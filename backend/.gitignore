@@ -1,0 +1,21 @@
+# ── Secrets / environment ────────────────────────────────────────────────────
+# NEVER commit a real .env — it will hold the Supabase Postgres connection string
+# and JWT secret. Only .env.example (placeholders) is tracked.
+.env
+.env.*
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

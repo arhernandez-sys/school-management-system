@@ -1,0 +1,145 @@
+import { createTheme } from '@mui/material/styles';
+
+/**
+ * MUI v6 theme — implements the D19 token set from `ui-design-system.md` §2.
+ *
+ * Structured via `colorSchemes` so adding a `dark` scheme later (D20) is a config
+ * addition, not a refactor. Components must reference `theme.palette.*` tokens,
+ * never raw hex (design-system §2.5 mandate).
+ *
+ * Light mode only for v1 (D20). The dark palette is intentionally NOT wired here;
+ * a sketched dark scheme can be added to `colorSchemes.dark` when the toggle ships.
+ */
+
+const SYSTEM_FONT_STACK = [
+  'Inter', // optional self-hosted enhancement (OQ-C); degrades gracefully below
+  'Roboto',
+  '"Segoe UI"',
+  '-apple-system',
+  'BlinkMacSystemFont',
+  '"Helvetica Neue"',
+  'Arial',
+  'sans-serif',
+].join(', ');
+
+export const theme = createTheme({
+  // MUI v6 token-driven theming. Single light scheme for v1 (D20).
+  colorSchemes: {
+    light: {
+      palette: {
+        primary: {
+          main: '#1F5BA8',
+          light: '#5A87D4',
+          dark: '#143E78',
+          contrastText: '#FFFFFF',
+        },
+        secondary: {
+          main: '#0E7C7B',
+          dark: '#0A5958',
+          contrastText: '#FFFFFF',
+        },
+        error: { main: '#C62828', contrastText: '#FFFFFF' },
+        warning: { main: '#B26A00', contrastText: '#FFFFFF' },
+        info: { main: '#0277BD', contrastText: '#FFFFFF' },
+        success: { main: '#2E7D32', contrastText: '#FFFFFF' },
+        text: {
+          primary: '#1A2027',
+          secondary: '#4A5560',
+        },
+        divider: '#E0E4E8',
+        background: {
+          default: '#F4F6F8',
+          paper: '#FFFFFF',
+        },
+      },
+    },
+  },
+
+  shape: {
+    borderRadius: 8,
+  },
+
+  spacing: 8, // MUI default 8px grid (design-system §2.3)
+
+  typography: {
+    fontFamily: SYSTEM_FONT_STACK,
+    h1: { fontSize: '2rem', fontWeight: 700, lineHeight: 1.25 },
+    h2: { fontSize: '1.5rem', fontWeight: 700, lineHeight: 1.3 },
+    h3: { fontSize: '1.25rem', fontWeight: 600, lineHeight: 1.35 },
+    h4: { fontSize: '1.125rem', fontWeight: 600, lineHeight: 1.4 },
+    subtitle1: { fontSize: '1rem', fontWeight: 600, lineHeight: 1.5 },
+    body1: { fontSize: '1rem', fontWeight: 400, lineHeight: 1.5 },
+    body2: { fontSize: '0.875rem', fontWeight: 400, lineHeight: 1.43 },
+    button: { fontSize: '0.875rem', fontWeight: 600, lineHeight: 1.75, textTransform: 'none' },
+    caption: { fontSize: '0.75rem', fontWeight: 400, lineHeight: 1.4 },
+    overline: { fontSize: '0.75rem', fontWeight: 600, lineHeight: 2.0, textTransform: 'none' },
+  },
+
+  components: {
+    // Flat-with-hairline-border surfaces (design-system §2.3 elevation stance).
+    MuiCard: {
+      defaultProps: { variant: 'outlined' },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        // Keep elevation-0 paper visually distinct via the divider border.
+        outlined: ({ theme: t }) => ({
+          borderColor: t.palette.divider,
+        }),
+      },
+    },
+    MuiButton: {
+      defaultProps: {
+        disableElevation: true,
+        size: 'medium',
+      },
+      styleOverrides: {
+        root: { textTransform: 'none' },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: { textTransform: 'none' },
+      },
+    },
+    MuiTextField: {
+      defaultProps: { size: 'small', variant: 'outlined' },
+    },
+    MuiSelect: {
+      defaultProps: { size: 'small' },
+    },
+    MuiTableCell: {
+      styleOverrides: {
+        // py:1 for dense (size="small") rows — design-system §2.4.
+        sizeSmall: { paddingTop: 8, paddingBottom: 8 },
+      },
+    },
+    MuiTooltip: {
+      defaultProps: { enterDelay: 300 },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: { borderRadius: 999 }, // pill radius for chips/badges
+      },
+    },
+    // Strengthen (do NOT remove) the focus-visible ring — accessibility §9.2.
+    MuiCssBaseline: {
+      styleOverrides: {
+        ':focus-visible': {
+          outline: '2px solid #1F5BA8',
+          outlineOffset: '2px',
+        },
+        // Respect reduced-motion (design-system §9.7).
+        '@media (prefers-reduced-motion: reduce)': {
+          '*, *::before, *::after': {
+            animationDuration: '0.01ms !important',
+            animationIterationCount: '1 !important',
+            transitionDuration: '0.01ms !important',
+          },
+        },
+      },
+    },
+  },
+});
+
+export default theme;

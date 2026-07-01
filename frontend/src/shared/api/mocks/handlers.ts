@@ -1,0 +1,124 @@
+import { http, HttpResponse } from 'msw';
+import { API_BASE_URL } from '@shared/api/client';
+import { MOCK_ACCESS_TOKEN, resolveMockUser } from './fixtures';
+import type { CurrentUser } from '@shared/types/api';
+
+/**
+ * Dev-only MSW handlers for the AUTH surface (api-specification.md §2), enough to
+ * drive login → bootstrap refresh → /auth/me → shell → role navigation without a
+ * backend. The "refresh session" is simulated with a non-HttpOnly marker cookie
+ * (`sis_mock_session`) since JS-set HttpOnly cookies aren't possible; real cookies
+ * are HttpOnly + SameSite=None and handled by the backend.
+ *
+ * Phase 7: delete these (or keep behind the flag for storybook-style local dev) once
+ * the real FastAPI backend is running. The SPA code does not change — only the flag.
+ */
+
+const SESSION_COOKIE = 'sis_mock_session';
+
+function readSessionRole(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.split(';').map((c) => c.trim().split('='));
+  const entry = match.find(([k]) => k === SESSION_COOKIE);
+  return entry?.[1] ?? null;
+}
+
+function userResponse(user: CurrentUser) {
+  return { access_token: MOCK_ACCESS_TOKEN, user };
+}
+
+export const handlers = [
+  // POST /auth/login — any password; identifier selects the role.
+  http.post(`${API_BASE_URL}/auth/login`, async ({ request }) => {
+    const body = (await request.json()) as { identifier?: string; password?: string };
+    if (!body?.identifier || !body?.password) {
+      return HttpResponse.json(
+        { error: { code: 'validation_error', message: 'Missing credentials.' } },
+        { status: 422 },
+      );
+    }
+    const user = resolveMockUser(body.identifier);
+    return HttpResponse.json(userResponse(user), {
+      status: 200,
+      headers: {
+        // Simulated (non-HttpOnly) session marker so /auth/refresh can resolve a role.
+        'Set-Cookie': `${SESSION_COOKIE}=${user.role}; Path=/`,
+      },
+    });
+  }),
+
+  // POST /auth/refresh — bootstrap + single-flight. 401 when no session cookie.
+  http.post(`${API_BASE_URL}/auth/refresh`, ({ request, cookies }) => {
+    const role =
+      cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get('Cookie'));
+    if (!role) {
+      return HttpResponse.json(
+        { error: { code: 'refresh_invalid', message: 'No active session.' } },
+        { status: 401 },
+      );
+    }
+    const user = resolveMockUser(role);
+    return HttpResponse.json(userResponse(user), { status: 200 });
+  }),
+
+  // GET /auth/me — current principal from the session cookie.
+  http.get(`${API_BASE_URL}/auth/me`, ({ request, cookies }) => {
+    const role =
+      cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get('Cookie'));
+    if (!role) {
+      return HttpResponse.json(
+        { error: { code: 'unauthenticated', message: 'Not signed in.' } },
+        { status: 401 },
+      );
+    }
+    return HttpResponse.json(resolveMockUser(role), { status: 200 });
+  }),
+
+  // POST /auth/logout — clear the simulated session.
+  http.post(`${API_BASE_URL}/auth/logout`, () => {
+    return new HttpResponse(null, {
+      status: 204,
+      headers: { 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0` },
+    });
+  }),
+
+  // PATCH /auth/me/password — forced/self-service change. 422 if the new password is
+  // trivially weak; otherwise 204 (the real backend also clears must_change_password
+  // + revokes other sessions). Lets the forced-change flow be demoed without a backend.
+  http.patch(`${API_BASE_URL}/auth/me/password`, async ({ request, cookies }) => {
+    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get('Cookie'));
+    if (!role) {
+      return HttpResponse.json(
+        { error: { code: 'unauthenticated', message: 'Not signed in.' } },
+        { status: 401 },
+      );
+    }
+    const body = (await request.json()) as { new_password?: string };
+    if (!body?.new_password || body.new_password.length < 8) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'weak_password',
+            message: 'Password does not meet the policy.',
+            fields: { new_password: ['Must be at least 8 characters.'] },
+          },
+        },
+        { status: 422 },
+      );
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // POST /auth/users/:userId/reset-password — admin-initiated reset (returns the temp
+  // password once). Mocked so Settings/user-admin flows can be exercised without a backend.
+  http.post(`${API_BASE_URL}/auth/users/:userId/reset-password`, ({ request, cookies }) => {
+    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get('Cookie'));
+    if (!role) {
+      return HttpResponse.json(
+        { error: { code: 'unauthenticated', message: 'Not signed in.' } },
+        { status: 401 },
+      );
+    }
+    return HttpResponse.json({ temporary_password: 'Temp-Pass-1234' }, { status: 200 });
+  }),
+];
