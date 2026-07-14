@@ -17,6 +17,7 @@ import AssignmentIcon from '@mui/icons-material/AssignmentOutlined';
 import GradeIcon from '@mui/icons-material/GradingOutlined';
 import EventAvailableIcon from '@mui/icons-material/EventAvailableOutlined';
 import CampaignIcon from '@mui/icons-material/CampaignOutlined';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import AssessmentIcon from '@mui/icons-material/AssessmentOutlined';
 import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import PersonIcon from '@mui/icons-material/PersonOutline';
@@ -101,6 +102,12 @@ function buildSections(role: Role): NavSection[] {
           label: nav.announcements,
           path: ROUTES.announcements,
           icon: <CampaignIcon />,
+        },
+        {
+          module: 'calendar',
+          label: nav.calendar,
+          path: ROUTES.calendar,
+          icon: <CalendarMonthIcon />,
         },
       ],
     },

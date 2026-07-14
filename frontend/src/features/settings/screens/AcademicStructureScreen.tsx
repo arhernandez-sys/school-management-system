@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Card,
+  CardActions,
   CardContent,
   Divider,
   Stack,
@@ -14,6 +15,8 @@ import {
   TableRow,
   TextField,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import {
@@ -46,6 +49,10 @@ import type { AcademicYearDetail } from '@shared/api/generated/model';
 export function AcademicStructureScreen() {
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'settings') : false;
+
+  const theme = useTheme();
+  // Below sm the per-year semester table would horizontal-scroll; stack cards instead.
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const query = useAcademicYears();
   const createMut = useCreateAcademicYear();
@@ -215,46 +222,116 @@ export function AcademicStructureScreen() {
                     {year.start_date} → {year.end_date}
                   </Typography>
                   <Divider sx={{ mb: 1 }} />
-                  <Table size="small" aria-label={`Semesters for ${year.name}`}>
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ fontWeight: 600 }}>Semester</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>Dates</TableCell>
-                        <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
-                        {canManage && !isArchived && <TableCell align="right" />}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
+                  {isMobile ? (
+                    // Mobile: each semester is a stacked card (mirrors the DataTable card
+                    // view) so the row never horizontal-scrolls. Same handlers as the table.
+                    <Stack
+                      component="ul"
+                      spacing={1.5}
+                      sx={{ listStyle: 'none', p: 0, m: 0 }}
+                      aria-label={`Semesters for ${year.name}`}
+                    >
                       {year.semesters.map((sem) => (
-                        <TableRow key={sem.id}>
-                          <TableCell>{sem.name}</TableCell>
-                          <TableCell>
-                            {sem.start_date} → {sem.end_date}
-                          </TableCell>
-                          <TableCell>
-                            {sem.is_active ? (
-                              <StatusBadge label="Active" kind="success" />
-                            ) : (
-                              <StatusBadge label="Inactive" kind="neutral" />
-                            )}
-                          </TableCell>
-                          {canManage && !isArchived && (
-                            <TableCell align="right">
-                              {!sem.is_active && (
-                                <Button
-                                  size="small"
-                                  onClick={() => handleActivate(sem.id)}
-                                  disabled={activateMut.isPending}
-                                >
-                                  Activate
-                                </Button>
+                        <Card key={sem.id} component="li" variant="outlined">
+                          <CardContent>
+                            <Typography
+                              variant="subtitle1"
+                              component="div"
+                              sx={{ fontWeight: 600, mb: 1 }}
+                            >
+                              {sem.name}
+                            </Typography>
+                            <Stack spacing={1}>
+                              <Box
+                                sx={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  gap: 2,
+                                  flexWrap: 'wrap',
+                                }}
+                              >
+                                <Typography variant="caption" color="text.secondary">
+                                  Dates
+                                </Typography>
+                                <Typography variant="body2">
+                                  {sem.start_date} → {sem.end_date}
+                                </Typography>
+                              </Box>
+                              <Box
+                                sx={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: 2,
+                                }}
+                              >
+                                <Typography variant="caption" color="text.secondary">
+                                  Status
+                                </Typography>
+                                {sem.is_active ? (
+                                  <StatusBadge label="Active" kind="success" />
+                                ) : (
+                                  <StatusBadge label="Inactive" kind="neutral" />
+                                )}
+                              </Box>
+                            </Stack>
+                          </CardContent>
+                          {canManage && !isArchived && !sem.is_active && (
+                            <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
+                              <Button
+                                size="small"
+                                onClick={() => handleActivate(sem.id)}
+                                disabled={activateMut.isPending}
+                              >
+                                Activate
+                              </Button>
+                            </CardActions>
+                          )}
+                        </Card>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Table size="small" aria-label={`Semesters for ${year.name}`}>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Semester</TableCell>
+                          <TableCell>Dates</TableCell>
+                          <TableCell>Status</TableCell>
+                          {canManage && !isArchived && <TableCell align="right" />}
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {year.semesters.map((sem) => (
+                          <TableRow key={sem.id}>
+                            <TableCell>{sem.name}</TableCell>
+                            <TableCell>
+                              {sem.start_date} → {sem.end_date}
+                            </TableCell>
+                            <TableCell>
+                              {sem.is_active ? (
+                                <StatusBadge label="Active" kind="success" />
+                              ) : (
+                                <StatusBadge label="Inactive" kind="neutral" />
                               )}
                             </TableCell>
-                          )}
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            {canManage && !isArchived && (
+                              <TableCell align="right">
+                                {!sem.is_active && (
+                                  <Button
+                                    size="small"
+                                    onClick={() => handleActivate(sem.id)}
+                                    disabled={activateMut.isPending}
+                                  >
+                                    Activate
+                                  </Button>
+                                )}
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
                 </CardContent>
               </Card>
             );

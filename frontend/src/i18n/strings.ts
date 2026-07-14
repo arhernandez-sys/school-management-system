@@ -20,6 +20,7 @@ export const strings = {
     grades: 'Grades',
     attendance: 'Attendance',
     announcements: 'Announcements',
+    calendar: 'Calendar',
     reports: 'Reports',
     settings: 'Settings',
     myProfile: 'My Profile',

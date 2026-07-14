@@ -6,7 +6,9 @@
   "description": "School Management System (SIS) — Phase 6 Frontend Foundation",
   "scripts": {
     "dev": "vite",
+    "demo": "vite --mode demo",
     "build": "tsc -b && vite build",
+    "build:demo": "vite build --mode demo",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",

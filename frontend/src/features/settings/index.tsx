@@ -59,7 +59,7 @@ export function SettingsPage() {
   const activeTab = tabs.some((t) => t.path === activeSegment) ? activeSegment : false;
 
   return (
-    <Box sx={{ pt: 3 }}>
+    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Tabs
         value={activeTab}
         onChange={(_, value: string) => navigate(`${ROUTES.settings}/${value}`)}
@@ -74,22 +74,24 @@ export function SettingsPage() {
         ))}
       </Tabs>
 
-      <Routes>
-        <Route index element={<Navigate to={defaultPath} replace />} />
-        <Route path="account" element={<AccountScreen />} />
-        {canManage && (
-          <>
-            <Route path="school" element={<SchoolProfileScreen />} />
-            <Route path="academic" element={<AcademicStructureScreen />} />
-            <Route path="subjects" element={<SubjectsPage />} />
-            <Route path="grading" element={<GradingScaleScreen />} />
-            <Route path="policy" element={<AssessmentPolicyScreen />} />
-            <Route path="users" element={<UsersScreen />} />
-          </>
-        )}
-        {/* Unknown sub-path → back to the section landing. */}
-        <Route path="*" element={<Navigate to={defaultPath} replace />} />
-      </Routes>
+      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Routes>
+          <Route index element={<Navigate to={defaultPath} replace />} />
+          <Route path="account" element={<AccountScreen />} />
+          {canManage && (
+            <>
+              <Route path="school" element={<SchoolProfileScreen />} />
+              <Route path="academic" element={<AcademicStructureScreen />} />
+              <Route path="subjects" element={<SubjectsPage />} />
+              <Route path="grading" element={<GradingScaleScreen />} />
+              <Route path="policy" element={<AssessmentPolicyScreen />} />
+              <Route path="users" element={<UsersScreen />} />
+            </>
+          )}
+          {/* Unknown sub-path → back to the section landing. */}
+          <Route path="*" element={<Navigate to={defaultPath} replace />} />
+        </Routes>
+      </Box>
     </Box>
   );
 }

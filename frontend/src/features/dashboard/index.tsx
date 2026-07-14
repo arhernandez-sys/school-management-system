@@ -1,11 +1,68 @@
-import { ModulePlaceholder } from '@shared/components/ModulePlaceholder';
+import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
+import { useAuth } from '@features/auth/hooks/useAuth';
+import { useDashboard } from './hooks/useDashboard';
+import { AdminDashboard } from './components/AdminDashboard';
+import { SecretaryDashboard } from './components/SecretaryDashboard';
+import { TeacherDashboard } from './components/TeacherDashboard';
+import { StudentDashboard } from './components/StudentDashboard';
+import type { DashboardResponse } from './types';
 
 /**
- * Dashboard feature module (Phase 7). Foundation placeholder only.
- * Co-locates components/, api/, hooks/, types per architecture §5 (currently empty).
+ * Dashboard feature (Phase 7 · DEMO). ONE role-aware page: the same DashboardPage is
+ * mounted at ROUTES.dashboard for every role and renders the variant the composite
+ * `GET /dashboard` returns, discriminated on `payload.role`. Role/scope are resolved
+ * server-side (MSW handler) from the session — the page just picks the matching layout.
+ *
+ * Handles all four UI states: loading (skeleton), error (retry), empty (no active term),
+ * and success (role variant).
  */
+function renderVariant(data: DashboardResponse) {
+  switch (data.role) {
+    case 'teacher':
+      return <TeacherDashboard data={data} />;
+    case 'student':
+      return <StudentDashboard data={data} />;
+    case 'secretary':
+      return <SecretaryDashboard data={data} />;
+    default:
+      return <AdminDashboard data={data} />;
+  }
+}
+
 export function DashboardPage() {
-  return <ModulePlaceholder module="dashboard" title="Dashboard" />;
+  const { user } = useAuth();
+  const query = useDashboard(user?.role);
+
+  const firstName = user?.full_name?.split(' ')[0] ?? '';
+  const title = firstName ? `Welcome, ${firstName}` : 'Dashboard';
+
+  const subtitle = query.data
+    ? [query.data.academic_year_name, query.data.semester_name].filter(Boolean).join(' · ') ||
+      undefined
+    : undefined;
+
+  return (
+    <>
+      <PageHeader title={title} subtitle={subtitle} />
+
+      {query.isLoading ? (
+        <LoadingState variant="cards" rows={4} label="Loading your dashboard" />
+      ) : query.isError ? (
+        <ErrorState
+          message="We couldn't load your dashboard. Please try again."
+          onRetry={() => void query.refetch()}
+        />
+      ) : !query.data ? (
+        <EmptyState
+          title="Nothing to show yet"
+          description="Your dashboard will appear once the school year is set up."
+          variant="page"
+        />
+      ) : (
+        renderVariant(query.data)
+      )}
+    </>
+  );
 }
 
 export default DashboardPage;

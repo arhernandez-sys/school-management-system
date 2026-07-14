@@ -69,7 +69,7 @@ export function ConfirmDialog({
           </Alert>
         )}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions>
         <Button onClick={onCancel} disabled={pending} autoFocus={destructive}>
           {cancelLabel}
         </Button>

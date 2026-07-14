@@ -1,8 +1,11 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { ProtectedRoute } from './ProtectedRoute';
 import { RoleRoute } from './RoleRoute';
+import { TeacherProfileRoute } from './TeacherProfileRoute';
 import { ForbiddenPage, NotFoundPage } from './ErrorPages';
 import { AppShell } from '@app/layout/AppShell';
+import { useAuth } from '@features/auth/hooks/useAuth';
+import { TeacherProfileView } from '@features/teachers/components/TeacherProfileView';
 import { ROUTES } from '@shared/constants/routes';
 import type { ModuleKey } from '@shared/auth/permissions';
 
@@ -15,6 +18,7 @@ import { AssessmentsPage } from '@features/assessments';
 import { GradesPage } from '@features/grades';
 import { AttendancePage } from '@features/attendance';
 import { AnnouncementsPage } from '@features/announcements';
+import { CalendarPage } from '@features/calendar';
 import { ReportsPage } from '@features/reports';
 import { SettingsPage } from '@features/settings';
 import { ModulePlaceholder } from '@shared/components/ModulePlaceholder';
@@ -23,8 +27,19 @@ import type { ReactElement } from 'react';
 
 /* eslint-disable react-refresh/only-export-components -- route module exports both the router and a small local page */
 
-/** Student-only "My Profile" placeholder (ui-design-system §6 `/me`). */
+/**
+ * Role-aware "My Profile" (`/me`, ui-design-system §6), gated by the `profile` module:
+ *  - teacher (with a linked teacher_profile_id) → their own {@link TeacherProfileView}
+ *    in `self` mode (edit-profile only).
+ *  - student → the existing student profile placeholder (unchanged).
+ *  - principal/secretary never reach here — `profile` is 'none' for them, so the module
+ *    gate redirects to /forbidden (their account lives under Settings).
+ */
 function MyProfilePage() {
+  const { user } = useAuth();
+  if (user?.role === 'teacher' && user.teacher_profile_id) {
+    return <TeacherProfileView teacherId={user.teacher_profile_id} mode="self" />;
+  }
   return <ModulePlaceholder module="profile" title="My Profile" />;
 }
 
@@ -58,9 +73,14 @@ export const router = createBrowserRouter([
         path: `${ROUTES.announcements}/*`,
         element: guarded('announcements', <AnnouncementsPage />),
       },
+      { path: `${ROUTES.calendar}/*`, element: guarded('calendar', <CalendarPage />) },
       { path: `${ROUTES.reports}/*`, element: guarded('reports', <ReportsPage />) },
       { path: `${ROUTES.settings}/*`, element: guarded('settings', <SettingsPage />) },
       { path: ROUTES.myProfile, element: guarded('profile', <MyProfilePage />) },
+      // Single teacher profile for roles without the directory (teacher self / student
+      // read-only). NOT behind the teachers-module gate — TeacherProfileRoute does its
+      // own per-role gating (and the server re-checks every call, NFR-SEC-01).
+      { path: `${ROUTES.teacherProfile}/:teacherId`, element: <TeacherProfileRoute /> },
       { path: ROUTES.forbidden, element: <ForbiddenPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

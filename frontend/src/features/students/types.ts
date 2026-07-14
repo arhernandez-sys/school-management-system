@@ -1,2 +1,96 @@
-// Students module types (Phase 7). Empty placeholder for the foundation.
-export {};
+/**
+ * Students module wire types (api-spec §5 Module 3).
+ *
+ * These mirror the exact snake_case shapes the demo MSW handler returns
+ * (handlers/students.ts), which in turn match the api-spec §5.3 response models. The
+ * enums are re-used from the shared vocabulary so the feature can never drift from the
+ * role/status sets the real backend uses.
+ */
+import type { Page } from '@shared/types/api';
+import type { StudentStatus, AssessmentType, GradeStatus } from '@shared/types/enums';
+
+/** Lightweight ref to the student's current (active-semester) section. */
+export interface StudentSectionRef {
+  id: string;
+  name: string;
+  grade_level: string;
+  section: string;
+}
+
+/** Row in GET /students. */
+export interface StudentListItem {
+  id: string;
+  student_number: string;
+  full_name: string;
+  status: StudentStatus;
+  current_section: StudentSectionRef | null;
+  guardian_name: string | null;
+}
+
+/** GET /students/{id}, /me, POST, PATCH, POST /status. */
+export interface StudentDetail {
+  id: string;
+  student_number: string;
+  full_name: string;
+  date_of_birth: string;
+  gender: 'male' | 'female';
+  enrollment_date: string;
+  status: StudentStatus;
+  guardian_name: string;
+  guardian_phone: string;
+  guardian_email: string;
+  address: string;
+  phone: string;
+  current_section: StudentSectionRef | null;
+}
+
+/** One assessment line under a subject group (GET /students/{id}/assessments). */
+export interface StudentAssessmentLine {
+  id: string;
+  title: string;
+  type: AssessmentType;
+  max_score: number;
+  weight: number;
+  assessment_date: string | null;
+  status: GradeStatus;
+  /** Only present once released + graded, else null. */
+  score: number | null;
+  is_released: boolean;
+}
+
+/** Assessments grouped by the student's class-subject offerings. */
+export interface StudentAssessmentGroup {
+  class_subject_id: string;
+  subject: { id: string; name: string; code: string } | null;
+  term_grade: { numeric: number | null; letter: string | null };
+  assessments: StudentAssessmentLine[];
+}
+
+/** Create/update payload (StudentCreate; all optional on PATCH). */
+export interface StudentWritePayload {
+  student_number: string;
+  full_name: string;
+  date_of_birth: string;
+  gender?: 'male' | 'female';
+  enrollment_date: string;
+  status?: StudentStatus;
+  guardian_name?: string;
+  guardian_phone?: string;
+  guardian_email?: string;
+  address?: string;
+  phone?: string;
+  section_id?: string | null;
+}
+
+/** GET /students query params (api-spec §5.3 + §6 list params). */
+export interface StudentsListParams {
+  page?: number;
+  page_size?: number;
+  sort?: string;
+  search?: string;
+  status?: StudentStatus;
+  class_id?: string;
+  grade_level?: string;
+}
+
+export type StudentsPage = Page<StudentListItem>;

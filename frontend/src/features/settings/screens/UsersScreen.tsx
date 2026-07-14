@@ -150,6 +150,7 @@ export function UsersScreen() {
       field: 'full_name',
       headerName: 'Name',
       sortable: true,
+      primary: true,
       render: (u) => (
         <>
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -175,6 +176,7 @@ export function UsersScreen() {
     {
       field: 'must_change_password',
       headerName: 'Password',
+      hideOnMobile: true,
       render: (u) =>
         u.must_change_password ? <StatusBadge label="Reset pending" kind="warning" /> : '—',
     },

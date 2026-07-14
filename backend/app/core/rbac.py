@@ -73,16 +73,19 @@ def assert_teacher_owns_section(db: Session, user: User, class_id: uuid.UUID) ->
     class_teachers → class_subjects on the section.
     """
     teacher_id = _teacher_profile_id(db, user)
+    # Build the join on a real Select, then wrap it in EXISTS. `exists().join(...)`
+    # is invalid — Exists has no `.join()` (SQLAlchemy proxies only where/select_from/
+    # correlate onto it), so the join must live on the underlying select.
     owns = db.scalar(
         select(
-            exists()
-            .select_from(ClassTeacher)
+            select(ClassTeacher.teacher_id)
             .join(ClassSubject, ClassTeacher.class_subject_id == ClassSubject.id)
             .where(
                 ClassSubject.class_id == class_id,
                 ClassSubject.deleted_at.is_(None),
                 ClassTeacher.teacher_id == teacher_id,
             )
+            .exists()
         )
     )
     if not owns:

@@ -4,8 +4,9 @@ import { Outlet } from 'react-router-dom';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { useDisclosure } from '@shared/hooks';
-import { LoadingState } from '@shared/components';
+import { useUnreadCount } from '@features/announcements/hooks/useAnnouncements';
+import { useDisclosure, useScrollToTop } from '@shared/hooks';
+import { LoadingState, PageContainer } from '@shared/components';
 import { strings } from '@i18n/strings';
 
 /**
@@ -24,8 +25,12 @@ export function AppShell() {
   const mobileDrawer = useDisclosure();
   const [collapsed, setCollapsed] = useState(false);
 
-  // Announcements module (Phase 7) will source the unread count; 0 until then.
-  const unreadCount = 0;
+  // Unread announcements count for the TopBar bell. Falls back to 0 while loading or
+  // if the endpoint is unavailable (e.g. real-backend mode before the module ships).
+  const { data: unreadCount = 0 } = useUnreadCount();
+
+  // Reset scroll to top on every route change (covers nested descendant routes).
+  useScrollToTop();
 
   if (!user) {
     // Should not happen inside ProtectedRoute, but guards the type.
@@ -78,13 +83,17 @@ export function AppShell() {
         sx={{
           flexGrow: 1,
           minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
           px: { xs: 2, md: 3 },
-          pb: 4,
+          pb: { xs: 2, md: 3 },
           bgcolor: 'background.default',
         }}
       >
         <Toolbar /> {/* spacer under the fixed app bar */}
-        <Outlet />
+        <PageContainer>
+          <Outlet />
+        </PageContainer>
       </Box>
     </Box>
   );

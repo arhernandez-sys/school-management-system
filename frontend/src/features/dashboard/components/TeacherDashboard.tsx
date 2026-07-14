@@ -1,0 +1,189 @@
+import { Link as RouterLink } from 'react-router-dom';
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Divider,
+  Grid,
+  List,
+  ListItem,
+  Stack,
+  Typography,
+} from '@mui/material';
+import ClassIcon from '@mui/icons-material/Class';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
+import RuleIcon from '@mui/icons-material/Rule';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import { StatCard, StatusBadge, EmptyState } from '@shared/components';
+import { ROUTES } from '@shared/constants/routes';
+import type { TeacherDashboard as TeacherDashboardData } from '../types';
+import { AnnouncementsList } from './AnnouncementsList';
+
+export interface TeacherDashboardProps {
+  data: TeacherDashboardData;
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return 'TBD';
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Teacher dashboard (design-system §7.2 — own classes, attendance-forward). The hero is
+ * "today's classes" with a recorded / not-recorded status per section (FR-ATT-08), each
+ * row deep-linking to the attendance sheet. Then upcoming/recent assessments and
+ * targeted announcements.
+ */
+export function TeacherDashboard({ data }: TeacherDashboardProps) {
+  const { stats } = data;
+
+  return (
+    <Grid container spacing={3}>
+      {/* Stat row */}
+      <Grid item xs={12} sm={4}>
+        <StatCard
+          label="My classes"
+          value={stats.my_sections}
+          icon={<ClassIcon />}
+          color="primary"
+          to={ROUTES.classes}
+        />
+      </Grid>
+      <Grid item xs={12} sm={4}>
+        <StatCard
+          label="Attendance due today"
+          value={stats.attendance_due_today}
+          icon={<EventBusyIcon />}
+          color={stats.attendance_due_today > 0 ? 'warning' : 'success'}
+          helperText={stats.attendance_due_today > 0 ? 'Action needed' : 'All recorded'}
+          to={ROUTES.attendance}
+        />
+      </Grid>
+      <Grid item xs={12} sm={4}>
+        <StatCard
+          label="Ungraded items"
+          value={stats.ungraded_items}
+          icon={<RuleIcon />}
+          color="info"
+          to={ROUTES.grades}
+        />
+      </Grid>
+
+      {/* Today's classes — hero */}
+      <Grid item xs={12} lg={7}>
+        <Card variant="outlined" sx={{ height: '100%' }}>
+          <CardContent>
+            <Typography variant="h4" component="h3" gutterBottom>
+              Today&apos;s classes
+            </Typography>
+            {data.today_classes.length === 0 ? (
+              <EmptyState
+                icon={<ClassIcon fontSize="inherit" />}
+                title="No classes assigned"
+                description="You have no sections in the active term yet."
+                variant="card"
+              />
+            ) : (
+              <List disablePadding>
+                {data.today_classes.map((c, i) => (
+                  <Box key={c.section_id}>
+                    {i > 0 && <Divider component="li" />}
+                    <ListItem
+                      sx={{ px: 0, py: 1.5, gap: 1, flexWrap: 'wrap' }}
+                      secondaryAction={
+                        <Button
+                          component={RouterLink}
+                          to={ROUTES.attendance}
+                          size="small"
+                          variant={c.attendance_recorded ? 'text' : 'contained'}
+                          startIcon={
+                            c.attendance_recorded ? <CheckCircleIcon /> : <WarningAmberIcon />
+                          }
+                        >
+                          {c.attendance_recorded ? 'View' : 'Record'}
+                        </Button>
+                      }
+                    >
+                      <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                        <Typography variant="subtitle2" component="p" noWrap>
+                          {c.section_name}
+                          {c.subject_name ? ` · ${c.subject_name}` : ''}
+                        </Typography>
+                        <StatusBadge
+                          label={c.attendance_recorded ? 'Recorded' : 'Not recorded'}
+                          kind={c.attendance_recorded ? 'success' : 'warning'}
+                        />
+                      </Stack>
+                    </ListItem>
+                  </Box>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+      </Grid>
+
+      {/* Announcements */}
+      <Grid item xs={12} lg={5}>
+        <AnnouncementsList title="Announcements" announcements={data.recent_announcements} />
+      </Grid>
+
+      {/* Upcoming / recent assessments */}
+      <Grid item xs={12}>
+        <Card variant="outlined">
+          <CardContent>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
+            >
+              <Typography variant="h4" component="h3">
+                Assessments needing attention
+              </Typography>
+              <Button component={RouterLink} to={ROUTES.grades} size="small">
+                Enter grades
+              </Button>
+            </Stack>
+            {data.recent_assessments.length === 0 ? (
+              <EmptyState
+                icon={<RuleIcon fontSize="inherit" />}
+                title="Nothing to grade"
+                description="No published or in-progress assessments right now."
+                variant="card"
+              />
+            ) : (
+              <List disablePadding>
+                {data.recent_assessments.map((a, i) => (
+                  <Box key={a.id}>
+                    {i > 0 && <Divider component="li" />}
+                    <ListItem sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}>
+                      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
+                        <Typography variant="subtitle2" component="p" noWrap>
+                          {a.title}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {a.section_name}
+                          {a.subject_name ? ` · ${a.subject_name}` : ''} · {formatDate(a.assessment_date)}
+                        </Typography>
+                      </Stack>
+                      <StatusBadge
+                        label={a.status === 'grading' ? 'In progress' : 'Published'}
+                        kind={a.status === 'grading' ? 'warning' : 'info'}
+                      />
+                    </ListItem>
+                  </Box>
+                ))}
+              </List>
+            )}
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
+}
+
+export default TeacherDashboard;

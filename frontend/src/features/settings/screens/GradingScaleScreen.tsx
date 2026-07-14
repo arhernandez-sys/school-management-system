@@ -3,6 +3,11 @@ import {
   Alert,
   Box,
   Button,
+  Card,
+  CardActions,
+  CardContent,
+  Checkbox,
+  FormControlLabel,
   IconButton,
   Paper,
   Snackbar,
@@ -15,6 +20,8 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -40,6 +47,10 @@ const withKey = (band: GradingBand): EditableBand => ({ ...band, _key: `band-${b
 export function GradingScaleScreen() {
   const { user } = useAuth();
   const canEdit = user ? user.role === 'principal' : false;
+
+  const theme = useTheme();
+  // Below sm the editable band table would horizontal-scroll; render stacked cards instead.
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const query = useGradingScale();
   const updateMut = useUpdateGradingScale();
@@ -139,82 +150,163 @@ export function GradingScaleScreen() {
             {frozen && <StatusBadge label="Frozen" kind="neutral" />}
           </Stack>
 
-          <Table size="small" aria-label="Grading bands">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 600 }}>Letter</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Min score</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Max score</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>Passing</TableCell>
-                {!readOnly && (
-                  <TableCell align="right" sx={{ fontWeight: 600 }}>
-                    Remove
-                  </TableCell>
-                )}
-              </TableRow>
-            </TableHead>
-            <TableBody>
+          {isMobile ? (
+            // Mobile: each band is a stacked editable card (mirrors the DataTable card
+            // view) so the row never horizontal-scrolls. Same handlers as the table.
+            <Stack
+              component="ul"
+              spacing={1.5}
+              sx={{ listStyle: 'none', p: 0, m: 0 }}
+              aria-label="Grading bands"
+            >
               {bands.map((band) => (
-                <TableRow key={band._key}>
-                  <TableCell>
-                    <TextField
-                      value={band.letter}
-                      onChange={(e) => updateBand(band._key, { letter: e.target.value })}
-                      size="small"
-                      disabled={readOnly}
-                      inputProps={{ maxLength: 8, 'aria-label': 'Band letter' }}
-                      sx={{ width: 80 }}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <TextField
-                      type="number"
-                      value={band.min_score}
-                      onChange={(e) => updateBand(band._key, { min_score: Number(e.target.value) })}
-                      size="small"
-                      disabled={readOnly}
-                      inputProps={{ min: 0, max: 100, 'aria-label': 'Minimum score' }}
-                      sx={{ width: 100 }}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <TextField
-                      type="number"
-                      value={band.max_score}
-                      onChange={(e) => updateBand(band._key, { max_score: Number(e.target.value) })}
-                      size="small"
-                      disabled={readOnly}
-                      inputProps={{ min: 0, max: 100, 'aria-label': 'Maximum score' }}
-                      sx={{ width: 100 }}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <input
-                      type="checkbox"
-                      checked={band.is_passing ?? false}
-                      onChange={(e) => updateBand(band._key, { is_passing: e.target.checked })}
-                      disabled={readOnly}
-                      aria-label={`${band.letter || 'Band'} is passing`}
-                    />
-                  </TableCell>
-                  {!readOnly && (
-                    <TableCell align="right">
-                      <Tooltip title="Remove band">
-                        <IconButton
+                <Card key={band._key} component="li" variant="outlined">
+                  <CardContent>
+                    <Stack spacing={1.5}>
+                      <TextField
+                        label="Letter"
+                        value={band.letter}
+                        onChange={(e) => updateBand(band._key, { letter: e.target.value })}
+                        size="small"
+                        disabled={readOnly}
+                        inputProps={{ maxLength: 8 }}
+                        fullWidth
+                      />
+                      <Stack direction="row" spacing={1.5}>
+                        <TextField
+                          label="Min score"
+                          type="number"
+                          value={band.min_score}
+                          onChange={(e) =>
+                            updateBand(band._key, { min_score: Number(e.target.value) })
+                          }
                           size="small"
-                          color="error"
-                          onClick={() => removeBand(band._key)}
-                          aria-label={`Remove band ${band.letter || ''}`}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
+                          disabled={readOnly}
+                          inputProps={{ min: 0, max: 100 }}
+                          fullWidth
+                        />
+                        <TextField
+                          label="Max score"
+                          type="number"
+                          value={band.max_score}
+                          onChange={(e) =>
+                            updateBand(band._key, { max_score: Number(e.target.value) })
+                          }
+                          size="small"
+                          disabled={readOnly}
+                          inputProps={{ min: 0, max: 100 }}
+                          fullWidth
+                        />
+                      </Stack>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            size="small"
+                            checked={band.is_passing ?? false}
+                            onChange={(e) =>
+                              updateBand(band._key, { is_passing: e.target.checked })
+                            }
+                            disabled={readOnly}
+                          />
+                        }
+                        label="Passing grade"
+                      />
+                    </Stack>
+                  </CardContent>
+                  {!readOnly && (
+                    <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
+                      <Button
+                        size="small"
+                        color="error"
+                        startIcon={<DeleteOutlineIcon />}
+                        onClick={() => removeBand(band._key)}
+                        aria-label={`Remove band ${band.letter || ''}`}
+                      >
+                        Remove
+                      </Button>
+                    </CardActions>
                   )}
-                </TableRow>
+                </Card>
               ))}
-            </TableBody>
-          </Table>
+            </Stack>
+          ) : (
+            <Table size="small" aria-label="Grading bands">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Letter</TableCell>
+                  <TableCell>Min score</TableCell>
+                  <TableCell>Max score</TableCell>
+                  <TableCell>Passing</TableCell>
+                  {!readOnly && <TableCell align="right">Remove</TableCell>}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {bands.map((band) => (
+                  <TableRow key={band._key}>
+                    <TableCell>
+                      <TextField
+                        value={band.letter}
+                        onChange={(e) => updateBand(band._key, { letter: e.target.value })}
+                        size="small"
+                        disabled={readOnly}
+                        inputProps={{ maxLength: 8, 'aria-label': 'Band letter' }}
+                        sx={{ width: 80 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        value={band.min_score}
+                        onChange={(e) =>
+                          updateBand(band._key, { min_score: Number(e.target.value) })
+                        }
+                        size="small"
+                        disabled={readOnly}
+                        inputProps={{ min: 0, max: 100, 'aria-label': 'Minimum score' }}
+                        sx={{ width: 100 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        value={band.max_score}
+                        onChange={(e) =>
+                          updateBand(band._key, { max_score: Number(e.target.value) })
+                        }
+                        size="small"
+                        disabled={readOnly}
+                        inputProps={{ min: 0, max: 100, 'aria-label': 'Maximum score' }}
+                        sx={{ width: 100 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={band.is_passing ?? false}
+                        onChange={(e) => updateBand(band._key, { is_passing: e.target.checked })}
+                        disabled={readOnly}
+                        aria-label={`${band.letter || 'Band'} is passing`}
+                      />
+                    </TableCell>
+                    {!readOnly && (
+                      <TableCell align="right">
+                        <Tooltip title="Remove band">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => removeBand(band._key)}
+                            aria-label={`Remove band ${band.letter || ''}`}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
 
           {!readOnly && (
             <Stack direction="row" spacing={1} sx={{ mt: 2 }}>

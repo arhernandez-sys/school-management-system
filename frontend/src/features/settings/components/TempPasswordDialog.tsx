@@ -68,7 +68,7 @@ export function TempPasswordDialog({ open, password, subject, onClose }: TempPas
           <Alert severity="warning">This password will not be shown again. Copy it now.</Alert>
         </Box>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions>
         <Button variant="contained" onClick={onClose}>
           Done
         </Button>

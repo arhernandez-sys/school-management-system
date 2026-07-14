@@ -76,9 +76,20 @@ export const theme = createTheme({
   },
 
   components: {
-    // Flat-with-hairline-border surfaces (design-system §2.3 elevation stance).
+    // Two-tier surface system: Cards are soft-elevated content, Paper stays flat.
     MuiCard: {
       defaultProps: { variant: 'outlined' },
+      styleOverrides: {
+        // A subtle two-layer soft shadow (in addition to the hairline border) lifts
+        // content/dashboard cards — StatCard, PeopleListCard, ChartWithTable and the
+        // DataTable mobile row cards — a step above the page. Dense data surfaces
+        // (DataTable/FilterBar Paper) deliberately stay flat + hairline below, so the
+        // elevation split reads as intentional. Radius stays at the theme shape (8).
+        root: ({ theme: t }) => ({
+          borderRadius: t.shape.borderRadius,
+          boxShadow: '0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.06)',
+        }),
+      },
     },
     MuiPaper: {
       styleOverrides: {
@@ -112,6 +123,18 @@ export const theme = createTheme({
       styleOverrides: {
         // py:1 for dense (size="small") rows — design-system §2.4.
         sizeSmall: { paddingTop: 8, paddingBottom: 8 },
+        // Uniform header weight app-wide — consolidated from the fontWeight 600/700
+        // that individual head cells used to set inline (DataTable, GradebookGrid,
+        // ChartWithTable, settings tables, report/transcript documents).
+        head: { fontWeight: 600 },
+      },
+    },
+    MuiDialogActions: {
+      styleOverrides: {
+        // Consolidated from the `sx={{ px: 3, pb: 2 }}` every dialog duplicated inline
+        // (FormDialog, ConfirmDialog, + the feature dialogs). Top padding keeps the MUI
+        // default (8px = spacing(1)) so the rendered spacing is unchanged.
+        root: ({ theme: t }) => ({ padding: t.spacing(1, 3, 2, 3) }),
       },
     },
     MuiTooltip: {

@@ -71,7 +71,7 @@ export function FormDialog({
         )}
         {children}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions>
         <Button onClick={onClose} disabled={submitting}>
           {cancelLabel}
         </Button>

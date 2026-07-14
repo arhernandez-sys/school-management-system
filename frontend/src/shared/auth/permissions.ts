@@ -10,7 +10,7 @@
 
 import type { Role } from '../types/enums';
 
-/** The 11 functional modules (+ the student-only "My Profile") that gate navigation. */
+/** The functional modules (+ the student-only "My Profile") that gate navigation. */
 export type ModuleKey =
   | 'dashboard'
   | 'students'
@@ -20,6 +20,7 @@ export type ModuleKey =
   | 'grades'
   | 'attendance'
   | 'announcements'
+  | 'calendar'
   | 'reports'
   | 'settings'
   | 'profile';
@@ -41,6 +42,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     grades: 'view-all',
     attendance: 'view-all',
     announcements: 'full',
+    calendar: 'full', // owns the shared school calendar
     reports: 'view-all',
     settings: 'full',
     profile: 'none', // Principal has no student "My Profile"; account is under Settings
@@ -54,6 +56,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     grades: 'view-all',
     attendance: 'view-all',
     announcements: 'full',
+    calendar: 'full', // secretary can add/edit school events too
     reports: 'view-all',
     settings: 'create-edit',
     profile: 'none',
@@ -61,15 +64,22 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
   teacher: {
     dashboard: 'view-own',
     students: 'view-own',
-    teachers: 'view-all', // read-only directory
+    // Product decision (2026-07): teachers do NOT browse the staff directory. This
+    // intentionally tightens requirements.md §2 (which allowed read-only View-all).
+    teachers: 'none',
     classes: 'view-own',
     assessments: 'full', // full on OWN classes (server enforces ownership)
     grades: 'create-edit',
     attendance: 'create-edit',
     announcements: 'create-edit',
+    calendar: 'view-all', // read-only school calendar
     reports: 'view-own',
     settings: 'view-own', // account only
-    profile: 'none',
+    // 'view-own' surfaces the teacher "My Profile" (/me → own TeacherProfileView).
+    // Ownership (a teacher may only reach their OWN profile) and the student
+    // subject-scoping rule are enforced CLIENT-SIDE for UX only — the server remains
+    // authoritative on every /teachers/{id} call (NFR-SEC-01).
+    profile: 'view-own',
   },
   student: {
     dashboard: 'view-own',
@@ -80,6 +90,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     grades: 'view-own',
     attendance: 'view-own',
     announcements: 'view-own',
+    calendar: 'view-all', // read-only school calendar (same events everyone sees)
     reports: 'view-own', // own report card only — NO transcript (D26)
     settings: 'view-own', // account only
     profile: 'view-own',

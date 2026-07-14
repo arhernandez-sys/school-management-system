@@ -127,6 +127,7 @@ export function SubjectsPage() {
       field: 'name',
       headerName: 'Subject',
       sortable: true,
+      primary: true,
       render: (s) => (
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {s.name}

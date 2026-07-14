@@ -15,9 +15,12 @@ export const ROUTES = {
   grades: '/grades',
   attendance: '/attendance',
   announcements: '/announcements',
+  calendar: '/calendar',
   reports: '/reports',
   settings: '/settings',
   myProfile: '/me',
+  /** Single teacher profile reachable by teacher (own) / student (subject teacher). */
+  teacherProfile: '/teacher',
   forbidden: '/forbidden',
 } as const;
 

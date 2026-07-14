@@ -33,7 +33,9 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.modules.auth.router import router as auth_router
 from app.modules.settings.router import router as settings_router
+from app.modules.students.router import router as students_router
 from app.modules.subjects.router import router as subjects_router
+from app.modules.teachers.router import router as teachers_router
 
 API_V1_PREFIX = "/api/v1"
 
@@ -46,6 +48,8 @@ MODULE_ROUTERS: list[APIRouter] = [
     auth_router,  # 7.1 — serves /api/v1/auth/* (api-spec §2)
     settings_router,  # 7.2 — serves /api/v1/settings/* (api-spec §5 Module 11)
     subjects_router,  # 7.2 — serves /api/v1/subjects/* (api-spec §5 Module 5b)
+    students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
+    teachers_router,  # 7.3 — serves /api/v1/teachers/* (api-spec §5 Module 4)
 ]
 
 

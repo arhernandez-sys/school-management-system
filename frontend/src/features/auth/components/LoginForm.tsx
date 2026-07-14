@@ -5,6 +5,8 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
+  Divider,
   IconButton,
   InputAdornment,
   Stack,
@@ -25,6 +27,21 @@ interface LocationState {
 }
 
 /**
+ * Demo mode only (VITE_ENABLE_MOCKS): the MSW auth handler keys the signed-in role off
+ * the identifier (`principal` | `secretary` | `teacher` | `student`, any password) and
+ * silently falls back to `principal` for anything else. These one-click buttons make
+ * the four roles discoverable so a reviewer can actually enter each one instead of
+ * guessing the magic username. No effect in real-backend mode (the panel is hidden).
+ */
+const DEMO_MODE = import.meta.env.VITE_ENABLE_MOCKS === 'true';
+const DEMO_ROLES = [
+  { id: 'principal', label: 'Principal' },
+  { id: 'secretary', label: 'Secretary' },
+  { id: 'teacher', label: 'Teacher' },
+  { id: 'student', label: 'Student' },
+] as const;
+
+/**
  * Login form (ui-design-system §7.1). Centered card, labeled inputs, generic
  * non-enumerating error, Enter submits, button spinner while submitting.
  * Accessibility: <form> with labeled fields, error Alert role="alert".
@@ -43,12 +60,11 @@ export function LoginForm() {
 
   const from = (location.state as LocationState | null)?.from?.pathname ?? ROUTES.dashboard;
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submitCredentials = async (id: string, pw: string) => {
     setError(null);
     setSubmitting(true);
     try {
-      const user = await login(identifier, password);
+      const user = await login(id, pw);
       if (user.must_change_password) {
         navigate(ROUTES.changePassword, { replace: true });
       } else {
@@ -65,6 +81,14 @@ export function LoginForm() {
       setSubmitting(false);
     }
   };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    void submitCredentials(identifier, password);
+  };
+
+  // Demo one-click sign-in: the mock backend accepts any password for these roles.
+  const handleDemoLogin = (role: string) => void submitCredentials(role, 'demo-password');
 
   return (
     <Box
@@ -147,6 +171,40 @@ export function LoginForm() {
               </Typography>
             </Stack>
           </Box>
+
+          {DEMO_MODE && (
+            <Box sx={{ mt: 3 }}>
+              <Divider sx={{ mb: 2 }}>
+                <Chip label="Demo — sign in as" size="small" />
+              </Divider>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 1,
+                }}
+              >
+                {DEMO_ROLES.map((role) => (
+                  <Button
+                    key={role.id}
+                    variant="outlined"
+                    size="small"
+                    disabled={submitting}
+                    onClick={() => handleDemoLogin(role.id)}
+                  >
+                    {role.label}
+                  </Button>
+                ))}
+              </Box>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', textAlign: 'center', mt: 1.5 }}
+              >
+                No backend — data is mocked. Any password works for these roles.
+              </Typography>
+            </Box>
+          )}
         </CardContent>
       </Card>
     </Box>
