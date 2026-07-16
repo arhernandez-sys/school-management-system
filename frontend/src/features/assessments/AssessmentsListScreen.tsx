@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -8,6 +8,7 @@ import {
   ListItemText,
   Menu,
   MenuItem,
+  Stack,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -15,16 +16,20 @@ import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import GradingIcon from '@mui/icons-material/Grading';
 import {
   DataTable,
   EmptyState,
   PageHeader,
   StatusBadge,
   ConfirmDialog,
+  YearSelect,
   type DataTableColumn,
 } from '@shared/components';
+import { useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
+import { ROUTES } from '@shared/constants/routes';
 import { DEMO_IDS } from '@shared/api/mocks/demo/dataset';
 import {
   useAssessmentCategories,
@@ -54,10 +59,14 @@ const CLASS_SUBJECT_PARAM = 'class_subject_id';
  *    (OQ-API-2 — P/S do not author on a teacher's behalf). The server is authoritative.
  */
 export function AssessmentsListScreen() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
   const isStudent = user?.role === 'student';
   const canAuthor = isTeacher; // P/S are view-all (OQ-API-2)
+  const canGrade = !isStudent; // teacher (edit) + P/S (read-only) open the grading page
+
+  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedCs = searchParams.get(CLASS_SUBJECT_PARAM) ?? '';
@@ -69,6 +78,7 @@ export function AssessmentsListScreen() {
   const optionsQuery = useClassSubjectOptions(
     isTeacher ? 'me' : 'all',
     user?.teacher_profile_id ?? null,
+    yearId,
   );
   const options = optionsQuery.data ?? [];
   const selectedOption = options.find((o) => o.class_subject_id === selectedCs) ?? null;
@@ -90,11 +100,12 @@ export function AssessmentsListScreen() {
   const listParams = useMemo(
     () => ({
       class_subject_id: selectedCs || undefined,
+      academic_year_id: yearId || undefined,
       page: page + 1,
       page_size: pageSize,
       sort: '-assessment_date',
     }),
-    [selectedCs, page, pageSize],
+    [selectedCs, yearId, page, pageSize],
   );
   const listQuery = useAssessmentsList(listParams, Boolean(selectedCs));
 
@@ -234,41 +245,59 @@ export function AssessmentsListScreen() {
     },
   ];
 
-  const rowActions = canAuthor
+  const openGrading = (a: AssessmentListItem) => {
+    const csId = a.class_subject?.class_subject_id ?? selectedCs;
+    navigate(`${ROUTES.gradeAssessment}/${a.id}?${CLASS_SUBJECT_PARAM}=${encodeURIComponent(csId)}`);
+  };
+
+  const rowActions = canGrade
     ? (a: AssessmentListItem) => {
         const nextStatuses = NEXT_STATUSES[a.status];
         return (
           <>
-            <Tooltip title="Edit">
-              <IconButton size="small" aria-label={`Edit ${a.title}`} onClick={() => openEdit(a)}>
-                <EditIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title={nextStatuses.length ? 'Change status' : 'No further status changes'}>
-              <span>
-                <IconButton
-                  size="small"
-                  aria-label={`Change status of ${a.title}`}
-                  disabled={nextStatuses.length === 0}
-                  onClick={(e) => openStatusMenu(e, a)}
-                >
-                  <MoreVertIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title="Delete (only if no grades)">
+            <Tooltip title="Grade this class">
               <IconButton
                 size="small"
-                color="error"
-                aria-label={`Delete ${a.title}`}
-                onClick={() => {
-                  setDeleteError(null);
-                  setDeleteTarget(a);
-                }}
+                aria-label={`Grade ${a.title}`}
+                onClick={() => openGrading(a)}
               >
-                <DeleteOutlineIcon fontSize="small" />
+                <GradingIcon fontSize="small" />
               </IconButton>
             </Tooltip>
+            {canAuthor && (
+              <>
+                <Tooltip title="Edit">
+                  <IconButton size="small" aria-label={`Edit ${a.title}`} onClick={() => openEdit(a)}>
+                    <EditIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={nextStatuses.length ? 'Change status' : 'No further status changes'}>
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label={`Change status of ${a.title}`}
+                      disabled={nextStatuses.length === 0}
+                      onClick={(e) => openStatusMenu(e, a)}
+                    >
+                      <MoreVertIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Delete (only if no grades)">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    aria-label={`Delete ${a.title}`}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteTarget(a);
+                    }}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
           </>
         );
       }
@@ -295,7 +324,25 @@ export function AssessmentsListScreen() {
         primaryAction={primaryAction}
       />
 
-      <Box sx={{ mb: 2 }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={2}
+        sx={{ mb: 2, alignItems: { sm: 'center' } }}
+      >
+        {!isStudent && (
+          <YearSelect
+            value={yearId}
+            onChange={(id) => {
+              // A class·subject belongs to one year — clear the stale selection.
+              setSelectedCs('');
+              setYearId(id);
+              setPage(0);
+            }}
+            years={years}
+            activeYearId={activeYearId}
+            isLoading={yearsLoading}
+          />
+        )}
         <ClassSubjectPicker
           options={options}
           value={selectedCs}
@@ -303,7 +350,7 @@ export function AssessmentsListScreen() {
           isLoading={optionsQuery.isLoading}
           disabled={optionsQuery.isError}
         />
-      </Box>
+      </Stack>
 
       {optionsQuery.isError && (
         <Alert severity="error" sx={{ mb: 2 }} role="alert">

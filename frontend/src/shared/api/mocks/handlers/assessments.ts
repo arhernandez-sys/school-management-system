@@ -6,8 +6,10 @@ import {
   DEMO_IDS,
   assessmentsForClassSubject,
   classSubjectsForSection,
+  classSubjectsForYear,
   classSubjectsOwnedByTeacher,
   currentDemoStudent,
+  getActiveYear,
   getClassSubject,
   getSection,
   getSubject,
@@ -137,6 +139,9 @@ export const assessmentsHandlers: RequestHandler[] = [
     const role = cookies['sis_mock_session'] ?? 'principal';
     const scope = url.searchParams.get('scope');
     const teacherId = resolveTeacherId(url.searchParams.get('teacher_profile_id'));
+    // Per-module year switcher: scope offerings to the chosen year (default active).
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const yearCsIds = yearId ? new Set(classSubjectsForYear(yearId).map((c) => c.id)) : null;
 
     let rows: DemoClassSubject[];
     const student = currentDemoStudent(role);
@@ -145,8 +150,9 @@ export const assessmentsHandlers: RequestHandler[] = [
       rows = classSubjectsForSection(student.section_id ?? '').filter((cs) => cs.is_active);
     } else if (scope === 'me' && teacherId) {
       rows = classSubjectsOwnedByTeacher(teacherId);
+      if (yearCsIds) rows = rows.filter((cs) => yearCsIds.has(cs.id));
     } else {
-      rows = D.class_subjects.filter((cs) => cs.is_active);
+      rows = yearId ? classSubjectsForYear(yearId) : D.class_subjects.filter((cs) => cs.is_active);
     }
 
     const items = rows
@@ -289,11 +295,16 @@ export const assessmentsHandlers: RequestHandler[] = [
       );
     } else if (classSubjectId) {
       rows = assessmentsForClassSubject(classSubjectId);
-    } else if (scope === 'me' && teacherId) {
-      const ownedIds = new Set(classSubjectsOwnedByTeacher(teacherId).map((cs) => cs.id));
-      rows = D.assessments.filter((a) => ownedIds.has(a.class_subject_id));
     } else {
-      rows = D.assessments;
+      // No specific offering chosen: scope to the selected year (default active), then
+      // to the teacher's own offerings when scope=me.
+      const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+      const yearCsIds = new Set((yearId ? classSubjectsForYear(yearId) : D.class_subjects).map((c) => c.id));
+      const visibleIds =
+        scope === 'me' && teacherId
+          ? new Set(classSubjectsOwnedByTeacher(teacherId).map((cs) => cs.id).filter((id) => yearCsIds.has(id)))
+          : yearCsIds;
+      rows = D.assessments.filter((a) => visibleIds.has(a.class_subject_id));
     }
     if (type) rows = rows.filter((a) => a.type === type);
     if (status) rows = rows.filter((a) => a.status === status);

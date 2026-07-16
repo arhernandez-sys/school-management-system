@@ -6,9 +6,10 @@ import {
   FilterBar,
   PageHeader,
   StatusBadge,
+  YearSelect,
   type DataTableColumn,
 } from '@shared/components';
-import { useDebounce } from '@shared/hooks';
+import { useDebounce, useYearFilter } from '@shared/hooks';
 import { ROUTES } from '@shared/constants/routes';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { useClassesList } from './hooks/useClasses';
@@ -28,6 +29,8 @@ export function ClassesListPage() {
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
 
+  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
@@ -36,11 +39,12 @@ export function ClassesListPage() {
   const params = useMemo(
     () => ({
       search: debouncedSearch || undefined,
+      academic_year_id: yearId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
       sort: 'name',
     }),
-    [debouncedSearch, page, pageSize],
+    [debouncedSearch, yearId, page, pageSize],
   );
 
   const query = useClassesList(params);
@@ -125,6 +129,18 @@ export function ClassesListPage() {
           setPage(0);
         }}
         searchPlaceholder="Search classes…"
+        filters={
+          <YearSelect
+            value={yearId}
+            onChange={(id) => {
+              setYearId(id);
+              setPage(0);
+            }}
+            years={years}
+            activeYearId={activeYearId}
+            isLoading={yearsLoading}
+          />
+        }
       />
 
       <DataTable<ClassListItem>

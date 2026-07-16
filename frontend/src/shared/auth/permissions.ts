@@ -73,7 +73,9 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     attendance: 'create-edit',
     announcements: 'create-edit',
     calendar: 'view-all', // read-only school calendar
-    reports: 'view-own',
+    // Product decision (2026-07): the Reports module is hidden from teachers (nav item
+    // removed + /reports/* route-guarded). The server remains authoritative (NFR-SEC-01).
+    reports: 'none',
     settings: 'view-own', // account only
     // 'view-own' surfaces the teacher "My Profile" (/me → own TeacherProfileView).
     // Ownership (a teacher may only reach their OWN profile) and the student
@@ -91,7 +93,9 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     attendance: 'view-own',
     announcements: 'view-own',
     calendar: 'view-all', // read-only school calendar (same events everyone sees)
-    reports: 'view-own', // own report card only — NO transcript (D26)
+    // Product decision (2026-07): the Reports module is hidden from students (nav item
+    // removed + /reports/* route-guarded). The server remains authoritative (NFR-SEC-01).
+    reports: 'none',
     settings: 'view-own', // account only
     profile: 'view-own',
   },

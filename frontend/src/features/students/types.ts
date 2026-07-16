@@ -91,6 +91,8 @@ export interface StudentsListParams {
   status?: StudentStatus;
   class_id?: string;
   grade_level?: string;
+  /** Per-module year switcher: restrict to students enrolled in this academic year. */
+  academic_year_id?: string;
 }
 
 export type StudentsPage = Page<StudentListItem>;

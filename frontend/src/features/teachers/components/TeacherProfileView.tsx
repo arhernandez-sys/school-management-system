@@ -15,14 +15,11 @@ import {
   Typography,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GradingOutlinedIcon from '@mui/icons-material/GradingOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
-import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined';
-import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
 import {
   ConfirmDialog,
   DetailTabs,
@@ -72,7 +69,6 @@ export interface TeacherProfileViewProps {
  *  - Left: {@link TeacherProfileSummary} identity card (avatar, status, personal info,
  *    statistics, subject-expertise bars).
  *  - Right: {@link DetailTabs}:
- *      · Overview — fuller contact/personal detail + audit dates.
  *      · Classes & Subjects — the teacher's class_subjects ("section · subject", lead
  *        chip), each linking to the gradebook (Grades filtered by class_subject_id).
  *      · Attendance / Grades / Documents / Activity — reserved placeholders (no data yet).
@@ -90,12 +86,6 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
   const tabs = useMemo<DetailTab[]>(() => {
     if (!detail) return [];
     return [
-      {
-        value: 'overview',
-        label: 'Overview',
-        icon: <PersonOutlineIcon fontSize="small" />,
-        render: () => <OverviewTab teacher={detail} />,
-      },
       {
         value: 'assignments',
         label: `Classes & Subjects (${detail.classes_taught.length})`,
@@ -178,114 +168,6 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
     >
       {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Teacher detail sections" />}
     </ProfileLayout>
-  );
-}
-
-type OverviewRow = { label: string; value: ReactNode };
-
-/** An iconed heading + definition-list grid — one labeled block of the Overview tab. */
-function OverviewSection({
-  icon,
-  title,
-  rows,
-}: {
-  icon: ReactNode;
-  title: string;
-  rows: OverviewRow[];
-}) {
-  return (
-    <Box>
-      <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', mb: 1.5 }} component="h3">
-        <Box aria-hidden sx={{ display: 'flex', color: 'text.secondary' }}>
-          {icon}
-        </Box>
-        <Typography variant="overline" color="text.secondary" component="span" sx={{ lineHeight: 1.5 }}>
-          {title}
-        </Typography>
-      </Stack>
-      <Box
-        component="dl"
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'max-content 1fr' },
-          rowGap: 1.5,
-          columnGap: 3,
-          m: 0,
-        }}
-      >
-        {rows.map((r) => (
-          <Box key={r.label} sx={{ display: 'contents' }}>
-            <Typography component="dt" variant="body2" color="text.secondary">
-              {r.label}
-            </Typography>
-            <Typography component="dd" variant="body2" sx={{ m: 0 }}>
-              {r.value}
-            </Typography>
-          </Box>
-        ))}
-      </Box>
-    </Box>
-  );
-}
-
-/** Fuller contact + personal detail and account audit dates, grouped into two labeled blocks. */
-function OverviewTab({ teacher }: { teacher: TeacherDetail }) {
-  const formatDate = (iso: string): string => {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
-  };
-
-  const contactRows: OverviewRow[] = [
-    { label: 'Email', value: teacher.email || '—' },
-    { label: 'Phone', value: teacher.phone || '—' },
-    ...(teacher.address ? [{ label: 'Address', value: teacher.address }] : []),
-  ];
-
-  const personalRows: OverviewRow[] = [
-    { label: 'Full name', value: teacher.full_name },
-    { label: 'Staff number', value: teacher.staff_number },
-    ...(teacher.gender
-      ? [
-          {
-            label: 'Gender',
-            value: teacher.gender.charAt(0).toUpperCase() + teacher.gender.slice(1),
-          },
-        ]
-      : []),
-    ...(teacher.designation ? [{ label: 'Designation', value: teacher.designation }] : []),
-    ...(teacher.education ? [{ label: 'Education', value: teacher.education }] : []),
-    {
-      label: 'Specializations',
-      value:
-        teacher.subject_specializations.length > 0 ? (
-          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-            {teacher.subject_specializations.map((s) => (
-              <Chip key={s} label={s} size="small" variant="outlined" />
-            ))}
-          </Stack>
-        ) : (
-          '—'
-        ),
-    },
-    { label: 'Status', value: teacher.status === 'active' ? 'Active' : 'Inactive' },
-    { label: 'Login account', value: teacher.has_login ? 'Linked' : 'None' },
-    { label: 'Created', value: formatDate(teacher.audit.created_at) },
-    { label: 'Last updated', value: formatDate(teacher.audit.updated_at) },
-  ];
-
-  return (
-    <Stack spacing={3}>
-      <OverviewSection
-        icon={<ContactMailOutlinedIcon fontSize="small" />}
-        title="Contact"
-        rows={contactRows}
-      />
-      <OverviewSection
-        icon={<BadgeOutlinedIcon fontSize="small" />}
-        title="Personal & Account"
-        rows={personalRows}
-      />
-    </Stack>
   );
 }
 

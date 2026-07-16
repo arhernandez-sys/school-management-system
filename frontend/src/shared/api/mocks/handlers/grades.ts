@@ -3,8 +3,10 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   assessmentsForClassSubject,
+  classSubjectsForYear,
   classSubjectsOwnedByTeacher,
   computeTermGrade,
+  getActiveYear,
   getClassSubject,
   getSection,
   getStudent,
@@ -148,12 +150,19 @@ interface GradeEntryBody {
 export const gradesHandlers = [
   // ── Class-subject picker (which gradebooks the caller may open) ────────────────
   // Teacher → own offerings; Principal/Secretary → all active offerings.
-  http.get(`${API_BASE_URL}/grades/class-subjects`, ({ cookies }) => {
+  http.get(`${API_BASE_URL}/grades/class-subjects`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     const teacherId = currentTeacherId(role);
-    const offerings = teacherId
+    // Per-module year switcher: scope the offerings to the chosen year (default active).
+    const url = new URL(request.url);
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const yearCsIds = yearId ? new Set(classSubjectsForYear(yearId).map((c) => c.id)) : null;
+    let offerings = teacherId
       ? classSubjectsOwnedByTeacher(teacherId)
-      : D.class_subjects.filter((c) => c.is_active);
+      : yearId
+        ? classSubjectsForYear(yearId)
+        : D.class_subjects.filter((c) => c.is_active);
+    if (teacherId && yearCsIds) offerings = offerings.filter((c) => yearCsIds.has(c.id));
     const items = offerings
       .map((cs) => {
         const ref = classSubjectRef(cs.id);
@@ -190,13 +199,22 @@ export const gradesHandlers = [
   }),
 
   // ── Grade entry / update — the ONLY grade-write path ───────────────────────────
-  http.put(`${API_BASE_URL}/assessments/:assessmentId/grades`, async ({ params, request }) => {
+  http.put(`${API_BASE_URL}/assessments/:assessmentId/grades`, async ({ params, request, cookies }) => {
     const assessmentId = String(params.assessmentId);
     const asmt = D.assessments.find((a) => a.id === assessmentId);
     if (!asmt) return errorResponse(404, 'not_found', 'Assessment not found.');
 
     const cs = getClassSubject(asmt.class_subject_id);
     if (!cs) return errorResponse(404, 'not_found', 'Class subject not found.');
+
+    // A teacher may only write grades for offerings they are assigned to
+    // (assert_teacher_owns_class_subject) — mirrors the gradebook read guard so the
+    // new per-assessment grading page can't be used to write into an un-owned class.
+    const writerRole = sessionRole(cookies);
+    const writerTeacherId = currentTeacherId(writerRole);
+    if (writerRole === 'teacher' && writerTeacherId != null && !cs.teacher_ids.includes(writerTeacherId)) {
+      return errorResponse(403, 'forbidden', 'You are not assigned to this class.');
+    }
 
     const payload = (await request.json()) as { entries?: GradeEntryBody[] };
     const entries = Array.isArray(payload?.entries) ? payload.entries : [];

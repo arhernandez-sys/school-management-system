@@ -125,6 +125,8 @@ export interface TeachersListParams {
   search?: string;
   status?: TeacherStatus;
   specialization?: string;
+  /** Per-module year switcher: restrict to teachers assigned in this academic year. */
+  academic_year_id?: string;
 }
 
 /** The Page[T] envelope (api-spec §4.1). */

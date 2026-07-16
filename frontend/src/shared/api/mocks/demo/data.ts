@@ -75,12 +75,13 @@ function isWeekday(iso: string): boolean {
 
 // ── School profile ──────────────────────────────────────────────────────────────
 const school_profile: DemoSchoolProfile = {
-  name: 'Belmopan Comprehensive High School',
-  address: '12 Constitution Drive, Belmopan, Cayo District, Belize',
-  phone: '+501-822-2015',
-  email: 'office@belmopancomp.edu.bz',
-  logo_url: null,
-  colors: { primary: '#1F5BA8', secondary: '#0E7C7B' },
+  name: 'Belize Adventist Junior College',
+  address: 'Corozal Town, Corozal District, Belize',
+  phone: '+501-422-2015',
+  email: 'office@bajc.edu.bz',
+  logo_url: '/logo.jpeg',
+  // Brand colors sampled from the BAJC seal (navy triangle + crimson ring).
+  colors: { primary: '#1E3A6E', secondary: '#C21F30' },
 };
 
 // ── Academic years + semesters ──────────────────────────────────────────────────
@@ -800,6 +801,191 @@ for (const s of students) {
     must_change_password: false,
     last_login_at: addDays(DEMO_TODAY, -randInt(makeRng(s.id.length + 9), 0, 7)) + 'T15:00:00Z',
   });
+}
+
+// ── Historical year (2024-2025) — a full parallel dataset ───────────────────────
+// So the per-module year switcher shows populated, DISTINCT data when a past year
+// is selected. Same students/teachers/subjects (those entities persist across
+// years); separate sections, offerings, enrollments, assessments, grades and
+// attendance, all tagged to the archived year's Semester 1 (`sem-2024-1`).
+const HIST_ANCHOR = '2025-01-10'; // a weekday inside Semester 1 of 2024-2025
+const SEM_2024_1 = 'sem-2024-1';
+
+// Historical sections mirror the active structure but belong to the archived year.
+// They carry is_archived=true and their offerings is_active=false so that EVERY
+// existing "active year" filter (`!is_archived`, `is_active`) keeps excluding them
+// by default — current screens are unchanged. The per-module year switcher selects
+// them explicitly by academic_year_id when a past year is chosen.
+const histSections: DemoSection[] = sectionSeed.map(([name, grade, section, capacity], i) => ({
+  id: `sec-2024-${i + 1}`,
+  academic_year_id: YEAR_ARCHIVED,
+  name,
+  grade_level: grade,
+  section,
+  homeroom_label: `${name} Homeroom`,
+  capacity,
+  is_archived: true,
+}));
+sections.push(...histSections);
+
+// Historical class_subjects: same subject sets + lead teachers as the active year.
+const histClassSubjects: DemoClassSubject[] = [];
+let histCsCounter = 0;
+for (const sec of histSections) {
+  for (const code of subjectsForSection(sec)) {
+    histCsCounter += 1;
+    const lead = teacherByCode(code);
+    histClassSubjects.push({
+      id: `cs-2024-${histCsCounter}`,
+      section_id: sec.id,
+      subject_id: subjectId(code),
+      teacher_ids: [lead.id],
+      lead_teacher_id: lead.id,
+      is_active: false,
+      drop_lowest_count: code === 'MATH' ? 1 : 0,
+    });
+  }
+}
+// Give the (now-inactive) teacher Trevor Neal a historical Geography assignment so
+// the Teachers directory scoped to 2024-2025 shows a believable past-year roster.
+const histGeo = histClassSubjects.find((c) => c.subject_id === subjectId('GEO'));
+if (histGeo && !histGeo.teacher_ids.includes('teach-12')) histGeo.teacher_ids.push('teach-12');
+class_subjects.push(...histClassSubjects);
+
+for (const cs of histClassSubjects) {
+  assessment_categories.push(
+    { id: `cat-${cs.id}-q`, class_subject_id: cs.id, name: 'Quizzes', weight: 0.4, drop_lowest_count: 1 },
+    { id: `cat-${cs.id}-t`, class_subject_id: cs.id, name: 'Tests', weight: 0.6, drop_lowest_count: 0 },
+  );
+}
+
+// Historical enrollments: place each student into the historical section with the
+// same index they occupy this year, so past-year rosters are full and stable.
+const histEnrollmentId = new Map<string, string>(); // `${studentId}:${sectionId}` -> enrollment_id
+let histEnrollCounter = 0;
+for (let i = 0; i < students.length; i += 1) {
+  const stu = students[i]!;
+  const sec = histSections[i % histSections.length]!;
+  histEnrollCounter += 1;
+  const enrId = `enr-2024-${histEnrollCounter}`;
+  enrollments.push({
+    id: enrId,
+    student_id: stu.id,
+    section_id: sec.id,
+    semester_id: SEM_2024_1,
+    enrolled_at: '2024-09-02T08:00:00Z',
+    unenrolled_at: null,
+  });
+  histEnrollmentId.set(`${stu.id}:${sec.id}`, enrId);
+}
+function histRoster(sectionId: string): DemoStudent[] {
+  const ids = enrollments
+    .filter((e) => e.section_id === sectionId && e.semester_id === SEM_2024_1 && !e.unenrolled_at)
+    .map((e) => e.student_id);
+  return students.filter((s) => ids.includes(s.id));
+}
+
+// Historical assessments — the year is complete, so all are graded + released.
+const HIST_ASMT_TEMPLATES: ReadonlyArray<{
+  title: string;
+  type: DemoAssessment['type'];
+  catSuffix: 'q' | 't' | null;
+  max: number;
+  offsetDays: number;
+}> = [
+  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -90 },
+  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -60 },
+  { title: 'Midterm Test', type: 'test', catSuffix: 't', max: 50, offsetDays: -30 },
+  { title: 'Final Project', type: 'assignment', catSuffix: null, max: 100, offsetDays: -10 },
+];
+const histAssessments: DemoAssessment[] = [];
+let histAsmtCounter = 0;
+for (const cs of histClassSubjects) {
+  for (const tmpl of HIST_ASMT_TEMPLATES) {
+    histAsmtCounter += 1;
+    histAssessments.push({
+      id: `asmt-2024-${histAsmtCounter}`,
+      class_subject_id: cs.id,
+      semester_id: SEM_2024_1,
+      category_id: tmpl.catSuffix ? `cat-${cs.id}-${tmpl.catSuffix}` : null,
+      title: tmpl.title,
+      type: tmpl.type,
+      max_score: tmpl.max,
+      weight: 1,
+      assessment_date: addDays(HIST_ANCHOR, tmpl.offsetDays),
+      status: 'graded',
+      is_released: true,
+    });
+  }
+}
+assessments.push(...histAssessments);
+
+// Historical grades — believable scores (~78% centre), a few absent/excused.
+const rngHistGrade = makeRng(24680);
+let histGradeCounter = 0;
+for (const asmt of histAssessments) {
+  const cs = histClassSubjects.find((c) => c.id === asmt.class_subject_id)!;
+  for (const stu of histRoster(cs.section_id)) {
+    const enrId = histEnrollmentId.get(`${stu.id}:${cs.section_id}`);
+    if (!enrId) continue;
+    histGradeCounter += 1;
+    const roll = rngHistGrade();
+    let status: GradeStatus = 'graded';
+    let score: number | null = null;
+    if (roll < 0.05) status = 'absent';
+    else if (roll < 0.08) status = 'excused';
+    else {
+      status = 'graded';
+      const pct = Math.min(1, Math.max(0.4, 0.78 + (rngHistGrade() - 0.5) * 0.4));
+      score = Math.round(pct * asmt.max_score);
+    }
+    assessment_grades.push({
+      id: `grd-2024-${histGradeCounter}`,
+      assessment_id: asmt.id,
+      student_id: stu.id,
+      enrollment_id: enrId,
+      status,
+      score,
+      makeup_score: null,
+      is_released: true,
+    });
+  }
+}
+
+// Historical attendance — a 2-week weekday window inside Semester 1 of 2024-2025.
+const histAttDates: string[] = [];
+for (let d = -13; d <= 0; d += 1) {
+  const iso = addDays(HIST_ANCHOR, d);
+  if (isWeekday(iso)) histAttDates.push(iso);
+}
+const rngHistAtt = makeRng(99999);
+let histAttCounter = 0;
+for (const sec of histSections) {
+  const roster = histRoster(sec.id);
+  for (const date of histAttDates) {
+    for (const stu of roster) {
+      const enrId = histEnrollmentId.get(`${stu.id}:${sec.id}`);
+      if (!enrId) continue;
+      histAttCounter += 1;
+      const roll = rngHistAtt();
+      let status: AttendanceStatus;
+      if (roll < 0.9) status = 'present';
+      else if (roll < 0.95) status = 'absent';
+      else if (roll < 0.98) status = 'late';
+      else status = 'excused';
+      attendance_records.push({
+        id: `att-2024-${histAttCounter}`,
+        section_id: sec.id,
+        student_id: stu.id,
+        enrollment_id: enrId,
+        semester_id: SEM_2024_1,
+        attendance_date: date,
+        status,
+        recorded_by_user_id: teacherByCode('MATH').user_id ?? principalUserId,
+        recorded_at: `${date}T08:15:00Z`,
+      });
+    }
+  }
 }
 
 // ── Assemble + freeze ───────────────────────────────────────────────────────────

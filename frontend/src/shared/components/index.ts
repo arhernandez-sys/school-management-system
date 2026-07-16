@@ -16,6 +16,8 @@ export { FormDialog } from './FormDialog';
 export type { FormDialogProps } from './FormDialog';
 export { FilterBar } from './FilterBar';
 export type { FilterBarProps } from './FilterBar';
+export { YearSelect } from './YearSelect';
+export type { YearSelectProps } from './YearSelect';
 export { StatusBadge } from './StatusBadge';
 export type { StatusBadgeProps, StatusKind } from './StatusBadge';
 export { RoleChip } from './RoleChip';

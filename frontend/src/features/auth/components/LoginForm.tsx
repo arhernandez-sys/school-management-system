@@ -15,7 +15,6 @@ import {
 } from '@mui/material';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import SchoolIcon from '@mui/icons-material/School';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { ApiError } from '@shared/api/client';
@@ -104,12 +103,24 @@ export function LoginForm() {
       <Card sx={{ width: '100%', maxWidth: 400 }} variant="outlined">
         <CardContent sx={{ p: 4 }}>
           <Stack spacing={1} alignItems="center" sx={{ mb: 3 }}>
-            <SchoolIcon color="primary" sx={{ fontSize: 48 }} aria-hidden />
-            <Typography variant="h1" component="h1" sx={{ fontSize: '1.5rem', textAlign: 'center' }}>
+            <Box
+              component="img"
+              src="/logo.jpeg"
+              alt={strings.app.schoolName}
+              sx={{ width: 88, height: 88, objectFit: 'contain' }}
+            />
+            <Typography variant="h1" component="h1" sx={{ fontSize: '1.75rem', textAlign: 'center' }}>
               {strings.app.name}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {strings.auth.signInSubtitle}
+            <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+              {strings.app.fullName}
+            </Typography>
+            <Typography
+              variant="subtitle2"
+              color="primary"
+              sx={{ textAlign: 'center', fontWeight: 600 }}
+            >
+              {strings.app.schoolName}
             </Typography>
           </Stack>
 

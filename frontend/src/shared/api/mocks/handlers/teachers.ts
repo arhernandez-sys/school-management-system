@@ -127,6 +127,8 @@ export const teachersHandlers = [
       ...listParamsFrom(url),
       status: url.searchParams.get('status'),
       specialization: url.searchParams.get('specialization'),
+      // Per-module year switcher: restrict to teachers assigned in the chosen year.
+      academic_year_id: url.searchParams.get('academic_year_id'),
     });
     return HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),

@@ -12,9 +12,15 @@ import type {
   MyGrades,
 } from '../types';
 
-/** GET /grades/class-subjects — the role-scoped gradebook picker. */
-export async function fetchClassSubjectOptions(signal?: AbortSignal): Promise<ClassSubjectOptionsResponse> {
-  const res = await api.get<ClassSubjectOptionsResponse>('/grades/class-subjects', { signal });
+/** GET /grades/class-subjects — the role-scoped gradebook picker (year-scoped). */
+export async function fetchClassSubjectOptions(
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<ClassSubjectOptionsResponse> {
+  const res = await api.get<ClassSubjectOptionsResponse>('/grades/class-subjects', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }
 

@@ -27,15 +27,18 @@ export const theme = createTheme({
   colorSchemes: {
     light: {
       palette: {
+        // Brand palette derived from the BAJC seal: the navy triangle (primary) and
+        // the crimson ring/flame (secondary).
         primary: {
-          main: '#1F5BA8',
-          light: '#5A87D4',
-          dark: '#143E78',
+          main: '#1E3A6E',
+          light: '#4A6BB0',
+          dark: '#12264A',
           contrastText: '#FFFFFF',
         },
         secondary: {
-          main: '#0E7C7B',
-          dark: '#0A5958',
+          main: '#C21F30',
+          light: '#D64A57',
+          dark: '#8E1622',
           contrastText: '#FFFFFF',
         },
         error: { main: '#C62828', contrastText: '#FFFFFF' },
@@ -149,7 +152,7 @@ export const theme = createTheme({
     MuiCssBaseline: {
       styleOverrides: {
         ':focus-visible': {
-          outline: '2px solid #1F5BA8',
+          outline: '2px solid #1E3A6E',
           outlineOffset: '2px',
         },
         // Respect reduced-motion (design-system §9.7).

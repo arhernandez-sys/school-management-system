@@ -18,10 +18,11 @@ import {
   FilterBar,
   PageHeader,
   StatusBadge,
+  YearSelect,
   type DataTableColumn,
 } from '@shared/components';
 import { TempPasswordDialog } from '@features/settings/components/TempPasswordDialog';
-import { useDebounce } from '@shared/hooks';
+import { useDebounce, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
@@ -41,6 +42,8 @@ export function TeachersListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'teachers') : false;
+
+  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
@@ -62,11 +65,12 @@ export function TeachersListPage() {
       search: debouncedSearch || undefined,
       status: status || undefined,
       specialization: debouncedSpec || undefined,
+      academic_year_id: yearId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
       sort: 'full_name',
     }),
-    [debouncedSearch, status, debouncedSpec, page, pageSize],
+    [debouncedSearch, status, debouncedSpec, yearId, page, pageSize],
   );
 
   const query = useTeachersList(params);
@@ -194,6 +198,16 @@ export function TeachersListPage() {
         searchPlaceholder="Search by name or staff #…"
         filters={
           <>
+            <YearSelect
+              value={yearId}
+              onChange={(id) => {
+                setYearId(id);
+                setPage(0);
+              }}
+              years={years}
+              activeYearId={activeYearId}
+              isLoading={yearsLoading}
+            />
             <TextField
               select
               size="small"

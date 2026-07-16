@@ -18,7 +18,7 @@ export interface StudentPickerProps {
 export function StudentPicker({ value, onChange, label = 'Student' }: StudentPickerProps) {
   const [input, setInput] = useState('');
   const search = useDebounce(input, 300);
-  const { data, isLoading } = useReportStudents({ search: search || undefined, page_size: 20 });
+  const { data, isLoading } = useReportStudents({ search: search || undefined, page_size: 5 });
 
   const options = data?.items ?? [];
 

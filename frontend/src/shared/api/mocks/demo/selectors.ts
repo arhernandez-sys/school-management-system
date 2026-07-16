@@ -88,6 +88,41 @@ export const getActiveYear = () => D.academic_years.find((y) => y.status === 'ac
 export const getActiveGradingScale = () =>
   D.grading_scales.find((g) => g.academic_year_id === DEMO_IDS.activeYearId);
 
+// ── Academic-year scoping (per-module year switcher) ────────────────────────────
+// Sections belong to exactly one academic year, so most section-keyed selectors are
+// automatically year-correct once roster/enrollment resolve the section's semester
+// (see rosterFor / activeEnrollmentFor below). These helpers filter the list
+// surfaces (students / teachers / classes / grades) by the selected year.
+export const listAcademicYears = () =>
+  [...D.academic_years].sort((a, b) => b.name.localeCompare(a.name));
+export function sectionsForYear(yearId: string): DemoSection[] {
+  return D.sections.filter((s) => s.academic_year_id === yearId);
+}
+/** The Semester 1 id for a year (where the demo anchors that year's roster/grades). */
+export function primarySemesterIdForYear(yearId: string): string | undefined {
+  return D.semesters.find((s) => s.academic_year_id === yearId && s.sequence === 1)?.id;
+}
+/** The semester a section's roster/attendance lives under (derived from its year). */
+export function semesterIdForSection(sectionId: string): string | undefined {
+  const sec = getSection(sectionId);
+  return sec ? primarySemesterIdForYear(sec.academic_year_id) : DEMO_IDS.activeSemesterId;
+}
+export function classSubjectsForYear(yearId: string): DemoClassSubject[] {
+  const secIds = new Set(sectionsForYear(yearId).map((s) => s.id));
+  return D.class_subjects.filter((c) => secIds.has(c.section_id));
+}
+/** Students who have any enrollment in a section belonging to the given year. */
+export function studentIdsForYear(yearId: string): Set<string> {
+  const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
+  return new Set(D.enrollments.filter((e) => semIds.has(e.semester_id)).map((e) => e.student_id));
+}
+/** Teachers assigned to any offering in the given year. */
+export function teacherIdsForYear(yearId: string): Set<string> {
+  const ids = new Set<string>();
+  for (const cs of classSubjectsForYear(yearId)) cs.teacher_ids.forEach((t) => ids.add(t));
+  return ids;
+}
+
 // ── Demo session scope (the login cookie carries only a role) ────────────────────
 /**
  * The demo login carries only a role, and resolveMockUser() returns a synthetic user
@@ -123,9 +158,17 @@ export interface ListStudentsParams extends DemoListParams {
   grade_level?: string | null;
   /** teacher scope: restrict to students in sections this teacher owns any subject of. */
   teacher_id?: string | null;
+  /** year scope: restrict to students enrolled in a section of this academic year. */
+  academic_year_id?: string | null;
 }
 export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStudent> {
   let rows = D.students;
+  // Year scope: for a past year, restrict to students enrolled that year. For the
+  // active year (or no year) keep the full directory (includes graduated/withdrawn).
+  if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
+    const ids = studentIdsForYear(params.academic_year_id);
+    rows = rows.filter((s) => ids.has(s.id));
+  }
   if (params.teacher_id) {
     const sectionIds = new Set(sectionsOwnedByTeacher(params.teacher_id).map((s) => s.id));
     rows = rows.filter((s) => s.section_id && sectionIds.has(s.section_id));
@@ -152,9 +195,15 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
 export interface ListTeachersParams extends DemoListParams {
   status?: string | null;
   specialization?: string | null;
+  /** year scope: restrict to teachers assigned to an offering in this academic year. */
+  academic_year_id?: string | null;
 }
 export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeacher> {
   let rows = D.teachers;
+  if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
+    const ids = teacherIdsForYear(params.academic_year_id);
+    rows = rows.filter((t) => ids.has(t.id));
+  }
   if (params.status) rows = rows.filter((t) => t.status === params.status);
   if (params.specialization) {
     rows = rows.filter((t) =>
@@ -204,21 +253,25 @@ export function classSubjectsOwnedByTeacher(teacherId: string): DemoClassSubject
   return D.class_subjects.filter((c) => c.teacher_ids.includes(teacherId));
 }
 
-/** Active roster (unenrolled_at IS NULL) of a section for the active semester. */
+/**
+ * Roster (unenrolled_at IS NULL) of a section for that section's own semester.
+ * Because a section belongs to exactly one academic year, resolving the semester
+ * from the section makes this correct for BOTH the active and archived years.
+ */
 export function rosterFor(sectionId: string): DemoStudent[] {
+  const semId = semesterIdForSection(sectionId);
   const ids = D.enrollments
-    .filter(
-      (e) => e.section_id === sectionId && e.semester_id === DEMO_IDS.activeSemesterId && !e.unenrolled_at,
-    )
+    .filter((e) => e.section_id === sectionId && e.semester_id === semId && !e.unenrolled_at)
     .map((e) => e.student_id);
   return D.students.filter((s) => ids.includes(s.id));
 }
 export function activeEnrollmentFor(studentId: string, sectionId: string): DemoEnrollment | undefined {
+  const semId = semesterIdForSection(sectionId);
   return D.enrollments.find(
     (e) =>
       e.student_id === studentId &&
       e.section_id === sectionId &&
-      e.semester_id === DEMO_IDS.activeSemesterId &&
+      e.semester_id === semId &&
       !e.unenrolled_at,
   );
 }
@@ -367,7 +420,8 @@ export function attendanceSummaryForSection(sectionId: string): {
 }
 /** School-wide attendance rate (%) over the recent window — Principal dashboard. */
 export function schoolAttendanceRate(): number {
-  const rows = D.attendance_records;
+  const activeSecIds = new Set(sectionsForYear(DEMO_IDS.activeYearId).map((s) => s.id));
+  const rows = D.attendance_records.filter((r) => activeSecIds.has(r.section_id));
   if (rows.length === 0) return 0;
   const present = rows.filter((r) => r.status === 'present' || r.status === 'late').length;
   return Math.round((present / rows.length) * 1000) / 10;
@@ -419,7 +473,7 @@ export function dashboardFor(role: string, userId?: string) {
       stats: {
         total_students: D.students.filter((s) => s.status === 'active').length,
         total_teachers: D.teachers.filter((t) => t.status === 'active').length,
-        total_classes: D.sections.length,
+        total_classes: sectionsForYear(DEMO_IDS.activeYearId).length,
         attendance_rate: schoolAttendanceRate(),
       },
       enrollment_by_grade: enrollmentByGrade(),
@@ -428,7 +482,7 @@ export function dashboardFor(role: string, userId?: string) {
   }
   if (role === 'teacher') {
     const teacher = userId ? D.teachers.find((t) => t.user_id === userId) : undefined;
-    const owned = teacher ? classSubjectsOwnedByTeacher(teacher.id) : [];
+    const owned = teacher ? classSubjectsOwnedByTeacher(teacher.id).filter((c) => c.is_active) : [];
     return {
       role,
       semester,
@@ -500,7 +554,7 @@ export function gradeDistribution(): Array<{ letter: string; count: number }> {
   const scale = getActiveGradingScale();
   const counts = new Map<string, number>();
   if (scale) for (const b of scale.bands) counts.set(b.letter, 0);
-  for (const cs of D.class_subjects) {
+  for (const cs of classSubjectsForYear(DEMO_IDS.activeYearId)) {
     for (const stu of rosterFor(cs.section_id)) {
       const { letter } = computeTermGrade(stu.id, cs.id);
       if (letter) counts.set(letter, (counts.get(letter) ?? 0) + 1);

@@ -1,8 +1,6 @@
-import { AppBar, Box, IconButton, Toolbar, Typography } from '@mui/material';
+import { AppBar, Box, IconButton, Stack, Toolbar, Typography } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
-import SchoolIcon from '@mui/icons-material/School';
 import { UserMenu } from './UserMenu';
-import { SemesterSwitcher } from './SemesterSwitcher';
 import { NotificationsBell } from './NotificationsBell';
 import { strings } from '@i18n/strings';
 import type { CurrentUser } from '@shared/types/api';
@@ -42,18 +40,37 @@ export function TopBar({
           <MenuIcon />
         </IconButton>
 
-        <SchoolIcon sx={{ mr: 1 }} aria-hidden />
-        <Typography variant="h3" component="span" noWrap sx={{ fontWeight: 700 }}>
-          {schoolName ?? strings.app.name}
-        </Typography>
+        <Box
+          component="img"
+          src="/logo.jpeg"
+          alt={strings.app.schoolName}
+          sx={{
+            width: 36,
+            height: 36,
+            mr: 1.5,
+            borderRadius: '50%',
+            bgcolor: '#FFFFFF',
+            p: '2px',
+            objectFit: 'contain',
+            flexShrink: 0,
+          }}
+        />
+        <Stack sx={{ minWidth: 0 }}>
+          <Typography variant="h3" component="span" noWrap sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+            {schoolName ?? strings.app.name}
+          </Typography>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{ opacity: 0.85, display: { xs: 'none', sm: 'block' }, lineHeight: 1.2 }}
+          >
+            {strings.app.schoolName}
+          </Typography>
+        </Stack>
 
         <Box sx={{ flexGrow: 1 }} />
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {/* Semester switcher hidden on xs (collapses into overflow — design-system §3.3). */}
-          <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-            <SemesterSwitcher />
-          </Box>
           <NotificationsBell count={unreadCount} />
           <UserMenu user={user} onLogout={onLogout} />
         </Box>

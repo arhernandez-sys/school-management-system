@@ -1,18 +1,18 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { GradebookScreen } from './GradebookScreen';
+import { GradeAssessmentsScreen } from './GradeAssessmentsScreen';
+import { AssessmentGradingScreen } from './AssessmentGradingScreen';
 import { MyGradesScreen } from './MyGradesScreen';
 
 /**
  * Grades module (Phase 7) — a nested-routed container mounted at `/grades/*`
  * (mirrors features/settings/index.tsx). Role-shaped:
  *  - Student → "My Grades" (own released grades, read-only).
- *  - Teacher → the Gradebook for subjects they own (grade entry + release).
- *  - Principal / Secretary → the Gradebook, view-all read-only.
+ *  - Teacher / Principal / Secretary → a LIST of assessments per class·subject; clicking
+ *    an assessment opens the per-assessment grading page for the whole class.
  *
- * The gradebook selection is URL-persisted via `?class_subject_id=` so links from the
- * Classes › Subjects tab and the Assessments list open the right grid directly (M4).
- * Route visibility is UX-only; the server (mocked here) is authoritative on every call.
+ * The class·subject selection is URL-persisted via `?class_subject_id=` and the year via
+ * `?year=`. Route visibility is UX-only; the server (mocked here) is authoritative.
  */
 export function GradesPage() {
   const { user } = useAuth();
@@ -20,7 +20,9 @@ export function GradesPage() {
 
   return (
     <Routes>
-      <Route index element={isStudent ? <MyGradesScreen /> : <GradebookScreen />} />
+      <Route index element={isStudent ? <MyGradesScreen /> : <GradeAssessmentsScreen />} />
+      {/* Per-assessment class grading page (teacher/P·S). */}
+      <Route path="assessment/:assessmentId" element={<AssessmentGradingScreen />} />
       {/* Explicit sub-paths keep deep links stable if a viewer role changes. */}
       <Route path="me" element={<MyGradesScreen />} />
       <Route path="*" element={<Navigate to="." replace />} />

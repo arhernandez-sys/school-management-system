@@ -256,6 +256,8 @@ export const studentsHandlers = [
       grade_level: url.searchParams.get('grade_level'),
       // Teacher scope: restrict to students in sections the teacher owns.
       teacher_id: role === 'teacher' ? currentTeacherId(role) : null,
+      // Per-module year switcher: restrict to students enrolled in the chosen year.
+      academic_year_id: url.searchParams.get('academic_year_id'),
     });
     return HttpResponse.json({ ...page, items: page.items.map(studentListItem) });
   }),

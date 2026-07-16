@@ -1,5 +1,8 @@
-import { Autocomplete, Box, Chip, TextField, Typography } from '@mui/material';
+import { Autocomplete, Box, Chip, TextField, Typography, createFilterOptions } from '@mui/material';
 import type { ClassSubjectOption } from '../types';
+
+// Type-ahead is capped to the top 5 matches so the dropdown stays scannable.
+const filterOptions = createFilterOptions<ClassSubjectOption>({ limit: 5 });
 
 /**
  * The gradebook selector. A searchable Autocomplete (one gradebook per section·subject,
@@ -29,8 +32,11 @@ export function ClassSubjectPicker({
       disabled={disabled}
       onChange={(_, next) => onChange(next)}
       getOptionLabel={(o) => o.display_name}
+      filterOptions={filterOptions}
       isOptionEqualToValue={(a, b) => a.id === b.id}
-      sx={{ maxWidth: 480 }}
+      // Grow to fill the row (and go full-width when stacked) but never collapse so
+      // narrow that the selected class·subject label is clipped.
+      sx={{ flex: 1, width: '100%', minWidth: { xs: '100%', sm: 280 }, maxWidth: 480 }}
       renderInput={(params) => (
         <TextField
           {...params}

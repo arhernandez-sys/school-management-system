@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -8,7 +8,6 @@ import {
   CardContent,
   Divider,
   Grid,
-  Link as MuiLink,
   Stack,
   Typography,
 } from '@mui/material';
@@ -21,7 +20,6 @@ import {
   StatusBadge,
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { ROUTES } from '@shared/constants/routes';
 import { useMyGrades } from './hooks/useGrades';
 import type { MyGradeSubject } from './types';
 import { formatNumeric, letterKind } from './components/gradeDisplay';
@@ -184,24 +182,13 @@ function SubjectDetail({ subject, onBack }: SubjectDetailProps) {
           <Typography variant="h4" component="h2">
             {name}
           </Typography>
-          {subject.teacher &&
-            (subject.teacher.id ? (
-              // Deep-link to the teacher's read-only profile; TeacherProfileRoute gates
-              // access (a student may only open a teacher who teaches their subjects).
-              <MuiLink
-                component={RouterLink}
-                to={`${ROUTES.teacherProfile}/${subject.teacher.id}`}
-                variant="body2"
-                underline="hover"
-                color="text.secondary"
-              >
-                {subject.teacher.full_name}
-              </MuiLink>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                {subject.teacher.full_name}
-              </Typography>
-            ))}
+          {subject.teacher && (
+            // Students do not have access to teacher profiles — show the name as plain
+            // text (the Teachers module is hidden from students).
+            <Typography variant="body2" color="text.secondary">
+              {subject.teacher.full_name}
+            </Typography>
+          )}
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography variant="h4" component="p">

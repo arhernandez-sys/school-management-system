@@ -5,6 +5,7 @@ import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import PlaceOutlinedIcon from '@mui/icons-material/PlaceOutlined';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import ClassOutlinedIcon from '@mui/icons-material/ClassOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
@@ -22,6 +23,11 @@ import type { TeacherDetail } from '../types';
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
 }
 
 /** A single label/value row in the definition-list sections. */
@@ -207,6 +213,24 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
             </Stack>
           </>
         )}
+
+        {/* Account — audit dates (created / last updated). */}
+        <Divider sx={{ my: 2 }} />
+        <SectionHeading icon={<HistoryOutlinedIcon fontSize="small" />}>Account</SectionHeading>
+        <Box
+          component="dl"
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: 'max-content 1fr',
+            rowGap: 1,
+            columnGap: 2,
+            m: 0,
+            mt: 1,
+          }}
+        >
+          <InfoRow label="Created" value={formatDate(teacher.audit.created_at)} />
+          <InfoRow label="Last updated" value={formatDate(teacher.audit.updated_at)} />
+        </Box>
       </CardContent>
     </Card>
   );

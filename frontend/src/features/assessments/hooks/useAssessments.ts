@@ -53,6 +53,7 @@ export interface AssessmentListParams {
   class_subject_id?: string;
   type?: AssessmentType;
   status?: AssessmentStatus;
+  academic_year_id?: string;
   page?: number;
   page_size?: number;
   sort?: string;
@@ -76,8 +77,14 @@ export type AssessmentUpdateBody = Partial<
 // ── Query keys ───────────────────────────────────────────────────────────────────
 export const assessmentKeys = {
   all: ['assessments'] as const,
-  classSubjects: (scope?: string, teacherProfileId?: string | null) =>
-    [...assessmentKeys.all, 'class-subjects', scope ?? 'all', teacherProfileId ?? null] as const,
+  classSubjects: (scope?: string, teacherProfileId?: string | null, academicYearId?: string | null) =>
+    [
+      ...assessmentKeys.all,
+      'class-subjects',
+      scope ?? 'all',
+      teacherProfileId ?? null,
+      academicYearId ?? null,
+    ] as const,
   list: (params: AssessmentListParams) => [...assessmentKeys.all, 'list', params] as const,
   detail: (id: string) => [...assessmentKeys.all, 'detail', id] as const,
   categories: (classSubjectId: string) =>
@@ -89,10 +96,14 @@ export const assessmentKeys = {
  * GET /assessments/class-subjects — options for the class-subject picker.
  * Teacher scope passes `scope=me&teacher_profile_id=…`; P/S omit scope (view-all).
  */
-export function useClassSubjectOptions(scope: 'me' | 'all', teacherProfileId?: string | null) {
+export function useClassSubjectOptions(
+  scope: 'me' | 'all',
+  teacherProfileId?: string | null,
+  academicYearId?: string,
+) {
   const enabled = scope !== 'me' || Boolean(teacherProfileId);
   return useQuery({
-    queryKey: assessmentKeys.classSubjects(scope, teacherProfileId),
+    queryKey: assessmentKeys.classSubjects(scope, teacherProfileId, academicYearId),
     enabled,
     queryFn: async ({ signal }) => {
       const params: Record<string, string> = {};
@@ -100,6 +111,7 @@ export function useClassSubjectOptions(scope: 'me' | 'all', teacherProfileId?: s
         params.scope = 'me';
         params.teacher_profile_id = teacherProfileId;
       }
+      if (academicYearId) params.academic_year_id = academicYearId;
       const res = await api.get<{ items: ClassSubjectRef[] }>('/assessments/class-subjects', {
         params,
         signal,

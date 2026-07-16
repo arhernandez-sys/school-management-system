@@ -1,6 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
-import { Box, Button, Link as MuiLink, Stack, Typography } from '@mui/material';
-import { Fragment } from 'react';
+import { Box, Button, Stack, Typography } from '@mui/material';
 import GroupsIcon from '@mui/icons-material/Groups';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
@@ -72,25 +71,10 @@ export function StudentClassesPage() {
       headerName: 'Teacher(s)',
       render: (cs) =>
         cs.teachers.length > 0 ? (
+          // Product decision (2026-07): students no longer have access to teacher
+          // profiles, so teacher names render as plain text (no link).
           <Typography variant="body2">
-            {cs.teachers.map((t, i) => (
-              <Fragment key={t.id}>
-                {i > 0 && ', '}
-                {t.id ? (
-                  // TeacherProfileRoute gates access — a student may only open a teacher
-                  // who teaches one of their subjects.
-                  <MuiLink
-                    component={RouterLink}
-                    to={`${ROUTES.teacherProfile}/${t.id}`}
-                    underline="hover"
-                  >
-                    {t.full_name}
-                  </MuiLink>
-                ) : (
-                  t.full_name
-                )}
-              </Fragment>
-            ))}
+            {cs.teachers.map((t) => t.full_name).join(', ')}
           </Typography>
         ) : (
           <StatusBadge label="Not assigned" kind="neutral" />

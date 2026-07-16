@@ -21,16 +21,17 @@ import type { GradeEntry } from '../types';
 
 export const gradeKeys = {
   all: ['grades'] as const,
-  classSubjectOptions: () => [...gradeKeys.all, 'class-subjects'] as const,
+  classSubjectOptions: (academicYearId?: string | null) =>
+    [...gradeKeys.all, 'class-subjects', academicYearId ?? null] as const,
   gradebook: (classSubjectId: string) => [...gradeKeys.all, 'gradebook', classSubjectId] as const,
   me: () => [...gradeKeys.all, 'me'] as const,
 };
 
-/** GET /grades/class-subjects — the picker (teacher own / P·S all). */
-export function useClassSubjectOptions() {
+/** GET /grades/class-subjects — the picker (teacher own / P·S all), year-scoped. */
+export function useClassSubjectOptions(academicYearId?: string) {
   return useQuery({
-    queryKey: gradeKeys.classSubjectOptions(),
-    queryFn: ({ signal }) => fetchClassSubjectOptions(signal),
+    queryKey: gradeKeys.classSubjectOptions(academicYearId),
+    queryFn: ({ signal }) => fetchClassSubjectOptions(academicYearId, signal),
   });
 }
 

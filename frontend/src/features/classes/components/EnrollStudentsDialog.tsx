@@ -53,7 +53,8 @@ export function EnrollStudentsDialog({
     }
   }, [open]);
 
-  const students = listQuery.data ?? [];
+  // Cap the type-ahead result list to the top 5 matches (the hook has no page_size param).
+  const students = (listQuery.data ?? []).slice(0, 5);
   const selectedCount = selected.size;
 
   const toggle = (id: string) => {

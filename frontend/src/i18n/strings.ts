@@ -8,7 +8,9 @@
 
 export const strings = {
   app: {
-    name: 'School Management System',
+    name: 'SIMS',
+    fullName: 'School Information Management System',
+    schoolName: 'Belize Adventist Junior College',
     skipToContent: 'Skip to main content',
   },
   nav: {

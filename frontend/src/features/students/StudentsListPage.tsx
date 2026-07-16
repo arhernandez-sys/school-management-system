@@ -16,10 +16,11 @@ import {
   FilterBar,
   PageHeader,
   StatusBadge,
+  YearSelect,
   type DataTableColumn,
   type StatusKind,
 } from '@shared/components';
-import { useDebounce } from '@shared/hooks';
+import { useDebounce, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
@@ -57,6 +58,8 @@ export function StudentsListPage() {
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'students') : false;
 
+  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
   const [status, setStatus] = useState<StudentStatus | ''>('');
@@ -79,11 +82,12 @@ export function StudentsListPage() {
       search: debouncedSearch || undefined,
       status: status || undefined,
       class_id: sectionId || undefined,
+      academic_year_id: yearId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
       sort: sortDirection === 'desc' ? `-${sortField}` : sortField,
     }),
-    [debouncedSearch, status, sectionId, page, pageSize, sortField, sortDirection],
+    [debouncedSearch, status, sectionId, yearId, page, pageSize, sortField, sortDirection],
   );
 
   const query = useStudentsList(params);
@@ -189,6 +193,16 @@ export function StudentsListPage() {
         searchPlaceholder="Search by name or student #…"
         filters={
           <>
+            <YearSelect
+              value={yearId}
+              onChange={(id) => {
+                setYearId(id);
+                setPage(0);
+              }}
+              years={years}
+              activeYearId={activeYearId}
+              isLoading={yearsLoading}
+            />
             <TextField
               select
               size="small"

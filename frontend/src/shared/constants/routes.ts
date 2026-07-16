@@ -13,6 +13,8 @@ export const ROUTES = {
   classes: '/classes',
   assessments: '/assessments',
   grades: '/grades',
+  /** Per-assessment class grading page: /grades/assessment/:assessmentId. */
+  gradeAssessment: '/grades/assessment',
   attendance: '/attendance',
   announcements: '/announcements',
   calendar: '/calendar',

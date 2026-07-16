@@ -13,11 +13,8 @@ import {
   Typography,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import GradingOutlinedIcon from '@mui/icons-material/GradingOutlined';
-import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
-import FamilyRestroomOutlinedIcon from '@mui/icons-material/FamilyRestroomOutlined';
 import {
   ConfirmDialog,
   DataTable,
@@ -80,12 +77,6 @@ export function StudentDetailPage() {
   const tabs = useMemo<DetailTab[]>(() => {
     if (!detail || !studentId) return [];
     return [
-      {
-        value: 'profile',
-        label: 'Profile',
-        icon: <PersonOutlineIcon fontSize="small" />,
-        render: () => <ProfileTab student={detail} />,
-      },
       {
         value: 'enrollment',
         label: 'Enrollment',
@@ -185,35 +176,6 @@ function Section({
       </Box>
       <DefinitionList rows={rows} />
     </Box>
-  );
-}
-
-/** Profile tab — personal detail grouped from guardian/contact. */
-function ProfileTab({ student }: { student: StudentDetail }) {
-  return (
-    <Stack spacing={3}>
-      <Section
-        icon={<BadgeOutlinedIcon fontSize="small" />}
-        title="Personal"
-        rows={[
-          { label: 'Full name', value: student.full_name },
-          { label: 'Student number', value: student.student_number },
-          { label: 'Date of birth', value: student.date_of_birth || '—' },
-          { label: 'Gender', value: student.gender === 'female' ? 'Female' : 'Male' },
-          { label: 'Phone', value: student.phone || '—' },
-          { label: 'Address', value: student.address || '—' },
-        ]}
-      />
-      <Section
-        icon={<FamilyRestroomOutlinedIcon fontSize="small" />}
-        title="Guardian"
-        rows={[
-          { label: 'Guardian', value: student.guardian_name || '—' },
-          { label: 'Guardian phone', value: student.guardian_phone || '—' },
-          { label: 'Guardian email', value: student.guardian_email || '—' },
-        ]}
-      />
-    </Stack>
   );
 }
 
