@@ -17,6 +17,7 @@
  */
 import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY } from './data';
 import type {
+  DemoAcademicYear,
   DemoAssessment,
   DemoAssessmentGrade,
   DemoClassSubject,
@@ -121,6 +122,24 @@ export function teacherIdsForYear(yearId: string): Set<string> {
   const ids = new Set<string>();
   for (const cs of classSubjectsForYear(yearId)) cs.teacher_ids.forEach((t) => ids.add(t));
   return ids;
+}
+/** The academic years a student has any enrollment in (newest first). */
+export function yearsForStudent(studentId: string): DemoAcademicYear[] {
+  const yearIds = new Set(
+    D.enrollments
+      .filter((e) => e.student_id === studentId)
+      .map((e) => D.semesters.find((s) => s.id === e.semester_id)?.academic_year_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  return D.academic_years
+    .filter((y) => yearIds.has(y.id))
+    .sort((a, b) => b.name.localeCompare(a.name));
+}
+/** The section a student was enrolled in for a given year (undefined if none). */
+export function sectionForStudentInYear(studentId: string, yearId: string): DemoSection | undefined {
+  const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
+  const enr = D.enrollments.find((e) => e.student_id === studentId && semIds.has(e.semester_id));
+  return enr ? getSection(enr.section_id) : undefined;
 }
 
 // ── Demo session scope (the login cookie carries only a role) ────────────────────

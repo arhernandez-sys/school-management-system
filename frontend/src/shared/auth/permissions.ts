@@ -38,7 +38,9 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     students: 'full',
     teachers: 'full',
     classes: 'full',
-    assessments: 'view-all',
+    // Product decision (2026-07): Assessments are folded into Grades (subject cards →
+    // drill-down). Staff manage assessments there, so the standalone nav is hidden.
+    assessments: 'none',
     grades: 'view-all',
     attendance: 'view-all',
     announcements: 'full',
@@ -52,7 +54,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     students: 'full',
     teachers: 'create-edit',
     classes: 'create-edit',
-    assessments: 'view-all',
+    assessments: 'none', // folded into Grades (see principal note)
     grades: 'view-all',
     attendance: 'view-all',
     announcements: 'full',
@@ -68,7 +70,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // intentionally tightens requirements.md §2 (which allowed read-only View-all).
     teachers: 'none',
     classes: 'view-own',
-    assessments: 'full', // full on OWN classes (server enforces ownership)
+    assessments: 'none', // folded into Grades — teachers author inside the Grades drill-down
     grades: 'create-edit',
     attendance: 'create-edit',
     announcements: 'create-edit',

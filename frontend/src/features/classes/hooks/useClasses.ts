@@ -10,6 +10,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@shared/api/client';
 import type {
+  ClassCreateBody,
   ClassDetail,
   ClassListParams,
   ClassListResponse,
@@ -95,6 +96,20 @@ export function useEnrollableStudents(classId: string | undefined, search: strin
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────────
+/** POST /classes — create a section. Invalidates the list on success. */
+export function useCreateClass() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: ClassCreateBody) => {
+      const res = await api.post<ClassDetail>('/classes', body);
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
+    },
+  });
+}
+
 /** POST /classes/{id}/enrollments — enroll one or more students (bulk). */
 export function useEnrollStudents(classId: string) {
   const qc = useQueryClient();

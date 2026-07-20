@@ -81,6 +81,15 @@ export interface EnrollmentResult {
   over_capacity_warning: boolean;
 }
 
+/** POST /classes request body. */
+export interface ClassCreateBody {
+  name: string;
+  grade_level: string;
+  section: string;
+  capacity: number;
+  academic_year_id: string;
+}
+
 export interface ClassListParams {
   academic_year_id?: string;
   grade_level?: string;

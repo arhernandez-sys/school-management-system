@@ -51,8 +51,11 @@ export async function setAssessmentRelease(
   return res.data;
 }
 
-/** GET /grades/me — the student's own released grades. */
-export async function fetchMyGrades(signal?: AbortSignal): Promise<MyGrades> {
-  const res = await api.get<MyGrades>('/grades/me', { signal });
+/** GET /grades/me — the student's own released grades (year-scoped). */
+export async function fetchMyGrades(academicYearId?: string, signal?: AbortSignal): Promise<MyGrades> {
+  const res = await api.get<MyGrades>('/grades/me', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }

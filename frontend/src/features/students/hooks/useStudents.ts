@@ -11,6 +11,7 @@ import {
   getMyStudentRecord,
   getStudent,
   getStudentAssessments,
+  getStudentYears,
   listStudents,
   setStudentStatus,
   updateStudent,
@@ -24,6 +25,7 @@ export const studentKeys = {
   detail: (id: string) => [...studentKeys.all, 'detail', id] as const,
   me: () => [...studentKeys.all, 'me'] as const,
   assessments: (id: string) => [...studentKeys.all, id, 'assessments'] as const,
+  years: (id: string) => [...studentKeys.all, id, 'years'] as const,
 };
 
 // ── Reads ──────────────────────────────────────────────────────────────────────
@@ -36,12 +38,22 @@ export function useStudentsList(params: StudentsListParams) {
   });
 }
 
-/** GET /students/{id} — full detail. */
-export function useStudentDetail(studentId: string | undefined) {
+/** GET /students/{id} — full detail, optionally scoped to an academic year. */
+export function useStudentDetail(studentId: string | undefined, yearId?: string) {
   return useQuery({
-    queryKey: studentKeys.detail(studentId ?? ''),
+    queryKey: [...studentKeys.detail(studentId ?? ''), yearId ?? null],
     enabled: Boolean(studentId),
-    queryFn: ({ signal }) => getStudent(studentId as string, signal),
+    queryFn: ({ signal }) => getStudent(studentId as string, yearId, signal),
+  });
+}
+
+/** GET /students/{id}/years — the years this student was enrolled in (for the year filter). */
+export function useStudentYears(studentId: string | undefined) {
+  return useQuery({
+    queryKey: studentKeys.years(studentId ?? ''),
+    enabled: Boolean(studentId),
+    queryFn: ({ signal }) => getStudentYears(studentId as string, signal),
+    staleTime: 5 * 60 * 1000, // a student's year history is stable within a session
   });
 }
 
@@ -54,12 +66,12 @@ export function useMyStudentRecord(enabled: boolean) {
   });
 }
 
-/** GET /students/{id}/assessments — subject-grouped assessments + term grades. */
-export function useStudentAssessments(studentId: string | undefined) {
+/** GET /students/{id}/assessments — subject-grouped assessments + term grades (year-scoped). */
+export function useStudentAssessments(studentId: string | undefined, yearId?: string) {
   return useQuery({
-    queryKey: studentKeys.assessments(studentId ?? ''),
+    queryKey: [...studentKeys.assessments(studentId ?? ''), yearId ?? null],
     enabled: Boolean(studentId),
-    queryFn: ({ signal }) => getStudentAssessments(studentId as string, signal),
+    queryFn: ({ signal }) => getStudentAssessments(studentId as string, yearId, signal),
   });
 }
 

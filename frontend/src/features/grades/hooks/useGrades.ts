@@ -24,7 +24,7 @@ export const gradeKeys = {
   classSubjectOptions: (academicYearId?: string | null) =>
     [...gradeKeys.all, 'class-subjects', academicYearId ?? null] as const,
   gradebook: (classSubjectId: string) => [...gradeKeys.all, 'gradebook', classSubjectId] as const,
-  me: () => [...gradeKeys.all, 'me'] as const,
+  me: (academicYearId?: string | null) => [...gradeKeys.all, 'me', academicYearId ?? null] as const,
 };
 
 /** GET /grades/class-subjects — the picker (teacher own / P·S all), year-scoped. */
@@ -54,7 +54,7 @@ export function useSaveGrades(classSubjectId: string | null) {
       if (classSubjectId) {
         void qc.invalidateQueries({ queryKey: gradeKeys.gradebook(classSubjectId) });
       }
-      void qc.invalidateQueries({ queryKey: gradeKeys.me() });
+      void qc.invalidateQueries({ queryKey: [...gradeKeys.all, 'me'] });
     },
   });
 }
@@ -69,15 +69,15 @@ export function useSetRelease(classSubjectId: string | null) {
       if (classSubjectId) {
         void qc.invalidateQueries({ queryKey: gradeKeys.gradebook(classSubjectId) });
       }
-      void qc.invalidateQueries({ queryKey: gradeKeys.me() });
+      void qc.invalidateQueries({ queryKey: [...gradeKeys.all, 'me'] });
     },
   });
 }
 
-/** GET /grades/me — the student's own released grades. */
-export function useMyGrades() {
+/** GET /grades/me — the student's own released grades (year-scoped). */
+export function useMyGrades(academicYearId?: string) {
   return useQuery({
-    queryKey: gradeKeys.me(),
-    queryFn: ({ signal }) => fetchMyGrades(signal),
+    queryKey: gradeKeys.me(academicYearId),
+    queryFn: ({ signal }) => fetchMyGrades(academicYearId, signal),
   });
 }

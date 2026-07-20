@@ -17,18 +17,19 @@ import {
 
 export const attendanceKeys = {
   all: ['attendance'] as const,
-  sections: () => [...attendanceKeys.all, 'sections'] as const,
+  sections: (academicYearId?: string | null) =>
+    [...attendanceKeys.all, 'sections', academicYearId ?? null] as const,
   register: (sectionId: string, date: string) =>
     [...attendanceKeys.all, 'register', sectionId, date] as const,
   summary: (sectionId: string) => [...attendanceKeys.all, 'summary', sectionId] as const,
-  me: () => [...attendanceKeys.all, 'me'] as const,
+  me: (academicYearId?: string | null) => [...attendanceKeys.all, 'me', academicYearId ?? null] as const,
 };
 
-/** Sections the caller may view/record (drives the section picker). */
-export function useAttendanceSections() {
+/** Sections the caller may view/record (drives the section picker), year-scoped. */
+export function useAttendanceSections(academicYearId?: string) {
   return useQuery({
-    queryKey: attendanceKeys.sections(),
-    queryFn: ({ signal }) => getAttendanceSections(signal),
+    queryKey: attendanceKeys.sections(academicYearId),
+    queryFn: ({ signal }) => getAttendanceSections(academicYearId, signal),
     staleTime: 5 * 60 * 1000, // sections rarely change within a demo session
   });
 }
@@ -52,11 +53,11 @@ export function useAttendanceSummary(sectionId: string | null) {
   });
 }
 
-/** The signed-in student's own attendance (self-scoped). */
-export function useMyAttendance() {
+/** The signed-in student's own attendance (self-scoped), year-scoped. */
+export function useMyAttendance(academicYearId?: string) {
   return useQuery({
-    queryKey: attendanceKeys.me(),
-    queryFn: ({ signal }) => getMyAttendance(signal),
+    queryKey: attendanceKeys.me(academicYearId),
+    queryFn: ({ signal }) => getMyAttendance(academicYearId, signal),
   });
 }
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Link as MuiLink, Typography } from '@mui/material';
+import { Alert, Box, Button, Link as MuiLink, Snackbar, Typography } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import {
   DataTable,
   FilterBar,
@@ -10,10 +11,13 @@ import {
   type DataTableColumn,
 } from '@shared/components';
 import { useDebounce, useYearFilter } from '@shared/hooks';
+import { canWrite } from '@shared/auth/permissions';
+import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { useClassesList } from './hooks/useClasses';
-import type { ClassListItem } from './types';
+import { useClassesList, useCreateClass } from './hooks/useClasses';
+import { ClassFormDialog } from './components/ClassFormDialog';
+import type { ClassCreateBody, ClassListItem } from './types';
 
 /**
  * Classes (sections) list (api-spec §5 GET /classes, ui-design-system §7.5). A class is
@@ -28,6 +32,7 @@ export function ClassesListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
+  const canManage = user ? canWrite(user.role, 'classes') : false;
 
   const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
@@ -35,6 +40,11 @@ export function ClassesListPage() {
   const debouncedSearch = useDebounce(search, 300);
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
   const [pageSize, setPageSize] = useState(25);
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
+  const [toast, setToast] = useState<string | null>(null);
 
   const params = useMemo(
     () => ({
@@ -48,8 +58,24 @@ export function ClassesListPage() {
   );
 
   const query = useClassesList(params);
+  const createMut = useCreateClass();
 
   const goToClass = (id: string) => navigate(`${ROUTES.classes}/${id}`);
+
+  const handleCreate = (values: ClassCreateBody) => {
+    setFormError(null);
+    setFieldErrors(undefined);
+    createMut.mutate(values, {
+      onSuccess: (created) => {
+        setCreateOpen(false);
+        setToast(`${created.name} was added.`);
+      },
+      onError: (err) => {
+        setFormError(apiErrorMessage(err));
+        setFieldErrors(fieldErrorsFrom(err));
+      },
+    });
+  };
 
   const columns: DataTableColumn<ClassListItem>[] = [
     {
@@ -120,6 +146,21 @@ export function ClassesListPage() {
             ? 'The sections you teach a subject in. Open one to see its roster and your subjects.'
             : 'Sections (homerooms) across the school. Each section holds one roster and the subjects taught within it.'
         }
+        primaryAction={
+          canManage ? (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                setFormError(null);
+                setFieldErrors(undefined);
+                setCreateOpen(true);
+              }}
+            >
+              Add class
+            </Button>
+          ) : undefined
+        }
       />
 
       <FilterBar
@@ -166,6 +207,32 @@ export function ClassesListPage() {
           debouncedSearch ? 'Try a different name.' : 'Sections will appear here once created.'
         }
       />
+
+      {canManage && (
+        <ClassFormDialog
+          open={createOpen}
+          submitting={createMut.isPending}
+          error={formError}
+          fieldErrors={fieldErrors}
+          onSubmit={handleCreate}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
+
+      <Snackbar
+        open={Boolean(toast)}
+        autoHideDuration={5000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {toast ? (
+          <Alert severity="success" onClose={() => setToast(null)} variant="filled">
+            {toast}
+          </Alert>
+        ) : (
+          <Box />
+        )}
+      </Snackbar>
     </>
   );
 }

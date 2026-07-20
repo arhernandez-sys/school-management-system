@@ -9,6 +9,8 @@ export interface ProfileLayoutProps {
   breadcrumbs?: ReactNode;
   /** Header actions (edit / activate / delete …), role-gated by the caller. */
   actions?: ReactNode;
+  /** Optional full-width toolbar row (e.g. a year filter) between the header and body. */
+  toolbar?: ReactNode;
   /** Left column — a compact summary card (identity, key facts). Shown first on `xs`. */
   summary: ReactNode;
   /** Right column — the fuller detail surface (e.g. tabbed sections). */
@@ -30,12 +32,14 @@ export function ProfileLayout({
   title,
   breadcrumbs,
   actions,
+  toolbar,
   summary,
   children,
 }: ProfileLayoutProps) {
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <PageHeader title={title} breadcrumbs={breadcrumbs} primaryAction={actions} />
+      {toolbar && <Box sx={{ mb: 3 }}>{toolbar}</Box>}
       <Box
         sx={{
           display: 'grid',

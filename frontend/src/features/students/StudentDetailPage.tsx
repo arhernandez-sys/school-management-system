@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
   Breadcrumbs,
   Button,
+  Card,
+  CardActionArea,
+  CardContent,
+  Chip,
+  Grid,
   Link as MuiLink,
   MenuItem,
   Snackbar,
@@ -15,6 +20,7 @@ import {
 import EditIcon from '@mui/icons-material/Edit';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import GradingOutlinedIcon from '@mui/icons-material/GradingOutlined';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import {
   ConfirmDialog,
   DataTable,
@@ -23,12 +29,11 @@ import {
   ErrorState,
   LoadingState,
   ProfileLayout,
-  ProfileSectionHeading,
   StatusBadge,
+  YearSelect,
   type DataTableColumn,
   type DetailTab,
 } from '@shared/components';
-import type { ReactNode } from 'react';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
@@ -38,10 +43,12 @@ import {
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,
+  useStudentYears,
   useUpdateStudent,
 } from './hooks/useStudents';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
+import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
 import {
   STUDENT_STATUS_LABEL as STATUS_LABEL,
   STUDENT_STATUS_OPTIONS as STATUS_OPTIONS,
@@ -57,8 +64,7 @@ import type { StudentStatus } from '@shared/types/enums';
 /**
  * Student detail (api-spec §5.3 GET /students/{id}). Header shows name · student # ·
  * status; DetailTabs:
- *  - Profile: bio + guardian + contact.
- *  - Enrollment: current section (and enrollment date).
+ *  - Enrollment: current section, grade level, and enrollment date.
  *  - Grades & Assessments: subject-grouped assessments with the student's score +
  *    per-subject term grade (compute-on-read).
  *
@@ -71,7 +77,23 @@ export function StudentDetailPage() {
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'students') : false;
 
-  const detailQuery = useStudentDetail(studentId);
+  // Per-student year filter (local to this page): the dropdown lists only the years this
+  // student was enrolled in; the choice persists to `?year=` and re-scopes the profile card,
+  // Enrollment, and Grades & Assessments together.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const yearsQuery = useStudentYears(studentId);
+  const years = useMemo(() => yearsQuery.data ?? [], [yearsQuery.data]);
+  const activeYearId = years.find((y) => y.status === 'active')?.id;
+  const urlYear = searchParams.get('year') ?? undefined;
+  const yearId = years.some((y) => y.id === urlYear) ? urlYear : (activeYearId ?? years[0]?.id);
+  const yearName = years.find((y) => y.id === yearId)?.name;
+  const changeYear = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('year', id);
+    setSearchParams(next, { replace: true });
+  };
+
+  const detailQuery = useStudentDetail(studentId, yearId);
   const detail = detailQuery.data;
 
   const tabs = useMemo<DetailTab[]>(() => {
@@ -81,16 +103,16 @@ export function StudentDetailPage() {
         value: 'enrollment',
         label: 'Enrollment',
         icon: <SchoolOutlinedIcon fontSize="small" />,
-        render: () => <EnrollmentTab student={detail} />,
+        render: () => <StudentEnrollmentPanel student={detail} yearName={yearName} />,
       },
       {
         value: 'grades',
         label: 'Grades & Assessments',
         icon: <GradingOutlinedIcon fontSize="small" />,
-        render: () => <GradesTab studentId={studentId} />,
+        render: () => <GradesTab studentId={studentId} yearId={yearId} />,
       },
     ];
-  }, [detail, studentId]);
+  }, [detail, studentId, yearId, yearName]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading student" />;
@@ -125,6 +147,17 @@ export function StudentDetailPage() {
       title={detail.full_name}
       breadcrumbs={breadcrumbs}
       actions={canManage ? <StudentActions student={detail} /> : undefined}
+      toolbar={
+        years.length > 0 ? (
+          <YearSelect
+            value={yearId}
+            onChange={changeYear}
+            years={years}
+            activeYearId={activeYearId}
+            isLoading={yearsQuery.isLoading}
+          />
+        ) : undefined
+      }
       summary={<StudentProfileSummary student={detail} />}
     >
       {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Student detail sections" />}
@@ -132,91 +165,21 @@ export function StudentDetailPage() {
   );
 }
 
-/** Definition-list layout shared by the Profile + Enrollment tabs. */
-function DefinitionList({ rows }: { rows: Array<{ label: string; value: ReactNode }> }) {
-  return (
-    <Box
-      component="dl"
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', sm: 'max-content 1fr' },
-        rowGap: 1.5,
-        columnGap: 3,
-        m: 0,
-      }}
-    >
-      {rows.map((r) => (
-        <Box key={r.label} sx={{ display: 'contents' }}>
-          <Typography component="dt" variant="body2" color="text.secondary">
-            {r.label}
-          </Typography>
-          <Typography component="dd" variant="body2" sx={{ m: 0 }}>
-            {r.value}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
-  );
+/** "12 (A)" / "Not yet graded" — a subject group's per-term grade as display text. */
+function termGradeText(group: StudentAssessmentGroup): string {
+  const { numeric, letter } = group.term_grade;
+  if (numeric == null) return 'Not yet graded';
+  return `${numeric}${letter ? ` (${letter})` : ''}`;
 }
 
-/** An iconed heading + definition-list grid — one labeled block of a detail tab. */
-function Section({
-  icon,
-  title,
-  rows,
-}: {
-  icon: ReactNode;
-  title: string;
-  rows: Array<{ label: string; value: ReactNode }>;
-}) {
-  return (
-    <Box>
-      <Box sx={{ mb: 1.5 }}>
-        <ProfileSectionHeading icon={icon}>{title}</ProfileSectionHeading>
-      </Box>
-      <DefinitionList rows={rows} />
-    </Box>
-  );
-}
-
-/** Enrollment tab — current section + enrollment date. */
-function EnrollmentTab({ student }: { student: StudentDetail }) {
-  if (!student.current_section) {
-    return (
-      <EmptyState
-        variant="card"
-        title="Not enrolled"
-        description="This student is not currently enrolled in a section."
-      />
-    );
-  }
-  return (
-    <Section
-      icon={<SchoolOutlinedIcon fontSize="small" />}
-      title="Enrollment"
-      rows={[
-        {
-          label: 'Current section',
-          value: (
-            <MuiLink
-              component={RouterLink}
-              to={`${ROUTES.classes}/${student.current_section.id}`}
-              underline="hover"
-            >
-              {student.current_section.name}
-            </MuiLink>
-          ),
-        },
-        { label: 'Grade level', value: student.current_section.grade_level },
-        { label: 'Enrolled since', value: student.enrollment_date || '—' },
-      ]}
-    />
-  );
-}
-
-/** Grades & Assessments tab — subject-grouped assessments + per-subject term grade. */
-function GradesTab({ studentId }: { studentId: string }) {
-  const query = useStudentAssessments(studentId);
+/**
+ * Grades & Assessments tab — a grid of SUBJECT CARDS (mirrors the Grades module). Clicking a
+ * card drills into that subject's assessments (paginated, 10 per page); a back link returns
+ * to the grid. Selection is local to the tab.
+ */
+function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }) {
+  const query = useStudentAssessments(studentId, yearId);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   if (query.isLoading) {
     return <LoadingState variant="table" rows={4} label="Loading assessments" />;
@@ -235,90 +198,140 @@ function GradesTab({ studentId }: { studentId: string }) {
     );
   }
 
+  const selected = groups.find((g) => g.class_subject_id === selectedId) ?? null;
+  if (selected) {
+    return <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />;
+  }
+
   return (
-    <Stack spacing={3}>
+    <Grid container spacing={2}>
       {groups.map((group) => (
-        <SubjectGroup key={group.class_subject_id} group={group} />
+        <Grid item xs={12} sm={6} key={group.class_subject_id}>
+          <SubjectCard group={group} onOpen={() => setSelectedId(group.class_subject_id)} />
+        </Grid>
       ))}
-    </Stack>
+    </Grid>
   );
 }
 
-function SubjectGroup({ group }: { group: StudentAssessmentGroup }) {
-  const columns: DataTableColumn<StudentAssessmentLine>[] = [
-    {
-      field: 'title',
-      headerName: 'Assessment',
-      primary: true,
-      render: (a) => <Typography variant="body2">{a.title}</Typography>,
-    },
-    {
-      field: 'type',
-      headerName: 'Type',
-      render: (a) => (
-        <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
-          {a.type}
-        </Typography>
-      ),
-    },
-    {
-      field: 'assessment_date',
-      headerName: 'Date',
-      render: (a) => <Typography variant="body2">{a.assessment_date ?? '—'}</Typography>,
-    },
-    {
-      field: 'score',
-      headerName: 'Score',
-      align: 'right',
-      render: (a) => (
-        <Typography variant="body2">
-          {a.score != null ? `${a.score} / ${a.max_score}` : '—'}
-        </Typography>
-      ),
-    },
-    {
-      field: 'status',
-      headerName: 'Status',
-      render: (a) => {
-        const released = a.is_released;
-        if (a.status === 'graded' && released) return <StatusBadge label="Graded" kind="success" />;
-        if (a.status === 'absent') return <StatusBadge label="Absent" kind="warning" />;
-        if (a.status === 'excused' || a.status === 'exempt')
-          return <StatusBadge label="Excused" kind="info" />;
-        return <StatusBadge label="Pending" kind="neutral" />;
-      },
-    },
-  ];
+/** One subject as a clickable card: name · term grade · assessment count. */
+function SubjectCard({ group, onOpen }: { group: StudentAssessmentGroup; onOpen: () => void }) {
+  const name = group.subject?.name ?? 'Unknown subject';
+  const count = group.assessments.length;
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardActionArea onClick={onOpen} aria-label={`Open ${name} assessments`} sx={{ height: '100%' }}>
+        <CardContent>
+          <Stack spacing={0.75}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap>
+              {name}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Term grade: {termGradeText(group)}
+            </Typography>
+            <Box sx={{ mt: 0.5 }}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`${count} assessment${count === 1 ? '' : 's'}`}
+              />
+            </Box>
+          </Stack>
+        </CardContent>
+      </CardActionArea>
+    </Card>
+  );
+}
 
-  const termText =
-    group.term_grade.numeric != null
-      ? `${group.term_grade.numeric}${group.term_grade.letter ? ` (${group.term_grade.letter})` : ''}`
-      : 'Not yet graded';
+const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
+  {
+    field: 'title',
+    headerName: 'Assessment',
+    primary: true,
+    render: (a) => <Typography variant="body2">{a.title}</Typography>,
+  },
+  {
+    field: 'type',
+    headerName: 'Type',
+    render: (a) => (
+      <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
+        {a.type}
+      </Typography>
+    ),
+  },
+  {
+    field: 'assessment_date',
+    headerName: 'Date',
+    render: (a) => <Typography variant="body2">{a.assessment_date ?? '—'}</Typography>,
+  },
+  {
+    field: 'score',
+    headerName: 'Score',
+    align: 'right',
+    render: (a) => (
+      <Typography variant="body2">
+        {a.score != null ? `${a.score} / ${a.max_score}` : '—'}
+      </Typography>
+    ),
+  },
+  {
+    field: 'status',
+    headerName: 'Status',
+    render: (a) => {
+      const released = a.is_released;
+      if (a.status === 'graded' && released) return <StatusBadge label="Graded" kind="success" />;
+      if (a.status === 'absent') return <StatusBadge label="Absent" kind="warning" />;
+      if (a.status === 'excused' || a.status === 'exempt')
+        return <StatusBadge label="Excused" kind="info" />;
+      return <StatusBadge label="Pending" kind="neutral" />;
+    },
+  },
+];
+
+const ASSESSMENTS_PAGE_SIZE = 10;
+
+/** Drill-down for one subject: back link, term grade, and its assessments (10 per page). */
+function SubjectAssessments({
+  group,
+  onBack,
+}: {
+  group: StudentAssessmentGroup;
+  onBack: () => void;
+}) {
+  const [page, setPage] = useState(0);
+  const name = group.subject?.name ?? 'Unknown subject';
+  const rows = group.assessments.slice(
+    page * ASSESSMENTS_PAGE_SIZE,
+    page * ASSESSMENTS_PAGE_SIZE + ASSESSMENTS_PAGE_SIZE,
+  );
 
   return (
     <Box>
+      <Button startIcon={<ArrowBackIcon />} onClick={onBack} sx={{ mb: 1 }}>
+        All subjects
+      </Button>
       <Stack
         direction="row"
         spacing={1}
-        sx={{ mb: 1, alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap' }}
+        sx={{ mb: 1.5, alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap' }}
       >
         <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-          {group.subject?.name ?? 'Unknown subject'}
+          {name}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Term grade: {termText}
+          Term grade: {termGradeText(group)}
         </Typography>
       </Stack>
       <DataTable<StudentAssessmentLine>
-        caption={`Assessments for ${group.subject?.name ?? 'subject'}`}
-        columns={columns}
-        rows={group.assessments}
+        caption={`Assessments for ${name}`}
+        columns={ASSESSMENT_COLUMNS}
+        rows={rows}
         getRowId={(a) => a.id}
-        page={0}
-        pageSize={100}
+        page={page}
+        pageSize={ASSESSMENTS_PAGE_SIZE}
         total={group.assessments.length}
-        rowsPerPageOptions={[100]}
-        onPageChange={() => undefined}
+        rowsPerPageOptions={[ASSESSMENTS_PAGE_SIZE]}
+        onPageChange={setPage}
         onPageSizeChange={() => undefined}
         emptyTitle="No assessments"
         emptyDescription="No published assessments in this subject yet."

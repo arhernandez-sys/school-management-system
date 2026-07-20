@@ -145,7 +145,20 @@ export const classesHandlers = [
     // Caller scope (Student → own section, Teacher → owned sections).
     const student = currentDemoStudent(role);
     if (student) {
-      rows = rows.filter((s) => s.id === student.section_id);
+      // Resolve the student's section FOR THE SELECTED YEAR via enrollments (their
+      // `section_id` denorm only points at the current year). Falls back to the
+      // current section when no enrollment resolves (keeps the active year working).
+      const yearSemIds = new Set(
+        D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id),
+      );
+      const studentSectionIds = new Set(
+        D.enrollments
+          .filter((e) => e.student_id === student.id && yearSemIds.has(e.semester_id))
+          .map((e) => e.section_id),
+      );
+      rows = rows.filter((s) =>
+        studentSectionIds.size > 0 ? studentSectionIds.has(s.id) : s.id === student.section_id,
+      );
     } else {
       const teacher = currentDemoTeacher(role);
       if (teacher) {
@@ -166,6 +179,35 @@ export const classesHandlers = [
       { ...listParamsFrom(url), sort: url.searchParams.get('sort') ?? 'name' },
     );
     return HttpResponse.json(page);
+  }),
+
+  // ── POST /classes — create a new section (Principal/Secretary) ─────────────────
+  http.post(`${API_BASE_URL}/classes`, async ({ request }) => {
+    const body = (await request.json()) as {
+      name?: string;
+      grade_level?: string;
+      section?: string;
+      capacity?: number;
+      academic_year_id?: string;
+    };
+    const name = (body.name ?? '').trim();
+    if (!name) {
+      return errorResponse(422, 'validation_error', 'Class name is required.', { name: ['Required'] });
+    }
+    const academic_year_id = body.academic_year_id || getActiveYear()?.id || DEMO_IDS.activeYearId;
+    const newSection: DemoSection = {
+      id: `sec-new-${D.sections.length + 1}`,
+      academic_year_id,
+      name,
+      grade_level: body.grade_level?.trim() || '',
+      section: body.section?.trim() || '',
+      homeroom_label: `${name} Homeroom`,
+      capacity:
+        typeof body.capacity === 'number' && body.capacity > 0 ? Math.floor(body.capacity) : 30,
+      is_archived: false,
+    };
+    D.sections.push(newSection);
+    return HttpResponse.json(classDetail(newSection), { status: 201 });
   }),
 
   // ── GET /classes/{id} — section detail (ClassDetail) ───────────────────────────

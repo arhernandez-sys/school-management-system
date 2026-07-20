@@ -14,7 +14,11 @@ export interface AttendanceSectionRef {
   id: string;
   name: string;
   grade_level: string;
+  /** Division letter within the grade/form (e.g. "A"). Drives the P/S section filter. */
+  section: string;
   homeroom_label: string;
+  /** Teachers who teach a subject in this section — drives the P/S teacher filter. */
+  teachers: Array<{ id: string; name: string }>;
 }
 
 /** Picker payload: sections the caller may view/record + whether they can record. */
@@ -67,11 +71,16 @@ export interface AttendanceUpsertResponse {
   summary: Omit<AttendanceCounts, 'pct_present'>;
 }
 
+/** One student's present/absent/late/excused tally over the summary window. */
+export type PerStudentAttendance = { student: AttendanceStudentRef } & AttendanceCounts;
+
 /** GET /attendance/summary — per-section rate over the seeded window. */
 export interface AttendanceSummaryResponse {
   section: AttendanceSectionRef;
   overall: AttendanceCounts;
   by_date: Array<{ date: string } & AttendanceCounts>;
+  /** Per-student tallies for every actively enrolled student in the section. */
+  by_student: PerStudentAttendance[];
 }
 
 /** GET /attendance/me — a student's own attendance. */

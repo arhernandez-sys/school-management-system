@@ -10,6 +10,7 @@ import {
   getClassSubject,
   getSection,
   getStudent,
+  sectionForStudentInYear,
   getSubject,
   getTeacher,
   gradebookFor,
@@ -69,7 +70,9 @@ function classSubjectRef(classSubjectId: string) {
     .map((t) => ({ id: t.id, full_name: t.full_name }));
   return {
     id: cs.id,
-    section: section ? { id: section.id, name: section.name, grade_level: section.grade_level } : null,
+    section: section
+      ? { id: section.id, name: section.name, grade_level: section.grade_level, section: section.section }
+      : null,
     subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
     teachers,
     lead_teacher_id: cs.lead_teacher_id,
@@ -374,15 +377,19 @@ export const gradesHandlers = [
   }),
 
   // ── Student "My Grades" (released only) ────────────────────────────────────────
-  http.get(`${API_BASE_URL}/grades/me`, ({ cookies }) => {
+  http.get(`${API_BASE_URL}/grades/me`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     const studentId = currentStudentId(role) ?? currentStudentId('student');
     if (!studentId) return errorResponse(404, 'not_found', 'Student profile not found.');
     const stu = getStudent(studentId);
-    const sectionId = stu?.section_id ?? null;
-    const offerings = sectionId
-      ? D.class_subjects.filter((c) => c.section_id === sectionId && c.is_active)
-      : [];
+    // Global student year switcher: resolve the section for the selected year (falls
+    // back to the current section). Past-year offerings are inactive, so scope by
+    // section membership rather than is_active.
+    const url = new URL(request.url);
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const section = yearId ? sectionForStudentInYear(studentId, yearId) : undefined;
+    const sectionId = section?.id ?? stu?.section_id ?? null;
+    const offerings = sectionId ? D.class_subjects.filter((c) => c.section_id === sectionId) : [];
 
     const bySubject = offerings.map((cs) => {
       const csRef = classSubjectRef(cs.id);

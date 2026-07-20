@@ -82,6 +82,13 @@ export interface StudentWritePayload {
   section_id?: string | null;
 }
 
+/** One academic year the student was enrolled in (GET /students/{id}/years). */
+export interface StudentYear {
+  id: string;
+  name: string;
+  status: string;
+}
+
 /** GET /students query params (api-spec §5.3 + §6 list params). */
 export interface StudentsListParams {
   page?: number;

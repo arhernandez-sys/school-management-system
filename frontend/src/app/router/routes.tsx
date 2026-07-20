@@ -6,6 +6,7 @@ import { ForbiddenPage, NotFoundPage } from './ErrorPages';
 import { AppShell } from '@app/layout/AppShell';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { TeacherProfileView } from '@features/teachers/components/TeacherProfileView';
+import { MyStudentProfilePage } from '@features/students/MyStudentProfilePage';
 import { ROUTES } from '@shared/constants/routes';
 import type { ModuleKey } from '@shared/auth/permissions';
 
@@ -31,7 +32,7 @@ import type { ReactElement } from 'react';
  * Role-aware "My Profile" (`/me`, ui-design-system §6), gated by the `profile` module:
  *  - teacher (with a linked teacher_profile_id) → their own {@link TeacherProfileView}
  *    in `self` mode (edit-profile only).
- *  - student → the existing student profile placeholder (unchanged).
+ *  - student → their own {@link MyStudentProfilePage} (read-only identity + enrollment).
  *  - principal/secretary never reach here — `profile` is 'none' for them, so the module
  *    gate redirects to /forbidden (their account lives under Settings).
  */
@@ -39,6 +40,9 @@ function MyProfilePage() {
   const { user } = useAuth();
   if (user?.role === 'teacher' && user.teacher_profile_id) {
     return <TeacherProfileView teacherId={user.teacher_profile_id} mode="self" />;
+  }
+  if (user?.role === 'student') {
+    return <MyStudentProfilePage />;
   }
   return <ModulePlaceholder module="profile" title="My Profile" />;
 }

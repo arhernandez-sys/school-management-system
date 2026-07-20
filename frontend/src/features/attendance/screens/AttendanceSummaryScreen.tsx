@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Box, Grid, Paper } from '@mui/material';
+import { Box, Grid, Paper, Typography } from '@mui/material';
 import {
   PageHeader,
   LoadingState,
@@ -8,10 +8,14 @@ import {
   EmptyState,
   StatCard,
   ChartWithTable,
+  DataTable,
+  type DataTableColumn,
 } from '@shared/components';
+import { useYearFilter } from '@shared/hooks';
 import { useAttendanceSections, useAttendanceSummary } from '../hooks/useAttendance';
 import { AttendanceToolbar } from '../components/AttendanceToolbar';
 import { ATTENDANCE_STATUS_META } from '../attendanceStatus';
+import type { PerStudentAttendance } from '../types';
 
 /** Format an ISO date (YYYY-MM-DD) as a short weekday+day label for the trend axis. */
 function shortDate(iso: string): string {
@@ -32,9 +36,26 @@ function shortDate(iso: string): string {
 export function AttendanceSummaryScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sectionId = searchParams.get('section_id');
+  const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
-  const sectionsQuery = useAttendanceSections();
+  // Client-side pagination for the per-student list (the payload arrives whole).
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+
+  const sectionsQuery = useAttendanceSections(yearId);
   const summaryQuery = useAttendanceSummary(sectionId);
+
+  // Switching year clears the (year-specific) section so the effect re-picks one.
+  const handleChangeYear = (value: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('year', value);
+        next.delete('section_id');
+        return next;
+      },
+      { replace: true },
+    );
 
   // Default to the caller's first available section.
   useEffect(() => {
@@ -49,6 +70,9 @@ export function AttendanceSummaryScreen() {
       );
     }
   }, [sectionId, sectionsQuery.data, setSearchParams]);
+
+  // Reset the per-student list to page 1 whenever the class changes.
+  useEffect(() => setPage(0), [sectionId]);
 
   const handleChangeSection = (value: string) =>
     setSearchParams((prev) => {
@@ -79,6 +103,32 @@ export function AttendanceSummaryScreen() {
     ? ATTENDANCE_STATUS_META.map((m) => ({ name: m.label, value: overall[m.value] }))
     : [];
 
+  const byStudent = summaryQuery.data?.by_student ?? [];
+  const pagedStudents = byStudent.slice(page * pageSize, page * pageSize + pageSize);
+
+  const studentColumns: DataTableColumn<PerStudentAttendance>[] = [
+    {
+      field: 'student',
+      headerName: 'Student',
+      primary: true,
+      render: (r) => (
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {r.student.full_name}
+        </Typography>
+      ),
+    },
+    { field: 'present', headerName: 'Present', align: 'right', render: (r) => r.present },
+    { field: 'absent', headerName: 'Absent', align: 'right', render: (r) => r.absent },
+    { field: 'late', headerName: 'Late', align: 'right', render: (r) => r.late },
+    { field: 'excused', headerName: 'Excused', align: 'right', render: (r) => r.excused },
+    {
+      field: 'pct_present',
+      headerName: '% present',
+      align: 'right',
+      render: (r) => `${r.pct_present}%`,
+    },
+  ];
+
   return (
     <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <PageHeader
@@ -95,6 +145,11 @@ export function AttendanceSummaryScreen() {
         sectionId={sectionId}
         onSectionChange={handleChangeSection}
         showDate={false}
+        years={years}
+        yearId={yearId}
+        activeYearId={activeYearId}
+        onYearChange={handleChangeYear}
+        yearsLoading={yearsLoading}
       />
 
       {summaryQuery.isLoading && <LoadingState variant="cards" rows={3} />}
@@ -133,7 +188,7 @@ export function AttendanceSummaryScreen() {
               description="Once attendance is recorded for this class, its trend appears here."
             />
           ) : (
-            <Grid container spacing={3} sx={{ flex: 1, minHeight: 0 }}>
+            <Grid container spacing={3} sx={{ mb: 3 }}>
               <Grid item xs={12} md={7}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <ChartWithTable
@@ -158,6 +213,28 @@ export function AttendanceSummaryScreen() {
               </Grid>
             </Grid>
           )}
+
+          <Paper variant="outlined" sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Students in this class
+            </Typography>
+            <DataTable<PerStudentAttendance>
+              caption="Per-student attendance days over the summary window"
+              columns={studentColumns}
+              rows={pagedStudents}
+              getRowId={(r) => r.student.id}
+              page={page}
+              pageSize={pageSize}
+              total={byStudent.length}
+              onPageChange={setPage}
+              onPageSizeChange={(ps) => {
+                setPageSize(ps);
+                setPage(0);
+              }}
+              emptyTitle="No students enrolled"
+              emptyDescription="There are no students enrolled in this class."
+            />
+          </Paper>
         </>
       )}
     </Box>

@@ -16,9 +16,9 @@ import { strings } from '@i18n/strings';
  * - Skip link is the first focusable element (WCAG 2.4.1).
  * - Single scroll owner: MainRegion scrolls; app bar + drawer are fixed.
  *
- * The active term is sourced by the self-contained SemesterSwitcher (GET
- * /settings/active-term). The unread announcements count is still a placeholder until
- * the Announcements module exists.
+ * Students get a global academic-year switcher in the TopBar (YearContext) that
+ * re-scopes their view; staff scope per-module. The unread announcements count comes
+ * from the Announcements module (falls back to 0 when unavailable).
  */
 export function AppShell() {
   const { user, logout } = useAuth();

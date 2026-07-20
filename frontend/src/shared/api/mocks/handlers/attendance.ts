@@ -6,11 +6,13 @@ import {
   DEMO_IDS,
   attendanceFor,
   rosterFor,
+  getActiveYear,
   getSection,
   getStudent,
   getTeacher,
   activeEnrollmentFor,
   sectionsOwnedByTeacher,
+  classSubjectsForSection,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAttendanceRecord,
@@ -67,20 +69,43 @@ function actingStudentId(): string {
   return getStudent('stu-1')?.id ?? D.students.find((s) => s.status === 'active')!.id;
 }
 
-/** Sections the caller may view/record for. Teacher → owned; P/S → all non-archived. */
-function sectionsForRole(role: string): DemoSection[] {
-  if (role === 'teacher') return sectionsOwnedByTeacher(actingTeacherId());
-  return D.sections.filter((s) => !s.is_archived);
+/**
+ * Sections the caller may view/record for, scoped to an academic year.
+ * Teacher → owned; P/S → all. With a `yearId` we restrict to that year's sections
+ * (past years included); without one we default to the current (non-archived) sections.
+ */
+function sectionsForRole(role: string, yearId?: string | null): DemoSection[] {
+  let secs = role === 'teacher' ? sectionsOwnedByTeacher(actingTeacherId()) : D.sections;
+  secs = yearId ? secs.filter((s) => s.academic_year_id === yearId) : secs.filter((s) => !s.is_archived);
+  return secs;
 }
 
-/** Can the caller access this section at all? (used to 404 cross-section teacher access) */
+/** Can the caller access this section at all? (P/S: any section; Teacher: owned only) */
 function canAccessSection(role: string, sectionId: string): boolean {
-  return sectionsForRole(role).some((s) => s.id === sectionId);
+  if (role !== 'teacher') return Boolean(getSection(sectionId));
+  return sectionsOwnedByTeacher(actingTeacherId()).some((s) => s.id === sectionId);
 }
 
 // ── Wire shapes ────────────────────────────────────────────────────────────────
+/** Distinct teachers who teach any subject in a section (drives the P/S teacher filter). */
+function teachersForSection(sectionId: string): Array<{ id: string; name: string }> {
+  const ids = [...new Set(classSubjectsForSection(sectionId).flatMap((cs) => cs.teacher_ids))];
+  return ids
+    .map((id) => getTeacher(id))
+    .filter((t): t is NonNullable<typeof t> => Boolean(t))
+    .map((t) => ({ id: t.id, name: t.full_name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function sectionRef(sec: DemoSection) {
-  return { id: sec.id, name: sec.name, grade_level: sec.grade_level, homeroom_label: sec.homeroom_label };
+  return {
+    id: sec.id,
+    name: sec.name,
+    grade_level: sec.grade_level,
+    section: sec.section,
+    homeroom_label: sec.homeroom_label,
+    teachers: teachersForSection(sec.id),
+  };
 }
 function studentRef(stu: DemoStudent) {
   return { id: stu.id, full_name: stu.full_name, student_number: stu.student_number };
@@ -99,11 +124,13 @@ function summarize(records: Array<{ status: AttendanceStatus }>) {
 export const attendanceHandlers: RequestHandler[] = [
   // ── Section picker ──────────────────────────────────────────────────────────────
   // GET /attendance/sections — the sections the caller may pick (teacher: own; P/S: all).
-  http.get(`${API_BASE_URL}/attendance/sections`, ({ cookies }) => {
+  http.get(`${API_BASE_URL}/attendance/sections`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     const canRecord = role === 'teacher';
+    const url = new URL(request.url);
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
     return HttpResponse.json({
-      items: sectionsForRole(role).map((s) => ({
+      items: sectionsForRole(role, yearId).map((s) => ({
         ...sectionRef(s),
         enrolled_count: rosterFor(s.id).length,
       })),
@@ -247,23 +274,39 @@ export const attendanceHandlers: RequestHandler[] = [
       return { date, ...summarize(dayRows) };
     });
 
+    // Per-student tallies: every actively enrolled student in the section, with their
+    // present/absent/late/excused counts over the window (0s for students with no records).
+    const by_student = rosterFor(sectionId)
+      .map((stu) => ({
+        student: studentRef(stu),
+        ...summarize(rows.filter((r) => r.student_id === stu.id)),
+      }))
+      .sort((a, b) => a.student.full_name.localeCompare(b.student.full_name));
+
     return HttpResponse.json({
       section: sectionRef(section),
       overall: summarize(rows),
       by_date,
+      by_student,
     });
   }),
 
   // ── Student's own attendance (FR-ATT-07) ────────────────────────────────────────
   // GET /attendance/me — summary + history for the signed-in student (self only).
-  http.get(`${API_BASE_URL}/attendance/me`, ({ cookies }) => {
+  http.get(`${API_BASE_URL}/attendance/me`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     if (role !== 'student') {
       return errorResponse(403, 'forbidden', 'Only a student can view their own attendance.');
     }
     const studentId = actingStudentId();
+    // Global student year switcher: restrict to the selected year's semesters.
+    const url = new URL(request.url);
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const yearSemIds = new Set(
+      D.semesters.filter((s) => !yearId || s.academic_year_id === yearId).map((s) => s.id),
+    );
     const rows = D.attendance_records
-      .filter((r) => r.student_id === studentId)
+      .filter((r) => r.student_id === studentId && yearSemIds.has(r.semester_id))
       .sort((a, b) => b.attendance_date.localeCompare(a.attendance_date));
 
     return HttpResponse.json({

@@ -14,6 +14,7 @@ import {
   type DataTableColumn,
 } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
+import { useSelectedYear } from '@app/providers/YearContext';
 import { useClassesList, useClassSubjects } from './hooks/useClasses';
 import type { ClassSubjectItem } from './types';
 
@@ -28,7 +29,8 @@ import type { ClassSubjectItem } from './types';
  * render its subjects via GET /classes/{id}/subjects.
  */
 export function StudentClassesPage() {
-  const sectionQuery = useClassesList({ sort: 'name' });
+  const { selectedYearId } = useSelectedYear();
+  const sectionQuery = useClassesList({ sort: 'name', academic_year_id: selectedYearId });
   const section = sectionQuery.data?.items[0] ?? null;
   const subjectsQuery = useClassSubjects(section?.id);
 

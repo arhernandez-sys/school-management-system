@@ -6,6 +6,7 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { theme } from '@theme/index';
 import { queryClient } from './queryClient';
 import { AuthProvider } from '@features/auth/context/AuthProvider';
+import { YearProvider } from './YearContext';
 import { ErrorBoundary } from './ErrorBoundary';
 
 /**
@@ -22,7 +23,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <ThemeProvider theme={theme} defaultMode="light">
         <CssBaseline />
         <QueryClientProvider client={queryClient}>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <YearProvider>{children}</YearProvider>
+          </AuthProvider>
           {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
         </QueryClientProvider>
       </ThemeProvider>

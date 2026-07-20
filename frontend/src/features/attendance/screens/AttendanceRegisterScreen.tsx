@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
+import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
 import type { AttendanceStatus } from '@shared/types/enums';
@@ -50,9 +51,22 @@ export function AttendanceRegisterScreen() {
   const sectionId = searchParams.get('section_id');
   const date = searchParams.get('date') ?? DEMO_TODAY;
 
-  const sectionsQuery = useAttendanceSections();
+  const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  const sectionsQuery = useAttendanceSections(yearId);
   const registerQuery = useAttendanceRegister(sectionId, date);
   const saveMut = useSaveAttendance();
+
+  // Switching year clears the (year-specific) section so the effect re-picks one.
+  const handleChangeYear = (value: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('year', value);
+        next.delete('section_id');
+        return next;
+      },
+      { replace: true },
+    );
 
   const [draft, setDraft] = useState<Draft>({});
   const [saved, setSaved] = useState<string | null>(null);
@@ -190,6 +204,11 @@ export function AttendanceRegisterScreen() {
         onSectionChange={handleChangeSection}
         date={date}
         onDateChange={handleChangeDate}
+        years={years}
+        yearId={yearId}
+        activeYearId={activeYearId}
+        onYearChange={handleChangeYear}
+        yearsLoading={yearsLoading}
       />
 
       {!canRecord && (

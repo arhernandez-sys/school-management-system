@@ -9,6 +9,7 @@ import {
   Link as MuiLink,
   List,
   ListItem,
+  ListItemButton,
   ListItemText,
   Snackbar,
   Stack,
@@ -16,10 +17,7 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
-import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GradingOutlinedIcon from '@mui/icons-material/GradingOutlined';
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
-import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
 import {
   ConfirmDialog,
   DetailTabs,
@@ -71,7 +69,8 @@ export interface TeacherProfileViewProps {
  *  - Right: {@link DetailTabs}:
  *      · Classes & Subjects — the teacher's class_subjects ("section · subject", lead
  *        chip), each linking to the gradebook (Grades filtered by class_subject_id).
- *      · Attendance / Grades / Documents / Activity — reserved placeholders (no data yet).
+ *      · Grades — the same subjects rendered as clickable rows that open each
+ *        class_subject's gradebook.
  *
  * The same component powers all three mount points; `mode` only controls the header
  * actions and breadcrumbs. Directory breadcrumbs render only for `manage` (self/readonly
@@ -93,28 +92,10 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
         render: () => <AssignmentsTab classes={detail.classes_taught} />,
       },
       {
-        value: 'attendance',
-        label: 'Attendance',
-        icon: <EventAvailableOutlinedIcon fontSize="small" />,
-        render: () => <ComingSoon title="Attendance" />,
-      },
-      {
         value: 'grades',
         label: 'Grades',
         icon: <GradingOutlinedIcon fontSize="small" />,
-        render: () => <ComingSoon title="Grades" />,
-      },
-      {
-        value: 'documents',
-        label: 'Documents',
-        icon: <DescriptionOutlinedIcon fontSize="small" />,
-        render: () => <ComingSoon title="Documents" />,
-      },
-      {
-        value: 'activity',
-        label: 'Activity',
-        icon: <TimelineOutlinedIcon fontSize="small" />,
-        render: () => <ComingSoon title="Activity" />,
+        render: () => <GradesTab classes={detail.classes_taught} />,
       },
     ];
   }, [detail]);
@@ -220,14 +201,46 @@ function AssignmentsTab({ classes }: { classes: TeacherClassTaught[] }) {
   );
 }
 
-/** Placeholder for a reserved future tab — no fabricated data. */
-function ComingSoon({ title }: { title: string }) {
+/** Grades tab — the teacher's subjects as clickable rows, each opening its gradebook. */
+function GradesTab({ classes }: { classes: TeacherClassTaught[] }) {
+  if (classes.length === 0) {
+    return (
+      <EmptyState
+        variant="card"
+        title="No subjects to grade"
+        description="This teacher is not assigned to any classes yet."
+      />
+    );
+  }
   return (
-    <EmptyState
-      variant="card"
-      title={`${title} — coming soon`}
-      description="This section isn't available yet. It will appear here once the module ships."
-    />
+    <List disablePadding>
+      {classes.map((c) => {
+        const sectionName = c.class_ref?.name ?? 'Unknown section';
+        const subjectName = c.subject?.name ?? 'Unknown subject';
+        return (
+          <ListItemButton
+            key={c.class_subject_id}
+            component={RouterLink}
+            to={`${ROUTES.grades}?class_subject_id=${c.class_subject_id}`}
+            divider
+          >
+            <ListItemText
+              primary={
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {sectionName} · {subjectName}
+                  </Typography>
+                  {c.is_lead && <Chip label="Lead" size="small" color="primary" />}
+                  {!c.is_active && <StatusBadge label="Inactive" kind="neutral" />}
+                </Stack>
+              }
+              secondary={c.class_ref?.grade_level ?? undefined}
+            />
+            <GradingOutlinedIcon fontSize="small" color="action" />
+          </ListItemButton>
+        );
+      })}
+    </List>
   );
 }
 

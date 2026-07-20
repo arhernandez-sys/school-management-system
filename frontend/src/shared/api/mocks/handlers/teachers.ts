@@ -33,6 +33,20 @@ import { errorResponse, listParamsFrom } from './_helpers';
  */
 const D = DEMO_DATASET;
 
+/**
+ * The seeded teacher a demo teacher login stands in for. The mock login (fixtures.ts)
+ * carries the placeholder `teacher_profile_id = "mock-teacher-profile"`, which is not a
+ * seeded id — so the teacher "My Profile" (/me → GET /teachers/mock-teacher-profile) would
+ * 404. Map that placeholder onto a real seeded teacher (teach-1, Maria Reyes), the same
+ * stand-in handlers/assessments.ts uses. Real ids pass through unchanged.
+ */
+const DEMO_STANDIN_TEACHER_ID = 'teach-1';
+function resolveTeacher(rawId: string): DemoTeacher | undefined {
+  const t = getTeacher(rawId);
+  if (t) return t;
+  return rawId === 'mock-teacher-profile' ? getTeacher(DEMO_STANDIN_TEACHER_ID) : undefined;
+}
+
 // ── Response shapers (map internal rows → api-spec shapes) ─────────────────────
 
 function toListItem(t: DemoTeacher) {
@@ -135,7 +149,7 @@ export const teachersHandlers = [
 
   // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
   http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
-    const teacher = getTeacher(String(params.teacherId));
+    const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
     return HttpResponse.json(toDetail(teacher));
   }),
@@ -220,7 +234,7 @@ export const teachersHandlers = [
 
   // PATCH /teachers/{id} — benign profile edits (NOT status; NOT role).
   http.patch(`${API_BASE_URL}/teachers/:teacherId`, async ({ params, request }) => {
-    const teacher = getTeacher(String(params.teacherId));
+    const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
     const body = (await request.json()) as {
       full_name?: string;
@@ -277,7 +291,7 @@ export const teachersHandlers = [
   // POST /teachers/{id}/status — activate/deactivate. Deactivating a teacher who still
   // has active assignments is blocked (409 teacher_has_active_assignments).
   http.post(`${API_BASE_URL}/teachers/:teacherId/status`, async ({ params, request }) => {
-    const teacher = getTeacher(String(params.teacherId));
+    const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
     const body = (await request.json()) as { status: DemoTeacher['status'] };
 
@@ -298,7 +312,7 @@ export const teachersHandlers = [
 
   // DELETE /teachers/{id} — hard delete; blocked if assigned to any active class_subject.
   http.delete(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
-    const teacher = getTeacher(String(params.teacherId));
+    const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
     const active = activeAssignmentsOf(teacher.id);
     if (active.length > 0) {

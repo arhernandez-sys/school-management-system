@@ -49,6 +49,8 @@ export {
   classSubjectsForYear,
   studentIdsForYear,
   teacherIdsForYear,
+  yearsForStudent,
+  sectionForStudentInYear,
   DEMO_REPRESENTATIVE_USER_ID,
   currentDemoStudent,
   currentDemoTeacher,

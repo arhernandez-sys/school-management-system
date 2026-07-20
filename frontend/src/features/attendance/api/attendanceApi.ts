@@ -15,9 +15,15 @@ import type {
   MyAttendanceResponse,
 } from '../types';
 
-/** GET /attendance/sections — sections the caller may view/record. */
-export async function getAttendanceSections(signal?: AbortSignal): Promise<AttendanceSectionsResponse> {
-  const res = await api.get<AttendanceSectionsResponse>('/attendance/sections', { signal });
+/** GET /attendance/sections — sections the caller may view/record (year-scoped). */
+export async function getAttendanceSections(
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<AttendanceSectionsResponse> {
+  const res = await api.get<AttendanceSectionsResponse>('/attendance/sections', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }
 
@@ -50,8 +56,14 @@ export async function getAttendanceSummary(
   return res.data;
 }
 
-/** GET /attendance/me — the signed-in student's own attendance. */
-export async function getMyAttendance(signal?: AbortSignal): Promise<MyAttendanceResponse> {
-  const res = await api.get<MyAttendanceResponse>('/attendance/me', { signal });
+/** GET /attendance/me — the signed-in student's own attendance (year-scoped). */
+export async function getMyAttendance(
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<MyAttendanceResponse> {
+  const res = await api.get<MyAttendanceResponse>('/attendance/me', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }

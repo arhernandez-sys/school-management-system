@@ -1,133 +1,143 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Alert, Box, Button, Link as MuiLink, Stack, Typography } from '@mui/material';
+import { useSearchParams } from 'react-router-dom';
 import {
-  DataTable,
+  Box,
+  Card,
+  CardActionArea,
+  CardContent,
+  Chip,
+  Grid,
+  MenuItem,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
+import {
   EmptyState,
   ErrorState,
+  LoadingState,
   PageHeader,
-  StatusBadge,
   YearSelect,
-  type DataTableColumn,
 } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { ROUTES } from '@shared/constants/routes';
-import {
-  useAssessmentsList,
-  type AssessmentListItem,
-} from '@features/assessments/hooks/useAssessments';
-import { STATUS_META, TYPE_LABEL } from '@features/assessments/statusMeta';
-import { ClassSubjectPicker } from './components/ClassSubjectPicker';
 import { useClassSubjectOptions } from './hooks/useGrades';
+import { SubjectGradesScreen } from './SubjectGradesScreen';
+import type { ClassSubjectOption } from './types';
 
 const CLASS_SUBJECT_PARAM = 'class_subject_id';
 
 /**
- * Grades entry point — a LIST of assessments (replaces the old students×assessments
- * grid). Pick a year + class·subject, then click an assessment to grade the whole class
- * on the per-assessment page (`/grades/assessment/:id`). Teacher sees their offerings;
- * P/S see all (read-only downstream). Students use "My Grades" instead.
+ * Grades entry point — a GRID OF SUBJECT CARDS (mirrors the student "My Grades" pattern).
+ * Click a subject to drill into its assessments + grading (SubjectGradesScreen). Teacher
+ * sees the subjects they teach; P/S see all (read-only downstream). Students use My Grades.
+ * Selection + year persist to the URL (`?class_subject_id=`, `?year=`).
  */
 export function GradeAssessmentsScreen() {
-  const navigate = useNavigate();
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
-
-  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  // P/S browse every offering school-wide; give them Teacher/Form/Section narrowing filters.
+  // Teachers see only their own subjects, so these would be noise for them.
+  const showClassFilters = user?.role === 'principal' || user?.role === 'secretary';
+  const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get(CLASS_SUBJECT_PARAM);
 
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
-
   const optionsQuery = useClassSubjectOptions(yearId);
   const options = useMemo(() => optionsQuery.data?.items ?? [], [optionsQuery.data]);
-  const selectedOption = useMemo(
+  const selected = useMemo(
     () => options.find((o) => o.id === selectedId) ?? null,
     [options, selectedId],
   );
 
-  const setSelected = (id: string | null) => {
-    const next = new URLSearchParams(searchParams);
-    if (id) next.set(CLASS_SUBJECT_PARAM, id);
-    else next.delete(CLASS_SUBJECT_PARAM);
-    setSearchParams(next, { replace: true });
-    setPage(0);
-  };
+  // ── Teacher / Form / Section filters (P/S only) ──────────────────────────────────
+  const [teacherId, setTeacherId] = useState('');
+  const [form, setForm] = useState('');
+  const [sectionLetter, setSectionLetter] = useState('');
 
-  // Auto-select the first offering (prefer one the teacher can edit) so the list is
-  // useful in one hop. Re-runs when the year changes and the selection is stale.
-  useEffect(() => {
-    if (options.length === 0) return;
-    if (selectedId && options.some((o) => o.id === selectedId)) return;
-    const first = options.find((o) => o.can_edit) ?? options[0];
-    if (first) {
-      const next = new URLSearchParams(searchParams);
-      next.set(CLASS_SUBJECT_PARAM, first.id);
-      setSearchParams(next, { replace: true });
+  // Distinct filter options derived from the offerings the caller can see.
+  const { teachers, forms, sectionLetters } = useMemo(() => {
+    const teacherMap = new Map<string, string>();
+    const formSet = new Set<string>();
+    const letterSet = new Set<string>();
+    for (const o of options) {
+      for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
+      if (o.section?.grade_level) formSet.add(o.section.grade_level);
+      if (o.section?.section) letterSet.add(o.section.section);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, selectedId]);
+    return {
+      teachers: [...teacherMap.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      forms: [...formSet].sort((a, b) => a.localeCompare(b)),
+      sectionLetters: [...letterSet].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [options]);
 
-  const listParams = useMemo(
-    () => ({
-      class_subject_id: selectedId || undefined,
-      academic_year_id: yearId || undefined,
-      page: page + 1,
-      page_size: pageSize,
-      sort: '-assessment_date',
-    }),
-    [selectedId, yearId, page, pageSize],
-  );
-  const listQuery = useAssessmentsList(listParams, Boolean(selectedId));
+  const filteredOptions = useMemo(() => {
+    if (!showClassFilters) return options;
+    return options.filter(
+      (o) =>
+        (!teacherId || o.teachers.some((t) => t.id === teacherId)) &&
+        (!form || o.section?.grade_level === form) &&
+        (!sectionLetter || o.section?.section === sectionLetter),
+    );
+  }, [options, showClassFilters, teacherId, form, sectionLetter]);
 
-  const openGrading = (a: AssessmentListItem) => {
-    const csId = a.class_subject?.class_subject_id ?? selectedId ?? '';
-    navigate(`${ROUTES.gradeAssessment}/${a.id}?${CLASS_SUBJECT_PARAM}=${encodeURIComponent(csId)}`);
-  };
+  // Drop a stale ?class_subject_id= that isn't in the current year's options.
+  useEffect(() => {
+    if (selectedId && options.length > 0 && !options.some((o) => o.id === selectedId)) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(CLASS_SUBJECT_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [selectedId, options, setSearchParams]);
 
-  const columns: DataTableColumn<AssessmentListItem>[] = [
-    {
-      field: 'title',
-      headerName: 'Assessment',
-      primary: true,
-      render: (a) => (
-        <MuiLink
-          component="button"
-          type="button"
-          onClick={() => openGrading(a)}
-          sx={{ fontWeight: 500, textAlign: 'left' }}
-        >
-          {a.title}
-        </MuiLink>
-      ),
-    },
-    { field: 'type', headerName: 'Type', render: (a) => TYPE_LABEL[a.type] },
-    {
-      field: 'assessment_date',
-      headerName: 'Date',
-      render: (a) =>
-        a.assessment_date ?? (
-          <Typography variant="body2" color="text.disabled">
-            —
-          </Typography>
-        ),
-    },
-    { field: 'max_score', headerName: 'Max', align: 'right', render: (a) => a.max_score },
-    {
-      field: 'status',
-      headerName: 'Status',
-      render: (a) => (
-        <StatusBadge label={STATUS_META[a.status].label} kind={STATUS_META[a.status].kind} />
-      ),
-    },
-  ];
+  const openSubject = (id: string) =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set(CLASS_SUBJECT_PARAM, id);
+      return next;
+    });
+  const backToGrid = () =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete(CLASS_SUBJECT_PARAM);
+      return next;
+    });
+  const changeYear = (id: string) =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('year', id);
+        next.delete(CLASS_SUBJECT_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
 
+  // ── Drill-down ────────────────────────────────────────────────────────────────
+  if (selectedId) {
+    return (
+      <SubjectGradesScreen
+        option={selected}
+        classSubjectId={selectedId}
+        canAuthor={Boolean(selected?.can_edit)}
+        onBack={backToGrid}
+      />
+    );
+  }
+
+  // ── Subject card grid ───────────────────────────────────────────────────────────
   const subtitle = isTeacher
-    ? 'Pick a class, then open an assessment to grade the whole class at once.'
-    : 'Browse assessments by class. Grade entry is done by the subject teacher.';
+    ? 'Pick a subject to view its assessments and grade the class.'
+    : 'Browse subjects. Grade entry is done by the subject teacher.';
 
   return (
     <Box sx={{ pt: 3 }}>
@@ -136,33 +146,77 @@ export function GradeAssessmentsScreen() {
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
-        sx={{ mb: 2, alignItems: { sm: 'center' } }}
+        sx={{ mb: 2, alignItems: { sm: 'flex-start' }, flexWrap: 'wrap' }}
       >
         <YearSelect
           value={yearId}
-          onChange={(id) => {
-            // A class·subject belongs to one year — clear the stale selection so the
-            // auto-select picks a valid offering for the new year.
-            setSelected(null);
-            setYearId(id);
-            setPage(0);
-          }}
+          onChange={changeYear}
           years={years}
           activeYearId={activeYearId}
           isLoading={yearsLoading}
         />
-        <ClassSubjectPicker
-          options={options}
-          value={selectedOption}
-          onChange={(opt) => setSelected(opt?.id ?? null)}
-          loading={optionsQuery.isLoading}
-          disabled={optionsQuery.isError}
-        />
+
+        {showClassFilters && (
+          <>
+            <TextField
+              select
+              size="small"
+              label="Teacher"
+              value={teacherId}
+              onChange={(e) => setTeacherId(e.target.value)}
+              disabled={teachers.length === 0}
+              sx={{ minWidth: 180 }}
+            >
+              <MenuItem value="">All teachers</MenuItem>
+              {teachers.map((t) => (
+                <MenuItem key={t.id} value={t.id}>
+                  {t.name}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Form"
+              value={form}
+              onChange={(e) => setForm(e.target.value)}
+              disabled={forms.length === 0}
+              sx={{ minWidth: 140 }}
+            >
+              <MenuItem value="">All forms</MenuItem>
+              {forms.map((f) => (
+                <MenuItem key={f} value={f}>
+                  {f}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              size="small"
+              label="Section"
+              value={sectionLetter}
+              onChange={(e) => setSectionLetter(e.target.value)}
+              disabled={sectionLetters.length === 0}
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value="">All sections</MenuItem>
+              {sectionLetters.map((l) => (
+                <MenuItem key={l} value={l}>
+                  {l}
+                </MenuItem>
+              ))}
+            </TextField>
+          </>
+        )}
       </Stack>
+
+      {optionsQuery.isLoading && <LoadingState variant="cards" rows={6} label="Loading subjects" />}
 
       {optionsQuery.isError && (
         <ErrorState
-          message="We couldn't load your class subjects."
+          message="We couldn't load your subjects."
           onRetry={() => void optionsQuery.refetch()}
         />
       )}
@@ -170,61 +224,61 @@ export function GradeAssessmentsScreen() {
       {!optionsQuery.isLoading && !optionsQuery.isError && options.length === 0 && (
         <EmptyState
           variant="page"
-          title="No class subjects"
+          title="No subjects"
           description={
             isTeacher
               ? 'You are not assigned to any subjects in this year.'
-              : 'No class subjects were found for this year.'
+              : 'No subjects were found for this year.'
           }
         />
       )}
 
-      {options.length > 0 && !selectedId && (
+      {options.length > 0 && filteredOptions.length === 0 && (
         <EmptyState
           variant="page"
-          title="Choose a class subject"
-          description="Select a class · subject above to see its assessments."
+          title="No subjects match these filters"
+          description="Try clearing the teacher, form, or section filter."
         />
       )}
 
-      {selectedId && (
-        <>
-          {selectedOption && (
-            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-              {selectedOption.display_name}
-            </Typography>
-          )}
-          {listQuery.isError ? (
-            <Alert severity="error" role="alert">
-              Could not load assessments.{' '}
-              <Button size="small" onClick={() => void listQuery.refetch()}>
-                Retry
-              </Button>
-            </Alert>
-          ) : (
-            <DataTable<AssessmentListItem>
-              caption="Assessments for the selected class subject"
-              columns={columns}
-              rows={listQuery.data?.items ?? []}
-              getRowId={(a) => a.id}
-              isLoading={listQuery.isLoading}
-              isError={listQuery.isError}
-              onRetry={() => void listQuery.refetch()}
-              page={page}
-              pageSize={pageSize}
-              total={listQuery.data?.total ?? 0}
-              onPageChange={setPage}
-              onPageSizeChange={(ps) => {
-                setPageSize(ps);
-                setPage(0);
-              }}
-              emptyTitle="No assessments yet"
-              emptyDescription="Assessments for this class subject will appear here. Create them in Assessments."
-            />
-          )}
-        </>
+      {filteredOptions.length > 0 && (
+        <Grid container spacing={2}>
+          {filteredOptions.map((cs) => (
+            <Grid item xs={12} sm={6} md={4} key={cs.id}>
+              <SubjectCard option={cs} onOpen={() => openSubject(cs.id)} />
+            </Grid>
+          ))}
+        </Grid>
       )}
     </Box>
+  );
+}
+
+function SubjectCard({ option, onOpen }: { option: ClassSubjectOption; onOpen: () => void }) {
+  const teacherName = option.teachers[0]?.full_name;
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardActionArea onClick={onOpen} aria-label={`Open ${option.display_name}`} sx={{ height: '100%' }}>
+        <CardContent>
+          <Stack spacing={0.5}>
+            <Typography variant="subtitle1" noWrap>
+              {option.subject?.name ?? 'Subject'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" noWrap>
+              {option.section?.name ?? 'Class'}
+              {teacherName ? ` · ${teacherName}` : ''}
+            </Typography>
+            <Box sx={{ mt: 1 }}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`${option.assessment_count} assessment${option.assessment_count === 1 ? '' : 's'}`}
+              />
+            </Box>
+          </Stack>
+        </CardContent>
+      </CardActionArea>
+    </Card>
   );
 }
 

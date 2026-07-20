@@ -5,6 +5,7 @@ import type {
   StudentDetail,
   StudentListItem,
   StudentWritePayload,
+  StudentYear,
   StudentsListParams,
 } from '../types';
 import type { StudentStatus } from '@shared/types/enums';
@@ -26,10 +27,23 @@ export async function listStudents(
   return res.data;
 }
 
-/** GET /students/{id} — full detail. */
-export async function getStudent(id: string, signal?: AbortSignal): Promise<StudentDetail> {
-  const res = await api.get<StudentDetail>(`/students/${id}`, { signal });
+/** GET /students/{id} — full detail. `academicYearId` scopes the section to that year. */
+export async function getStudent(
+  id: string,
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<StudentDetail> {
+  const res = await api.get<StudentDetail>(`/students/${id}`, {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
+}
+
+/** GET /students/{id}/years — academic years the student was enrolled in (newest first). */
+export async function getStudentYears(id: string, signal?: AbortSignal): Promise<StudentYear[]> {
+  const res = await api.get<{ items: StudentYear[] }>(`/students/${id}/years`, { signal });
+  return res.data.items;
 }
 
 /** GET /students/me — the acting student's own record. */
@@ -41,9 +55,11 @@ export async function getMyStudentRecord(signal?: AbortSignal): Promise<StudentD
 /** GET /students/{id}/assessments — assessments grouped by subject, with term grades. */
 export async function getStudentAssessments(
   id: string,
+  academicYearId?: string,
   signal?: AbortSignal,
 ): Promise<StudentAssessmentGroup[]> {
   const res = await api.get<{ items: StudentAssessmentGroup[] }>(`/students/${id}/assessments`, {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
     signal,
   });
   return res.data.items;

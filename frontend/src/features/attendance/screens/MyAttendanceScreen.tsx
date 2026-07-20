@@ -19,6 +19,7 @@ import {
 } from '@shared/components';
 import type { StatusKind } from '@shared/components';
 import type { AttendanceStatus } from '@shared/types/enums';
+import { useSelectedYear } from '@app/providers/YearContext';
 import { useMyAttendance } from '../hooks/useAttendance';
 import { attendanceStatusMeta } from '../attendanceStatus';
 
@@ -43,7 +44,8 @@ function longDate(iso: string): string {
  * table where each status shows a StatusBadge (label + color, never color alone).
  */
 export function MyAttendanceScreen() {
-  const query = useMyAttendance();
+  const { selectedYearId } = useSelectedYear();
+  const query = useMyAttendance(selectedYearId);
 
   if (query.isLoading) return <LoadingState variant="page" label="Loading your attendance" />;
   if (query.isError || !query.data) return <ErrorState onRetry={() => void query.refetch()} />;

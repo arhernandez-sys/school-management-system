@@ -20,6 +20,7 @@ import {
   StatusBadge,
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
+import { useSelectedYear } from '@app/providers/YearContext';
 import { useMyGrades } from './hooks/useGrades';
 import type { MyGradeSubject } from './types';
 import { formatNumeric, letterKind } from './components/gradeDisplay';
@@ -40,7 +41,8 @@ function subjectKey(subject: MyGradeSubject): string {
 }
 
 export function MyGradesScreen() {
-  const query = useMyGrades();
+  const { selectedYearId } = useSelectedYear();
+  const query = useMyGrades(selectedYearId);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get('subject');
 

@@ -9,7 +9,9 @@ import {
   getStudent,
   getSubject,
   listStudents,
+  sectionForStudentInYear,
   sectionsOwnedByTeacher,
+  yearsForStudent,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAssessment,
@@ -78,6 +80,15 @@ function currentSectionFor(student: DemoStudent) {
   return student.section_id ? getSection(student.section_id) : undefined;
 }
 
+/**
+ * The section that scopes a detail-style read. With a `yearId` this is the section the
+ * student was enrolled in that year (historical view); without one it's their current
+ * (active-semester) section.
+ */
+function scopedSectionFor(student: DemoStudent, yearId?: string | null) {
+  return yearId ? sectionForStudentInYear(student.id, yearId) : currentSectionFor(student);
+}
+
 /** StudentListItem (GET /students). */
 function studentListItem(s: DemoStudent) {
   return {
@@ -90,8 +101,11 @@ function studentListItem(s: DemoStudent) {
   };
 }
 
-/** StudentDetail (GET /students/{id}, /me, POST, PATCH, status). */
-function studentDetail(s: DemoStudent) {
+/**
+ * StudentDetail (GET /students/{id}, /me, POST, PATCH, status). With `yearId` the
+ * `current_section` reflects the section the student was enrolled in that year.
+ */
+function studentDetail(s: DemoStudent, yearId?: string | null) {
   return {
     id: s.id,
     student_number: s.student_number,
@@ -105,7 +119,7 @@ function studentDetail(s: DemoStudent) {
     guardian_email: s.guardian_email,
     address: s.address,
     phone: s.phone,
-    current_section: sectionRef(currentSectionFor(s)),
+    current_section: sectionRef(scopedSectionFor(s, yearId)),
   };
 }
 
@@ -114,8 +128,8 @@ function studentDetail(s: DemoStudent) {
  * (GET /students/{id}/assessments). Each group carries the subject label + the
  * student's computed term grade for that offering, and the per-assessment lines.
  */
-function assessmentsForStudent(student: DemoStudent) {
-  const section = currentSectionFor(student);
+function assessmentsForStudent(student: DemoStudent, yearId?: string | null) {
+  const section = scopedSectionFor(student, yearId);
   if (!section) return [];
   const offerings = classSubjectsForSection(section.id).filter((cs) => cs.is_active);
   return offerings.map((cs) => {
@@ -262,6 +276,20 @@ export const studentsHandlers = [
     return HttpResponse.json({ ...page, items: page.items.map(studentListItem) });
   }),
 
+  // ── GET /students/me/years — academic years the acting student was enrolled in ──
+  // Backs the student-only top-bar year switcher.
+  http.get(`${API_BASE_URL}/students/me/years`, ({ cookies }) => {
+    const role = sessionRole(cookies);
+    if (role !== 'student') {
+      return errorResponse(403, 'forbidden', 'Only students may read /students/me/years.');
+    }
+    const id = currentStudentId(role);
+    const years = id ? yearsForStudent(id) : [];
+    return HttpResponse.json({
+      items: years.map((y) => ({ id: y.id, name: y.name, status: y.status })),
+    });
+  }),
+
   // ── GET /students/me — the student's own profile (student role only) ────────────
   http.get(`${API_BASE_URL}/students/me`, ({ cookies }) => {
     const role = sessionRole(cookies);
@@ -274,20 +302,36 @@ export const studentsHandlers = [
     return HttpResponse.json(studentDetail(student));
   }),
 
-  // ── GET /students/{id}/assessments — grouped assessment summary ─────────────────
-  http.get(`${API_BASE_URL}/students/:studentId/assessments`, ({ params, cookies }) => {
+  // ── GET /students/{id}/years — academic years this student was enrolled in ──────
+  // Backs the per-student year filter on the profile page (P/S/teacher, scope-checked).
+  http.get(`${API_BASE_URL}/students/:studentId/years`, ({ params, cookies }) => {
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
-    return HttpResponse.json({ items: assessmentsForStudent(resolved.student) });
+    const years = yearsForStudent(resolved.student.id);
+    return HttpResponse.json({
+      items: years.map((y) => ({ id: y.id, name: y.name, status: y.status })),
+    });
+  }),
+
+  // ── GET /students/{id}/assessments — grouped assessment summary ─────────────────
+  // `?academic_year_id=` scopes to the section the student had that year.
+  http.get(`${API_BASE_URL}/students/:studentId/assessments`, ({ params, cookies, request }) => {
+    const role = sessionRole(cookies);
+    const resolved = resolveScopedStudent(role, String(params.studentId));
+    if ('error' in resolved) return resolved.error;
+    const yearId = new URL(request.url).searchParams.get('academic_year_id');
+    return HttpResponse.json({ items: assessmentsForStudent(resolved.student, yearId) });
   }),
 
   // ── GET /students/{id} — detail header ──────────────────────────────────────────
-  http.get(`${API_BASE_URL}/students/:studentId`, ({ params, cookies }) => {
+  // `?academic_year_id=` scopes `current_section` to that year.
+  http.get(`${API_BASE_URL}/students/:studentId`, ({ params, cookies, request }) => {
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
-    return HttpResponse.json(studentDetail(resolved.student));
+    const yearId = new URL(request.url).searchParams.get('academic_year_id');
+    return HttpResponse.json(studentDetail(resolved.student, yearId));
   }),
 
   // ── POST /students — create (principal / secretary) ─────────────────────────────

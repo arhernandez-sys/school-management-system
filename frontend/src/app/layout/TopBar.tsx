@@ -2,6 +2,7 @@ import { AppBar, Box, IconButton, Stack, Toolbar, Typography } from '@mui/materi
 import MenuIcon from '@mui/icons-material/Menu';
 import { UserMenu } from './UserMenu';
 import { NotificationsBell } from './NotificationsBell';
+import { StudentYearSwitcher } from './StudentYearSwitcher';
 import { strings } from '@i18n/strings';
 import type { CurrentUser } from '@shared/types/api';
 
@@ -71,6 +72,7 @@ export function TopBar({
         <Box sx={{ flexGrow: 1 }} />
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {user.role === 'student' && <StudentYearSwitcher />}
           <NotificationsBell count={unreadCount} />
           <UserMenu user={user} onLogout={onLogout} />
         </Box>

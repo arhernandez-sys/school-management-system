@@ -9,6 +9,8 @@ export interface SectionRef {
   id: string;
   name: string;
   grade_level: string;
+  /** Division letter within the grade/form (e.g. "A"). Drives the P/S section filter. */
+  section: string;
 }
 
 export interface SubjectRef {
