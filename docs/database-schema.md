@@ -952,7 +952,15 @@ term_numeric  = weighted_sum / weight_base   (NULL / “—” if weight_base = 
 With categories, the two-level rollup applies (grades → category %, categories → by `category.weight`); drop-lowest is applied **within** each category. `weight_base_used` is captured in the snapshot for explainability.
 
 ### 10.3 Derive-on-read letter (FR-GRD-03)
-The letter is **not stored at entry time**. Given `term_numeric` (or a single graded assessment's `pct*100`), select the band where `min_score ≤ value ≤ max_score` from the **active year's** `grading_scale_bands`; pass/fail compares against `pass_mark`. A scale change applies going forward automatically (Q7, FR-SET-06); the UI warns the admin (FR-SET-06).
+The letter is **not stored at entry time**. Given `term_numeric` (or a single graded assessment's `pct*100`), select a band from `grading_scale_bands`; pass/fail compares against `pass_mark`. A scale change applies going forward automatically (Q7, FR-SET-06); the UI warns the admin (FR-SET-06).
+
+> **OQ-DB2 RESOLVED (2026-07-28) — the lookup is HALF-OPEN on `min_score`.** Earlier revisions of this section said "select the band where `min_score ≤ value ≤ max_score`". That is **wrong** against the bands this system actually stores, which use `.99` ceilings (`A 90–100, B 80–89.99, …`): a strict two-sided test leaves unreachable holes, so `179.99/200 = 89.995` matched **no band**, returned an empty letter, and the gradebook rendered "Graded" where a "B" belonged.
+>
+> **The implemented rule** (`app/modules/grades/calc.py::letter_for`): clamp the value to `[0,100]`, round HALF_UP to 2dp, then take the **highest band whose `min_score <= value`**. `max_score` is **never consulted** — it is authoring/display metadata that the grading-scale screen still edits and stores. This is gap-proof by construction and convention-agnostic: it returns identical letters for the `.99` bands and for clean `[80,90)` bands, so re-entering the scale either way is safe.
+>
+> Rounding to 2dp happens **before** the lookup for both term numerics *and* per-cell percentages (`percentage_for`), which is what makes a single cell's letter deterministic.
+>
+> **Which year's bands.** "The active year's" is imprecise for a historical read. The implementation uses the **section's academic year's** scale, falling back to the active year's if that year has none. For a live year the two coincide (only one year is active); for an archived year the read comes from a snapshot anyway (§10.4), so a later scale edit cannot reletter history.
 
 ### 10.4 Archived-year freeze (FR-SET-07 — the exception to derive-on-read)
 When the Principal archives a year:
@@ -1008,7 +1016,7 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 - **`school_profile`:** the single `id=1` row with a placeholder name (Principal edits via FR-SET-01).
 - **`assessment_policies`:** the single `id=1` school-default row — `absent_as_zero=false`, `allow_makeup=true`, `drop_lowest_count=0` (DB-14 defaults; Principal edits under Settings → Grading, FR-SET-03). All year/category/assessment override columns seed/default to `NULL` (inherit).
 - **First `academic_years`** (`status='active'`) + its **two `semesters`** (`sequence` 1 & 2, one `is_active`) (D10, FR-SET-02).
-- **`grading_scales`** for that year (`pass_mark=60`) + **default `grading_scale_bands`:** A 90–100, B 80–89.99, C 70–79.99, D 60–69.99, F 0–59.99 (D11 default; editable). Use `.99` ceilings *or* model bands half-open `[min, next.min)` in the service so 0–100 tiles without overlap — document the chosen convention for the contiguity validator (§5, OQ-DB2).
+- **`grading_scales`** for that year (`pass_mark=60`) + **default `grading_scale_bands`:** A 90–100, B 80–89.99, C 70–79.99, D 60–69.99, F 0–59.99 (D11 default; editable). **Convention settled (OQ-DB2, 2026-07-28):** the seed's `.99` ceilings are kept in storage, and the service resolves letters **half-open on `min_score`** so 0–100 tiles with neither overlap nor gaps — see §10.3.
 - **`subjects`:** optionally seed common subjects, or leave for the Secretary.
 
 **Migration safety / locking (scale is modest, but the standard for Phase 7+ changes):**
@@ -1048,7 +1056,7 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 
 - **OQ-DB1 — ✅ RESOLVED (DB-14).** Stakeholder replaced the hardcoded "absent = 0" assumption with **configurable per-assessment grading policy** (`absent_as_zero`, `allow_makeup`, `drop_lowest_count`), an explicit grade `status` (pending/graded/absent/excused/exempt) so not-yet-graded is distinct from absent, and a most-specific-wins precedence chain frozen into the snapshot. Modeled in §1.5, §3.D, §10, §12.1 DB-14. *(Modeled per the coordinator's relayed resolution; if the orchestrator wants the absent/excused distinction or the precedence order confirmed by the stakeholder directly, flag it — see OQ-DB7.)*
 - **OQ-DB7 (new — policy semantics to confirm):** two modeling choices worth a stakeholder nod: (a) `excused` is treated as **always-excluded** (like exempt) rather than policy-driven — confirm that's intended, or whether `excused` should also obey `absent_as_zero`; (b) `drop_lowest_count` is applied **within each category** when categories are used (vs across the whole term) — confirm. Both are reversible config-semantics decisions, not schema changes.
-- **OQ-DB2 (grading-band convention):** store bands **half-open `[min, next.min)`** (service derives the upper bound) or **explicit inclusive `min/max` with `.99` ceilings**? Affects the contiguity validator and 90.0-vs-89.999 edges. Recommend half-open in the service (store `min_score` + ordering). Confirm.
+- **OQ-DB2 (grading-band convention) — ✅ RESOLVED 2026-07-28.** Stakeholder chose the hybrid: **storage keeps explicit `min_score` + `max_score` with `.99` ceilings** (no migration, the grading-scale screen keeps editing both fields, the contiguity validator is unchanged), and **the service resolves letters half-open on `min_score` alone**, never consulting `max_score`. See §10.3 for the implemented rule and why a strict two-sided test was an actual bug (89.995 matched no band). `max_score` is now formally authoring/display metadata.
 - **OQ-DB3 (one-role assumption — watch-item, not a change):** schema is single-role per user (A-ONE-ROLE, correct for v1). A future "teacher who is also a guardian/admin who teaches" would need a `user_roles` M:N table — **not** building it now.
 - **OQ-DB4 (attendance future-date — defense-in-depth):** enforce **FR-ATT-05** in the service only (chosen) or **also** add a `BEFORE INSERT/UPDATE` trigger? Recommend service-only for v1.
 - **OQ-DB5 (object storage target):** schema stores `storage_key`s, not blobs (logo, student documents, optional report-card PDFs). Confirm the object store (Railway volume / S3-compatible / Supabase Storage) for Phase 6/7 — does not affect this schema.

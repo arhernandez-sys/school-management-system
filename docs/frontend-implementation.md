@@ -2,7 +2,30 @@
 
 > **Phase 6 — Frontend Foundation.** Owner: `frontend-engineer`. This is the first code-writing phase. It delivers the **application shell everything else plugs into** — scaffold, theme, routing + guards, auth structure, TanStack Query + API client infra, and the feature-based folder tree. It deliberately builds **no feature-module functionality** (that is Phase 7). It honors `architecture.md` (§3 auth, §5 folder structure, §7 state strategy), `ui-design-system.md` (D18 nav, D19 theme tokens, D20–D22), `api-specification.md` (§1 conventions, §2 auth, §4 envelopes), and `progress-tracker.md` (D14/D15/D27/D28).
 
-_Last updated: 2026-06-26 — Phase 6._
+_Last updated: 2026-07-28._
+
+> **⚙️ THE BACKEND NOW EXISTS FOR EVERY SCREEN (2026-07-28).** Phase 7 is complete: all twelve
+> modules are served (70 path templates / 99 operations — see `backend/openapi.json`). The routes
+> that were previously dead against the real API — `/dashboard`, `/grades`, `/attendance`,
+> `/announcements`, `/reports`, `/calendar` — are all live now. **Run with
+> `VITE_ENABLE_MOCKS=false` to hit the real backend**; `npm run demo` remains the MSW fake-data
+> track for client previews.
+>
+> **Two things to know when comparing the real API to `npm run demo`:**
+> 1. **Term grades will differ where the demo data uses weighted categories.** The backend
+>    implements the documented two-level rollup (`database-schema.md` §10.2c: grades → category %,
+>    categories → by `category.weight`, with drop-lowest); `mocks/demo/selectors.ts::computeTermGrade`
+>    does a flat mean and ignores category weights entirely. The backend is correct — the mock is a
+>    simplification. Screens are unaffected (they render `term_numeric` from the server), only the
+>    numbers move.
+> 2. **`selectors.ts::letterFor` still has the OQ-DB2 bug** — a strict `min <= v <= max` lookup
+>    against `.99`-ceiling bands, so e.g. `179.99/200 = 89.995` matches no band and renders blank
+>    where a "B" belongs. The backend resolves this half-open on `min_score`. Demo-only and
+>    cosmetic, but worth aligning if the demo is shown again.
+>
+> **Orval was deliberately NOT regenerated** for the new modules: they use hand-written transports
+> (`features/*/api/*.ts`), so generating clients nothing imports would add noise without proving
+> anything. `npm run typecheck` passes clean. See the progress tracker's note for the full reasoning.
 
 ---
 

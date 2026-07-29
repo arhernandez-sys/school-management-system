@@ -258,6 +258,32 @@ School-level configuration and per-user account settings.
 - **FR-SET-06:** Changes to the grading scale shall apply to grade derivation going forward and shall warn the administrator about effects on already-displayed grades (assumption: re-derivation behavior to confirm — see Q7).
 - **FR-SET-07:** The system shall prevent deletion/closure of the active academic year while it is in use; closing a year shall archive its classes, grades, and attendance read-only.
 
+### 3.12 Calendar / Events (CAL)
+
+> **Scope addition, 2026-07.** Not part of the original 11-module charter. Added because
+> the shipped frontend already contained a full calendar and the `events` table already
+> existed in the database — see `project-overview.md` §4 for the provenance. Documented
+> here so the module has requirements like every other one.
+
+- **FR-CAL-01:** The Principal and Secretary shall create, edit and delete school
+  calendar events, each with a title, optional description, category
+  (holiday / exam / meeting / activity / other), location, and an inclusive date range.
+- **FR-CAL-02:** An event shall be either **all-day** or **timed**; a timed event shall
+  require a start time, and an end time (when given) shall be after the start time.
+  Switching an event to all-day shall clear its clock times.
+- **FR-CAL-03:** Each event shall carry a **visibility**: `global` events are visible to
+  every role; `internal` events are visible to staff only (Principal, Secretary,
+  Teacher) and shall be hidden from Students — including by direct lookup.
+- **FR-CAL-04:** Teachers and Students shall **read** the shared school calendar but
+  shall not create, edit or delete events.
+- **FR-CAL-05:** The calendar feed shall report a server-side **reference date** in the
+  school's local timezone (`America/Belize`), so the month view opens on the correct
+  month independently of the client clock (see OQ-TZ1 in the progress tracker).
+
+**Roles × Calendar:** Principal `full` · Secretary `full` · Teacher `view-all` ·
+Student `view-all` (global-visibility events only). Matches the frontend's
+`PERMISSION_MATRIX.calendar`.
+
 ---
 
 ## 4. User Stories

@@ -242,23 +242,67 @@ AnnouncementAudience = all | students | teachers | class
 > Per endpoint: **method + path**, **purpose**, **Authz** (§3.1), **params**, **request body** (field/type/req/validation), **success** (status + schema), **key errors**. Repeating CRUD patterns (create/edit/soft-delete of an admin-owned resource) are stated once and referenced. Entity field names track `database-schema.md` exactly.
 
 ### 5.0 Module index & endpoint counts
-| # | Module | Endpoints |
+
+> **⚙️ RECONCILED AGAINST THE SHIPPED BACKEND, 2026-07-28.** Phase 7 is complete; the
+> served OpenAPI (`backend/openapi.json`) is now the authoritative surface — **70 path
+> templates / 99 operations**. Where this document and the finished frontend disagreed,
+> **the frontend won** and the spec has been corrected here; every such change is listed
+> in §5.0a. The per-module counts below are the *operation* counts actually served.
+
+| # | Module | Operations |
 |---|---|---|
 | 1 | Auth | 6 |
 | 2 | Dashboard | 1 |
-| 3 | Students | 8 |
+| 3 | Students | 10 |
 | 4 | Teachers | 6 |
-| 5 | Classes/Sections (+ class_subjects, teachers, enrollment) | 12 |
+| 5 | Classes/Sections (+ class_subjects, teachers, enrollment, categories) | 17 |
 | 5b | **Subjects (catalog — feeds the subject picker)** | 4 |
-| 6 | Assessments (+ status + categories) | 8 |
-| 7 | Grades | 8 |
-| 8 | Attendance | 4 |
-| 9 | Announcements | 7 |
+| 6 | Assessments (+ status + release + the grade write) | 10 |
+| 7 | Grades | 4 |
+| 8 | Attendance | 5 |
+| 9 | Announcements | 8 |
 | 10 | Reports (incl. Transcript) | 7 |
 | 11 | Settings | 18 |
-| | **Total** | **89** |
+| 12 | **Calendar / Events (scope addition, 2026-07)** | 4 |
+| — | Health | 1 |
+| | **Total** | **101** |
 
-> **Count notes (authoritative over the rounded numbers):** Module 6 = 8 — list, detail, create, patch, delete, **`POST /assessments/{id}/status` (M1)**, categories `GET`, categories write-family (POST/PATCH/DELETE on one path group, counted as one). Module 11 = 18 — school 3, academic 6, grading-scale 2, assessment-policy 2, users 3, account 2. Subjects (5b, **M2**) = 4. Total **89** endpoints / endpoint-families.
+> **Count notes.** Module 5 (17) now includes the 4 assessment-category operations,
+> which are served under `/classes/{id}/subjects/{cs}/categories`. Module 6 (10) includes
+> `POST /{id}/status`, `POST /{id}/release`, `POST /{id}/unrelease` and
+> **`PUT /assessments/{id}/grades`** — the grade write is mounted under `/assessments`
+> because grading is assessment-first (§7, there is no `POST /grades`), but its logic
+> belongs to the Grades module. Module 7 (4) is therefore the `/grades/*` reads only.
+> Module 12 is a scope addition outside the original 11-module charter — see
+> `project-overview.md` §4 for its provenance.
+
+### 5.0a Corrections applied 2026-07-28 (frontend is binding)
+
+The finished frontend is the contract. These paths/shapes in earlier revisions of this
+document did not match what it calls, and have been corrected:
+
+| Was specified as | Actually served | Why |
+|---|---|---|
+| `GET/PUT /attendance/class/{class_id}` | `GET/PUT /attendance?section_id=&date=` | `features/attendance/api/attendanceApi.ts` |
+| `GET /attendance/class/{id}/history` | `GET /attendance/summary?section_id=` | same |
+| — | `GET /attendance/sections` | picker the spec never listed |
+| `GET /reports/report-card/{student_id}` | `GET /reports/report-card?student_id=` | `features/reports/api/reportsApi.ts` |
+| `GET /reports/transcript/{student_id}` | `GET /reports/transcript?student_id=` | same |
+| `GET /reports/class-grades/{class_id}` | `GET /reports/class-grades?class_subject_id=` | keyed by offering, not section |
+| `GET /reports/attendance/{class_id}` | `GET /reports/attendance?section_id=` | query-param form |
+| — | `GET /reports/students` | picker the spec never listed |
+| — | `GET /grades/class-subjects`, `GET /grades/class-subject/{id}` | pickers/gradebook the spec never listed |
+| — | `GET /announcements/target-classes` | compose picker the spec never listed |
+| `PUT /classes/{cid}/subjects/{csid}/drop-lowest` | **not built** | no frontend caller; drop-lowest resolves category → year → school (schema §10.2a), which has no offering level |
+| `GET /students/{id}/assessments` → `AssessmentSummary[]` (bare array), query `semester_id?` | `{items: StudentAssessmentGroup[]}`, query `academic_year_id?` | `features/students/api/studentsApi.ts` reads `res.data.items`; a bare array made it `undefined` and crashed the tab |
+| `GET /students/{id}/years`, `GET /students/me/years` — *"deferred, deliberately"* | **built** | `studentsApi.getStudentYears` + `app/providers/YearContext.tsx` call them unconditionally; the student role 404'd on every page load |
+| `GET /students` / `GET /students/{id}` — no `academic_year_id` | both accept `academic_year_id?` | the year switcher sends it on both; FastAPI silently dropped the undeclared param, so a past year showed the CURRENT section in the profile header while the assessments tab showed the past year's |
+
+> **Correction to an earlier correction (2026-07-28).** This section previously recorded
+> the two `/years` endpoints as deliberately deferred, on the belief that only the demo
+> called them. It is not true of the finished frontend: `YearContext` fetches
+> `/students/me/years` for every student session and the profile page's year filter
+> fetches `/students/{id}/years`. Both are now served.
 
 ---
 
@@ -293,13 +337,15 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 #### `GET /students`
 - **Purpose:** searchable, filterable, paginated list (FR-STU-06; UI §7.3).
 - **Authz:** `require_role(principal, secretary, teacher)`. **Teacher scope:** results auto-restricted to students enrolled in a section the teacher owns any subject of (`assert_teacher_owns_section` as a filter, read-only) — cannot list students outside own classes (FR-STU-08).
-- **Query:** list params (§6) + `search` (name or `student_number`), `status: StudentStatus`, `class_id: uuid`, `grade_level: string`. `sort` ∈ {`full_name`,`student_number`,`status`,`created_at`}; default `full_name`.
+- **Query:** list params (§6) + `search` (name or `student_number`), `status: StudentStatus`, `class_id: uuid`, `grade_level: string`, `academic_year_id: uuid`. `sort` ∈ {`full_name`,`student_number`,`status`,`created_at`}; default `full_name`.
+- **`academic_year_id` (year switcher) FILTERS the student set, it does not rescope rows.** A **past** year restricts the directory to students enrolled that year (ended enrollments included — `unenrolled_at` being set is the normal state for a past year). The **active** year, or no year at all, applies no enrollment filter so the whole directory lists, including graduated/withdrawn students who hold no active enrollment; filtering there would silently empty the `status=graduated` view. Each row's `current_section` always stays the student's **live** section — the field is named *current*, and the frontend's `studentListItem` resolves it with no year. Teacher scope (FR-STU-08) composes with the filter and is evaluated against the selected year's sections.
 - **Success `200`:** `Page[StudentListItem]` `{ id, student_number, full_name, status, current_section?: ClassRef, guardian_name? }`.
 - **Errors:** `401`, `403` (student).
 
 #### `GET /students/{id}`
 - **Purpose:** detail header (FR-STU-07; UI §7.4 — tabs lazy-load via their modules).
 - **Authz:** `require_role(principal, secretary, teacher)`; **Teacher** must own a section the student is enrolled in (else `404`, §3.3).
+- **Query:** `academic_year_id?` — rescopes `current_section` to the section the student sat in **that year**, resolved by the same helper `GET /students/{id}/assessments` uses (`students.service.section_in_year`), so the profile header and the assessments tab can never name different sections for the same selected year. Branching is on the **presence** of the param: supplied and unmatched → `current_section: null`, never a fall-through to another year. Omitted → the live active-semester section. Authorization is unaffected — teacher ownership is still evaluated against live enrollments, so a past year cannot widen a teacher's reach.
 - **Success `200`:** `StudentDetail { ...profile fields per student_profiles..., current_section?: ClassRef, audit: AuditStamp }`.
 - **Errors:** `401`, `403` (student → use `/students/me`), `404`.
 
@@ -342,10 +388,24 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 - **Success `204`** (sets `deleted_at`). **Errors:** `409 has_academic_history` ("deactivate instead", UI §10.4), `404`.
 
 #### `GET /students/{id}/assessments`
-- **Purpose:** assessments for the subjects in the student's section (Student-detail Assessments tab). FR-ASMT-06.
-- **Authz:** `require_role(principal, secretary, teacher)` (teacher: owns a section the student is in → else `404`). *(Student self uses `GET /assessments?scope=me`, §5.6.)*
-- **Query:** `semester_id?`.
-- **Success `200`:** `AssessmentSummary[]` grouped by `class_subject` (subject label included). **Errors:** `401`, `404`.
+- **Purpose:** assessments for the subjects in the student's section, with that student's per-assessment result and computed term grade (Student-detail Grades/Assessments tab). FR-ASMT-06.
+- **Authz:** `require_role(principal, secretary, teacher)` (teacher: owns a section the student is in → else `404`). *(Student self uses `GET /grades/me`, §5.7.)*
+- **Query:** `academic_year_id?` — scopes to the section the student sat in **that year** (a year spans both semesters, so this is *not* a semester filter). Default: the active year.
+- **Success `200`:** `{ items: StudentAssessmentGroup[] }` — **an envelope, not a bare array** (§5.0a).
+  - `StudentAssessmentGroup { class_subject_id: uuid, subject: SubjectRef|null, term_grade: { numeric: float|null, letter: string|null }, assessments: StudentAssessmentLine[] }`
+  - `StudentAssessmentLine { id: uuid, title: string, type: AssessmentType, max_score: float, weight: float|null, assessment_date: date|null, status: GradeStatus, score: float|null, is_released: bool }`
+- **Semantics:** `status` is the **student's grade status** (`pending` when no `assessment_grades` row exists), *not* the assessment's lifecycle status. `is_released` = `grade.is_released ?? assessment.is_released`. `score` is withheld (`null`) unless released **and** graded — but the row is still listed, because the viewer is an admin/teacher (contrast `GET /grades/me`, which drops unreleased rows). `draft` assessments are excluded. `term_grade` is computed by the single engine in `grades/calc.py` with `released_only=false`, so it is the true working average and may legitimately differ from the student's own `/grades/me` number while results are unreleased.
+- **Errors:** `401`, `403`, `404`.
+
+#### `GET /students/{id}/years`
+- **Purpose:** the academic years the student was actually enrolled in — backs the per-student year filter on the profile page.
+- **Authz:** `require_role(principal, secretary, teacher)` (teacher: owns a section the student is in → else `404`). **Student → 403** (use `/students/me/years`).
+- **Success `200`:** `{ items: { id: uuid, name: string, status: AcademicYearStatus }[] }`, **newest first**. Resolved `class_enrollments → semesters → academic_years`; ended enrollments (`unenrolled_at` set) still count. **Errors:** `401`, `403`, `404`.
+
+#### `GET /students/me/years`
+- **Purpose:** same list for the signed-in student — backs the student-only top-bar year switcher (`app/providers/YearContext.tsx`).
+- **Authz:** `require_role(student)`. Scope is server-derived from the token (§3.2), never a param.
+- **Success `200`:** as above. **Errors:** `401`, `403`, `404 no_student_profile`.
 
 > The Student-detail **Grades/Attendance tabs for an admin/teacher viewer** are served by `GET /grades?student_id=…` and `GET /attendance/class/{id}/history?student_id=…` (admin/teacher only; §5.7/§5.8), where `student_id` is a legitimate addressed param **for those roles** — never for a student caller (who is server-scoped).
 

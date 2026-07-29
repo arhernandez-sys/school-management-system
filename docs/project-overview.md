@@ -41,6 +41,14 @@ A modern, web-based **School Management System (Student Information System / SIS
 9. Announcements
 10. Reports
 11. Settings
+12. **Calendar / Events** — _scope addition, 2026-07. Not in the original charter._
+    Added because the shipped frontend already contains a complete calendar
+    (`features/calendar/`: `CalendarPage`, `MonthCalendar`, `EventFormDialog`,
+    `EventDetailDialog`, a nav item, a route and a `PERMISSION_MATRIX.calendar` entry),
+    MSW had `handlers/events.ts` wired in, and the `events` table has existed in
+    MariaDB since `db/mariadb/001_missing_fields.sql`. Without a backend, `/calendar`
+    was a dead route in the real app. Recorded here rather than shipped silently.
+    Contract: `api-specification.md` §5.0 Module 12; requirements: FR-CAL-01..05.
 
 ## 5. Documentation Map (Source of Truth)
 
@@ -50,12 +58,15 @@ A modern, web-based **School Management System (Student Information System / SIS
 | `requirements.md` | 1 | ✅ Complete |
 | `architecture.md` | 2 | ✅ Complete |
 | `ui-design-system.md` | 3 | ✅ Complete |
-| `database-schema.md` | 4 | ✅ Complete |
-| `api-specification.md` | 5 | ✅ Complete |
-| `frontend-implementation.md` | 6–7 | 🟡 Foundation done (Phase 6); modules pending (Phase 7) |
-| `testing-plan.md` | 8 | ⬜ Pending |
+| `database-schema.md` | 4 | ✅ Complete (OQ-DB2 resolved 2026-07-28, §10.3) |
+| `api-specification.md` | 5 | ✅ Complete (reconciled to the shipped backend 2026-07-28, §5.0a) |
+| `frontend-implementation.md` | 6–7 | ✅ Complete — frontend finished |
+| `testing-plan.md` | 8 | ⬜ Pending — but the backend suite is live (see tracker) |
 | `security-review.md` | 9 | ⬜ Pending |
 | `progress-tracker.md` | all | ✅ Live |
+
+> **Backend surface is authoritative in `backend/openapi.json`** (regenerated
+> 2026-07-28): 70 path templates / 99 operations. Phase 7 is complete.
 
 ## 6. Orchestration Principles
 
