@@ -6,8 +6,14 @@ same secret-free configuration serves the app and migrations. `target_metadata`
 is `Base.metadata`, populated by importing `app.db.models` (the aggregator that
 imports ALL 28 ORM models), so autogenerate/compare sees the full schema.
 
-The psycopg3 driver URL (`postgresql+psycopg://...`) works as-is for Alembic's
+The pymysql driver URL (`mysql+pymysql://...`) works as-is for Alembic's
 synchronous engine.
+
+SCOPE NOTE: the checked-in revision was authored for Postgres and is knowingly
+non-functional against MariaDB (native ENUMs, `gen_random_uuid()`, partial
+indexes). The live MariaDB schema is maintained by the hand-run SQL under
+`backend/db/mariadb/`. This env.py is kept correct so `target_metadata` stays
+usable, not because `alembic upgrade` is the deployment path.
 """
 
 from __future__ import annotations
@@ -28,9 +34,9 @@ config = context.config
 
 # Inject the secret connection string from app settings — never from the ini.
 # `set_main_option` writes through ConfigParser, which treats `%` as interpolation
-# syntax. The Supabase password URL-encodes `@` as `%40`, so we escape every `%`
-# to `%%` for ConfigParser; it un-escapes back to a single `%` when read. The
-# stored secret stays `%40`-encoded end to end (never decoded, never logged).
+# syntax. A DB password URL-encodes `@` as `%40` (see .env.example), so we escape
+# every `%` to `%%` for ConfigParser; it un-escapes back to a single `%` when read.
+# The stored secret stays `%40`-encoded end to end (never decoded, never logged).
 _db_url = get_settings().database_url
 config.set_main_option("sqlalchemy.url", _db_url.replace("%", "%%"))
 

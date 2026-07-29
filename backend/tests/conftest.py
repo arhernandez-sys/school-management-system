@@ -54,9 +54,15 @@ if TYPE_CHECKING:  # import only for type checkers; avoids hard runtime coupling
     from app.config import Settings
 
 # The local default baked into Settings.database_url. If DATABASE_URL is unset the
-# app falls back to this; a test run against it would hit a Postgres nobody is
+# app falls back to this; a test run against it would hit a MariaDB nobody is
 # running, so we treat "unset or equal to this default" as "no test DB available".
-_LOCAL_DEFAULT_DB_URL = "postgresql+psycopg://sis:sis@localhost:5432/sis"
+#
+# IMPORTED, never re-typed. This guard previously hardcoded the OLD Postgres
+# default; once the app pivoted to MariaDB the strings no longer matched, so a
+# machine with no `.env` stopped recognising the fallback as "no DB" and tried a
+# real connection instead of skipping cleanly. Importing the constant makes that
+# class of drift impossible.
+from app.config import LOCAL_DEFAULT_DATABASE_URL as _LOCAL_DEFAULT_DB_URL  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -119,6 +125,35 @@ def _hydrate_database_url_from_dotenv() -> None:
 
 
 _hydrate_database_url_from_dotenv()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Rate limiting OFF by default for the suite (added in the hardening pass).
+# ──────────────────────────────────────────────────────────────────────────────
+# `core/ratelimit.py` counts FAILED auth attempts per client IP, and under
+# TestClient every request reports the same peer ("testclient"), so the whole
+# suite shares ONE bucket. The auth tests deliberately generate dozens of failures
+# (lockout, wrong password, forged refresh cookies) and would trip the limiter,
+# turning later tests' expected 401/423 into an unexpected 429.
+#
+# Set BEFORE anything constructs Settings, and via `setdefault` so an explicit
+# export still wins. The rate-limit tests re-enable it per-app by overriding the
+# `get_settings` dependency, which is the only place that reads the flag.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    """Clear the process-wide limiter around every test.
+
+    The limiter is a module singleton, so without this a test that enables
+    throttling would leak its counters into the next one.
+    """
+    from app.core.ratelimit import get_limiter
+
+    get_limiter().reset()
+    yield
+    get_limiter().reset()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

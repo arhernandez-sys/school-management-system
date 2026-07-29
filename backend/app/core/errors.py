@@ -35,6 +35,7 @@ class AppError(Exception):
         code: str | None = None,
         fields: dict[str, list[str]] | None = None,
         extra: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -44,6 +45,13 @@ class AppError(Exception):
         # `extra` merges additional top-level keys into the error body (e.g.
         # retry_after_seconds for account_locked).
         self.extra = extra or {}
+        # `headers` sets response headers the status code has a STANDARD meaning
+        # for — currently only `Retry-After` on a 429 (core/ratelimit.py). The
+        # machine-readable value is still in the body as `retry_after_seconds`;
+        # the header exists for proxies and non-browser clients that act on it.
+        # Cross-origin JS can only read it because `Retry-After` is listed in the
+        # CORS `expose_headers` in app/main.py.
+        self.headers = headers
 
 
 class ValidationError(AppError):
@@ -124,6 +132,7 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
             fields=exc.fields,
             extra=exc.extra,
         ),
+        headers=exc.headers or None,
     )
 
 

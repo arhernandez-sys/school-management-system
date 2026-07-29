@@ -21,16 +21,23 @@ routes touches no connection.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, FastAPI
+import logging
+
+from fastapi import APIRouter, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 # Importing the models aggregator populates Base.metadata for the whole app at
 # import time (no DB connection is opened — the engine connects lazily per
 # request). Kept here so the app is the single import that brings the ORM online.
 from app.db import models as _db_models  # noqa: F401
 from app.config import Settings, get_settings
-from app.core.errors import register_exception_handlers
+from app.core import ratelimit
+from app.core.errors import _envelope, register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, configure_logging
+from app.core.security_headers import SecurityHeadersMiddleware
+from app.db import session as db_session
 from app.modules.assessments.router import categories_router as assessment_categories_router
 from app.modules.assessments.router import router as assessments_router
 from app.modules.auth.router import router as auth_router
@@ -73,15 +80,52 @@ MODULE_ROUTERS: list[APIRouter] = [
 ]
 
 
+logger = logging.getLogger("sis.health")
+
+
 def _build_health_router() -> APIRouter:
     router = APIRouter(tags=["health"])
 
     @router.get("/health", summary="Liveness probe (no auth)")
     def health() -> dict[str, str]:
         """Unauthenticated 200. Does NOT touch the database — it is a pure
-        liveness signal so the app reports healthy even if Postgres is
-        unreachable (DB connectivity is per-request, architecture §1)."""
+        liveness signal so the app reports healthy even if MariaDB is
+        unreachable (DB connectivity is per-request, architecture §1).
+
+        This behaviour is DELIBERATE and must not change: a liveness probe wired
+        to the database restarts the app every time the database hiccups, which
+        turns a recoverable 60-second DB blip into a crash loop that is still
+        failing long after the database came back. Use `/ready` for anything that
+        should drain traffic instead of killing the process.
+        """
         return {"status": "ok"}
+
+    @router.get(
+        "/ready",
+        summary="Readiness probe — verifies database reachability (no auth)",
+        responses={503: {"description": "A dependency is unreachable."}},
+    )
+    def ready() -> JSONResponse:
+        """Unauthenticated. 200 when the app can reach MariaDB, 503 when it
+        cannot — the signal a load balancer should use to stop sending traffic to
+        this instance (as opposed to `/health`, which decides whether to KILL it).
+
+        Deliberately reports no driver text, host, or exception detail: an
+        unauthenticated endpoint must not describe the internals of a failure.
+        The full error is logged server-side for the operator.
+        """
+        try:
+            db_session.check_connection()
+        except Exception:
+            logger.exception("readiness_check_failed")
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=_envelope(
+                    "service_unavailable",
+                    "The service is not ready to accept traffic.",
+                ),
+            )
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ready"})
 
     return router
 
@@ -108,6 +152,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ── Exception handlers (the single ErrorResponse envelope, §8.1) ──────────
     register_exception_handlers(app)
 
+    # Bound the in-process rate limiter's memory from settings (core/ratelimit.py).
+    ratelimit.configure(settings)
+
+    # ══ MIDDLEWARE ORDER ══════════════════════════════════════════════════════
+    # Starlette's `add_middleware` INSERTS AT POSITION 0, so the LAST call below
+    # is the OUTERMOST layer. Reading the calls bottom-to-top gives the order a
+    # request actually traverses:
+    #
+    #   RequestLogging  →  TrustedHost  →  SecurityHeaders  →  CORS  →  routes
+    #
+    # Why this order:
+    #
+    #  * RequestLogging OUTERMOST (unchanged from before). It assigns
+    #    `request.state.request_id`, which `errors.py` reads for the 500 envelope,
+    #    and stamps `X-Request-ID` on the way out. Outermost is the only position
+    #    where a request rejected by an INNER layer (a bad Host, a CORS preflight)
+    #    still gets logged and correlated — the requests you most need to see are
+    #    exactly the ones that never reach a route.
+    #
+    #  * TrustedHost next. A poisoned Host header should be refused before any
+    #    further work; its 400 deliberately carries no CORS headers, so a browser
+    #    sees an opaque failure rather than a readable error, while the log line
+    #    from the layer above still records it.
+    #
+    #  * SecurityHeaders OUTSIDE CORS so its headers land on every response the
+    #    app can emit, including CORS preflight replies (which CORSMiddleware
+    #    short-circuits without ever reaching a route) and error responses. Inside
+    #    CORS those responses would ship bare. It only ADDS headers, so the
+    #    `Access-Control-*` set by the inner layer passes through untouched.
+    #
+    #  * CORS innermost of the four, i.e. closest to the routes, which is where
+    #    Starlette's own docs put it — it must see the real route response to
+    #    decide the `Access-Control-Allow-*` reply.
+    # ══════════════════════════════════════════════════════════════════════════
+
     # ── CORS: credentialed + explicit origins (mandatory for the refresh cookie)
     # NEVER `*` with credentials — validate_runtime() already rejects `*`, and
     # CORSMiddleware itself forbids `*` + allow_credentials. Origins come from the
@@ -118,12 +197,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        # Expose the correlation id so the SPA can surface it on 500s.
-        expose_headers=["X-Request-ID"],
+        # Expose the correlation id so the SPA can surface it on 500s, and
+        # `Retry-After` so it can re-enable the sign-in button at the right moment
+        # after a 429 (core/ratelimit.py). A cross-origin response header the SPA
+        # is not allowed to READ is the same as one that was never sent.
+        expose_headers=["X-Request-ID", "Retry-After"],
     )
+
+    # ── Static security response headers. No CSP — see the module docstring for
+    # why (it would break Swagger UI without protecting a JSON API).
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        hsts_enabled=settings.hsts_enabled,  # never over plain http in `local`
+        hsts_max_age=settings.hsts_max_age,
+    )
+
+    # ── Host allow-list. Opt-in: the default "*" is a no-op, so a local or
+    # PaaS-with-generated-hostname deployment is not broken by a setting nobody
+    # knew to fill in. Set TRUSTED_HOSTS once the public hostname is fixed.
+    trusted_hosts = settings.trusted_host_list
+    if trusted_hosts and trusted_hosts != ["*"]:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
 
     # ── Structured request logging + request_id (§8.3). Sets request.state.
     # request_id (consumed by errors.py) and reads request.state.user_id.
+    # OUTERMOST — see the order block above.
     app.add_middleware(RequestLoggingMiddleware)
 
     # ── Routes, all under /api/v1 (api-spec §1.1) ─────────────────────────────

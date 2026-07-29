@@ -12,7 +12,9 @@ dependencies = [
     "pydantic-settings==2.7.1",
     "argon2-cffi==23.1.0",
     "pyjwt==2.10.1",
-    "psycopg[binary]==3.2.3",
+    # The backend targets self-hosted MariaDB; the former psycopg/Postgres driver
+    # was dropped with the pivot. Nothing imports psycopg — the only remaining
+    # Postgres artefact is the knowingly Postgres-only Alembic revision.
     "pymysql==1.1.1",
     "python-multipart==0.0.20",
     "email-validator==2.2.0",

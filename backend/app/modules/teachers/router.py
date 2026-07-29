@@ -56,16 +56,22 @@ def list_teachers(
     search: Annotated[str | None, Query(max_length=160)] = None,
     status_filter: Annotated[TeacherStatus | None, Query(alias="status")] = None,
     specialization: Annotated[str | None, Query(max_length=120)] = None,
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     _caller: User = Depends(_read),
 ) -> Page[TeacherListItem]:
-    """Read-only for teachers; students are denied at the gate (403)."""
+    """Read-only for teachers; students are denied at the gate (403).
+
+    `academic_year_id` backs the module's year switcher — a PAST year narrows the
+    directory to staff who taught that year; the active year does not filter (see
+    `service.list_teachers`)."""
     return service.list_teachers(
         db,
         params=params,
         search=search,
         status=status_filter,
         specialization=specialization,
+        academic_year_id=academic_year_id,
     )
 
 

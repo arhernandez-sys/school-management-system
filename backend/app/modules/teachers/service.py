@@ -25,13 +25,13 @@ from datetime import datetime, timezone
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role, TeacherStatus
+from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.common.schemas import AuditStamp, ClassRef, SubjectRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
 from app.modules.classes.models import Class, ClassSubject, ClassTeacher, Subject
-from app.modules.settings.models import AuditLog
+from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.teachers.models import TeacherProfile
 from app.modules.teachers.schemas import (
     ClassTaught,
@@ -186,13 +186,53 @@ def list_teachers(
     search: str | None,
     status: TeacherStatus | None,
     specialization: str | None,
+    academic_year_id: uuid.UUID | None = None,
 ):
     """GET /teachers (P/S/Teacher RO). Page[TeacherListItem]; default sort
-    full_name. `specialization` matches the JSON array via MariaDB JSON_SEARCH."""
+    full_name. `specialization` matches the JSON array via MariaDB JSON_SEARCH.
+
+    `academic_year_id` scopes the directory to staff who actually taught that
+    year, for the module's year switcher. Two things about it are deliberate and
+    mirror the equivalent rule on `students.list_students`:
+
+    * **A PAST year filters the set**; the active year (or no param) does not.
+      Filtering on the active year would hide any teacher who holds no offering
+      yet — a newly hired member of staff, or anyone between assignments — which
+      silently empties the directory exactly when it is most needed.
+    * Membership is resolved through `class_teachers -> class_subjects -> classes`
+      for that year, so it reflects real assignments rather than the teacher's
+      own status field.
+
+    Before this parameter existed the frontend sent it and FastAPI silently
+    dropped it (undeclared query params are discarded, not rejected), so the year
+    switcher appeared to work while returning the same rows for every year.
+    """
     stmt = select(TeacherProfile).where(TeacherProfile.deleted_at.is_(None))
 
     if status is not None:
         stmt = stmt.where(TeacherProfile.status == status)
+
+    if academic_year_id is not None:
+        active = db.scalar(
+            select(AcademicYear.id).where(
+                AcademicYear.status == AcademicYearStatus.ACTIVE
+            )
+        )
+        # Compared as strings on purpose. FastAPI hands us a real `uuid.UUID` and
+        # the GUID TypeDecorator returns one too, so `!=` works — but a caller
+        # passing a str (a script, a test using raw text() SQL that bypasses the
+        # decorator) would silently miss the exemption and filter the ACTIVE year,
+        # emptying the directory. Failing that way is worse than the cost of str().
+        if str(academic_year_id) != str(active):
+            stmt = stmt.where(
+                exists().where(
+                    ClassTeacher.teacher_id == TeacherProfile.id,
+                    ClassTeacher.class_subject_id == ClassSubject.id,
+                    ClassSubject.class_id == Class.id,
+                    ClassSubject.deleted_at.is_(None),
+                    Class.academic_year_id == academic_year_id,
+                )
+            )
 
     if search:
         like = f"%{search.strip()}%"

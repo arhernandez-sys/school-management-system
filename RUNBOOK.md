@@ -269,8 +269,58 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 
 ### Health endpoints
 
-- `GET /api/v1/health` — liveness. **Does not touch the database**, so it returns 200 even
-  when MariaDB is down. A DB-backed readiness probe is Step 3d.
+- `GET /api/v1/health` — **liveness**. Deliberately does not touch the database, so it
+  returns 200 even when MariaDB is down. Point restart-on-failure checks here: a liveness
+  probe that fails on DB trouble causes restart loops.
+- `GET /api/v1/ready` — **readiness**. Runs `SELECT 1` and returns **503** when the database
+  is unreachable. Point load-balancer traffic gating here. Note it has no client-side
+  connect timeout, so against a black-holed host it waits pymysql's default (~10s) before
+  answering — give anything polling it its own timeout.
+
+---
+
+## 9. Running behind a reverse proxy — READ THIS
+
+**You must start uvicorn with `--forwarded-allow-ips=""` unless you have deliberately
+configured it otherwise.**
+
+uvicorn enables its own `ProxyHeadersMiddleware` **by default**, trusting `127.0.0.1`. When
+the immediate peer is loopback — which is the normal self-hosted layout, nginx/Caddy/IIS in
+front of the app on the same host — it **overwrites the client address from
+`X-Forwarded-For` before the application ever sees the request**. The app's own
+`TRUSTED_PROXIES` setting cannot override that; it runs too late.
+
+Consequence, measured on this codebase: an attacker rotating the `X-Forwarded-For` header
+gets a **fresh rate-limit bucket every request**, and every `login_attempts` and `audit_log`
+row records whatever IP they chose.
+
+```
+# exhaust the limiter from one identity
+X-Forwarded-For: 10.0.0.1   -> 429 after 31 failed logins
+# then simply rotate it
+X-Forwarded-For: 8.8.8.8    -> 401   (throttle evaded)
+X-Forwarded-For: 1.1.1.1    -> 401
+```
+
+With `--forwarded-allow-ips=""` the same rotation stays `429`.
+
+```powershell
+# correct production launch (TLS terminated by the proxy in front)
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --forwarded-allow-ips=""
+```
+
+Then set `TRUSTED_PROXIES` in `.env` to your proxy's address so the app resolves the real
+client IP itself, under its own rules.
+
+This cannot be fixed from `.env` — uvicorn reads `FORWARDED_ALLOW_IPS` from the environment
+before importing the app, so it must be a real environment variable or the CLI flag.
+
+The backend detects the situation at runtime and logs `proxy_header_conflict` **once** if it
+sees a rewritten peer. If that appears in your logs, the flag is missing.
+
+> Also note the rate limiter is **in-process**. With `--workers 4` each worker keeps its own
+> counters, so the effective limit is roughly 4x the configured value, and it does not hold
+> across multiple hosts at all. Fine for a single-school deployment; revisit before scaling out.
 
 ---
 
@@ -282,12 +332,14 @@ Tracked in the production-readiness plan; none block local use.
   `frontend/src/app/providers/YearContext.tsx:47` and
   `frontend/src/features/students/api/studentsApi.ts:45`; mocked in MSW so they only work in
   demo. The student year-switcher renders empty against the real API.
-- **No rate limiting.** `RateLimited` exists in `app/core/errors.py` and `429` is declared in
-  the OpenAPI for `/auth/login` and `/auth/refresh`, but nothing raises it. Per-account
-  lockout is the only protection — password-spraying across accounts is unthrottled.
-- **No retention jobs.** `login_attempts` and `refresh_sessions` grow unbounded.
 - **No backups, no Dockerfile, no CI**, and no production process manager. The only
-  documented launch uses `--reload`, a dev flag.
+  documented local launch uses `--reload`, a dev flag — see §9 for the production form.
+- **Retention is not scheduled.** `python -m app.jobs.purge` exists (add `--dry-run` to see
+  counts without deleting) and trims `login_attempts`, `audit_log` and expired
+  `refresh_sessions` to the configured windows, but nothing runs it on a timer yet —
+  scheduling waits on a deployment target. Until then those tables still grow.
+- **`backend/openapi.json` is stale** — it predates `/api/v1/ready`. It is a hand-maintained
+  snapshot with no regeneration script.
 - **School-logo upload is stubbed** — validation is real, the byte upload is not
   (`TODO(OQ-DB5)`, needs an object-storage bucket).
 - **MSW ships in the production bundle** — `main.tsx` imports it statically, so the mock
