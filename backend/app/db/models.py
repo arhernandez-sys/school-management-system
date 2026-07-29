@@ -51,4 +51,7 @@ from app.modules.announcements.models import (  # noqa: F401
 # Documents / reports
 from app.modules.reports.models import ReportCardSnapshot  # noqa: F401
 
+# Calendar (Module 12 — scope addition, 2026-07)
+from app.modules.events.models import Event  # noqa: F401
+
 from app.db.base import Base  # noqa: F401  (re-export for convenience)

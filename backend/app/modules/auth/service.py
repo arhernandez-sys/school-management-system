@@ -36,6 +36,7 @@ from app.core.errors import (
     Unauthenticated,
     ValidationError,
 )
+from app.core.timeutil import ensure_aware
 from app.core.security import (
     create_access_token,
     generate_temp_password,
@@ -209,8 +210,9 @@ def login(
     now = _now()
 
     # ── Lockout gate (FR-AUTH-07): refuse while locked, surface retry window. ──
-    if user.locked_until is not None and user.locked_until > now:
-        retry_after = int((user.locked_until - now).total_seconds())
+    locked_until = ensure_aware(user.locked_until)
+    if locked_until is not None and locked_until > now:
+        retry_after = int((locked_until - now).total_seconds())
         db.add(
             LoginAttempt(
                 email_attempted=ident,
@@ -322,8 +324,9 @@ def refresh(
     if (
         session.token_hash != sha256_hash(raw_cookie)
         or session.is_revoked
-        or session.expires_at <= now
-        or (now - session.last_used_at).total_seconds() > settings.session_idle_timeout
+        or ensure_aware(session.expires_at) <= now
+        or (now - ensure_aware(session.last_used_at)).total_seconds()
+        > settings.session_idle_timeout
     ):
         raise invalid
 

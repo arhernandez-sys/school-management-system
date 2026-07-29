@@ -498,3 +498,76 @@ def make_class_subject(db_session) -> "callable":  # noqa: ANN001
         return offering
 
     return _make
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Grading-policy helpers (added 7.6 — Grades module tests)
+# ──────────────────────────────────────────────────────────────────────────────
+# The grade engine reads a resolved policy (schema §10.2a) and the year's bands
+# (§10.3). Both live in rows that tests must MUTATE rather than insert: the
+# `assessment_policies` singleton is pinned to id=1 and is already seeded, and a
+# test-created year has no grading scale of its own.
+@pytest.fixture
+def set_assessment_policy(db_session) -> "callable":  # noqa: ANN001
+    """Set fields on the school-default `assessment_policies` singleton (id=1).
+
+    Upserts rather than inserts, since the row is seeded and the PK is pinned by
+    a CHECK constraint. Returns the row. Rolled back with the test.
+    """
+    from sqlalchemy import select
+
+    from app.modules.settings.models import AssessmentPolicy
+
+    def _set(**fields: object) -> "AssessmentPolicy":
+        policy = db_session.scalar(select(AssessmentPolicy).where(AssessmentPolicy.id == 1))
+        if policy is None:
+            policy = AssessmentPolicy(id=1, absent_as_zero=False, allow_makeup=True, drop_lowest_count=0)
+            db_session.add(policy)
+        for name, value in fields.items():
+            setattr(policy, name, value)
+        db_session.flush()
+        return policy
+
+    return _set
+
+
+@pytest.fixture
+def make_grading_scale(db_session) -> "callable":  # noqa: ANN001
+    """Factory: create a GradingScale + bands for a given academic year.
+
+    Defaults to the bands this system ships (`settings/service.py::_DEFAULT_BANDS`,
+    `.99` ceilings) so letter assertions in the Grades suite exercise the real
+    OQ-DB2 convention. `bands` takes `(letter, min_score, max_score, is_passing)`
+    tuples if a test needs a custom scale.
+    """
+    from decimal import Decimal
+
+    from app.modules.settings.models import GradingScale, GradingScaleBand
+
+    _SHIPPED = [
+        ("A", "90.00", "100.00", True),
+        ("B", "80.00", "89.99", True),
+        ("C", "70.00", "79.99", True),
+        ("D", "60.00", "69.99", True),
+        ("F", "0.00", "59.99", False),
+    ]
+
+    def _make(academic_year_id, *, pass_mark="60.00", bands=None) -> "GradingScale":  # noqa: ANN001
+        scale = GradingScale(academic_year_id=academic_year_id, pass_mark=Decimal(pass_mark))
+        db_session.add(scale)
+        db_session.flush()
+        for order, (letter, low, high, passing) in enumerate(bands or _SHIPPED):
+            db_session.add(
+                GradingScaleBand(
+                    grading_scale_id=scale.id,
+                    letter=letter,
+                    min_score=Decimal(low),
+                    max_score=Decimal(high),
+                    is_passing=passing,
+                    sort_order=order,
+                )
+            )
+        db_session.flush()
+        return scale
+
+    return _make

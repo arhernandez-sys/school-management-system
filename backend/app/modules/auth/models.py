@@ -15,15 +15,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    String,
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import INET
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, uuid_pk
+from app.db.types import GUID
 
 
 class RefreshSession(Base, TimestampMixin):
@@ -32,7 +31,7 @@ class RefreshSession(Base, TimestampMixin):
     # PK is also the token's jti.
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="CASCADE", name="fk_refresh_sessions_user"),
         nullable=False,
     )
@@ -51,7 +50,7 @@ class RefreshSession(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     user_agent: Mapped[str | None] = mapped_column(Text(), nullable=True)
-    ip_address: Mapped[str | None] = mapped_column(INET(), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     __table_args__ = (
         Index("uq_refresh_sessions_token_hash", "token_hash", unique=True),
@@ -68,7 +67,7 @@ class PasswordResetToken(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="CASCADE", name="fk_pwreset_user"),
         nullable=False,
     )
@@ -76,7 +75,7 @@ class PasswordResetToken(Base, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_pwreset_creator"),
         nullable=True,
     )
@@ -90,14 +89,14 @@ class LoginAttempt(Base):
     __tablename__ = "login_attempts"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    email_attempted: Mapped[str] = mapped_column(CITEXT(), nullable=False)
+    email_attempted: Mapped[str] = mapped_column(String(254), nullable=False)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_login_attempts_user"),
         nullable=True,
     )
     succeeded: Mapped[bool] = mapped_column(Boolean(), nullable=False)
-    ip_address: Mapped[str | None] = mapped_column(INET(), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     attempted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

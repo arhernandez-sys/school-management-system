@@ -1,13 +1,14 @@
 """Ownership/scope authorization helpers (architecture.md §3.2, schema §9, D23).
 
-The coarse role gate (`require_role`) lives in deps.py. This module holds the FINE
-ownership checks. Two are fully needed by later workstreams (Grades, Assessments,
-Attendance, Announcements) and are STUBBED here with correct signatures + a clear
-NotImplementedError + TODO, so imports are stable now and the modules that need
-them have a single source of truth to implement against.
+The coarse role gate (`require_role`) lives in deps.py; this module holds the FINE
+ownership checks. All three helpers are implemented and in use:
 
-The Auth workstream (this one) does not call these — auth endpoints are role- or
-self-scoped only — but they are defined so the import graph is complete.
+  * `assert_teacher_owns_class_subject` — Grades, Assessments, the gradebook.
+  * `assert_teacher_owns_section`       — the attendance register.
+  * `teacher_section_ids`               — Announcements targeting + compose picker.
+
+Denial raises `NotFound`, never `Forbidden`: confirming that a resource exists but
+is off-limits leaks its existence (api-spec §3.3).
 """
 
 from __future__ import annotations
@@ -92,11 +93,32 @@ def assert_teacher_owns_section(db: Session, user: User, class_id: uuid.UUID) ->
         raise NotFound("Resource not found.")
 
 
-# Sentinel kept for any caller that wants an explicit "not built yet" marker for
-# the section-scoped announcement nuance distinct from attendance (same check
-# today, separate TODO if semantics diverge in a later workstream).
-def _todo_section_announcement_scope() -> None:  # pragma: no cover
-    raise NotImplementedError(
-        "Class-scoped announcement targeting beyond assert_teacher_owns_section "
-        "is implemented in the Announcements workstream (api-spec §5.9)."
+def teacher_section_ids(db: Session, user: User) -> list[uuid.UUID]:
+    """Every section (class_id) the teacher owns at least one subject offering in.
+
+    The set form of `assert_teacher_owns_section`: that helper answers "may this
+    teacher touch THIS section?", which suits a register or a gradebook addressed by
+    id. Announcements need the inverse — "which sections may this teacher aim at?" —
+    to build the compose picker and the feed's class-audience clause, and answering
+    that by looping `assert_teacher_owns_section` over every section in the school
+    would be one query per section.
+
+    Returns `[]` for a teacher with no profile rather than raising, because the
+    callers here are list/filter paths where "owns nothing" is a legitimate empty
+    result, not a 404 on a specific resource.
+    """
+    try:
+        teacher_id = _teacher_profile_id(db, user)
+    except NotFound:
+        return []
+    return list(
+        db.scalars(
+            select(ClassSubject.class_id)
+            .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
+            .where(
+                ClassTeacher.teacher_id == teacher_id,
+                ClassSubject.deleted_at.is_(None),
+            )
+            .distinct()
+        ).all()
     )

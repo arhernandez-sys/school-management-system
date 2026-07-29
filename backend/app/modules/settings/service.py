@@ -10,13 +10,13 @@ fine-grained guards are security-critical):
   * Fine-grained guards (Secretary may not touch a Principal; only a Principal may
     assign/Change a privileged role) live here, next to the data.
 
-Two deliberately-stubbed integration points are flagged inline:
-  * TODO(OQ-DB5) — logo object-storage upload (Supabase bucket/anon-key not yet
-    provisioned). The endpoint shape + validation are real; the upload is stubbed.
-  * TODO(7.6/7.8) — year-archival snapshot COMPUTATION (term_grade_snapshots +
-    report_card_snapshots) belongs to the Grades (7.6) and Reports (7.8) engines,
-    which are not built. We perform the STATE TRANSITIONS + idempotency guard now
-    and write ZERO snapshots, leaving a clearly-marked hook.
+One deliberately-stubbed integration point is flagged inline:
+  * TODO(OQ-DB5) — logo object-storage upload (no object-storage bucket provisioned).
+    The endpoint shape + validation are real; only the byte upload is stubbed.
+
+The year-archival snapshot freeze is **no longer stubbed** (2026-07-28): computation
+lives in `app/modules/reports/freeze.py` and is invoked by `archive_academic_year`
+before the state transitions. See that function's docstring for the ordering rule.
 """
 
 from __future__ import annotations
@@ -428,22 +428,27 @@ def archive_academic_year(
     """POST /settings/academic-years/{id}/archive (principal). Returns
     (snapshots_written, no_active_year_remaining).
 
-    STATE TRANSITIONS implemented now (idempotent at request level):
-      * academic_years.status = 'archived' (+ archived_at)
-      * grading_scales.is_frozen = true (for this year's scale)
-      * classes.is_archived = true (for this year's sections)
-      * deactivate this year's semesters (so no_active_year_remaining is honest)
+    THE FREEZE (schema §10.4, FR-SET-07) runs first, then the state transitions:
+      1. compute + upsert `term_grade_snapshots` and `report_card_snapshots`
+         (delegated to `reports.freeze.freeze_academic_year`)
+      2. academic_years.status = 'archived' (+ archived_at)
+      3. grading_scales.is_frozen = true (for this year's scale)
+      4. classes.is_archived = true (for this year's sections)
+      5. deactivate this year's semesters (so no_active_year_remaining is honest)
     Already archived -> 409 year_already_archived (no double-write).
 
-    TODO(7.6/7.8) — SNAPSHOT COMPUTATION HOOK. The full freeze must also compute &
-    write `term_grade_snapshots` (per student/class_subject/semester, with frozen
-    subject_id + effective_policy) and `report_card_snapshots` (jsonb). Those
-    require the grade-computation engine (module 7.6 Grades) and the report-card
-    engine (module 7.8 Reports), which are NOT built. We therefore write ZERO
-    snapshots here and return snapshots_written=0. When 7.6/7.8 land, the snapshot
-    writer plugs in HERE, reconciling on the uq_term_snapshot / uq_report_card_
-    snapshot unique keys so a retried/partial batch never duplicates.
+    **Step 1 must precede step 2.** The report-card builder decides live-vs-frozen
+    from `archived_at`, so setting the flag first would make the freeze read the
+    snapshots it is meant to be creating and write nothing.
+
+    Snapshot computation lives in `reports.freeze` rather than here because a
+    snapshot IS a report card — it is produced by the same builder that serves
+    `/reports/report-card`, and duplicating that shaping logic would guarantee the
+    two drift apart. Imported lazily to avoid a circular import (Reports depends on
+    this module for the logo URL resolver).
     """
+    from app.modules.reports.freeze import freeze_academic_year
+
     year = db.get(AcademicYear, year_id)
     if year is None:
         raise NotFound("Academic year not found.", code="not_found")
@@ -454,7 +459,10 @@ def archive_academic_year(
             "This academic year is already archived.", code="year_already_archived"
         )
 
-    # ── State transitions ──────────────────────────────────────────────────────
+    # ── 1. Freeze, while the year is still live ────────────────────────────────
+    snapshots_written = freeze_academic_year(db, actor=actor, year=year)
+
+    # ── 2-5. State transitions ─────────────────────────────────────────────────
     year.status = AcademicYearStatus.ARCHIVED
     year.archived_at = _now()
     year.updated_by = actor.id
@@ -476,9 +484,6 @@ def archive_academic_year(
         .where(Semester.academic_year_id == year.id, Semester.is_active.is_(True))
         .values(is_active=False)
     )
-
-    # TODO(7.6/7.8): compute + upsert term_grade_snapshots & report_card_snapshots.
-    snapshots_written = 0
 
     no_active_year_remaining = (
         db.scalar(

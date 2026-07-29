@@ -8,12 +8,17 @@ SubjectRef) where possible; the few here are Students-specific payloads.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.common.enums import AssessmentType, StudentStatus
+from app.common.enums import (
+    AcademicYearStatus,
+    AssessmentType,
+    GradeStatus,
+    StudentStatus,
+)
 from app.common.schemas import AuditStamp, ClassRef, SubjectRef
 
 
@@ -56,25 +61,86 @@ class StudentDetail(BaseModel):
     audit: AuditStamp | None = None
 
 
-class StudentAssessmentItem(BaseModel):
-    """GET /students/{id}/assessments item (api-spec §5.3, FR-ASMT-06).
+class StudentAssessmentLine(BaseModel):
+    """One assessment row under a subject group (GET /students/{id}/assessments).
 
-    A student-detail-scoped assessment summary carrying exactly the fields the
-    api-spec `AssessmentSummary` enumerates. Defined locally (not imported from an
-    Assessments-module schema) because that module is not built yet; the Students
-    endpoint reads assessments for the subjects in the student's section directly.
+    `status` is the **student's grade status** — `pending` when no
+    `assessment_grades` row exists yet — NOT the assessment's lifecycle status.
+    `score` is withheld (`null`) unless the result is released AND graded; the row
+    itself is still listed, because the viewer here is an admin/teacher rather
+    than the student (contrast `GET /grades/me`, which drops unreleased rows).
     """
 
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     title: str
     type: AssessmentType
-    assessment_date: date | None = None
     max_score: float
+    weight: float | None = None
+    assessment_date: date | None = None
+    status: GradeStatus
+    score: float | None = None
+    is_released: bool
+    #: When a principal/secretary last reminded the teacher to release this
+    #: assessment (UTC), or `null` if never. Lets the Grades tab render
+    #: "Reminded 2h ago" and disable the button for the remainder of the cooldown,
+    #: instead of letting the user click into a 429.
+    last_nudged_at: datetime | None = None
+
+
+class StudentTermGrade(BaseModel):
+    """The student's computed term grade for one offering. Both members are null
+    when nothing has participated yet (all pending / excused / zero weight)."""
+
+    numeric: float | None = None
+    letter: str | None = None
+
+
+class StudentAssessmentGroup(BaseModel):
+    """GET /students/{id}/assessments group — one `class_subject` offering.
+
+    The numbers come from `grades.service.student_assessment_groups`, which routes
+    the arithmetic through the single grade engine (`grades/calc.py`); nothing is
+    recomputed here.
+    """
+
     class_subject_id: UUID
-    class_ref: ClassRef
-    subject: SubjectRef
-    status: str
+    subject: SubjectRef | None = None
+    term_grade: StudentTermGrade
+    assessments: list[StudentAssessmentLine] = Field(default_factory=list)
+
+
+class StudentAssessmentsResponse(BaseModel):
+    """GET /students/{id}/assessments (api-spec §5.3, FR-ASMT-06).
+
+    An `{items:[...]}` envelope, not a bare array — the frontend reads
+    `res.data.items` (`features/students/api/studentsApi.ts`).
+    """
+
+    items: list[StudentAssessmentGroup] = Field(default_factory=list)
+    #: The `POST /assessments/{id}/nudge-release` cooldown, served here so the SPA
+    #: computes "still within the cooldown" from the server's window rather than a
+    #: hardcoded copy that would silently drift if the window is retuned.
+    nudge_cooldown_seconds: int = 0
+
+
+class StudentYearItem(BaseModel):
+    """One academic year the student was actually enrolled in."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    status: AcademicYearStatus
+
+
+class StudentYearsResponse(BaseModel):
+    """GET /students/{id}/years and GET /students/me/years — newest year first.
+
+    Backs the student year-switcher (`app/providers/YearContext.tsx`) and the
+    per-student year filter on the profile page; both read `res.data.items`.
+    """
+
+    items: list[StudentYearItem] = Field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -21,10 +21,10 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
+from app.db.types import GUID
 
 
 class Subject(Base, TimestampMixin, SoftDeleteMixin):
@@ -60,7 +60,7 @@ class Class(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     academic_year_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("academic_years.id", ondelete="RESTRICT", name="fk_classes_year"),
         nullable=False,
     )
@@ -68,6 +68,10 @@ class Class(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     grade_level: Mapped[str] = mapped_column(Text(), nullable=False)
     section: Mapped[str | None] = mapped_column(Text(), nullable=True)
     capacity: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
+    # Display label for the homeroom, surfaced by the Attendance section picker.
+    # The column has existed in MariaDB since 001_missing_fields.sql; only the ORM
+    # mapping was missing.
+    homeroom_label: Mapped[str | None] = mapped_column(Text(), nullable=True)
     is_archived: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("false")
     )
@@ -93,12 +97,12 @@ class ClassSubject(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     class_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("classes.id", ondelete="RESTRICT", name="fk_class_subjects_class"),
         nullable=False,
     )
     subject_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("subjects.id", ondelete="RESTRICT", name="fk_class_subjects_subject"),
         nullable=False,
     )
@@ -135,14 +139,14 @@ class ClassTeacher(Base, TimestampMixin, AuditMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     class_subject_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "class_subjects.id", ondelete="CASCADE", name="fk_class_teachers_class_subject"
         ),
         nullable=False,
     )
     teacher_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "teacher_profiles.id", ondelete="RESTRICT", name="fk_class_teachers_teacher"
         ),
@@ -173,17 +177,17 @@ class ClassEnrollment(Base, TimestampMixin, AuditMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     class_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("classes.id", ondelete="RESTRICT", name="fk_enroll_class"),
         nullable=False,
     )
     student_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("student_profiles.id", ondelete="RESTRICT", name="fk_enroll_student"),
         nullable=False,
     )
     semester_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("semesters.id", ondelete="RESTRICT", name="fk_enroll_semester"),
         nullable=False,
     )

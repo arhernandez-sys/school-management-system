@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     # ── Database ──────────────────────────────────────────────────────────────
-    database_url: str = "postgresql+psycopg://sis:sis@localhost:5432/sis"
+    database_url: str = "mysql+pymysql://sis:sis@127.0.0.1:3306/sims"
 
     # ── JWT / tokens ──────────────────────────────────────────────────────────
     jwt_secret: str = _INSECURE_DEFAULT_SECRET

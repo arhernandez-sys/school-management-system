@@ -18,20 +18,18 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
-    Identity,
     Index,
     Numeric,
     SmallInteger,
+    String,
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, JSONB
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import AcademicYearStatus
 from app.db.base import AuditMixin, Base, TimestampMixin, uuid_pk
-from app.db.types import pg_enum
+from app.db.types import GUID, JSONType, enum_col
 
 
 class AcademicYear(Base, TimestampMixin, AuditMixin):
@@ -42,7 +40,7 @@ class AcademicYear(Base, TimestampMixin, AuditMixin):
     start_date: Mapped[date] = mapped_column(Date(), nullable=False)
     end_date: Mapped[date] = mapped_column(Date(), nullable=False)
     status: Mapped[AcademicYearStatus] = mapped_column(
-        pg_enum(AcademicYearStatus), nullable=False, server_default=text("'active'")
+        enum_col(AcademicYearStatus), nullable=False, server_default=text("'active'")
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Year-level grading-policy overrides (DB-14); NULL = inherit school default.
@@ -71,7 +69,7 @@ class Semester(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     academic_year_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("academic_years.id", ondelete="RESTRICT", name="fk_semesters_year"),
         nullable=False,
     )
@@ -101,7 +99,7 @@ class GradingScale(Base, TimestampMixin, AuditMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     academic_year_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("academic_years.id", ondelete="RESTRICT", name="fk_grading_scales_year"),
         nullable=False,
     )
@@ -123,7 +121,7 @@ class GradingScaleBand(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     grading_scale_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("grading_scales.id", ondelete="CASCADE", name="fk_bands_scale"),
         nullable=False,
     )
@@ -179,7 +177,7 @@ class SchoolProfile(Base, TimestampMixin, AuditMixin):
     name: Mapped[str] = mapped_column(Text(), nullable=False)
     logo_storage_key: Mapped[str | None] = mapped_column(Text(), nullable=True)
     address: Mapped[str | None] = mapped_column(Text(), nullable=True)
-    contact_email: Mapped[str | None] = mapped_column(CITEXT(), nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
     __table_args__ = (
@@ -193,17 +191,17 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(
-        BigInteger(), Identity(always=True), primary_key=True
+        BigInteger(), primary_key=True, autoincrement=True
     )
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_audit_actor"),
         nullable=True,
     )
     action: Mapped[str] = mapped_column(Text(), nullable=False)
     entity_type: Mapped[str] = mapped_column(Text(), nullable=False)
-    entity_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    summary: Mapped[dict | None] = mapped_column(JSONB(), nullable=True)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    summary: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

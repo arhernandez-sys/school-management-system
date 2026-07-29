@@ -22,12 +22,11 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import AssessmentStatus, AssessmentType
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import pg_enum
+from app.db.types import GUID, enum_col
 
 
 class AssessmentCategory(Base, TimestampMixin, AuditMixin):
@@ -35,7 +34,7 @@ class AssessmentCategory(Base, TimestampMixin, AuditMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     class_subject_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "class_subjects.id", ondelete="CASCADE", name="fk_categories_class_subject"
         ),
@@ -65,33 +64,33 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     class_subject_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "class_subjects.id", ondelete="RESTRICT", name="fk_assessments_class_subject"
         ),
         nullable=False,
     )
     semester_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("semesters.id", ondelete="RESTRICT", name="fk_assessments_semester"),
         nullable=False,
     )
     category_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "assessment_categories.id", ondelete="SET NULL", name="fk_assessments_category"
         ),
         nullable=True,
     )
     title: Mapped[str] = mapped_column(Text(), nullable=False)
-    type: Mapped[AssessmentType] = mapped_column(pg_enum(AssessmentType), nullable=False)
+    type: Mapped[AssessmentType] = mapped_column(enum_col(AssessmentType), nullable=False)
     max_score: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     weight: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, server_default=text("1.00")
     )
     assessment_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     status: Mapped[AssessmentStatus] = mapped_column(
-        pg_enum(AssessmentStatus), nullable=False, server_default=text("'draft'")
+        enum_col(AssessmentStatus), nullable=False, server_default=text("'draft'")
     )
     is_released: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("false")

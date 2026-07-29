@@ -15,16 +15,15 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
+    String,
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import StudentStatus
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import pg_enum
+from app.db.types import GUID, enum_col
 
 
 class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
@@ -32,7 +31,7 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_student_profiles_user"),
         nullable=True,
     )
@@ -42,11 +41,11 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     gender: Mapped[str | None] = mapped_column(Text(), nullable=True)
     enrollment_date: Mapped[date] = mapped_column(Date(), nullable=False)
     status: Mapped[StudentStatus] = mapped_column(
-        pg_enum(StudentStatus), nullable=False, server_default=text("'active'")
+        enum_col(StudentStatus), nullable=False, server_default=text("'active'")
     )
     guardian_name: Mapped[str | None] = mapped_column(Text(), nullable=True)
     guardian_phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
-    guardian_email: Mapped[str | None] = mapped_column(CITEXT(), nullable=True)
+    guardian_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     address: Mapped[str | None] = mapped_column(Text(), nullable=True)
     phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
@@ -71,7 +70,7 @@ class StudentDocument(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     student_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey(
             "student_profiles.id", ondelete="RESTRICT", name="fk_student_documents_student"
         ),

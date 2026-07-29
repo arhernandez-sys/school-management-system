@@ -218,8 +218,9 @@ def archive_academic_year(
     db: Session = Depends(get_db),
     actor: User = Depends(_principal),
 ) -> ArchiveYearResponse:
-    """Principal. State transitions + idempotency guard implemented; snapshot
-    COMPUTATION is stubbed (TODO(7.6/7.8), see service). 409 year_already_archived
+    """Principal. Computes and writes `term_grade_snapshots` +
+    `report_card_snapshots` (schema §10.4), then applies the state transitions;
+    `snapshots_written` reports the term-grade rows frozen. 409 year_already_archived
     if already archived."""
     written, no_active = service.archive_academic_year(
         db, actor=actor, year_id=year_id

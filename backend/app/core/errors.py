@@ -127,6 +127,10 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+#: Where FastAPI says a validation error came from. These appear as loc[0] only.
+_LOCATION_PREFIXES = frozenset({"body", "query", "path", "header", "cookie"})
+
+
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
@@ -134,10 +138,19 @@ async def validation_error_handler(
     messages (api-spec §4.3)."""
     fields: dict[str, list[str]] = {}
     for err in exc.errors():
-        # loc is like ("body", "field", ...) — take the last string segment as the
-        # field name; fall back to a joined path.
-        loc = [str(p) for p in err.get("loc", []) if p not in ("body", "query", "path")]
-        field = loc[-1] if loc else "_root"
+        # `loc` is ("body", "title") or ("body", "entries", 0, "student_id") — a
+        # location prefix, then the path to the offending field.
+        #
+        # Only the FIRST segment is a location. Filtering every occurrence would
+        # erase a field genuinely NAMED "body" (announcements have one): loc
+        # ("body", "body") would collapse to empty and report as "_root", so the
+        # frontend could not attach the message to its textarea.
+        loc = [str(p) for p in err.get("loc", [])]
+        if loc and loc[0] in _LOCATION_PREFIXES:
+            loc = loc[1:]
+        # Skip list indices ("0") so `entries.0.student_id` reports as "student_id".
+        names = [p for p in loc if not p.isdigit()]
+        field = names[-1] if names else "_root"
         fields.setdefault(field, []).append(err.get("msg", "Invalid value."))
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

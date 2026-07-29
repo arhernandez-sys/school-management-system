@@ -28,22 +28,28 @@ from datetime import datetime, timezone
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AssessmentStatus, Role, StudentStatus
+from app.common.enums import AcademicYearStatus, Role, StudentStatus
 from app.common.schemas import AuditStamp, ClassRef, SubjectRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.rbac import _teacher_profile_id
-from app.modules.assessments.models import Assessment
-from app.modules.classes.models import Class, ClassEnrollment, ClassSubject, Subject
+from app.modules.assessments import release_nudge
+from app.modules.classes.models import Class, ClassEnrollment, ClassSubject
+from app.modules.grades import service as grades_service
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.students.schemas import (
-    StudentAssessmentItem,
+    StudentAssessmentGroup,
+    StudentAssessmentLine,
+    StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
     StudentListItem,
     StudentStatusRequest,
+    StudentTermGrade,
     StudentUpdateRequest,
+    StudentYearItem,
+    StudentYearsResponse,
 )
 from app.modules.users.models import User
 
@@ -123,6 +129,86 @@ def _active_semester_id(db: Session) -> uuid.UUID | None:
     return db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))
 
 
+def _active_year_id(db: Session) -> uuid.UUID | None:
+    """The single active academic year (schema §3.C), or None if unconfigured."""
+    return db.scalar(
+        select(AcademicYear.id).where(AcademicYear.status == AcademicYearStatus.ACTIVE)
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Year → section resolution (THE single implementation)
+# ──────────────────────────────────────────────────────────────────────────────
+def section_in_year(
+    db: Session, *, student_id: uuid.UUID, academic_year_id: uuid.UUID
+) -> Class | None:
+    """The section the student sat in during `academic_year_id`, or None.
+
+    An academic year spans BOTH semesters, so this resolves through
+    `class_enrollments → semesters → academic_years` rather than filtering on a
+    single semester, and ended enrollments (`unenrolled_at` set) still count — a
+    past year is exactly the case where they are set.
+
+    This is the single implementation of "which section that year". The student
+    detail header (`GET /students/{id}?academic_year_id=`) and the assessments tab
+    (`GET /students/{id}/assessments?academic_year_id=`) MUST agree, or one screen
+    shows two different sections for the same student at the same time.
+
+    It lives here rather than in the Grades module because it is an enrollment
+    question, not grade math; `grades.service.student_assessment_groups` takes the
+    section this resolves as a parameter (Students imports Grades, never the
+    reverse).
+    """
+    return db.scalar(
+        select(Class)
+        .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+        .join(Semester, ClassEnrollment.semester_id == Semester.id)
+        .where(
+            ClassEnrollment.student_id == student_id,
+            Semester.academic_year_id == academic_year_id,
+            Class.deleted_at.is_(None),
+        )
+        .order_by(ClassEnrollment.enrolled_at.desc())
+        .limit(1)
+    )
+
+
+def _assessments_section(
+    db: Session, *, student_id: uuid.UUID, academic_year_id: uuid.UUID | None
+) -> Class | None:
+    """The section that scopes the assessments tab.
+
+    An EXPLICIT year is strict — if the student never sat that year the tab is
+    empty, rather than silently answering about a different year. With no year
+    asked for we use the active year, falling back to the student's latest live
+    enrollment so a school with no active year configured still renders.
+    """
+    if academic_year_id is not None:
+        return section_in_year(
+            db, student_id=student_id, academic_year_id=academic_year_id
+        )
+
+    active_year_id = _active_year_id(db)
+    section = (
+        section_in_year(db, student_id=student_id, academic_year_id=active_year_id)
+        if active_year_id is not None
+        else None
+    )
+    if section is None:
+        section = db.scalar(
+            select(Class)
+            .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+            .where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.unenrolled_at.is_(None),
+                Class.deleted_at.is_(None),
+            )
+            .order_by(ClassEnrollment.enrolled_at.desc())
+            .limit(1)
+        )
+    return section
+
+
 def _current_section_map(
     db: Session, student_ids: list[uuid.UUID], *, semester_id: uuid.UUID | None
 ) -> dict[uuid.UUID, ClassRef]:
@@ -165,11 +251,31 @@ def _audit_stamp(db: Session, student: StudentProfile) -> AuditStamp:
 
 
 def _detail(
-    db: Session, student: StudentProfile, *, semester_id: uuid.UUID | None
+    db: Session,
+    student: StudentProfile,
+    *,
+    semester_id: uuid.UUID | None,
+    academic_year_id: uuid.UUID | None = None,
 ) -> StudentDetail:
-    section_map = _current_section_map(db, [student.id], semester_id=semester_id)
+    """Shape a StudentDetail. `current_section` is the student's ACTIVE-semester
+    section, unless `academic_year_id` is supplied — then it is the section they
+    sat in that year, so the profile header agrees with the assessments tab when
+    the year switcher is on a past year.
+
+    The branch is on the PRESENCE of the param, not on resolving-then-falling-back:
+    an explicit year the student never sat in yields `null`, never another year's
+    section (matching `scopedSectionFor` in the MSW handler)."""
     detail = StudentDetail.model_validate(student)
-    detail.current_section = section_map.get(student.id)
+    if academic_year_id is not None:
+        section = section_in_year(
+            db, student_id=student.id, academic_year_id=academic_year_id
+        )
+        detail.current_section = (
+            ClassRef.model_validate(section) if section is not None else None
+        )
+    else:
+        section_map = _current_section_map(db, [student.id], semester_id=semester_id)
+        detail.current_section = section_map.get(student.id)
     detail.audit = _audit_stamp(db, student)
     return detail
 
@@ -202,14 +308,32 @@ def list_students(
     status: StudentStatus | None,
     class_id: uuid.UUID | None,
     grade_level: str | None,
+    academic_year_id: uuid.UUID | None = None,
 ):
     """GET /students (P/S/Teacher). Page[StudentListItem]; default sort full_name.
 
     Teacher scope (FR-STU-08): restricted to students with an active enrollment in
     a section the teacher owns ANY class_subject of — enforced as a read filter, so
     a teacher literally cannot page students outside their sections.
+
+    `academic_year_id` (the module year switcher) FILTERS the student set: a PAST
+    year restricts the directory to the students enrolled that year. It
+    deliberately does NOT rescope each row's `current_section`, which stays the
+    student's live section — the field is named *current*, and the MSW handler's
+    `studentListItem` likewise always uses `currentSectionFor` with no year.
+
+    The ACTIVE year (or no year at all) applies NO enrollment filter, so the full
+    directory still lists — including graduated / withdrawn / transferred students
+    who hold no active enrollment. Filtering on the active year would quietly empty
+    the `status=graduated` view (mock: `academic_year_id !== activeYearId`).
     """
     semester_id = _active_semester_id(db)
+    # Only a PAST year scopes the roster; the active year means "the directory".
+    past_year_id = (
+        academic_year_id
+        if academic_year_id is not None and academic_year_id != _active_year_id(db)
+        else None
+    )
 
     stmt = select(StudentProfile).where(StudentProfile.deleted_at.is_(None))
 
@@ -227,7 +351,8 @@ def list_students(
     # → classes. We build an EXISTS correlated subquery so a student appears once
     # regardless of how the joins fan out.
     needs_enrollment_scope = (
-        class_id is not None
+        past_year_id is not None
+        or class_id is not None
         or grade_level is not None
         or caller.role == Role.TEACHER
     )
@@ -237,14 +362,26 @@ def list_students(
             .join(Class, ClassEnrollment.class_id == Class.id)
             .where(
                 ClassEnrollment.student_id == StudentProfile.id,
-                ClassEnrollment.unenrolled_at.is_(None),
                 Class.deleted_at.is_(None),
             )
         )
-        # Constrain to the active semester when known so "current section" filters
-        # and teacher scope reflect the live term (not historical rosters).
-        if semester_id is not None:
-            enr = enr.where(ClassEnrollment.semester_id == semester_id)
+        if past_year_id is not None:
+            # Historical roster: any semester of that year, and ENDED enrollments
+            # count — `unenrolled_at` being set is the normal state for a past
+            # year, so requiring it NULL would return an empty directory.
+            enr = enr.where(
+                ClassEnrollment.semester_id.in_(
+                    select(Semester.id).where(
+                        Semester.academic_year_id == past_year_id
+                    )
+                )
+            )
+        else:
+            # Live view: constrain to the active semester when known so section /
+            # grade filters and teacher scope reflect the current term.
+            enr = enr.where(ClassEnrollment.unenrolled_at.is_(None))
+            if semester_id is not None:
+                enr = enr.where(ClassEnrollment.semester_id == semester_id)
         if class_id is not None:
             enr = enr.where(Class.id == class_id)
         if grade_level is not None:
@@ -300,14 +437,30 @@ def _apply_teacher_ownership(enr_stmt, teacher_id: uuid.UUID):
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /students/{id} — detail
 # ──────────────────────────────────────────────────────────────────────────────
-def get_student(db: Session, *, caller: User, student_id: uuid.UUID) -> StudentDetail:
+def get_student(
+    db: Session,
+    *,
+    caller: User,
+    student_id: uuid.UUID,
+    academic_year_id: uuid.UUID | None = None,
+) -> StudentDetail:
     """GET /students/{id} (P/S any; Teacher must own a section the student is in →
-    else 404, §3.3)."""
+    else 404, §3.3).
+
+    `academic_year_id` rescopes `current_section` to the section the student sat in
+    that year (the profile page's year switcher). RBAC is unaffected — the teacher
+    ownership check is still evaluated against the student's LIVE enrollments, so
+    selecting a past year can never widen a teacher's reach.
+    """
     student = _student_or_404(db, student_id)
     if caller.role == Role.TEACHER:
         _assert_teacher_can_see_student(db, caller, student.id)
-    semester_id = _active_semester_id(db)
-    return _detail(db, student, semester_id=semester_id)
+    return _detail(
+        db,
+        student,
+        semester_id=_active_semester_id(db),
+        academic_year_id=academic_year_id,
+    )
 
 
 def _assert_teacher_can_see_student(
@@ -338,9 +491,8 @@ def _assert_teacher_can_see_student(
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /students/me — self (server-derived scope)
 # ──────────────────────────────────────────────────────────────────────────────
-def get_my_student(db: Session, *, caller: User) -> StudentDetail:
-    """GET /students/me (student). Scope is derived from the token's user, NEVER a
-    client id (§3.2 hard rule). 404 no_student_profile if the login isn't linked."""
+def _my_student_or_404(db: Session, caller: User) -> StudentProfile:
+    """The profile linked to the token's user (§3.2 hard rule — never a client id)."""
     student = db.scalar(
         select(StudentProfile).where(
             StudentProfile.user_id == caller.id,
@@ -352,6 +504,13 @@ def get_my_student(db: Session, *, caller: User) -> StudentDetail:
             "No student profile is linked to this account.",
             code="no_student_profile",
         )
+    return student
+
+
+def get_my_student(db: Session, *, caller: User) -> StudentDetail:
+    """GET /students/me (student). Scope is derived from the token's user, NEVER a
+    client id (§3.2 hard rule). 404 no_student_profile if the login isn't linked."""
+    student = _my_student_or_404(db, caller)
     semester_id = _active_semester_id(db)
     return _detail(db, student, semester_id=semester_id)
 
@@ -582,71 +741,124 @@ def _has_academic_history(db: Session, student_id: uuid.UUID) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GET /students/{id}/assessments — assessments for the student's section subjects
+# GET /students/{id}/assessments — grouped by offering, with the term grade
 # ──────────────────────────────────────────────────────────────────────────────
 def list_student_assessments(
     db: Session,
     *,
     caller: User,
     student_id: uuid.UUID,
-    semester_id: uuid.UUID | None,
-) -> list[StudentAssessmentItem]:
+    academic_year_id: uuid.UUID | None,
+) -> StudentAssessmentsResponse:
     """GET /students/{id}/assessments (P/S any; Teacher must own a section the
-    student is in → else 404). Returns assessments for the subjects offered in the
-    student's active section, grouped-friendly (ordered by subject then date).
+    student is in → else 404, §3.3).
 
-    This is a student-DETAIL read for an admin/teacher viewer; a student self uses
-    GET /assessments?scope=me (Assessments module, not built here). We surface the
-    published/known assessment set for the section's subjects.
+    A student-DETAIL read for an admin/teacher viewer (a student self uses
+    `GET /grades/me`). Returns `{items:[...]}` grouped by `class_subject`, each
+    group carrying the subject label, the student's term grade and the per-
+    assessment lines with that student's own grade status/score.
+
+    `academic_year_id` scopes to the section the student sat in that YEAR — a year
+    spans both semesters, so this is deliberately NOT a semester filter. The
+    resolution is `section_in_year`, the SAME helper `GET /students/{id}` uses, so
+    the profile header and this tab can never disagree about which section the
+    student sat in.
+
+    All loading + arithmetic is delegated to
+    `grades.service.student_assessment_groups`, which routes the term grade through
+    the single engine in `grades/calc.py`. This function only resolves the section
+    and maps the dataclasses it returns onto the Students wire schema.
     """
     student = _student_or_404(db, student_id)
     if caller.role == Role.TEACHER:
         _assert_teacher_can_see_student(db, caller, student.id)
 
-    target_semester = semester_id or _active_semester_id(db)
-    if target_semester is None:
-        return []
-
-    # The student's active section for the target semester.
-    section_id = db.scalar(
-        select(ClassEnrollment.class_id).where(
-            ClassEnrollment.student_id == student.id,
-            ClassEnrollment.semester_id == target_semester,
-            ClassEnrollment.unenrolled_at.is_(None),
-        )
+    section = _assessments_section(
+        db, student_id=student.id, academic_year_id=academic_year_id
     )
-    if section_id is None:
-        return []
+    groups = grades_service.student_assessment_groups(
+        db, student_id=student.id, section=section
+    )
+    return StudentAssessmentsResponse(
+        items=[
+            StudentAssessmentGroup(
+                class_subject_id=g.class_subject_id,
+                subject=SubjectRef(
+                    id=g.subject_id, name=g.subject_name, code=g.subject_code
+                ),
+                term_grade=StudentTermGrade(
+                    numeric=g.term_numeric, letter=g.term_letter
+                ),
+                assessments=[
+                    StudentAssessmentLine(
+                        id=line.id,
+                        title=line.title,
+                        type=line.type,
+                        max_score=line.max_score,
+                        weight=line.weight,
+                        assessment_date=line.assessment_date,
+                        status=line.status,
+                        score=line.score,
+                        is_released=line.is_released,
+                        last_nudged_at=line.last_nudged_at,
+                    )
+                    for line in g.assessments
+                ],
+            )
+            for g in groups
+        ],
+        nudge_cooldown_seconds=release_nudge.NUDGE_COOLDOWN_SECONDS,
+    )
 
-    # Assessments for every live class_subject of that section, in the semester.
-    # Draft assessments are internal-only; the student-detail view shows the known
-    # (published+) set. We join class + subject once (no N+1).
-    rows = db.execute(
-        select(Assessment, ClassSubject, Class, Subject)
-        .join(ClassSubject, Assessment.class_subject_id == ClassSubject.id)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(
-            ClassSubject.class_id == section_id,
-            ClassSubject.deleted_at.is_(None),
-            Assessment.semester_id == target_semester,
-            Assessment.deleted_at.is_(None),
-            Assessment.status != AssessmentStatus.DRAFT,
-        )
-        .order_by(Subject.name.asc(), Assessment.assessment_date.asc().nullslast())
-    ).all()
 
-    return [
-        StudentAssessmentItem(
-            id=a.id,
-            title=a.title,
-            type=a.type,
-            assessment_date=a.assessment_date,
-            max_score=float(a.max_score),
-            class_subject_id=cs.id,
-            class_ref=ClassRef.model_validate(cls),
-            subject=SubjectRef.model_validate(subj),
-            status=a.status.value,
-        )
-        for (a, cs, cls, subj) in rows
-    ]
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /students/{id}/years + GET /students/me/years — the year switcher
+# ──────────────────────────────────────────────────────────────────────────────
+def _years_for_student(db: Session, student_id: uuid.UUID) -> list[AcademicYear]:
+    """Academic years the student was ACTUALLY enrolled in, newest first.
+
+    Resolved through `class_enrollments → semesters → academic_years`. Ended
+    enrollments count (`unenrolled_at` is not filtered) — the whole point of the
+    switcher is to reach past years. The year id set is an IN-subquery rather than
+    a DISTINCT over a joined entity select, so the ordering columns stay
+    unambiguous across dialects.
+    """
+    enrolled_year_ids = (
+        select(Semester.academic_year_id)
+        .join(ClassEnrollment, ClassEnrollment.semester_id == Semester.id)
+        .where(ClassEnrollment.student_id == student_id)
+    )
+    return list(
+        db.scalars(
+            select(AcademicYear)
+            .where(AcademicYear.id.in_(enrolled_year_ids))
+            .order_by(AcademicYear.start_date.desc(), AcademicYear.name.desc())
+        ).all()
+    )
+
+
+def _years_response(db: Session, student_id: uuid.UUID) -> StudentYearsResponse:
+    return StudentYearsResponse(
+        items=[
+            StudentYearItem.model_validate(y) for y in _years_for_student(db, student_id)
+        ]
+    )
+
+
+def list_student_years(
+    db: Session, *, caller: User, student_id: uuid.UUID
+) -> StudentYearsResponse:
+    """GET /students/{id}/years (P/S any; Teacher must own a section the student is
+    in → else 404, §3.3). Students are denied at the role gate → use /me/years."""
+    student = _student_or_404(db, student_id)
+    if caller.role == Role.TEACHER:
+        _assert_teacher_can_see_student(db, caller, student.id)
+    return _years_response(db, student.id)
+
+
+def list_my_years(db: Session, *, caller: User) -> StudentYearsResponse:
+    """GET /students/me/years (student). Server-derived scope (§3.2) — the profile
+    comes from the token, never a param. 404 no_student_profile if unlinked, the
+    same contract as GET /students/me."""
+    student = _my_student_or_404(db, caller)
+    return _years_response(db, student.id)

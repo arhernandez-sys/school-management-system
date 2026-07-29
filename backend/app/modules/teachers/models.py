@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, Index, Text, text
-from sqlalchemy.dialects.postgresql import ARRAY, CITEXT
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import TeacherStatus
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import pg_enum
+from app.db.types import GUID, JSONType, enum_col
 
 
 class TeacherProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
@@ -23,19 +21,19 @@ class TeacherProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     user_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_teacher_profiles_user"),
         nullable=True,
     )
     staff_number: Mapped[str] = mapped_column(Text(), nullable=False)
     full_name: Mapped[str] = mapped_column(Text(), nullable=False)
-    email: Mapped[str | None] = mapped_column(CITEXT(), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
     status: Mapped[TeacherStatus] = mapped_column(
-        pg_enum(TeacherStatus), nullable=False, server_default=text("'active'")
+        enum_col(TeacherStatus), nullable=False, server_default=text("'active'")
     )
     subject_specializations: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text()), nullable=True, server_default=text("'{}'")
+        JSONType(), nullable=True, default=list
     )
 
     __table_args__ = (

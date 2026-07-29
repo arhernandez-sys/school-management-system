@@ -32,6 +32,7 @@ from sqlalchemy import func, select
 from app.common.enums import Role
 from app.core.cookies import REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH
 from app.core.security import parse_refresh_jti, sha256_hash
+from app.core.timeutil import ensure_aware
 from app.modules.auth.models import LoginAttempt, RefreshSession
 from app.modules.settings.models import AuditLog
 from app.modules.users.models import User
@@ -209,7 +210,9 @@ class TestLogin:
         assert err["retry_after_seconds"] <= settings.lockout_duration
 
         db_session.refresh(user)
-        assert user.locked_until is not None and user.locked_until > _now()
+        assert user.locked_until is not None
+        # locked_until may read back tz-naive (MariaDB) or aware (Postgres); coerce.
+        assert ensure_aware(user.locked_until) > _now()
 
     def test_correct_password_while_locked_still_423(self, client, make_user, settings) -> None:
         """A correct password during the lockout window is still refused (423)."""

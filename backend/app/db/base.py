@@ -14,21 +14,26 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, func, text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.db.types import GUID
 
 
 class Base(DeclarativeBase):
-    """Single declarative base; its metadata drives Alembic autogenerate."""
+    """Single declarative base; its metadata drives Alembic autogenerate (PG ref)."""
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:
-    """A UUID primary key column with a DB-side gen_random_uuid() default (pgcrypto)."""
+    """A UUID primary key column with an application-side default.
+
+    MariaDB has no `gen_random_uuid()`; the app generates the id (`uuid.uuid4`)
+    on insert. Stored as CHAR(36) via the portable `GUID` type.
+    """
     return mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
+        default=uuid.uuid4,
     )
 
 
@@ -48,12 +53,12 @@ class TimestampMixin:
 
 class AuditMixin:
     created_by: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )

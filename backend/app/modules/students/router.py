@@ -1,4 +1,4 @@
-"""Students router (api-spec §5 Module 3) — the 8 student endpoints.
+"""Students router (api-spec §5 Module 3) — the 10 student endpoints.
 
 Thin transport layer; the service owns DB + transactions. Mounts under `/api/v1`
 via app/main.py.
@@ -6,16 +6,19 @@ via app/main.py.
 Endpoints:
   GET    /students                      P/S/Teacher   -> Page[StudentListItem]
   GET    /students/me                   Student       -> StudentDetail
+  GET    /students/me/years             Student       -> StudentYearsResponse
   GET    /students/{id}                 P/S/Teacher   -> StudentDetail
-  GET    /students/{id}/assessments     P/S/Teacher   -> StudentAssessmentItem[]
+  GET    /students/{id}/years           P/S/Teacher   -> StudentYearsResponse
+  GET    /students/{id}/assessments     P/S/Teacher   -> StudentAssessmentsResponse
   POST   /students                      P/S           -> StudentDetail (201)
   PATCH  /students/{id}                  P/S           -> StudentDetail
   POST   /students/{id}/status           P/S           -> StudentDetail
   DELETE /students/{id}                  P/S           -> 204
 
-Route ordering note: `/students/me` is declared BEFORE `/students/{student_id}`
-so the literal path wins over the UUID path param (a student hitting /me must not
-be parsed as an id).
+Route ordering note: the literal `/students/me` and `/students/me/years` are
+declared BEFORE their `/{student_id}` counterparts so the literal path wins over
+the UUID path param — otherwise FastAPI tries to parse "me" as a UUID and the
+student's own routes 422.
 """
 
 from __future__ import annotations
@@ -32,12 +35,13 @@ from app.core.deps import get_db, require_role
 from app.core.pagination import PageParams, page_params
 from app.modules.students import service
 from app.modules.students.schemas import (
-    StudentAssessmentItem,
+    StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
     StudentListItem,
     StudentStatusRequest,
     StudentUpdateRequest,
+    StudentYearsResponse,
 )
 from app.modules.users.models import User
 
@@ -61,11 +65,15 @@ def list_students(
     status_filter: Annotated[StudentStatus | None, Query(alias="status")] = None,
     class_id: Annotated[uuid.UUID | None, Query()] = None,
     grade_level: Annotated[str | None, Query(max_length=40)] = None,
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
 ) -> Page[StudentListItem]:
     """Teacher results auto-restrict to students in a section they own any subject
-    of (FR-STU-08). Students are denied at the role gate (403)."""
+    of (FR-STU-08). Students are denied at the role gate (403).
+
+    `academic_year_id` (year switcher) restricts the directory to students enrolled
+    in that year when it is a PAST year; the active year lists everyone."""
     return service.list_students(
         db,
         caller=caller,
@@ -74,6 +82,7 @@ def list_students(
         status=status_filter,
         class_id=class_id,
         grade_level=grade_level,
+        academic_year_id=academic_year_id,
     )
 
 
@@ -93,6 +102,22 @@ def get_my_student(
 
 
 @router.get(
+    "/me/years",
+    response_model=StudentYearsResponse,
+    summary="Academic years the signed-in student was enrolled in (student; §5.3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def list_my_years(
+    db: Session = Depends(get_db),
+    caller: User = Depends(_student_only),
+) -> StudentYearsResponse:
+    """Backs the student-only top-bar year switcher. Server-derived scope (§3.2);
+    404 no_student_profile if the login isn't linked. Declared before
+    `/{student_id}/years` so "me" is never parsed as a UUID."""
+    return service.list_my_years(db, caller=caller)
+
+
+@router.get(
     "/{student_id}",
     response_model=StudentDetail,
     summary="Student detail (P/S/Teacher; api-spec §5.3, FR-STU-07)",
@@ -100,30 +125,54 @@ def get_my_student(
 )
 def get_student(
     student_id: uuid.UUID,
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
 ) -> StudentDetail:
     """Teacher must own a section the student is enrolled in, else 404 (§3.3).
-    Students are denied at the role gate (403 → use /students/me)."""
-    return service.get_student(db, caller=caller, student_id=student_id)
+    Students are denied at the role gate (403 → use /students/me).
+
+    `academic_year_id` rescopes `current_section` to the section the student sat in
+    that year, so the profile header agrees with the assessments tab."""
+    return service.get_student(
+        db, caller=caller, student_id=student_id, academic_year_id=academic_year_id
+    )
+
+
+@router.get(
+    "/{student_id}/years",
+    response_model=StudentYearsResponse,
+    summary="Academic years the student was enrolled in (P/S/Teacher; §5.3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def list_student_years(
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    caller: User = Depends(_read),
+) -> StudentYearsResponse:
+    """Backs the per-student year filter on the profile page. Teacher must own a
+    section the student is in, else 404 (§3.3). Students are denied at the role
+    gate (403 → use /students/me/years)."""
+    return service.list_student_years(db, caller=caller, student_id=student_id)
 
 
 @router.get(
     "/{student_id}/assessments",
-    response_model=list[StudentAssessmentItem],
-    summary="Assessments for the student's section subjects (P/S/Teacher; §5.3)",
+    response_model=StudentAssessmentsResponse,
+    summary="Assessments + term grades grouped by subject (P/S/Teacher; §5.3)",
     responses={401: _ERR, 403: _ERR, 404: _ERR},
 )
 def list_student_assessments(
     student_id: uuid.UUID,
-    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
-) -> list[StudentAssessmentItem]:
-    """Teacher must own a section the student is in, else 404. (A student self uses
-    GET /assessments?scope=me in the Assessments module.)"""
+) -> StudentAssessmentsResponse:
+    """Teacher must own a section the student is in, else 404. `academic_year_id`
+    scopes to the section the student sat in that YEAR (a year spans both
+    semesters). A student self uses GET /grades/me."""
     return service.list_student_assessments(
-        db, caller=caller, student_id=student_id, semester_id=semester_id
+        db, caller=caller, student_id=student_id, academic_year_id=academic_year_id
     )
 
 

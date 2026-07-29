@@ -47,6 +47,7 @@ from app.modules.classes.models import (
     ClassTeacher,
     Subject,
 )
+from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
@@ -164,6 +165,90 @@ def _enroll(db_session, *, student, section, semester_id=None, unenrolled_at=Non
     db_session.add(enr)
     db_session.flush()
     return enr
+
+
+def _make_year(  # noqa: ANN001
+    db_session, *, name=None, start=None, status=AcademicYearStatus.ARCHIVED
+) -> AcademicYear:
+    """A non-active year. Default status is `archived` on purpose — the DB enforces
+    at most one ACTIVE year, and the seeded `2025-2026` already holds that slot."""
+    start = start or date(2020, 9, 1)
+    y = AcademicYear(
+        name=name or f"Year {uuid.uuid4().hex[:8]}",
+        start_date=start,
+        end_date=date(start.year + 1, 6, 30),
+        status=status,
+    )
+    db_session.add(y)
+    db_session.flush()
+    return y
+
+
+def _make_semester(db_session, *, year, sequence=1, is_active=False) -> Semester:  # noqa: ANN001
+    """A non-active semester (the DB allows only one active semester globally)."""
+    s = Semester(
+        academic_year_id=year.id,
+        name=f"Semester {sequence} {uuid.uuid4().hex[:4]}",
+        sequence=sequence,
+        start_date=year.start_date,
+        end_date=year.end_date,
+        is_active=is_active,
+    )
+    db_session.add(s)
+    db_session.flush()
+    return s
+
+
+def _make_assessment(  # noqa: ANN001
+    db_session,
+    *,
+    class_subject,
+    semester_id=None,
+    title=None,
+    type_=AssessmentType.TEST,
+    max_score=50,
+    weight=1,
+    status=AssessmentStatus.GRADED,
+    is_released=False,
+    assessment_date=None,
+) -> Assessment:
+    a = Assessment(
+        class_subject_id=class_subject.id,
+        semester_id=semester_id or _active_semester_id(db_session),
+        title=title or f"Assessment {uuid.uuid4().hex[:6]}",
+        type=type_,
+        max_score=max_score,
+        weight=weight,
+        status=status,
+        is_released=is_released,
+        assessment_date=assessment_date,
+    )
+    db_session.add(a)
+    db_session.flush()
+    return a
+
+
+def _make_grade(  # noqa: ANN001
+    db_session,
+    *,
+    assessment,
+    student,
+    enrollment,
+    status=GradeStatus.GRADED,
+    score=None,
+    is_released=None,
+) -> AssessmentGrade:
+    g = AssessmentGrade(
+        assessment_id=assessment.id,
+        student_id=student.id,
+        enrollment_id=enrollment.id,
+        status=status,
+        score=score,
+        is_released=is_released,
+    )
+    db_session.add(g)
+    db_session.flush()
+    return g
 
 
 def _make_owned_student(db_session, teacher_user):  # noqa: ANN001
@@ -906,46 +991,275 @@ class TestDeleteStudent:
 # GET /students/{id}/assessments
 # ════════════════════════════════════════════════════════════════════════════
 class TestStudentAssessments:
-    def test_assessments_returns_published_for_section_subjects(
+    """The response is the `{items:[...]}` envelope the finished frontend reads
+    (`features/students/api/studentsApi.ts` does `res.data.items`), grouped by
+    class_subject, each group carrying the student's term grade and per-assessment
+    lines with THAT STUDENT's grade status/score. api-spec §5.0a: the frontend is
+    binding; this endpoint used to return a bare, flat array of assessment
+    metadata, which crashed the Grades/Assessments tab."""
+
+    def _get(self, client, auth_headers, student_id, *, user, role=Role.PRINCIPAL, params=None):  # noqa: ANN001
+        return client.get(
+            f"{STUDENTS}/{student_id}/assessments",
+            params=params,
+            headers=auth_headers(user_id=user.id, role=role),
+        )
+
+    def test_assessments_items_envelope_grouped_by_class_subject(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The envelope + grouping contract: one group per offering, ordered by
+        subject name, each with subject / term_grade / assessments."""
+        tag = uuid.uuid4().hex[:6]
+        section = _make_section(db_session)
+        cs_a = _make_class_subject(
+            db_session, section=section, subject=_make_subject(db_session, name=f"AAA {tag}")
+        )
+        cs_z = _make_class_subject(
+            db_session, section=section, subject=_make_subject(db_session, name=f"ZZZ {tag}")
+        )
+        student = _make_student(db_session)
+        _enroll(db_session, student=student, section=section)
+        _make_assessment(db_session, class_subject=cs_a, title="A-Quiz")
+        _make_assessment(db_session, class_subject=cs_z, title="Z-Quiz")
+
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert isinstance(body, dict) and set(body.keys()) == {
+            "items",
+            "nudge_cooldown_seconds",
+        }, "must be an {items:[...]} envelope, not a bare array"
+        groups = {g["class_subject_id"]: g for g in body["items"]}
+        assert {str(cs_a.id), str(cs_z.id)} <= set(groups)
+
+        group = groups[str(cs_a.id)]
+        assert set(group.keys()) == {
+            "class_subject_id", "subject", "term_grade", "assessments",
+        }
+        assert group["subject"]["name"] == f"AAA {tag}"
+        assert set(group["term_grade"].keys()) == {"numeric", "letter"}
+        assert [a["title"] for a in group["assessments"]] == ["A-Quiz"]
+        assert set(group["assessments"][0].keys()) == {
+            "id", "title", "type", "max_score", "weight",
+            "assessment_date", "status", "score", "is_released",
+        }
+        # Ordered by subject name.
+        ordered = [g["class_subject_id"] for g in body["items"]]
+        assert ordered.index(str(cs_a.id)) < ordered.index(str(cs_z.id))
+
+    def test_assessments_drafts_excluded(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         section = _make_section(db_session)
         cs = _make_class_subject(db_session, section=section)
         student = _make_student(db_session)
         _enroll(db_session, student=student, section=section)
-        sem = _active_semester_id(db_session)
-        pub = Assessment(
-            class_subject_id=cs.id, semester_id=sem, title="Published Test",
-            type=AssessmentType.TEST, max_score=50, status=AssessmentStatus.PUBLISHED,
+        _make_assessment(
+            db_session, class_subject=cs, title="Published Test",
+            status=AssessmentStatus.PUBLISHED,
         )
-        draft = Assessment(
-            class_subject_id=cs.id, semester_id=sem, title="Draft Test",
-            type=AssessmentType.TEST, max_score=50, status=AssessmentStatus.DRAFT,
+        _make_assessment(
+            db_session, class_subject=cs, title="Draft Test", status=AssessmentStatus.DRAFT
         )
-        db_session.add_all([pub, draft])
-        db_session.flush()
         principal = make_user(role=Role.PRINCIPAL)
-        resp = client.get(
-            f"{STUDENTS}/{student.id}/assessments",
-            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-        )
+        resp = self._get(client, auth_headers, student.id, user=principal)
         assert resp.status_code == 200, resp.text
-        items = resp.json()
-        titles = {i["title"] for i in items}
+        titles = {
+            a["title"] for g in resp.json()["items"] for a in g["assessments"]
+        }
         assert "Published Test" in titles
         assert "Draft Test" not in titles, "draft assessments are internal-only"
+
+    def test_assessments_unreleased_row_is_listed_but_score_withheld(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Unlike the student's own /grades/me view, an admin/teacher still SEES the
+        row; only `score` is withheld until release."""
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        enr = _enroll(db_session, student=student, section=section)
+        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=False)
+        _make_grade(
+            db_session, assessment=a, student=student, enrollment=enr,
+            status=GradeStatus.GRADED, score=40,
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        line = resp.json()["items"][0]["assessments"][0]
+        assert line["id"] == str(a.id)
+        assert line["is_released"] is False
+        assert line["status"] == "graded", "the STUDENT's grade status, not the assessment's"
+        assert line["score"] is None, "score is withheld while unreleased"
+
+    def test_assessments_released_graded_row_surfaces_score(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        enr = _enroll(db_session, student=student, section=section)
+        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=True)
+        _make_grade(
+            db_session, assessment=a, student=student, enrollment=enr,
+            status=GradeStatus.GRADED, score=40,
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        line = resp.json()["items"][0]["assessments"][0]
+        assert line["is_released"] is True
+        assert line["score"] == 40.0
+
+    def test_assessments_grade_row_release_overrides_assessment(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`is_released` = grade.is_released when set, else the assessment's."""
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        enr = _enroll(db_session, student=student, section=section)
+        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=False)
+        _make_grade(
+            db_session, assessment=a, student=student, enrollment=enr,
+            status=GradeStatus.GRADED, score=45, is_released=True,
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        line = resp.json()["items"][0]["assessments"][0]
+        assert line["is_released"] is True
+        assert line["score"] == 45.0
+
+    def test_assessments_status_defaults_pending_with_no_grade_row(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """No `assessment_grades` row at all → the line still lists, status
+        'pending', score null (schema §10.2b treats no-row as pending)."""
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        _enroll(db_session, student=student, section=section)
+        _make_assessment(db_session, class_subject=cs, is_released=True)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        line = resp.json()["items"][0]["assessments"][0]
+        assert line["status"] == "pending"
+        assert line["score"] is None
+        assert resp.json()["items"][0]["term_grade"]["numeric"] is None
+
+    def test_assessments_term_grade_comes_from_the_grade_engine(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """One graded 40/50 assessment, weight 1, no categories → 80.00. The number
+        is produced by grades/calc.py, not recomputed in the Students module. It is
+        computed with released_only=False, so it appears even while UNRELEASED —
+        this deliberately differs from the student's own /grades/me view."""
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        enr = _enroll(db_session, student=student, section=section)
+        a = _make_assessment(
+            db_session, class_subject=cs, max_score=50, weight=1,
+            status=AssessmentStatus.GRADED, is_released=False,
+        )
+        _make_grade(
+            db_session, assessment=a, student=student, enrollment=enr,
+            status=GradeStatus.GRADED, score=40,
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(client, auth_headers, student.id, user=principal)
+        assert resp.status_code == 200, resp.text
+        group = resp.json()["items"][0]
+        assert group["term_grade"]["numeric"] == 80.0
+        assert group["assessments"][0]["score"] is None, "still withheld on the line"
+
+    def test_assessments_academic_year_scopes_to_that_years_section(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`academic_year_id` picks the section the student sat in THAT year (a year
+        spans both semesters), not the active one."""
+        # Current year section + offering.
+        current_section = _make_section(db_session)
+        current_cs = _make_class_subject(db_session, section=current_section)
+        student = _make_student(db_session)
+        _enroll(db_session, student=student, section=current_section)
+        _make_assessment(db_session, class_subject=current_cs, title="Current Year Quiz")
+
+        # A prior year the student also sat in.
+        past_year = _make_year(db_session)
+        past_sem = _make_semester(db_session, year=past_year)
+        past_section = _make_section(db_session, academic_year_id=past_year.id)
+        past_cs = _make_class_subject(db_session, section=past_section)
+        past_enr = _enroll(
+            db_session, student=student, section=past_section, semester_id=past_sem.id
+        )
+        past_enr.unenrolled_at = None
+        _make_assessment(
+            db_session, class_subject=past_cs, semester_id=past_sem.id,
+            title="Past Year Quiz",
+        )
+
+        principal = make_user(role=Role.PRINCIPAL)
+
+        past = self._get(
+            client, auth_headers, student.id, user=principal,
+            params={"academic_year_id": str(past_year.id)},
+        )
+        assert past.status_code == 200, past.text
+        past_titles = {a["title"] for g in past.json()["items"] for a in g["assessments"]}
+        assert past_titles == {"Past Year Quiz"}
+
+        current = self._get(client, auth_headers, student.id, user=principal)
+        current_titles = {
+            a["title"] for g in current.json()["items"] for a in g["assessments"]
+        }
+        assert current_titles == {"Current Year Quiz"}
+
+    def test_assessments_explicit_unknown_year_returns_empty_items(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """An EXPLICIT year the student never sat in yields no groups — it must not
+        silently fall back to answering about a different year."""
+        section = _make_section(db_session)
+        cs = _make_class_subject(db_session, section=section)
+        student = _make_student(db_session)
+        _enroll(db_session, student=student, section=section)
+        _make_assessment(db_session, class_subject=cs)
+        other_year = _make_year(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = self._get(
+            client, auth_headers, student.id, user=principal,
+            params={"academic_year_id": str(other_year.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["items"] == []
+
+    def test_assessments_teacher_owning_section_200(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        teacher_user = make_user(role=Role.TEACHER)
+        student, _, cs = _make_owned_student(db_session, teacher_user)
+        _make_assessment(db_session, class_subject=cs, title="Owned Quiz")
+        resp = self._get(
+            client, auth_headers, student.id, user=teacher_user, role=Role.TEACHER
+        )
+        assert resp.status_code == 200, resp.text
+        titles = {a["title"] for g in resp.json()["items"] for a in g["assessments"]}
+        assert "Owned Quiz" in titles
 
     def test_assessments_no_enrollment_returns_empty(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         student = _make_student(db_session)  # not enrolled anywhere
         principal = make_user(role=Role.PRINCIPAL)
-        resp = client.get(
-            f"{STUDENTS}/{student.id}/assessments",
-            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-        )
+        resp = self._get(client, auth_headers, student.id, user=principal)
         assert resp.status_code == 200, resp.text
-        assert resp.json() == []
+        assert resp.json()["items"] == []
 
     def test_assessments_unknown_student_404(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)
@@ -982,6 +1296,508 @@ class TestStudentAssessments:
             headers=auth_headers(user_id=student.id, role=Role.STUDENT),
         )
         assert resp.status_code == 403
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# academic_year_id — the module year switcher on GET /students and /students/{id}
+# ════════════════════════════════════════════════════════════════════════════
+class TestYearScoping:
+    """`academic_year_id` was previously undeclared on both endpoints, so FastAPI
+    dropped it silently: the profile header showed the CURRENT section while the
+    assessments tab showed the past year's — contradictory data on one screen.
+
+    Contract (MSW `handlers/students.ts`):
+      * detail — `scopedSectionFor`: with a year, the section that year (strictly,
+        `null` if none); without, the current section.
+      * list — `selectors.listStudents`: a PAST year FILTERS the student set; the
+        active year / no year lists the whole directory. Row `current_section` is
+        never rescoped (`studentListItem` always uses `currentSectionFor`).
+    """
+
+    def _two_year_student(self, db_session, *, tag=None):  # noqa: ANN001
+        """A student who sat in a DIFFERENT section object in each of two years.
+        Returns (student, past_year, past_section, current_section)."""
+        tag = tag or uuid.uuid4().hex[:6]
+        student = _make_student(db_session, full_name=f"Switcher {tag}")
+        current_section = _make_section(db_session, name=f"Cur {tag}")
+        _enroll(db_session, student=student, section=current_section)
+
+        past_year = _make_year(db_session, start=date(2019, 9, 1))
+        past_sem = _make_semester(db_session, year=past_year)
+        past_section = _make_section(
+            db_session, name=f"Past {tag}", academic_year_id=past_year.id
+        )
+        _enroll(
+            db_session, student=student, section=past_section, semester_id=past_sem.id
+        )
+        return student, past_year, past_section, current_section
+
+    # ── GET /students/{id} ──────────────────────────────────────────────────
+    def test_detail_explicit_past_year_returns_that_years_section(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        student, past_year, past_section, current_section = self._two_year_student(
+            db_session
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        headers = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+
+        past = client.get(
+            _student_path(student.id),
+            params={"academic_year_id": str(past_year.id)},
+            headers=headers,
+        )
+        assert past.status_code == 200, past.text
+        assert past.json()["current_section"]["id"] == str(past_section.id)
+        assert past.json()["current_section"]["id"] != str(current_section.id), (
+            "the year switcher must not fall through to the live section"
+        )
+
+    def test_detail_no_year_param_returns_current_section(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        student, _, past_section, current_section = self._two_year_student(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            _student_path(student.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["current_section"]["id"] == str(current_section.id)
+        assert resp.json()["current_section"]["id"] != str(past_section.id)
+
+    def test_detail_explicit_unmatched_year_returns_null_section(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Strictness, consistent with the assessments tab: an explicit year the
+        student never sat in yields null — never another year's section."""
+        student, _, _, _ = self._two_year_student(db_session)
+        stranger_year = _make_year(db_session, start=date(2014, 9, 1))
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            _student_path(student.id),
+            params={"academic_year_id": str(stranger_year.id)},
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["current_section"] is None
+
+    def test_detail_and_assessments_agree_on_the_same_year(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The regression this fix exists for: both screens must name the SAME
+        section for the selected year."""
+        student, past_year, past_section, _ = self._two_year_student(db_session)
+        past_cs = _make_class_subject(db_session, section=past_section)
+        _make_assessment(
+            db_session,
+            class_subject=past_cs,
+            semester_id=db_session.scalar(
+                select(Semester.id).where(Semester.academic_year_id == past_year.id)
+            ),
+            title="Past Paper",
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        headers = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        params = {"academic_year_id": str(past_year.id)}
+
+        detail = client.get(_student_path(student.id), params=params, headers=headers)
+        asmts = client.get(
+            f"{STUDENTS}/{student.id}/assessments", params=params, headers=headers
+        )
+        assert detail.status_code == 200 and asmts.status_code == 200
+        assert detail.json()["current_section"]["id"] == str(past_section.id)
+        assert {g["class_subject_id"] for g in asmts.json()["items"]} == {str(past_cs.id)}
+
+    def test_detail_year_param_does_not_widen_teacher_scope(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """RBAC is unchanged: ownership is still evaluated against LIVE enrollments,
+        so passing a past year cannot let a teacher reach a student — still 404."""
+        teacher_user = make_user(role=Role.TEACHER)
+        _make_teacher_profile(db_session, user_id=teacher_user.id)  # owns nothing
+        student, past_year, _, _ = self._two_year_student(db_session)
+        resp = client.get(
+            _student_path(student.id),
+            params={"academic_year_id": str(past_year.id)},
+            headers=auth_headers(user_id=teacher_user.id, role=Role.TEACHER),
+        )
+        assert resp.status_code == 404, resp.text
+        _assert_envelope(resp.json(), code="not_found")
+
+    # ── GET /students ───────────────────────────────────────────────────────
+    def test_list_past_year_filters_to_students_enrolled_that_year(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        tag = uuid.uuid4().hex[:6]
+        sat, past_year, _, _ = self._two_year_student(db_session, tag=tag)
+        # A second student who only ever sat in the CURRENT year.
+        never = _make_student(db_session, full_name=f"Switcher {tag} Never")
+        _enroll(db_session, student=never, section=_make_section(db_session))
+
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            STUDENTS,
+            params={
+                "search": f"Switcher {tag}",
+                "page_size": 200,
+                "academic_year_id": str(past_year.id),
+            },
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {i["id"] for i in resp.json()["items"]}
+        assert str(sat.id) in ids
+        assert str(never.id) not in ids, "past year must exclude students not enrolled then"
+
+    def test_list_past_year_keeps_rows_current_section(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Rows are NOT rescoped — the field is `current_section` and the mock's
+        `studentListItem` always resolves it without a year."""
+        tag = uuid.uuid4().hex[:6]
+        student, past_year, past_section, current_section = self._two_year_student(
+            db_session, tag=tag
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            STUDENTS,
+            params={
+                "search": f"Switcher {tag}",
+                "page_size": 200,
+                "academic_year_id": str(past_year.id),
+            },
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        row = next(i for i in resp.json()["items"] if i["id"] == str(student.id))
+        assert row["current_section"]["id"] == str(current_section.id)
+        assert row["current_section"]["id"] != str(past_section.id)
+
+    def test_list_active_year_does_not_filter_the_directory(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The active year means 'the directory', so students with NO active
+        enrollment (graduated / withdrawn) must still list — otherwise the
+        status=graduated view silently empties."""
+        tag = uuid.uuid4().hex[:6]
+        grad = _make_student(
+            db_session, full_name=f"Ungrouped {tag}", status=StudentStatus.GRADUATED
+        )  # never enrolled anywhere
+        principal = make_user(role=Role.PRINCIPAL)
+        headers = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        active_year_id = _active_year_id(db_session)
+
+        for params in (
+            {"search": f"Ungrouped {tag}", "page_size": 200},
+            {
+                "search": f"Ungrouped {tag}",
+                "page_size": 200,
+                "academic_year_id": str(active_year_id),
+            },
+        ):
+            resp = client.get(STUDENTS, params=params, headers=headers)
+            assert resp.status_code == 200, resp.text
+            ids = {i["id"] for i in resp.json()["items"]}
+            assert str(grad.id) in ids, f"unenrolled student dropped for params={params}"
+
+    def test_list_unmatched_year_returns_no_rows(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        tag = uuid.uuid4().hex[:6]
+        student, _, _, _ = self._two_year_student(db_session, tag=tag)
+        stranger_year = _make_year(db_session, start=date(2013, 9, 1))
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            STUDENTS,
+            params={
+                "search": f"Switcher {tag}",
+                "page_size": 200,
+                "academic_year_id": str(stranger_year.id),
+            },
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert str(student.id) not in {i["id"] for i in resp.json()["items"]}
+
+    def test_list_past_year_still_applies_teacher_scope(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """FR-STU-08 composes with the year filter: a teacher browsing a past year
+        sees only students in sections they own that year."""
+        tag = uuid.uuid4().hex[:6]
+        teacher_user = make_user(role=Role.TEACHER)
+        teacher = _make_teacher_profile(db_session, user_id=teacher_user.id)
+
+        past_year = _make_year(db_session, start=date(2012, 9, 1))
+        past_sem = _make_semester(db_session, year=past_year)
+
+        owned_section = _make_section(db_session, academic_year_id=past_year.id)
+        owned_cs = _make_class_subject(db_session, section=owned_section)
+        _assign_teacher(db_session, class_subject=owned_cs, teacher=teacher)
+        mine = _make_student(db_session, full_name=f"Scoped {tag} Mine")
+        _enroll(db_session, student=mine, section=owned_section, semester_id=past_sem.id)
+
+        other_section = _make_section(db_session, academic_year_id=past_year.id)
+        _make_class_subject(db_session, section=other_section)
+        theirs = _make_student(db_session, full_name=f"Scoped {tag} Theirs")
+        _enroll(
+            db_session, student=theirs, section=other_section, semester_id=past_sem.id
+        )
+
+        resp = client.get(
+            STUDENTS,
+            params={
+                "search": f"Scoped {tag}",
+                "page_size": 200,
+                "academic_year_id": str(past_year.id),
+            },
+            headers=auth_headers(user_id=teacher_user.id, role=Role.TEACHER),
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {i["id"] for i in resp.json()["items"]}
+        assert str(mine.id) in ids
+        assert str(theirs.id) not in ids, "teacher scope must survive the year filter"
+
+    def test_list_past_year_counts_ended_enrollments(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """A past year's enrollments normally have `unenrolled_at` set; requiring it
+        NULL would return an empty historical directory."""
+        from datetime import datetime, timezone
+
+        tag = uuid.uuid4().hex[:6]
+        student = _make_student(db_session, full_name=f"Ended {tag}")
+        past_year = _make_year(db_session, start=date(2011, 9, 1))
+        past_sem = _make_semester(db_session, year=past_year)
+        section = _make_section(db_session, academic_year_id=past_year.id)
+        _enroll(
+            db_session, student=student, section=section, semester_id=past_sem.id,
+            unenrolled_at=datetime.now(tz=timezone.utc),
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            STUDENTS,
+            params={
+                "search": f"Ended {tag}",
+                "page_size": 200,
+                "academic_year_id": str(past_year.id),
+            },
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert str(student.id) in {i["id"] for i in resp.json()["items"]}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# GET /students/{id}/years + GET /students/me/years — the year switcher
+# ════════════════════════════════════════════════════════════════════════════
+class TestStudentYears:
+    """Both routes return `{items:[{id,name,status}]}` newest year first — the shape
+    `features/students/api/studentsApi.ts` and `app/providers/YearContext.tsx` read
+    (`res.data.items`). Years are the ones the student was ACTUALLY enrolled in,
+    resolved class_enrollments → semesters → academic_years."""
+
+    def _enroll_in_new_year(self, db_session, student, *, start):  # noqa: ANN001
+        year = _make_year(db_session, start=start)
+        sem = _make_semester(db_session, year=year)
+        section = _make_section(db_session, academic_year_id=year.id)
+        _enroll(db_session, student=student, section=section, semester_id=sem.id)
+        return year
+
+    def test_years_lists_enrolled_years_newest_first(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        student = _make_student(db_session)
+        older = self._enroll_in_new_year(db_session, student, start=date(2018, 9, 1))
+        newer = self._enroll_in_new_year(db_session, student, start=date(2021, 9, 1))
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert list(body.keys()) == ["items"]
+        ids = [y["id"] for y in body["items"]]
+        assert str(newer.id) in ids and str(older.id) in ids
+        assert ids.index(str(newer.id)) < ids.index(str(older.id)), "newest first"
+        item = next(y for y in body["items"] if y["id"] == str(newer.id))
+        assert set(item.keys()) == {"id", "name", "status"}
+        assert item["name"] == newer.name
+        assert item["status"] == newer.status.value
+
+    def test_years_excludes_years_the_student_never_sat_in(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        student = _make_student(db_session)
+        mine = self._enroll_in_new_year(db_session, student, start=date(2019, 9, 1))
+        untouched = _make_year(db_session, start=date(2017, 9, 1))
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {y["id"] for y in resp.json()["items"]}
+        assert str(mine.id) in ids
+        assert str(untouched.id) not in ids
+
+    def test_years_counts_ended_enrollments(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`unenrolled_at` is deliberately NOT filtered — reaching past years is the
+        whole point of the switcher."""
+        from datetime import datetime, timezone
+
+        student = _make_student(db_session)
+        year = _make_year(db_session, start=date(2016, 9, 1))
+        sem = _make_semester(db_session, year=year)
+        section = _make_section(db_session, academic_year_id=year.id)
+        _enroll(
+            db_session, student=student, section=section, semester_id=sem.id,
+            unenrolled_at=datetime.now(tz=timezone.utc),
+        )
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert str(year.id) in {y["id"] for y in resp.json()["items"]}
+
+    def test_years_no_enrollments_empty_items(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        student = _make_student(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"items": []}
+
+    def test_years_secretary_allowed(self, client, make_user, auth_headers, db_session) -> None:
+        student = _make_student(db_session)
+        secretary = make_user(role=Role.SECRETARY)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_years_unknown_student_404(self, client, make_user, auth_headers) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/{uuid.uuid4()}/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 404, resp.text
+        _assert_envelope(resp.json(), code="not_found")
+
+    def test_years_teacher_owning_section_200(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        teacher_user = make_user(role=Role.TEACHER)
+        student, _, _ = _make_owned_student(db_session, teacher_user)
+        resp = client.get(
+            f"{STUDENTS}/{student.id}/years",
+            headers=auth_headers(user_id=teacher_user.id, role=Role.TEACHER),
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(resp.json()["items"]) >= 1
+
+    def test_years_teacher_not_sharing_section_404_not_403(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """§3.3 no-existence-leak: 404, never 403."""
+        teacher_user = make_user(role=Role.TEACHER)
+        _make_teacher_profile(db_session, user_id=teacher_user.id)  # owns nothing
+        section = _make_section(db_session)
+        _make_class_subject(db_session, section=section)
+        outsider = _make_student(db_session)
+        _enroll(db_session, student=outsider, section=section)
+        resp = client.get(
+            f"{STUDENTS}/{outsider.id}/years",
+            headers=auth_headers(user_id=teacher_user.id, role=Role.TEACHER),
+        )
+        assert resp.status_code == 404, resp.text
+        _assert_envelope(resp.json(), code="not_found")
+
+    def test_years_student_role_403_on_id_route(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        target = _make_student(db_session)
+        student_user = make_user(role=Role.STUDENT)
+        resp = client.get(
+            f"{STUDENTS}/{target.id}/years",
+            headers=auth_headers(user_id=student_user.id, role=Role.STUDENT),
+        )
+        assert resp.status_code == 403, resp.text
+        _assert_envelope(resp.json(), code="forbidden")
+
+    def test_years_unauthenticated_401(self, client, db_session) -> None:
+        student = _make_student(db_session)
+        resp = client.get(f"{STUDENTS}/{student.id}/years")
+        assert resp.status_code == 401
+        _assert_envelope(resp.json(), code="unauthenticated")
+
+    # ── /students/me/years ──────────────────────────────────────────────────
+    def test_me_years_route_wins_over_uuid_path(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Route ordering: /me/years is declared BEFORE /{student_id}/years, so "me"
+        is never parsed as a UUID (which would 422)."""
+        student_user = make_user(role=Role.STUDENT)
+        profile = _make_student(db_session, user_id=student_user.id)
+        year = self._enroll_in_new_year(db_session, profile, start=date(2022, 9, 1))
+        resp = client.get(
+            f"{STUDENTS}/me/years",
+            headers=auth_headers(user_id=student_user.id, role=Role.STUDENT),
+        )
+        assert resp.status_code == 200, resp.text
+        assert str(year.id) in {y["id"] for y in resp.json()["items"]}
+
+    def test_me_years_server_derived_ignores_other_students(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """§3.2: scope comes from the token, never a param — another student's years
+        are never returned."""
+        student_user = make_user(role=Role.STUDENT)
+        mine = _make_student(db_session, user_id=student_user.id)
+        my_year = self._enroll_in_new_year(db_session, mine, start=date(2023, 9, 1))
+
+        other_user = make_user(role=Role.STUDENT)
+        theirs = _make_student(db_session, user_id=other_user.id)
+        their_year = self._enroll_in_new_year(db_session, theirs, start=date(2015, 9, 1))
+
+        resp = client.get(
+            f"{STUDENTS}/me/years",
+            headers=auth_headers(user_id=student_user.id, role=Role.STUDENT),
+        )
+        assert resp.status_code == 200, resp.text
+        ids = {y["id"] for y in resp.json()["items"]}
+        assert str(my_year.id) in ids
+        assert str(their_year.id) not in ids
+
+    def test_me_years_no_profile_linked_404(self, client, make_user, auth_headers) -> None:
+        student_user = make_user(role=Role.STUDENT)  # no profile row
+        resp = client.get(
+            f"{STUDENTS}/me/years",
+            headers=auth_headers(user_id=student_user.id, role=Role.STUDENT),
+        )
+        assert resp.status_code == 404, resp.text
+        _assert_envelope(resp.json(), code="no_student_profile")
+
+    def test_me_years_non_student_403(self, client, make_user, auth_headers) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            f"{STUDENTS}/me/years",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 403, resp.text
+        _assert_envelope(resp.json(), code="forbidden")
 
 
 # ════════════════════════════════════════════════════════════════════════════

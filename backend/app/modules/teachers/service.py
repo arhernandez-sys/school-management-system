@@ -188,7 +188,7 @@ def list_teachers(
     specialization: str | None,
 ):
     """GET /teachers (P/S/Teacher RO). Page[TeacherListItem]; default sort
-    full_name. `specialization` matches the text[] via a GIN-backed contains."""
+    full_name. `specialization` matches the JSON array via MariaDB JSON_SEARCH."""
     stmt = select(TeacherProfile).where(TeacherProfile.deleted_at.is_(None))
 
     if status is not None:
@@ -202,10 +202,15 @@ def list_teachers(
         )
 
     if specialization:
-        # Array-contains: rows whose subject_specializations include the value
-        # (uses ix_teacher_subject_specializations GIN, schema §6).
+        # JSON-array membership on MariaDB: JSON_SEARCH returns the path to a
+        # matching string element (or NULL). The term is a bound parameter, so
+        # this is injection-safe. Exact element match (no LIKE wildcards passed).
         stmt = stmt.where(
-            TeacherProfile.subject_specializations.contains([specialization.strip()])
+            func.json_search(
+                TeacherProfile.subject_specializations,
+                "one",
+                specialization.strip(),
+            ).is_not(None)
         )
 
     sort = (params.sort or "full_name").strip()

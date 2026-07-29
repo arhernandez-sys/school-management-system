@@ -517,8 +517,13 @@ class TestArchiveAcademicYear:
     def test_archive_seeded_year_202_and_no_active_remaining(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        """Archiving the only active year → 202 with snapshots_written=0 (stub) and
-        no_active_year_remaining=true. State transitions verified."""
+        """Archiving the only active year → 202 and no_active_year_remaining=true.
+
+        `snapshots_written` was 0 while the freeze was stubbed; the freeze is real as
+        of 2026-07-28, so this now asserts the shape and non-negativity rather than a
+        hardcoded 0 (the exact count depends on how much graded seed data exists).
+        Dedicated freeze coverage lives in `TestArchiveFreeze`.
+        """
         principal = make_user(role=Role.PRINCIPAL)
         year_id = db_session.scalar(
             select(AcademicYear.id).where(AcademicYear.status == AcademicYearStatus.ACTIVE)
@@ -529,7 +534,10 @@ class TestArchiveAcademicYear:
         )
         assert resp.status_code == 202, resp.text
         body = resp.json()
-        assert body == {"snapshots_written": 0, "no_active_year_remaining": True}
+        assert set(body.keys()) == {"snapshots_written", "no_active_year_remaining"}
+        assert body["no_active_year_remaining"] is True
+        assert isinstance(body["snapshots_written"], int)
+        assert body["snapshots_written"] >= 0
 
         db_session.expire_all()
         year = db_session.get(AcademicYear, year_id)

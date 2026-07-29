@@ -61,7 +61,8 @@ class TestListSubjects:
     ) -> None:
         """GET /subjects (authenticated — everyone reads reference data) →
         Page[SubjectListItem]."""
-        _make_subject(db_session, name=f"Math {uuid.uuid4().hex[:6]}", code="MATH")
+        # Unique code — a hardcoded code (e.g. "MATH") collides with seeded data.
+        _make_subject(db_session, name=f"Math {uuid.uuid4().hex[:6]}", code=uuid.uuid4().hex[:6].upper())
         student = make_user(role=Role.STUDENT)
         resp = client.get(SUBJECTS, headers=auth_headers(user_id=student.id, role=Role.STUDENT))
         assert resp.status_code == 200, resp.text

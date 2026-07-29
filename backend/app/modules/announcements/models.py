@@ -17,12 +17,11 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import AnnouncementAudience
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import pg_enum
+from app.db.types import GUID, enum_col
 
 
 class Announcement(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
@@ -30,17 +29,17 @@ class Announcement(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     author_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="SET NULL", name="fk_announcements_author"),
         nullable=True,
     )
     title: Mapped[str] = mapped_column(Text(), nullable=False)
     body: Mapped[str] = mapped_column(Text(), nullable=False)
     audience: Mapped[AnnouncementAudience] = mapped_column(
-        pg_enum(AnnouncementAudience), nullable=False
+        enum_col(AnnouncementAudience), nullable=False
     )
     class_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("classes.id", ondelete="CASCADE", name="fk_announcements_class"),
         nullable=True,
     )
@@ -72,12 +71,12 @@ class AnnouncementRead(Base):
     __tablename__ = "announcement_reads"
 
     announcement_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("announcements.id", ondelete="CASCADE", name="fk_announcement_reads_ann"),
         primary_key=True,
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
+        GUID(),
         ForeignKey("users.id", ondelete="CASCADE", name="fk_announcement_reads_user"),
         primary_key=True,
     )

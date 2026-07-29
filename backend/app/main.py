@@ -31,7 +31,17 @@ from app.db import models as _db_models  # noqa: F401
 from app.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, configure_logging
+from app.modules.assessments.router import categories_router as assessment_categories_router
+from app.modules.assessments.router import router as assessments_router
 from app.modules.auth.router import router as auth_router
+from app.modules.announcements.router import router as announcements_router
+from app.modules.attendance.router import router as attendance_router
+from app.modules.classes.router import router as classes_router
+from app.modules.dashboard.router import router as dashboard_router
+from app.modules.events.router import router as events_router
+from app.modules.grades.router import assessment_grades_router
+from app.modules.grades.router import router as grades_router
+from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
 from app.modules.students.router import router as students_router
 from app.modules.subjects.router import router as subjects_router
@@ -50,6 +60,16 @@ MODULE_ROUTERS: list[APIRouter] = [
     subjects_router,  # 7.2 — serves /api/v1/subjects/* (api-spec §5 Module 5b)
     students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
     teachers_router,  # 7.3 — serves /api/v1/teachers/* (api-spec §5 Module 4)
+    classes_router,  # 7.4 — serves /api/v1/classes/* (api-spec §5 Module 5)
+    assessments_router,  # 7.5 — serves /api/v1/assessments/* (api-spec §6)
+    assessment_categories_router,  # 7.5 — /api/v1/classes/{id}/subjects/{cs}/categories
+    grades_router,  # 7.6 — serves /api/v1/grades/* (api-spec §7)
+    assessment_grades_router,  # 7.6 — PUT /api/v1/assessments/{id}/grades (the grade write)
+    attendance_router,  # 7.7 — serves /api/v1/attendance/* (api-spec §8)
+    announcements_router,  # 7.8 — serves /api/v1/announcements/* (api-spec §9)
+    dashboard_router,  # 7.9a — serves GET /api/v1/dashboard (api-spec §5 Module 2)
+    reports_router,  # 7.9b — serves /api/v1/reports/* (api-spec §5 Module 10)
+    events_router,  # 12 — serves /api/v1/events/* (scope addition; see progress-tracker)
 ]
 
 
