@@ -35,13 +35,17 @@ interface YearContextValue {
 const YearContext = createContext<YearContextValue | undefined>(undefined);
 
 export function YearProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, status } = useAuth();
   const isStudent = user?.role === 'student';
-  const activeTerm = useActiveTerm();
+  // YearProvider mounts above the route guards, so it renders while AuthProvider is
+  // still bootstrapping. Hold both reads until the session exists — otherwise they
+  // fire with no access token and 401 on every hard reload.
+  const isAuthed = status === 'authenticated';
+  const activeTerm = useActiveTerm({ enabled: isAuthed });
 
   const yearsQuery = useQuery({
     queryKey: ['student-years', user?.id ?? null],
-    enabled: isStudent,
+    enabled: isStudent && isAuthed,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
       const res = await api.get<{ items: StudentYear[] }>('/students/me/years', { signal });

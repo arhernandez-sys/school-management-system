@@ -9,6 +9,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@shared/api/client';
+import { teacherKeys } from '@features/teachers/hooks/useTeachers';
 import type {
   ClassCreateBody,
   ClassDetail,
@@ -18,6 +19,7 @@ import type {
   EnrollmentResult,
   RosterEntry,
   StudentRef,
+  TeacherAssignBody,
 } from '../types';
 
 export const classKeys = {
@@ -125,6 +127,81 @@ export function useEnrollStudents(classId: string) {
       void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, classId, 'enrollable'] });
+    },
+  });
+}
+
+/**
+ * PUT /classes/{id}/subjects/{csId}/teachers — set the teachers for one subject offering
+ * (P/S only; the caller gates rendering). This REPLACES the set, so callers send the full
+ * intended `teacher_ids` — an empty array removes every teacher, which the API allows.
+ *
+ * Invalidates this section's subjects list (the row the caller just changed) plus the
+ * section reads that summarise it, and the Teachers module reads whose `assignment_count`
+ * / `classes_taught` now differ.
+ */
+export function useAssignTeachers(classId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { classSubjectId: string; body: TeacherAssignBody }) => {
+      const res = await api.put<ClassSubjectItem>(
+        `/classes/${classId}/subjects/${vars.classSubjectId}/teachers`,
+        vars.body,
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: classKeys.subjects(classId) });
+      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
+      void qc.invalidateQueries({ queryKey: teacherKeys.all });
+    },
+  });
+}
+
+/**
+ * POST /classes/{id}/subjects — attach a subject to this section (P/S only).
+ *
+ * This is the entry point for the whole D23 offering lifecycle: until a subject is
+ * attached there is no `class_subject`, and therefore nothing to assign a teacher to,
+ * no gradebook, and no assessments. 409 when the subject is already offered here.
+ *
+ * Invalidates the subjects list plus the section detail (whose subject count changes).
+ */
+export function useAttachSubject(classId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (subjectId: string) => {
+      const res = await api.post<ClassSubjectItem>(`/classes/${classId}/subjects`, {
+        subject_id: subjectId,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: classKeys.subjects(classId) });
+      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
+    },
+  });
+}
+
+/**
+ * DELETE /classes/{id}/subjects/{csId} — detach a subject offering (P/S only).
+ *
+ * The API refuses (409) once the offering has history — assessments or grades — so
+ * this only ever removes something added by mistake. Teacher assignments also count
+ * against it, so callers should surface the server's message rather than assuming
+ * success.
+ */
+export function useDetachSubject(classId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (classSubjectId: string) => {
+      await api.delete(`/classes/${classId}/subjects/${classSubjectId}`);
+      return classSubjectId;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: classKeys.subjects(classId) });
+      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
+      void qc.invalidateQueries({ queryKey: teacherKeys.all });
     },
   });
 }

@@ -250,6 +250,37 @@ function teacherPayload(user: DemoUser) {
     0,
   );
 
+  // Assessments MARKED but still HIDDEN from students. Deliberately NOT the same
+  // figure as `ungraded_items` (work still to do) — an assessment can be in both,
+  // which is correct: it has two outstanding actions. Same predicate as the
+  // backend's graded_unreleased_clause().
+  const awaiting_release = owned
+    .flatMap((cs) => {
+      const sec = getSection(cs.section_id);
+      const subject = getSubject(cs.subject_id);
+      return assessmentsForClassSubject(cs.id)
+        .map((a) => {
+          const graded_unreleased_count = D.assessment_grades.filter(
+            (g) =>
+              g.assessment_id === a.id &&
+              g.status === 'graded' &&
+              (g.is_released === false || (g.is_released == null && !a.is_released)),
+          ).length;
+          return {
+            id: a.id,
+            title: a.title,
+            subject_name: subject?.name ?? '',
+            section_name: sec?.name ?? '',
+            assessment_date: a.assessment_date,
+            status: a.status,
+            class_subject_id: cs.id,
+            graded_unreleased_count,
+          };
+        })
+        .filter((row) => row.graded_unreleased_count > 0);
+    })
+    .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''));
+
   return {
     role: 'teacher' as const,
     user_full_name: user.full_name,
@@ -259,9 +290,11 @@ function teacherPayload(user: DemoUser) {
       my_class_subjects: owned.length,
       attendance_due_today: today_classes.filter((c) => !c.attendance_recorded).length,
       ungraded_items,
+      awaiting_release_items: awaiting_release.length,
     },
     today_classes,
     recent_assessments,
+    awaiting_release,
     recent_announcements: announcementsForUser(user.id)
       .slice(0, 4)
       .map((a) => announcementView(a, user.id)),

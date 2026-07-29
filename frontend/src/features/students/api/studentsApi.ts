@@ -1,7 +1,8 @@
 import { api } from '@shared/api/client';
 import type { Page } from '@shared/types/api';
 import type {
-  StudentAssessmentGroup,
+  NudgeReleaseResult,
+  StudentAssessmentsResponse,
   StudentDetail,
   StudentListItem,
   StudentWritePayload,
@@ -52,17 +53,36 @@ export async function getMyStudentRecord(signal?: AbortSignal): Promise<StudentD
   return res.data;
 }
 
-/** GET /students/{id}/assessments — assessments grouped by subject, with term grades. */
+/**
+ * GET /students/{id}/assessments — assessments grouped by subject, with term grades.
+ *
+ * Returns the WHOLE envelope rather than just `items`: the response also carries
+ * `nudge_cooldown_seconds`, which the Grades tab needs to decide whether the
+ * "Remind teacher" action is still inside its cooldown.
+ */
 export async function getStudentAssessments(
   id: string,
   academicYearId?: string,
   signal?: AbortSignal,
-): Promise<StudentAssessmentGroup[]> {
-  const res = await api.get<{ items: StudentAssessmentGroup[] }>(`/students/${id}/assessments`, {
+): Promise<StudentAssessmentsResponse> {
+  const res = await api.get<StudentAssessmentsResponse>(`/students/${id}/assessments`, {
     params: academicYearId ? { academic_year_id: academicYearId } : undefined,
     signal,
   });
-  return res.data.items;
+  return res.data;
+}
+
+/**
+ * POST /assessments/{id}/nudge-release — remind the teacher to release this
+ * assessment's grades. Principal/secretary only.
+ *
+ * Errors worth handling at the call site: 409 `nothing_awaiting_release` (nothing
+ * is marked-and-hidden), 409 `no_assigned_teacher`, 429 `rate_limited` (inside the
+ * cooldown — the UI should normally prevent this by disabling the control).
+ */
+export async function nudgeRelease(assessmentId: string): Promise<NudgeReleaseResult> {
+  const res = await api.post<NudgeReleaseResult>(`/assessments/${assessmentId}/nudge-release`);
+  return res.data;
 }
 
 /** POST /students — create a student profile (+ optional section enroll). */

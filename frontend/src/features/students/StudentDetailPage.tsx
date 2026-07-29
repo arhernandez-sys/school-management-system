@@ -40,12 +40,14 @@ import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteStudent,
+  useNudgeRelease,
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,
   useStudentYears,
   useUpdateStudent,
 } from './hooks/useStudents';
+import { RemindTeacherButton } from './components/RemindTeacherButton';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
@@ -180,6 +182,19 @@ function termGradeText(group: StudentAssessmentGroup): string {
 function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }) {
   const query = useStudentAssessments(studentId, yearId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const nudge = useNudgeRelease(studentId);
+  const [nudgeError, setNudgeError] = useState<string | null>(null);
+  const [nudgeNotice, setNudgeNotice] = useState<string | null>(null);
+
+  /*
+   * Who may nudge: principal + secretary, mirroring the endpoint's
+   * `require_role(PRINCIPAL, SECRETARY)`. Checked against the role directly rather
+   * than via `canWrite(role, 'grades')` — that helper is TRUE for teachers and
+   * FALSE for principals (teachers own grade entry), i.e. exactly inverted for
+   * this action. A teacher or student must never see this control.
+   */
+  const canNudge = user?.role === 'principal' || user?.role === 'secretary';
 
   if (query.isLoading) {
     return <LoadingState variant="table" rows={4} label="Loading assessments" />;
@@ -187,7 +202,8 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   if (query.isError) {
     return <ErrorState onRetry={() => void query.refetch()} />;
   }
-  const groups = query.data ?? [];
+  const groups = query.data?.items ?? [];
+  const cooldownSeconds = query.data?.nudge_cooldown_seconds ?? 0;
   if (groups.length === 0) {
     return (
       <EmptyState
@@ -198,9 +214,48 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
     );
   }
 
+  const handleNudge = (assessmentId: string) => {
+    setNudgeError(null);
+    nudge.mutate(assessmentId, {
+      onSuccess: (result) => {
+        const names = result.teachers.map((t) => t.full_name).join(', ');
+        setNudgeNotice(names ? `Reminder sent to ${names}.` : 'Reminder sent.');
+      },
+      onError: (err) => setNudgeError(apiErrorMessage(err, 'Could not send the reminder.')),
+    });
+  };
+
+  const feedback = (
+    <>
+      {nudgeError && (
+        <Alert severity="error" onClose={() => setNudgeError(null)} sx={{ mb: 2 }}>
+          {nudgeError}
+        </Alert>
+      )}
+      <Snackbar
+        open={Boolean(nudgeNotice)}
+        autoHideDuration={4000}
+        onClose={() => setNudgeNotice(null)}
+        message={nudgeNotice ?? ''}
+      />
+    </>
+  );
+
   const selected = groups.find((g) => g.class_subject_id === selectedId) ?? null;
   if (selected) {
-    return <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />;
+    return (
+      <Box>
+        {feedback}
+        <SubjectAssessments
+          group={selected}
+          onBack={() => setSelectedId(null)}
+          canNudge={canNudge}
+          cooldownSeconds={cooldownSeconds}
+          onNudge={handleNudge}
+          pendingAssessmentId={nudge.isPending ? (nudge.variables ?? null) : null}
+        />
+      </Box>
+    );
   }
 
   return (
@@ -243,7 +298,7 @@ function SubjectCard({ group, onOpen }: { group: StudentAssessmentGroup; onOpen:
   );
 }
 
-const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
+const BASE_ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
   {
     field: 'title',
     headerName: 'Assessment',
@@ -283,6 +338,9 @@ const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
       if (a.status === 'absent') return <StatusBadge label="Absent" kind="warning" />;
       if (a.status === 'excused' || a.status === 'exempt')
         return <StatusBadge label="Excused" kind="info" />;
+      // An unreleased graded row reads "Pending" here on purpose — that IS the
+      // student's view of it. The Remind-teacher column is what tells staff the
+      // mark exists but is being withheld.
       return <StatusBadge label="Pending" kind="neutral" />;
     },
   },
@@ -294,9 +352,17 @@ const ASSESSMENTS_PAGE_SIZE = 10;
 function SubjectAssessments({
   group,
   onBack,
+  canNudge,
+  cooldownSeconds,
+  onNudge,
+  pendingAssessmentId,
 }: {
   group: StudentAssessmentGroup;
   onBack: () => void;
+  canNudge: boolean;
+  cooldownSeconds: number;
+  onNudge: (assessmentId: string) => void;
+  pendingAssessmentId: string | null;
 }) {
   const [page, setPage] = useState(0);
   const name = group.subject?.name ?? 'Unknown subject';
@@ -304,6 +370,29 @@ function SubjectAssessments({
     page * ASSESSMENTS_PAGE_SIZE,
     page * ASSESSMENTS_PAGE_SIZE + ASSESSMENTS_PAGE_SIZE,
   );
+
+  // The action column closes over handlers, so unlike the static base columns it
+  // must be built inside the component. Only staff who may nudge get the column
+  // at all — a teacher or student never sees an empty extra column either.
+  const columns = useMemo<DataTableColumn<StudentAssessmentLine>[]>(() => {
+    if (!canNudge) return BASE_ASSESSMENT_COLUMNS;
+    return [
+      ...BASE_ASSESSMENT_COLUMNS,
+      {
+        field: 'last_nudged_at',
+        headerName: 'Release',
+        align: 'right',
+        render: (a) => (
+          <RemindTeacherButton
+            line={a}
+            cooldownSeconds={cooldownSeconds}
+            onNudge={onNudge}
+            pending={pendingAssessmentId === a.id}
+          />
+        ),
+      },
+    ];
+  }, [canNudge, cooldownSeconds, onNudge, pendingAssessmentId]);
 
   return (
     <Box>
@@ -324,7 +413,7 @@ function SubjectAssessments({
       </Stack>
       <DataTable<StudentAssessmentLine>
         caption={`Assessments for ${name}`}
-        columns={ASSESSMENT_COLUMNS}
+        columns={columns}
         rows={rows}
         getRowId={(a) => a.id}
         page={page}

@@ -23,10 +23,14 @@ export const teacherKeys = {
 };
 
 // ── Reads ──────────────────────────────────────────────────────────────────────
-/** GET /teachers — paginated directory. */
-export function useTeachersList(params: TeachersListParams) {
+/**
+ * GET /teachers — paginated directory. `enabled` defers the fetch for consumers that
+ * mount the hook before it is needed (e.g. a closed picker dialog); list screens omit it.
+ */
+export function useTeachersList(params: TeachersListParams, enabled = true) {
   return useQuery({
     queryKey: teacherKeys.list(params),
+    enabled,
     queryFn: ({ signal }) => listTeachers(params, signal),
     placeholderData: (prev) => prev, // keep the previous page visible during pagination
   });

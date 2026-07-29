@@ -18,6 +18,7 @@ import {
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoAssessment, DemoAssessmentGrade } from '@shared/api/mocks/demo/dataset';
 import { errorResponse } from './_helpers';
+import { NUDGE_COOLDOWN_SECONDS, nudgeRetryAfter, recordNudge } from './_nudges';
 
 /**
  * MSW handlers for the GRADES module (api-spec §5 Module 7) — DEMO.
@@ -326,6 +327,72 @@ export const gradesHandlers = [
     asmt.is_released = false;
     const releasedCount = D.assessment_grades.filter((g) => g.assessment_id === asmt.id).length;
     return HttpResponse.json({ assessment_id: asmt.id, is_released: false, released_count: releasedCount });
+  }),
+
+  // ── Nudge: remind the teacher to release (principal/secretary) ─────────────────
+  // Mirrors the backend's refusal order exactly (assessments/service.py::nudge_release):
+  // 403 role gate → 404 unknown → 409 no_assigned_teacher → 409 nothing_awaiting_release
+  // → 429 rate_limited. Getting the ORDER right matters: the UI distinguishes these.
+  http.post(`${API_BASE_URL}/assessments/:assessmentId/nudge-release`, ({ params, cookies }) => {
+    const role = sessionRole(cookies);
+    if (role !== 'principal' && role !== 'secretary') {
+      return errorResponse(403, 'forbidden', 'You cannot send release reminders.');
+    }
+    const asmt = D.assessments.find((a) => a.id === String(params.assessmentId));
+    if (!asmt) return errorResponse(404, 'not_found', 'Assessment not found.');
+
+    const cs = getClassSubject(asmt.class_subject_id);
+    const teachers = (cs?.teacher_ids ?? [])
+      .map((id) => getTeacher(id))
+      .filter((t): t is NonNullable<typeof t> => Boolean(t))
+      .map((t) => ({ id: t.id, full_name: t.full_name }));
+    if (teachers.length === 0) {
+      return errorResponse(
+        409,
+        'no_assigned_teacher',
+        'This subject offering has no assigned teacher to remind.',
+      );
+    }
+
+    // "Marked but still hidden" — same predicate as graded_unreleased_clause():
+    // the grade row was explicitly unreleased, or it defers (null) and the whole
+    // column is unreleased. `graded` (not merely present) is what makes it awaiting
+    // RELEASE rather than awaiting MARKING.
+    const awaiting = D.assessment_grades.filter(
+      (g) =>
+        g.assessment_id === asmt.id &&
+        g.status === 'graded' &&
+        (g.is_released === false || (g.is_released == null && !asmt.is_released)),
+    ).length;
+    if (awaiting === 0) {
+      return errorResponse(
+        409,
+        'nothing_awaiting_release',
+        'Nothing is awaiting release for this assessment.',
+      );
+    }
+
+    const retryAfter = nudgeRetryAfter(asmt.id);
+    if (retryAfter > 0) {
+      return errorResponse(
+        429,
+        'rate_limited',
+        'This teacher was reminded recently. Try again later.',
+        { retry_after_seconds: [String(retryAfter)] },
+      );
+    }
+
+    const at = recordNudge(asmt.id);
+    return HttpResponse.json({
+      assessment_id: asmt.id,
+      awaiting_release_count: awaiting,
+      teachers,
+      last_nudged_at: at,
+      next_nudge_allowed_at: new Date(
+        new Date(at).getTime() + NUDGE_COOLDOWN_SECONDS * 1000,
+      ).toISOString(),
+      cooldown_seconds: NUDGE_COOLDOWN_SECONDS,
+    });
   }),
 
   // ── Computed-on-read term grade(s) ─────────────────────────────────────────────

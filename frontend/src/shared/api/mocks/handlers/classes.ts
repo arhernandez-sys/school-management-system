@@ -41,6 +41,11 @@ import { errorResponse, listParamsFrom } from './_helpers';
  */
 const D = DEMO_DATASET;
 
+/** Acting role from the demo session cookie (same local helper the other handlers use). */
+function sessionRole(cookies: Record<string, string>): string {
+  return cookies['sis_mock_session'] ?? 'principal';
+}
+
 // ── Response shapers (snake_case wire format) ──────────────────────────────────
 function subjectRef(subjectId: string) {
   const s = getSubject(subjectId);
@@ -224,6 +229,71 @@ export const classesHandlers = [
     const items = classSubjectsForSection(section.id).map(classSubjectItem);
     return HttpResponse.json(items);
   }),
+
+  // ── POST /classes/{id}/subjects — attach a subject to the section (P/S) ────────
+  // The first step of the D23 offering lifecycle: no class_subject means no teacher
+  // assignment, no gradebook, no assessments.
+  http.post(`${API_BASE_URL}/classes/:classId/subjects`, async ({ params, cookies, request }) => {
+    const role = sessionRole(cookies);
+    if (role !== 'principal' && role !== 'secretary') {
+      return errorResponse(403, 'forbidden', 'You cannot change this section’s subjects.');
+    }
+    const section = getSection(String(params.classId));
+    if (!section) return errorResponse(404, 'not_found', 'Class not found.');
+
+    const body = (await request.json()) as { subject_id?: string };
+    if (!body.subject_id) {
+      return errorResponse(422, 'validation_error', 'Missing required fields.', {
+        subject_id: ['Required.'],
+      });
+    }
+    const subject = D.subjects.find((s) => s.id === body.subject_id);
+    if (!subject) return errorResponse(404, 'not_found', 'Subject not found.');
+
+    if (classSubjectsForSection(section.id).some((cs) => cs.subject_id === subject.id)) {
+      return errorResponse(
+        409,
+        'already_offered',
+        `${subject.name} is already offered in this section.`,
+      );
+    }
+
+    const created: DemoClassSubject = {
+      id: `cs-${section.id}-${subject.id}`,
+      section_id: section.id,
+      subject_id: subject.id,
+      teacher_ids: [],
+      lead_teacher_id: null,
+      is_active: true,
+      drop_lowest_count: 0,
+    };
+    D.class_subjects.push(created);
+    return HttpResponse.json(classSubjectItem(created), { status: 201 });
+  }),
+
+  // ── DELETE /classes/{id}/subjects/{csId} — detach, only while it has no history ─
+  http.delete(
+    `${API_BASE_URL}/classes/:classId/subjects/:classSubjectId`,
+    ({ params, cookies }) => {
+      const role = sessionRole(cookies);
+      if (role !== 'principal' && role !== 'secretary') {
+        return errorResponse(403, 'forbidden', 'You cannot change this section’s subjects.');
+      }
+      const idx = D.class_subjects.findIndex((cs) => cs.id === String(params.classSubjectId));
+      if (idx === -1) return errorResponse(404, 'not_found', 'Subject offering not found.');
+
+      const cs = D.class_subjects[idx]!;
+      if (assessmentsForClassSubject(cs.id).length > 0) {
+        return errorResponse(
+          409,
+          'has_history',
+          'This subject has assessments recorded and cannot be removed.',
+        );
+      }
+      D.class_subjects.splice(idx, 1);
+      return new HttpResponse(null, { status: 204 });
+    },
+  ),
 
   // ── GET /classes/{id}/roster — active roster (RosterEntry[], not paginated) ────
   http.get(`${API_BASE_URL}/classes/:classId/roster`, ({ params }) => {

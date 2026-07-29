@@ -81,6 +81,19 @@ export interface EnrollmentResult {
   over_capacity_warning: boolean;
 }
 
+/**
+ * PUT /classes/{id}/subjects/{csId}/teachers request body.
+ *
+ * REPLACES the offering's whole teacher set (it is a PUT, not a PATCH). An empty
+ * `teacher_ids` is valid and removes every teacher. `lead_teacher_id` must be a member
+ * of `teacher_ids` (422 `validation_error` otherwise) and defaults server-side to
+ * `teacher_ids[0]` when null.
+ */
+export interface TeacherAssignBody {
+  teacher_ids: string[];
+  lead_teacher_id: string | null;
+}
+
 /** POST /classes request body. */
 export interface ClassCreateBody {
   name: string;

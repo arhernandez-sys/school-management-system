@@ -26,11 +26,12 @@ import { SubjectsTab } from './components/SubjectsTab';
  * homeroom: one roster, many subjects. Header shows name · grade · academic year and a
  * capacity summary with a warn-only "Over capacity" chip (D-Q6). DetailTabs:
  *  - Roster: the section's enrolled students (P/S can enroll/withdraw).
- *  - Subjects: each `class_subject` offering (subject + teacher(s)), linking to its gradebook.
+ *  - Subjects: each `class_subject` offering (subject + teacher(s)), linking to its gradebook
+ *    (P/S can staff each offering — teachers attach to the offering, not to the section).
  *  - Overview: at-a-glance section stats.
  *
- * Write capability (enroll/withdraw) is UX-gated by the `classes` permission; the server
- * remains authoritative.
+ * Write capability (enroll/withdraw, assign teachers) is UX-gated by the `classes`
+ * permission; the server remains authoritative.
  */
 export function ClassDetailPage() {
   const { classId } = useParams<{ classId: string }>();
@@ -54,7 +55,7 @@ export function ClassDetailPage() {
       {
         value: 'subjects',
         label: 'Subjects',
-        render: () => <SubjectsTab classId={classId} />,
+        render: () => <SubjectsTab classId={classId} canManage={canManage} />,
       },
       {
         value: 'overview',

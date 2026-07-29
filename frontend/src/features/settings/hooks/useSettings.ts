@@ -159,10 +159,18 @@ export function useAccount() {
  * GET /settings/active-term. 409 no_active_semester when the school has no active
  * year/semester — the caller degrades to a setup prompt. Retries are disabled so a
  * 409 (a valid "not set up" state, not a transient error) surfaces immediately.
+ *
+ * `enabled` exists so callers mounted ABOVE the route guards (YearProvider) can hold
+ * the request until the session is established. Without it the query fires during
+ * AuthProvider's bootstrap, when no access token is in memory yet, and eats a
+ * guaranteed 401 on every hard reload. The client's interceptor does recover it —
+ * the 401 coalesces onto the same single-flight `performRefresh()` the bootstrap is
+ * already running and is replayed — but it costs a round-trip and puts a red herring
+ * in the console. Defaults to true so existing callers are unaffected.
  */
-export function useActiveTerm() {
+export function useActiveTerm(options?: { enabled?: boolean }) {
   return useGetActiveTermApiV1SettingsActiveTermGet({
-    query: { staleTime: CONFIG_STALE_MS, retry: false },
+    query: { staleTime: CONFIG_STALE_MS, retry: false, enabled: options?.enabled ?? true },
   });
 }
 

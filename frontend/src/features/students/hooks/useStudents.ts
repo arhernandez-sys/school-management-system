@@ -13,6 +13,7 @@ import {
   getStudentAssessments,
   getStudentYears,
   listStudents,
+  nudgeRelease,
   setStudentStatus,
   updateStudent,
 } from '../api/studentsApi';
@@ -72,6 +73,24 @@ export function useStudentAssessments(studentId: string | undefined, yearId?: st
     queryKey: [...studentKeys.assessments(studentId ?? ''), yearId ?? null],
     enabled: Boolean(studentId),
     queryFn: ({ signal }) => getStudentAssessments(studentId as string, yearId, signal),
+  });
+}
+
+/**
+ * POST /assessments/{id}/nudge-release — remind the teacher to release grades.
+ *
+ * Invalidates the assessments tab so `last_nudged_at` is re-read from the server
+ * rather than patched in locally: the server is the only place the cooldown clock
+ * lives (it is derived from `audit_log`), so re-reading keeps the disabled state
+ * honest even across two admins acting at once.
+ */
+export function useNudgeRelease(studentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (assessmentId: string) => nudgeRelease(assessmentId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: studentKeys.assessments(studentId) });
+    },
   });
 }
 

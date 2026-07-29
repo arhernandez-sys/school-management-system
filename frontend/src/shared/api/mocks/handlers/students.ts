@@ -20,6 +20,7 @@ import type {
   DemoStudent,
 } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
+import { NUDGE_COOLDOWN_SECONDS, lastNudgedAt } from './_nudges';
 
 /**
  * MSW handlers for the STUDENTS module (api-spec §5 Module 3) — DEMO.
@@ -164,6 +165,10 @@ function assessmentLine(a: DemoAssessment, studentId: string) {
     status: grade?.status ?? 'pending',
     score,
     is_released: released,
+    // Read back from the demo nudge log, exactly as the real API derives it from
+    // the most recent `grade.release_nudge` audit row. Drives the "Reminded 2h ago"
+    // disabled state on the principal's Remind-teacher action.
+    last_nudged_at: lastNudgedAt(a.id),
   };
 }
 
@@ -321,7 +326,12 @@ export const studentsHandlers = [
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
     const yearId = new URL(request.url).searchParams.get('academic_year_id');
-    return HttpResponse.json({ items: assessmentsForStudent(resolved.student, yearId) });
+    // `nudge_cooldown_seconds` rides in the envelope so the SPA never keeps its own
+    // copy of the window — the server owns it and can retune without a frontend release.
+    return HttpResponse.json({
+      items: assessmentsForStudent(resolved.student, yearId),
+      nudge_cooldown_seconds: NUDGE_COOLDOWN_SECONDS,
+    });
   }),
 
   // ── GET /students/{id} — detail header ──────────────────────────────────────────

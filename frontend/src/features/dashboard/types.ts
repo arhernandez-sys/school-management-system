@@ -126,16 +126,36 @@ export interface TeacherAssessmentItem {
   status: string;
 }
 
+/**
+ * An assessment the teacher has MARKED but not yet RELEASED to students.
+ *
+ * Extends the plain assessment item with the two fields that make the row
+ * actionable: `class_subject_id` (the gradebook is addressed by offering, not by
+ * assessment) and how many students are still waiting.
+ */
+export interface TeacherAwaitingReleaseItem extends TeacherAssessmentItem {
+  class_subject_id: string;
+  graded_unreleased_count: number;
+}
+
 export interface TeacherDashboard extends DashboardBase {
   role: 'teacher';
   stats: {
     my_sections: number;
     my_class_subjects: number;
     attendance_due_today: number;
+    /** Assessments still being MARKED (published / grading). */
     ungraded_items: number;
+    /**
+     * Assessments already marked but still HIDDEN from students. Distinct from
+     * `ungraded_items`: that is work still to do, this is finished work not yet
+     * published. The two are counted separately and must not be summed.
+     */
+    awaiting_release_items: number;
   };
   today_classes: TeacherTodayClass[];
   recent_assessments: TeacherAssessmentItem[];
+  awaiting_release: TeacherAwaitingReleaseItem[];
   recent_announcements: DashboardAnnouncement[];
 }
 
