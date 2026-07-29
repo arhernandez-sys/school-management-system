@@ -13,8 +13,14 @@ dependencies = [
     "argon2-cffi==23.1.0",
     "pyjwt==2.10.1",
     "psycopg[binary]==3.2.3",
+    "pymysql==1.1.1",
     "python-multipart==0.0.20",
     "email-validator==2.2.0",
+    # IANA timezone database. Required for ZoneInfo("America/Belize") — Windows does
+    # not ship the tz database, so without this the school-local date resolution in
+    # app/core/timeutil.py raises ZoneInfoNotFoundError. It was already present as a
+    # transitive dependency; declared explicitly now that we depend on it directly.
+    "tzdata==2026.2",
 ]
 
 [project.optional-dependencies]
