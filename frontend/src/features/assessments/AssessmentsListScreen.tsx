@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -30,7 +30,7 @@ import { useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
-import { DEMO_IDS } from '@shared/api/mocks/demo/dataset';
+import { useSelectedYear } from '@app/providers/YearContext';
 import {
   useAssessmentCategories,
   useAssessmentsList,
@@ -57,6 +57,8 @@ const CLASS_SUBJECT_PARAM = 'class_subject_id';
  *  - Teacher: the picker lists ONLY their owned offerings; authoring is enabled.
  *  - Principal / Secretary: the picker lists all offerings; view-all, no authoring
  *    (OQ-API-2 — P/S do not author on a teacher's behalf). The server is authoritative.
+ *  - Student ("My Assessments"): read-only, and scoped by the GLOBAL top-bar
+ *    year·semester switcher rather than by a picker on this page (see below).
  */
 export function AssessmentsListScreen() {
   const navigate = useNavigate();
@@ -66,7 +68,21 @@ export function AssessmentsListScreen() {
   const canAuthor = isTeacher; // P/S are view-all (OQ-API-2)
   const canGrade = !isStudent; // teacher (edit) + P/S (read-only) open the grading page
 
-  const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  /**
+   * Two period sources, one per audience — and picking the wrong one was THE bug on
+   * this screen. Staff scope per-module via `useYearFilter` (URL `?year=`, rendered as
+   * the `<YearSelect>` below). A student has no `<YearSelect>` here (`!isStudent`, they
+   * use the global top-bar switcher) — yet this screen still read `useYearFilter`, whose
+   * value for a student could only ever resolve to the ACTIVE year because nothing on
+   * the page writes `?year=`. So the global switcher moved every other student screen
+   * and left this one pinned to the current year, subject dropdown included.
+   *
+   * `useYearFilter` is still called unconditionally — hooks cannot be conditional — but
+   * for a student its result is deliberately unused.
+   */
+  const staffYear = useYearFilter();
+  const { selectedYearId, selectedSemesterId, selectedPeriod } = useSelectedYear();
+  const yearId = isStudent ? selectedYearId : staffYear.yearId;
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedCs = searchParams.get(CLASS_SUBJECT_PARAM) ?? '';
@@ -80,32 +96,58 @@ export function AssessmentsListScreen() {
     user?.teacher_profile_id ?? null,
     yearId,
   );
-  const options = optionsQuery.data ?? [];
+  // Memoized because the reconcile effect below depends on it — a fresh `[]` literal on
+  // every render would re-run that effect continuously.
+  const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
   const selectedOption = options.find((o) => o.class_subject_id === selectedCs) ?? null;
 
-  const setSelectedCs = (id: string) => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (id) next.set(CLASS_SUBJECT_PARAM, id);
-        else next.delete(CLASS_SUBJECT_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
-    setPage(0);
-  };
+  const setSelectedCs = useCallback(
+    (id: string) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set(CLASS_SUBJECT_PARAM, id);
+          else next.delete(CLASS_SUBJECT_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
+      setPage(0);
+    },
+    [setSearchParams],
+  );
+
+  /**
+   * A class·subject belongs to ONE year, so a `?class_subject_id=` carried across a
+   * year change names an offering that no longer exists in the selected year — the
+   * table renders empty and the picker shows a blank selection, which reads exactly
+   * like the switcher being broken. Staff already clear it in `YearSelect.onChange`;
+   * a student's change arrives from outside this screen (the top bar), so there is no
+   * event to hang it on and it has to be reconciled here.
+   *
+   * Keyed on the OPTIONS rather than on the year: it must only fire once the new year's
+   * options have actually loaded, otherwise it would wipe a valid selection during
+   * every refetch.
+   */
+  useEffect(() => {
+    if (!isStudent || !selectedCs || optionsQuery.isPending || options.length === 0) return;
+    if (!options.some((o) => o.class_subject_id === selectedCs)) setSelectedCs('');
+  }, [isStudent, selectedCs, options, optionsQuery.isPending, setSelectedCs]);
 
   // ── List (only once a class_subject is chosen) ────────────────────────────────────
   const listParams = useMemo(
     () => ({
       class_subject_id: selectedCs || undefined,
       academic_year_id: yearId || undefined,
+      // Students only: staff scope by year here and manage every term of an offering
+      // together. `semester_id` is what makes the switcher's "· Semester 2" mean
+      // something instead of listing the whole year under that heading.
+      semester_id: isStudent ? (selectedSemesterId || undefined) : undefined,
       page: page + 1,
       page_size: pageSize,
       sort: '-assessment_date',
     }),
-    [selectedCs, yearId, page, pageSize],
+    [selectedCs, yearId, isStudent, selectedSemesterId, page, pageSize],
   );
   const listQuery = useAssessmentsList(listParams, Boolean(selectedCs));
 
@@ -121,6 +163,11 @@ export function AssessmentsListScreen() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string[]>>({});
   const categoriesQuery = useAssessmentCategories(formOpen ? selectedCs || null : null);
+  // Every assessment write needs the REAL active semester id — the school's CURRENT
+  // term, not `selectedSemesterId` (what the reader is browsing). Read from YearContext,
+  // which already holds `GET /settings/active-term` — no extra request. It was a
+  // hardcoded demo-dataset id here, which no real database contains.
+  const { activeSemesterId } = useSelectedYear();
 
   const openCreate = () => {
     setEditing(null);
@@ -159,10 +206,18 @@ export function AssessmentsListScreen() {
         { onSuccess: () => setFormOpen(false), onError },
       );
     } else {
+      // No active semester → the write cannot be formed. Say so instead of posting a
+      // request the server will reject with an error nobody can act on.
+      if (!activeSemesterId) {
+        setFormError(
+          'No active semester is set for the school. An administrator must set the active term before assessments can be created.',
+        );
+        return;
+      }
       createMut.mutate(
         {
           class_subject_id: selectedCs,
-          semester_id: DEMO_IDS.activeSemesterId,
+          semester_id: activeSemesterId,
           title: values.title,
           type: values.type,
           category_id: values.category_id,
@@ -318,7 +373,11 @@ export function AssessmentsListScreen() {
           isTeacher
             ? 'Create assessment definitions and manage their status. Enter grades in Grades.'
             : isStudent
-              ? "Assessments in your class. Pick a subject to see its quizzes, tests, and exams."
+              ? // Name the period rather than implying "now" — this screen is reachable
+                // for any year·semester the student was enrolled in.
+                selectedPeriod
+                ? `Your assessments for ${selectedPeriod.label}. Pick a subject to see its quizzes, tests, and exams.`
+                : 'Assessments in your class. Pick a subject to see its quizzes, tests, and exams.'
               : 'Browse assessments across the school.'
         }
         primaryAction={primaryAction}
@@ -329,18 +388,20 @@ export function AssessmentsListScreen() {
         spacing={2}
         sx={{ mb: 2, alignItems: { sm: 'center' } }}
       >
+        {/* Staff only. A student's period comes from the GLOBAL top-bar switcher, so a
+            second picker here would be a competing source of truth. */}
         {!isStudent && (
           <YearSelect
-            value={yearId}
+            value={staffYear.yearId}
             onChange={(id) => {
               // A class·subject belongs to one year — clear the stale selection.
               setSelectedCs('');
-              setYearId(id);
+              staffYear.setYearId(id);
               setPage(0);
             }}
-            years={years}
-            activeYearId={activeYearId}
-            isLoading={yearsLoading}
+            years={staffYear.years}
+            activeYearId={staffYear.activeYearId}
+            isLoading={staffYear.isLoading}
           />
         )}
         <ClassSubjectPicker

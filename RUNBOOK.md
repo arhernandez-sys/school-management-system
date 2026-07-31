@@ -115,11 +115,13 @@ ENVIRONMENT=local
 SEED_ADMIN_EMAIL=principal@school.local
 ```
 
-> ⚠️ **Do not copy `backend/.env.example` verbatim** — it still advertises a
-> `postgresql+psycopg://` URL and will not connect. (Cleanup is Step 3e.)
->
 > ⚠️ **URL-encode special characters in the password** (`@` → `%40`). Both
 > `alembic/env.py:31` and `tests/conftest.py:81` depend on the value staying encoded.
+>
+> _(An earlier note here warned that `backend/.env.example` advertised a
+> `postgresql+psycopg://` URL. That was already fixed — the example is MariaDB
+> throughout and is safe to copy. It also now documents the `JWT_SECRET` length and
+> Argon2 floor the app enforces outside `local`.)_
 
 `ENVIRONMENT` is load-bearing beyond logging: outside `local` the app refuses to start with a
 default `JWT_SECRET` or an empty/`*` CORS list (`config.validate_runtime()`), and the refresh
@@ -234,21 +236,33 @@ sessions still show server-local time — that's expected and harmless.
 
 ## 6. Tests
 
+See `docs/testing-plan.md` for the full plan — strategy, coverage, gaps and the manual UAT
+scripts. Quick reference:
+
 ```powershell
 cd C:\Users\arhernandez\source\repos\school-management-system\backend
-.\.venv\Scripts\python.exe -m pytest -q                  # full suite — ~18 minutes
+.\.venv\Scripts\python.exe -m pytest -q                  # full suite — ~56 seconds
 .\.venv\Scripts\python.exe -m pytest tests/test_auth.py -q   # one module — seconds
 .\.venv\Scripts\python.exe -m pytest -m "not requires_db" -q # DB-free subset
+.\.venv\Scripts\python.exe -m pytest -q --durations=10       # find the slow ones
 ```
 
-- **819 tests.** Run per-module while iterating; save the full run for checkpoints.
-- The ~18 minutes is dominated by Argon2id (`memory_cost=65536`) on every user fixture.
+- **941 tests, all green.** The whole suite now runs in under a minute, so just run it.
+- **It used to take ~18 minutes, and the cause recorded here was wrong.** The note said Argon2id
+  dominated. Measured (2026-07-29): Argon2 was ~96ms/hash — real but minor — the database ~1ms
+  per test, and **`create_app()` ~1.3s per test**, paid by all 941 tests because the `app`
+  fixture was function-scoped. Building the app once per session, plus a reduced Argon2 work
+  factor inside the test process, took the run to ~56s. Both live in `tests/conftest.py` and
+  are guarded by `tests/test_qa_foundation.py`.
+- Run at production hashing cost with `$env:SIS_TEST_FULL_ARGON2="1"` when you want to verify
+  the parameters themselves. Production defaults are unchanged and pinned by a test.
+- A test needing **different settings** must build its own app (`test_hardening.py::_build_app`);
+  the shared fixture's settings are fixed at construction.
 - ⚠️ **Tests run against the live `sims` database.** Isolation is per-test
   transaction-rollback (`tests/conftest.py`) so nothing commits — but there is no separate
   test schema and no CI. Don't run them against anything precious.
-- ⚠️ `pytest-asyncio` may be missing if `.venv` was built without `[dev]`. Symptom:
-  `PytestConfigWarning: Unknown config option: asyncio_mode`. Fix: `pip install -e ".[dev]"`.
-- There is **no frontend test suite** — no Vitest, no Playwright, no `*.test.*` files.
+- There is **no frontend test suite** — no Vitest, no Playwright, no `*.test.*` files. Every
+  user-facing flow is covered by a human following `docs/testing-plan.md` §5, or not at all.
 
 ---
 
@@ -324,14 +338,196 @@ sees a rewritten peer. If that appears in your logs, the flag is missing.
 
 ---
 
+## 10. Going live on a public URL — pre-flight
+
+Everything above assumes a laptop on a private network. The moment this answers on a
+public hostname, the threat model changes: the login page is reachable from any phone on
+any network, and it fronts named minors' academic records.
+
+Work top to bottom. Items marked **BLOCKER** must be done before the first public
+request; the app cannot enforce them for you.
+
+### 10.1 BLOCKER — the demo accounts must not exist
+
+The `sims` database on this machine was populated by `seed_demo`, which creates **19
+accounts sharing the password `SimsDemo2025!`** with `must_change_password = false`. That
+password is written in plain text in this repository and in the seed script. If that
+database is what goes live, the system is open to anyone who has seen either.
+
+Before go-live, either provision a fresh database (§4, minimal seed `(a)`) or, on the
+existing one:
+
+```sql
+-- See what you have. Every row here is a live credential.
+SELECT email, role, must_change_password FROM users ORDER BY role, email;
+```
+
+Then delete every demo account you do not need, and for the ones you keep, force a reset
+(`must_change_password = 1`) **and** set a fresh individual password through the app.
+Flipping `must_change_password` alone does not invalidate the old password.
+
+`seed_demo` now refuses to run unless `ENVIRONMENT=local` **and**
+`SIS_ALLOW_DEMO_SEED=yes-destroy-my-data` — but that guard protects the future, not the
+data already seeded.
+
+### 10.2 BLOCKER — TLS, and one origin
+
+Serve the SPA and the API from **the same origin** behind one reverse proxy:
+
+```
+https://sims.yourschool.edu.bz/           →  frontend/dist  (static files)
+https://sims.yourschool.edu.bz/api/v1/    →  http://127.0.0.1:8000
+```
+
+Two reasons this is not merely tidier. The refresh cookie is `SameSite=None; Secure`
+outside `local`, which browsers only accept over HTTPS — without TLS **every user is
+silently logged out on each reload**. And same-origin means the CORS allow-list stops
+being load-bearing at all.
+
+Keep `VITE_API_BASE_URL=/api/v1` (relative). Rebuild the frontend after changing it —
+Vite inlines env vars at build time, so editing `.env` on the server changes nothing.
+
+The SPA is a single-page app: the proxy must serve `index.html` for any unmatched path,
+or a hard reload on `/students/123` returns 404 from the web server.
+
+### 10.3 BLOCKER — the database must not be on the internet
+
+Bind MariaDB to loopback (`bind-address = 127.0.0.1` in `my.cnf`) and confirm port 3306
+is not reachable from outside the host. The app connects over localhost; nothing else
+needs to.
+
+Also note the app currently connects as the **table owner**. There is no row-level
+security behind it — application-layer RBAC is the only thing between a caller and the
+data, which is why the authorization tests matter so much. A least-privilege application
+user (no DDL, no DROP) is worth creating; it is tracked as `OQ-7.0-ROLE` and is not done.
+
+### 10.4 Backend launch
+
+```powershell
+# NOT --reload. That is a development flag: it watches the filesystem, runs a
+# supervisor process, and serves single-threaded.
+$env:FORWARDED_ALLOW_IPS=""
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --forwarded-allow-ips=""
+```
+
+`--forwarded-allow-ips=""` is **mandatory** behind a proxy — see §9 for the measured
+consequence of omitting it (an attacker rotating `X-Forwarded-For` gets a fresh
+rate-limit bucket per request and writes any IP they like into the audit trail).
+
+Bind to `127.0.0.1`, not `0.0.0.0`, so the app is reachable only through the proxy.
+
+Run it under a process manager that restarts on failure and starts at boot (systemd on
+Linux; NSSM or a Scheduled Task on Windows). **There is none configured today.**
+
+### 10.5 Production `.env` differences
+
+```ini
+ENVIRONMENT=production                      # flips cookie Secure + HSTS, arms the guards
+JWT_SECRET=<openssl rand -hex 32>           # >= 32 chars or the app refuses to start
+DATABASE_URL=mysql+pymysql://<least-priv-user>:<urlencoded-pw>@127.0.0.1:3306/sims
+CORS_ORIGINS=https://sims.yourschool.edu.bz # exact origin; never "*"
+TRUSTED_HOSTS=sims.yourschool.edu.bz        # "*" logs a warning and answers to any host
+TRUSTED_PROXIES=127.0.0.1                   # your proxy's address
+HSTS_MAX_AGE=300                            # start LOW; raise to 31536000 once TLS is proven
+```
+
+`HSTS_MAX_AGE` low at first is deliberate: HSTS **cannot be un-sent** to a browser that
+already cached it, so a year-long header on a misconfigured certificate locks users out
+of the site for a year.
+
+On startup the app refuses to boot on: the default or a short `JWT_SECRET`, an Argon2
+work factor below the OWASP floor, the built-in `DATABASE_URL`, or an empty/`*` CORS
+list. It logs `hardening_advisory` warnings for `TRUSTED_HOSTS=*`, empty
+`TRUSTED_PROXIES`, and disabled rate limiting. **Read the startup log once after the
+first deploy** — those advisories are the difference between "it runs" and "it is
+configured".
+
+### 10.6 Verify after deploying
+
+```bash
+curl -si https://sims.yourschool.edu.bz/api/v1/health   # 200
+curl -si https://sims.yourschool.edu.bz/api/v1/ready    # 200 (503 = DB unreachable)
+```
+
+- Log in, then **hard-reload**. Staying logged in proves the `Secure` cookie works.
+- Confirm `Strict-Transport-Security` is present on a response.
+- Confirm `/api/v1/docs` — the interactive API browser is **public and unauthenticated**.
+  It exposes no data, but it does hand an attacker a complete map of the API. Consider
+  blocking `/api/v1/docs`, `/redoc` and `/openapi.json` at the proxy.
+- In DevTools → Network, log in as a **student** and confirm no `feature-students`,
+  `feature-settings`, `feature-teachers` or `feature-reports` chunk is ever requested
+  (see §11).
+- Fail a login 5 times and confirm the lockout `423`; keep failing and confirm the `429`.
+
+### 10.7 Still missing (decisions, not code)
+
+None of these are blockers for switching it on, but each is a real exposure. They are
+tracked in `docs/testing-plan.md` §6 and the progress tracker:
+
+- **No backups.** Nothing is scheduled and no restore has ever been tested. For student
+  records this is the largest remaining risk on this list — an untested backup is not a
+  backup. A nightly `mysqldump` off-host is a few lines.
+- **No reproducible provisioning.** Alembic cannot run against MariaDB (§4), so rebuilding
+  the schema is a manual four-file sequence.
+- **Retention not scheduled.** `python -m app.jobs.purge` works (`--dry-run` first) but
+  nothing calls it, so `login_attempts` and `audit_log` grow without bound.
+- **The rate limiter is in-process.** With `--workers 4` the effective limit is ~4x the
+  configured value. Fine for one school; it does not hold across hosts.
+- **No CI, no automated frontend tests**, and the eight manual UAT scripts in
+  `docs/testing-plan.md` §5 have not been executed against a live deployment.
+
+---
+
+## 11. Frontend build and role-scoped loading
+
+```powershell
+cd frontend
+npm run build        # tsc -b && vite build → dist/
+```
+
+Serve `dist/` as static files (§10.2). Rebuild whenever a `VITE_*` value changes.
+
+**Each role downloads only the screens it can reach.** Every feature module is a
+`React.lazy` boundary in `src/app/router/routes.tsx`, wrapped so the `RoleRoute` guard
+runs *outside* `Suspense` — a role without access redirects before the component mounts,
+so its chunk is never fetched. Chunks are named for their feature
+(`feature-grades-<hash>.js`), which is what makes this verifiable in DevTools rather than
+merely claimed.
+
+First load is the shell plus vendor chunks (~247 kB gzip); it was ~425 kB with every
+role's screens in one file. `charts` (recharts, 110 kB gzip) now loads only for screens
+that draw charts.
+
+⚠️ **This is a payload measure, not a security boundary.** Chunk URLs are public and
+anyone can fetch one directly. What protects data is the server re-checking role and
+ownership on every call (NFR-SEC-01).
+
+### The mock layer is excluded from production builds
+
+`npm run build` produces a bundle containing **no** MSW runtime, **no** mock handlers,
+**no** demo dataset, and no `mockServiceWorker.js` — verified by grepping `dist/`. It is
+gated on `VITE_ENABLE_MOCKS` being statically false at build time, so Rollup drops the
+branch entirely (`src/main.tsx`), and a Vite plugin deletes the stray worker file.
+
+Previously all of it shipped to production, dormant behind a runtime flag. If you ever
+see `[MSW] Mock layer active` in a production console, the build was made with
+`.env.demo` — rebuild with `npm run build`, not `npm run build:demo`.
+
+---
+
 ## 8. Known gaps
 
-Tracked in the production-readiness plan; none block local use.
+Tracked in the production-readiness plan; none block local use. **For public deployment,
+read §10 — several of these become blockers there.**
 
-- **`GET /students/me/years` and `GET /students/{id}/years` return 404 live.** Called by
-  `frontend/src/app/providers/YearContext.tsx:47` and
-  `frontend/src/features/students/api/studentsApi.ts:45`; mocked in MSW so they only work in
-  demo. The student year-switcher renders empty against the real API.
+- 🔴 **The live `sims` database contains 19 accounts sharing the password
+  `SimsDemo2025!`** (`must_change_password = false`), because `seed_demo` created them and
+  that password is in this repository. Harmless on a laptop, catastrophic on a public URL.
+  See §10.1 before going live.
+- ~~**`GET /students/me/years` and `GET /students/{id}/years` return 404 live**~~ — **stale,
+  both are served.** Verified in the live route table (`app/modules/students/router.py:104`
+  and `:142`), with `/me/years` declared first so "me" is never parsed as a UUID. The
+  student year-switcher works against the real API.
 - **No backups, no Dockerfile, no CI**, and no production process manager. The only
   documented local launch uses `--reload`, a dev flag — see §9 for the production form.
 - **Retention is not scheduled.** `python -m app.jobs.purge` exists (add `--dry-run` to see
@@ -342,7 +538,10 @@ Tracked in the production-readiness plan; none block local use.
   snapshot with no regeneration script.
 - **School-logo upload is stubbed** — validation is real, the byte upload is not
   (`TODO(OQ-DB5)`, needs an object-storage bucket).
-- **MSW ships in the production bundle** — `main.tsx` imports it statically, so the mock
-  handlers and demo dataset are in `dist/`, kept dormant only by a runtime flag.
+- ~~**MSW ships in the production bundle**~~ — **fixed.** The mock runtime, handlers, demo
+  dataset and `mockServiceWorker.js` are all excluded from a `npm run build` bundle. See §11.
 - **`frontend/openapi.json` is stale** (covers 4 of 14 modules). Don't run
   `npm run generate:api` until it's refreshed from `backend/openapi.json`.
+- **`/api/v1/docs` and `/openapi.json` are public and unauthenticated.** They expose no
+  data but publish a complete map of the API surface. Consider blocking them at the proxy
+  (§10.6).

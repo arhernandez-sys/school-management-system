@@ -454,6 +454,10 @@ export const gradesHandlers = [
     // section membership rather than is_active.
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    // Narrows within the year — the switcher now picks a year·semester pair, so both the
+    // listed rows AND the term average below must come from the same semester (see the
+    // note on computeReleasedTermGrade).
+    const semesterId = url.searchParams.get('semester_id');
     const section = yearId ? sectionForStudentInYear(studentId, yearId) : undefined;
     const sectionId = section?.id ?? stu?.section_id ?? null;
     const offerings = sectionId ? D.class_subjects.filter((c) => c.section_id === sectionId) : [];
@@ -461,7 +465,9 @@ export const gradesHandlers = [
     const bySubject = offerings.map((cs) => {
       const csRef = classSubjectRef(cs.id);
       const lead = cs.lead_teacher_id ? getTeacher(cs.lead_teacher_id) : undefined;
-      const asmts = assessmentsForClassSubject(cs.id);
+      const asmts = assessmentsForClassSubject(cs.id).filter(
+        (a) => !semesterId || a.semester_id === semesterId,
+      );
       const assessments = asmts
         .map((a) => {
           const g = D.assessment_grades.find(
@@ -487,8 +493,10 @@ export const gradesHandlers = [
         })
         .filter((x): x is NonNullable<typeof x> => Boolean(x));
 
-      // Term numeric from released, graded assessments only (student-facing).
-      const term = computeReleasedTermGrade(studentId, cs.id);
+      // Term numeric from released, graded assessments only (student-facing) — and from
+      // the SAME semester as the rows above, so the average is derivable from what the
+      // student can see rather than silently spanning the whole year.
+      const term = computeReleasedTermGrade(studentId, cs.id, semesterId);
       return {
         class_subject: csRef,
         teacher: lead ? { id: lead.id, full_name: lead.full_name } : null,
@@ -506,12 +514,21 @@ export const gradesHandlers = [
  * A student-facing term grade: like computeTermGrade but only released, graded
  * assessments contribute (grade_release_filter on the score). Kept local to the
  * handler so the selector stays release-agnostic (teachers/admins see everything).
+ *
+ * `semesterId` must be the same one used to build the listed rows. The whole point of a
+ * per-semester view is that the average describes what is on screen: averaging the year
+ * while listing one term would print a number the student cannot derive from their own
+ * marks. The backend gets this for free (one `_assessments_for` call feeds both); here
+ * the filter has to be passed to both places explicitly.
  */
 function computeReleasedTermGrade(
   studentId: string,
   classSubjectId: string,
+  semesterId?: string | null,
 ): { numeric: number | null; letter: string | null } {
-  const asmts = assessmentsForClassSubject(classSubjectId).filter((a) => a.status === 'graded');
+  const asmts = assessmentsForClassSubject(classSubjectId)
+    .filter((a) => a.status === 'graded')
+    .filter((a) => !semesterId || a.semester_id === semesterId);
   let weightedSum = 0;
   let weightBase = 0;
   for (const a of asmts) {

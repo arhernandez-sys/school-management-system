@@ -1041,9 +1041,17 @@ class TestStudentAssessments:
         assert group["subject"]["name"] == f"AAA {tag}"
         assert set(group["term_grade"].keys()) == {"numeric", "letter"}
         assert [a["title"] for a in group["assessments"]] == ["A-Quiz"]
+        # `last_nudged_at` arrives with the release-nudge feature. It belongs on the
+        # LINE, not just in the envelope: `RemindTeacherButton` computes the
+        # remaining cooldown per assessment from `last_nudged_at` + the envelope's
+        # `nudge_cooldown_seconds`, and `frontend/src/features/students/types.ts:64`
+        # declares it `string | null` — so a nullable key that is always PRESENT.
+        # (This assertion was missed when the feature landed; the envelope-level one
+        # above was updated, this one was not.)
         assert set(group["assessments"][0].keys()) == {
             "id", "title", "type", "max_score", "weight",
             "assessment_date", "status", "score", "is_released",
+            "last_nudged_at",
         }
         # Ordered by subject name.
         ordered = [g["class_subject_id"] for g in body["items"]]

@@ -41,8 +41,8 @@ function subjectKey(subject: MyGradeSubject): string {
 }
 
 export function MyGradesScreen() {
-  const { selectedYearId } = useSelectedYear();
-  const query = useMyGrades(selectedYearId);
+  const { selectedYearId, selectedSemesterId, selectedPeriod } = useSelectedYear();
+  const query = useMyGrades(selectedYearId, selectedSemesterId);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get('subject');
 
@@ -68,7 +68,13 @@ export function MyGradesScreen() {
     <Box>
       <PageHeader
         title="My Grades"
-        subtitle="Your released grades for the current term, by subject."
+        // Name the selected period. "the current term" was hardcoded, so a student
+        // browsing an archived year read a present-tense claim about past marks.
+        subtitle={
+          selectedPeriod
+            ? `Your released grades for ${selectedPeriod.label}, by subject.`
+            : 'Your released grades, by subject.'
+        }
       />
 
       {query.isLoading && <LoadingState variant="cards" rows={3} label="Loading your grades" />}

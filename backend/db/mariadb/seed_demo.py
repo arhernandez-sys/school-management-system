@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import uuid
 from datetime import date, timedelta
@@ -46,6 +47,7 @@ if str(_BACKEND) not in sys.path:
 
 from pymysql.converters import escape_string  # noqa: E402
 
+from app.config import get_settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.session import engine  # noqa: E402
 
@@ -656,7 +658,54 @@ def build_sql() -> str:
     return "\n".join(parts) + "\n"
 
 
+def _assert_safe_to_seed() -> None:
+    """Refuse to run unless this is explicitly a local/demo environment.
+
+    ⚠️ THIS SCRIPT IS THE MOST DESTRUCTIVE THING IN THE REPOSITORY. It `DELETE`s
+    every row from 22 tables and then inserts 19 user accounts that all share the
+    hardcoded password `SimsDemo2025!` with `must_change_password=False`. Run
+    against a live school it destroys the real records AND leaves the replacement
+    accounts publicly guessable.
+
+    Nothing stopped that before: the script imported the app's engine and wrote to
+    whatever `DATABASE_URL` happened to be configured. On a server where the
+    production `.env` sits next to it — the normal layout — one command run in the
+    wrong directory was enough.
+
+    Two independent conditions must both hold, so a single mistake is not sufficient:
+      1. `ENVIRONMENT` must be `local` (the app's own notion of a dev box), and
+      2. `SIS_ALLOW_DEMO_SEED=yes-destroy-my-data` must be exported.
+
+    The second is deliberately awkward. This is not a prompt, because prompts get
+    piped `yes` — it has to be typed on purpose.
+    """
+    settings = get_settings()
+    consent = os.environ.get("SIS_ALLOW_DEMO_SEED", "")
+    problems: list[str] = []
+    if not settings.is_local:
+        problems.append(f"ENVIRONMENT is {settings.environment!r}, not 'local'")
+    if consent != "yes-destroy-my-data":
+        problems.append("SIS_ALLOW_DEMO_SEED is not set to 'yes-destroy-my-data'")
+    if not problems:
+        return
+
+    # Show WHICH database was about to be wiped, with the password redacted — the
+    # operator needs to recognise the target, not be handed a credential.
+    target = re.sub(r"//[^@/]*@", "//<redacted>@", settings.database_url)
+    raise SystemExit(
+        "REFUSING TO SEED — this script deletes every row in 22 tables and creates "
+        "19 accounts sharing a hardcoded password.\n"
+        f"  Target database : {target}\n"
+        + "".join(f"  Blocked because : {p}\n" for p in problems)
+        + "\nIf this really is a throwaway local database:\n"
+        '  $env:ENVIRONMENT="local"; $env:SIS_ALLOW_DEMO_SEED="yes-destroy-my-data"\n'
+        "and run again. Never do this on a database holding real student records."
+    )
+
+
 def main() -> None:
+    _assert_safe_to_seed()
+
     sql = build_sql()
     SQL_OUT.write_text(sql, encoding="utf-8")
     print(f"Wrote {SQL_OUT} ({len(sql):,} bytes)")

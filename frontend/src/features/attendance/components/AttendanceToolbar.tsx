@@ -1,5 +1,5 @@
 import { MenuItem, Stack, TextField } from '@mui/material';
-import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
+import { schoolToday } from '@shared/utils/schoolDate';
 import { YearSelect } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
 import type { AttendanceSectionsResponse } from '../types';
@@ -23,9 +23,10 @@ export interface AttendanceToolbarProps {
 
 /**
  * Year + section (+ optional date) pickers for attendance. Section is required; date
- * defaults to "today" (DEMO_TODAY) and is capped at today so future dates cannot be chosen
- * (FR-ATT-05) — the server also rejects them. Selections are lifted to the parent, which
- * persists them to the URL (?section_id=&date=).
+ * defaults to the school-local today (`schoolToday()`, America/Belize — matching the
+ * backend's `school_today()`) and is capped there so future dates cannot be chosen
+ * (FR-ATT-05) — the server also rejects them with `future_date_not_allowed`. Selections
+ * are lifted to the parent, which persists them to the URL (?section_id=&date=).
  *
  * Teacher / Form / Section narrowing filters used to live here for principal/secretary;
  * they now belong to the Grades module. The summary is scoped by Year + Class/homeroom only.
@@ -47,6 +48,11 @@ export function AttendanceToolbar({
   onYearChange,
   yearsLoading = false,
 }: AttendanceToolbarProps) {
+  // Resolved once per render: both the fallback value and the `max` cap must be the
+  // REAL school-local today. This used to be the demo dataset's fixed 2025-10-15,
+  // which capped the picker in the past and made the current day unselectable.
+  const today = schoolToday();
+
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -85,10 +91,10 @@ export function AttendanceToolbar({
           size="small"
           label="Date"
           type="date"
-          value={date ?? DEMO_TODAY}
+          value={date ?? today}
           onChange={(e) => onDateChange(e.target.value)}
           disabled={disabled}
-          inputProps={{ max: DEMO_TODAY }}
+          inputProps={{ max: today }}
           InputLabelProps={{ shrink: true }}
           helperText="Future dates are disabled"
           sx={{ minWidth: 200 }}

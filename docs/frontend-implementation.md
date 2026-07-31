@@ -92,9 +92,10 @@ frontend/
     ├── vite-env.d.ts                 # typed import.meta.env
     │
     ├── app/
-    │   ├── providers/                # AppProviders, queryClient, ErrorBoundary
+    │   ├── providers/                # AppProviders, queryClient, ErrorBoundary,
+    │   │                             #   YearContext (student year·semester selection)
     │   ├── router/                   # routes.tsx, ProtectedRoute, RoleRoute, ErrorPages (403/404)
-    │   └── layout/                   # AppShell, TopBar, Sidebar, UserMenu, SemesterSwitcher,
+    │   └── layout/                   # AppShell, TopBar, Sidebar, UserMenu, StudentYearSwitcher,
     │                                 #   NotificationsBell, navConfig (role-aware nav map)
     │
     ├── features/                     # one folder per module — components/ api/ hooks/ types.ts
@@ -183,7 +184,7 @@ Lives in `src/shared/api/mocks/` (`browser.ts`, `handlers.ts`, `fixtures.ts`), u
 - Scaffold + tooling (Vite/TS strict/ESLint/Prettier), `.env.example`, path aliases, vendor chunk-splitting.
 - MUI theme (D19) via `colorSchemes`.
 - Feature-based folder tree (11 modules + shared + theme + i18n).
-- AppShell + TopBar + Sidebar (role-aware nav from permission map, responsive permanent/temporary/mini drawer) + UserMenu + SemesterSwitcher + NotificationsBell (shell-functional; data sources wired in Phase 7).
+- AppShell + TopBar + Sidebar (role-aware nav from permission map, responsive permanent/temporary/mini drawer) + UserMenu + NotificationsBell (shell-functional; data sources wired in Phase 7). The app-bar period control shipped as the **student-only `StudentYearSwitcher`** (`YearContext`), not the all-roles `SemesterSwitcher` originally specified — staff scope per module via `?year=`. See ui-design-system §3.1.
 - Routing + `ProtectedRoute` + `RoleRoute` + 403/404 pages + per-role placeholder pages.
 - Auth structure: in-memory token, bootstrap silent refresh, single-flight refresh, logout, `/auth/me`, error normalization.
 - QueryClient + query-key factory.
@@ -195,7 +196,7 @@ Lives in `src/shared/api/mocks/` (`browser.ts`, `handlers.ts`, `fixtures.ts`), u
 - The 13 data/feature-composition shared components (`stubs.tsx`): `DataTable`, `ConfirmDialog`, `ChartWithTable`, `StatCard`, `FormDialog`, `FormPage`, `FilterBar`, `RoleChip`, `StatusBadge`, `DetailTabs`, `PrintLayout`, `PasswordField`, `CollapsibleSection` — typed placeholders rendering a "Phase 7" marker.
 - All 11 feature modules' real functionality (lists/detail/forms/dashboards/reports).
 - Forced password-change form body (route + placeholder exist; `PATCH /auth/me/password` wiring is Phase 7).
-- SemesterSwitcher term list + NotificationsBell unread count (need Settings + Announcements modules).
+- Period-switcher term list + NotificationsBell unread count (need Settings + Announcements modules). ✅ Both landed: `StudentYearSwitcher` reads `GET /students/me/years` + `GET /settings/academic-years`; the bell reads `GET /announcements/unread-count`.
 - OpenAPI-generated TS client (needs the running backend / Phase 5 artifact).
 - i18n is a string-table stub (English); no i18n library wired yet.
 

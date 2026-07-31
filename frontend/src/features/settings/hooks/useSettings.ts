@@ -54,9 +54,21 @@ export function useUpdateSchoolProfile() {
 }
 
 // ── Academic structure (years + semesters) ─────────────────────────────────────
-export function useAcademicYears() {
+/**
+ * GET /settings/academic-years — every year with its semesters.
+ *
+ * Readable by ALL authenticated roles (widened 2026-07-29): this is the calendar every
+ * period picker is built from — the staff `?year=` filter (`useYearFilter`) and the
+ * student's global year·semester switcher, which joins it against
+ * `GET /students/me/years` for the semesters. It was P/S-only, so a teacher's picker
+ * got a 403 and silently emptied.
+ *
+ * `enabled` mirrors {@link useActiveTerm}: YearProvider mounts ABOVE the route guards,
+ * so it must hold the request until the session exists or eat a 401 on every reload.
+ */
+export function useAcademicYears(options?: { enabled?: boolean }) {
   return useListAcademicYearsApiV1SettingsAcademicYearsGet({
-    query: { staleTime: CONFIG_STALE_MS },
+    query: { staleTime: CONFIG_STALE_MS, enabled: options?.enabled ?? true },
   });
 }
 

@@ -44,8 +44,8 @@ function longDate(iso: string): string {
  * table where each status shows a StatusBadge (label + color, never color alone).
  */
 export function MyAttendanceScreen() {
-  const { selectedYearId } = useSelectedYear();
-  const query = useMyAttendance(selectedYearId);
+  const { selectedYearId, selectedSemesterId, selectedPeriod } = useSelectedYear();
+  const query = useMyAttendance(selectedYearId, selectedSemesterId);
 
   if (query.isLoading) return <LoadingState variant="page" label="Loading your attendance" />;
   if (query.isError || !query.data) return <ErrorState onRetry={() => void query.refetch()} />;
@@ -54,7 +54,16 @@ export function MyAttendanceScreen() {
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <PageHeader title="My attendance" subtitle="Your attendance record this term." />
+      {/* "this term" was hardcoded — it misdescribed every past period the switcher
+          can reach. */}
+      <PageHeader
+        title="My attendance"
+        subtitle={
+          selectedPeriod
+            ? `Your attendance record for ${selectedPeriod.label}.`
+            : 'Your attendance record.'
+        }
+      />
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={6} md={3}>

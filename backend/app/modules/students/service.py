@@ -507,12 +507,22 @@ def _my_student_or_404(db: Session, caller: User) -> StudentProfile:
     return student
 
 
-def get_my_student(db: Session, *, caller: User) -> StudentDetail:
+def get_my_student(
+    db: Session, *, caller: User, academic_year_id: uuid.UUID | None = None
+) -> StudentDetail:
     """GET /students/me (student). Scope is derived from the token's user, NEVER a
-    client id (§3.2 hard rule). 404 no_student_profile if the login isn't linked."""
+    client id (§3.2 hard rule). 404 no_student_profile if the login isn't linked.
+
+    `academic_year_id` rescopes `current_section` to the section this student sat in
+    that year, so their "My Profile" header agrees with the year·semester switcher
+    instead of always showing the current section. Identical to the `academic_year_id`
+    handling in `get_student` — and equally unable to affect WHICH student is read,
+    since that comes from `caller` alone."""
     student = _my_student_or_404(db, caller)
     semester_id = _active_semester_id(db)
-    return _detail(db, student, semester_id=semester_id)
+    return _detail(
+        db, student, semester_id=semester_id, academic_year_id=academic_year_id
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

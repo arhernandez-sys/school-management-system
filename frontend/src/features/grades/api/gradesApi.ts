@@ -51,10 +51,24 @@ export async function setAssessmentRelease(
   return res.data;
 }
 
-/** GET /grades/me — the student's own released grades (year-scoped). */
-export async function fetchMyGrades(academicYearId?: string, signal?: AbortSignal): Promise<MyGrades> {
+/**
+ * GET /grades/me — the student's own released grades, scoped to the selected period.
+ *
+ * With `semesterId` supplied the term average is computed from that semester's rows
+ * ONLY, so the number matches the assessments listed beside it; omitted, the response
+ * spans the whole year as before. Both params are dropped when undefined so the request
+ * never carries an empty value.
+ */
+export async function fetchMyGrades(
+  academicYearId?: string,
+  semesterId?: string,
+  signal?: AbortSignal,
+): Promise<MyGrades> {
+  const params: Record<string, string> = {};
+  if (academicYearId) params.academic_year_id = academicYearId;
+  if (semesterId) params.semester_id = semesterId;
   const res = await api.get<MyGrades>('/grades/me', {
-    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    params: Object.keys(params).length ? params : undefined,
     signal,
   });
   return res.data;

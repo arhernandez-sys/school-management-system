@@ -447,11 +447,34 @@ export function schoolAttendanceRate(): number {
 }
 
 // ── Announcements ───────────────────────────────────────────────────────────────
-/** Announcements targeted at a given user (role + section), non-expired, newest first. */
+/**
+ * Announcements targeted at a given user, live (published, unexpired), newest first.
+ *
+ * Mirrors the backend's `_audience_clause` + `_visible_clause`
+ * (`app/modules/announcements/service.py`). Kept deliberately close to it: this handler
+ * is the binding contract the frontend is developed against, so anywhere the two
+ * diverge is a bug the demo cannot show. Two such divergences were fixed here:
+ *
+ *  1. **No admin branch.** Principal and secretary fell through to "school-wide only",
+ *     so in demo they could not see the `students` / `teachers` / `class` notices they
+ *     themselves post — while the real backend shows admins everything admin-authored
+ *     (`_authored_by_admin()`). The audience filter on the feed was therefore untestable
+ *     for the two roles that have all four options.
+ *  2. **`published_at` was ignored**, so future-dated (scheduled) notices leaked into
+ *     the feed. The backend gates on `published_at <= now`.
+ *
+ * Authorship is also honoured now (`author_user_id === userId`), matching the backend's
+ * "an author always sees their own, whatever the audience" rule. Previously only the
+ * by-id handler patched that in.
+ */
 export function announcementsForUser(userId: string) {
   const user = D.users.find((u) => u.id === userId);
   if (!user) return [];
   const now = new Date(`${DEMO_TODAY}T23:59:59Z`).getTime();
+  const isAdmin = user.role === 'principal' || user.role === 'secretary';
+  const adminUserIds = new Set(
+    D.users.filter((u) => u.role === 'principal' || u.role === 'secretary').map((u) => u.id),
+  );
   // Resolve which sections this user is linked to (student via enrollment, teacher via ownership).
   const linkedSectionIds = new Set<string>();
   if (user.role === 'student') {
@@ -463,8 +486,18 @@ export function announcementsForUser(userId: string) {
   }
   return D.announcements
     .filter((a) => {
+      // ── visibility window ──
       if (a.expires_at && new Date(a.expires_at).getTime() <= now) return false;
+      if (new Date(a.published_at).getTime() > now) return false;
+      // ── targeting ──
+      if (a.author_user_id === userId) return true; // author always sees their own
       if (a.audience === 'all') return true;
+      if (isAdmin) {
+        // P/S see every notice an administrator broadcast, whatever its audience —
+        // including their own `students`/`teachers` broadcasts. They do NOT get a
+        // blanket override on teacher-authored class notices (backend has none either).
+        return adminUserIds.has(a.author_user_id);
+      }
       if (a.audience === 'students') return user.role === 'student';
       if (a.audience === 'teachers') return user.role === 'teacher';
       if (a.audience === 'class') return a.section_id ? linkedSectionIds.has(a.section_id) : false;

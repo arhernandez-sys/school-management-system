@@ -488,9 +488,18 @@ def get_summary(
 # GET /attendance/me
 # ──────────────────────────────────────────────────────────────────────────────
 def get_my_attendance(
-    db: Session, *, actor: User, academic_year_id: uuid.UUID | None
+    db: Session,
+    *,
+    actor: User,
+    academic_year_id: uuid.UUID | None,
+    semester_id: uuid.UUID | None = None,
 ) -> MyAttendanceResponse:
-    """The signed-in student's own attendance, newest first."""
+    """The signed-in student's own attendance, newest first.
+
+    `semester_id` narrows within the year (the global switcher picks a year·semester
+    pair); omitted, the year's semesters are fanned out exactly as before. The summary
+    is computed from the SAME filtered records as the history, so the percentage always
+    describes the period on screen."""
     student = db.scalar(
         select(StudentProfile).where(
             StudentProfile.user_id == actor.id, StudentProfile.deleted_at.is_(None)
@@ -508,6 +517,13 @@ def get_my_attendance(
     if year_id is not None:
         semester_ids = select(Semester.id).where(Semester.academic_year_id == year_id)
         stmt = stmt.where(AttendanceRecord.semester_id.in_(semester_ids))
+    if semester_id is not None:
+        # Applied IN ADDITION to the year fan-out above, never instead of it. If the
+        # caller pairs a year with a semester from a DIFFERENT year the two clauses
+        # intersect to nothing, and empty is the right answer: returning that
+        # semester's records under the requested year's heading is precisely the
+        # mislabelling defect that `/grades/me` was fixed for (see its fallback guard).
+        stmt = stmt.where(AttendanceRecord.semester_id == semester_id)
     records = list(db.scalars(stmt.order_by(AttendanceRecord.attendance_date.desc())).all())
 
     return MyAttendanceResponse(

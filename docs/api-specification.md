@@ -352,6 +352,7 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 #### `GET /students/me`
 - **Purpose:** the student's own profile, read-only (FR-STU-09; UI `/me`).
 - **Authz:** `require_role(student)`; `student_scope` (self).
+- **Query:** `academic_year_id?` — rescopes `current_section` to the section the caller sat in that year, the same way `GET /students/{id}` does for staff. Added 2026-07-29: it was missing here, so "My Profile" kept showing the **current** section while every other student screen followed the global year·semester switcher — and a student sits in a different section each year, so the profile contradicted the rest of their session. **WHICH student is read still comes from the token alone** (§3.2 hard rule); the param narrows the caller's view of their own record and cannot reach anyone else's.
 - **Success `200`:** `StudentDetail` (own). **Errors:** `401`, `403` (non-student), `404 no_student_profile` (defensive).
 
 #### `POST /students`
@@ -534,7 +535,9 @@ Tables: `assessments`, `assessment_categories`. **Created independently of any s
 #### `GET /assessments`
 - **Authz:** `authenticated`. **Scope:** P/S = view-all; Teacher = own `class_subjects`; Student (`scope=me`) = assessments for subjects in their enrolled section.
 - **S6 — student visibility (FR-ASMT-06):** a student **sees the assessment itself** (title, type, `assessment_date`, `max_score`) for every **published** assessment in their subjects — so they can prepare — but the **`my_score`/`my_status` fields are omitted (null) until that assessment's grade is released** to them (grade_release_filter on the *score*, not the assessment). The whole assessment is **not** hidden. Draft assessments are not shown to students. *(Contrast `/grades/me` (§5.7), which lists graded results and **excludes unreleased assessments entirely** — that endpoint is about results, this one is about the upcoming/known assessment set.)*
-- **Query:** list params + `class_subject_id?`, `class_id?` (all subjects in a section), `semester_id?`, `type?: AssessmentType`, `status?: AssessmentStatus`, `scope?:"me"`.
+- **Query:** list params + `class_subject_id?`, `class_id?` (all subjects in a section), `academic_year_id?`, `semester_id?`, `type?: AssessmentType`, `status?: AssessmentStatus`, `scope?:"me"`.
+  - `academic_year_id` filters on the **section's** year; `semester_id` on the **assessment's own** `semester_id`. They **compose** — the student's global switcher sends both. Pairing a year with a semester from a *different* year intersects to nothing, and empty is the intended answer: showing one period's rows under another's heading is the mislabelling class of defect `/grades/me` was fixed for.
+  - ⚠️ `semester_id` was specified here but **not declared by the endpoint until 2026-07-29**, so FastAPI silently dropped it — "My Assessments" listed a student's whole year under a heading naming one semester. Now honoured; pinned by `tests/test_year_scoping.py::TestAssessmentsSemesterFilter`.
 - **Success `200`:** `Page[AssessmentListItem]` `{ id, title, type, class_subject: ClassSubjectRef, max_score, weight, assessment_date?, status, is_released, my_score?: number /* student scope, released only */, my_status?: GradeStatus /* student scope, released only */ }`.
 
 #### `GET /assessments/{id}`
@@ -682,7 +685,9 @@ Tables: `assessment_grades`, `term_grade_snapshots`. **Compute-on-read term grad
 #### `GET /grades/me`
 - **Purpose:** the student's own grades per assessment + term grade, **released only** (FR-GRD-07; UI "My Grades").
 - **Authz:** `require_role(student)`; `student_scope` + `grade_release_filter`.
-- **Query:** `semester_id?`, `class_subject_id?`.
+- **Query:** `academic_year_id?`, `semester_id?`, `class_subject_id?`.
+- `academic_year_id` resolves which section's offerings are listed; `semester_id` (declared 2026-07-29 — specified before then but silently dropped) narrows within it. **`semester_id` also narrows the term average**, because it is threaded into the single `_assessments_for` call that feeds both the rows and `compute_term_grade` — so the number stays derivable from the marks shown instead of averaging the whole year beneath a one-semester heading.
+- An explicitly-requested year or semester the student has no data in returns **empty**, never another period's marks — see the fallback guard in `get_my_grades` (defect fixed 2026-07-29). The current-enrollment fallback survives **only** for the "no year requested" case.
 - **Success `200`:** `MyGrades { by_subject:{ class_subject: ClassSubjectRef, teacher?: TeacherRef, assessments:{ title, type, max_score, score?, status, letter?, assessment_date? }[], term_numeric?, term_letter? }[] }` — **unreleased assessments are excluded entirely** server-side.
 
 #### `POST /assessments/{assessment_id}/release` / `POST /assessments/{assessment_id}/unrelease` — release control (FR-GRD-09)
@@ -730,7 +735,8 @@ Table: `attendance_records`. Section-scoped (homeroom), **not** per subject (sch
 
 #### `GET /attendance/me` — student's own (FR-ATT-07)
 - **Authz:** `require_role(student)`; `student_scope`.
-- **Query:** `semester_id?`, `from?`, `to?`.
+- **Query:** `academic_year_id?`, `semester_id?`, `from?`, `to?`.
+- `academic_year_id` fans out to that year's semesters; `semester_id` (declared 2026-07-29) is applied **in addition**, not instead — a semester paired with a foreign year intersects to nothing, which is the intended empty rather than one period shown under another's heading. The `summary` is computed from the same filtered records as `history`, so the percentage always describes the period on screen.
 - **Success `200`:** `MyAttendance { summary:{ present, absent, late, excused, pct_present }, history:{ date, status }[] }` (own only).
 
 ---
@@ -837,8 +843,9 @@ Tables: `school_profile`, `academic_years`, `semesters`, `grading_scales`, `grad
 
 #### Academic structure (FR-SET-02; D10 — 2 semesters/year)
 - **`GET /settings/active-term`** — Authz: `authenticated`. Returns `{ academic_year: AcademicYearRef, semester: SemesterRef }` for the global semester switcher (UI §3.1). Returns **`409 no_active_semester`** when none is configured/active (e.g. fresh install, or the only active year was just archived) — so **every module degrades to the same setup-prompt path uniformly** (the SPA keys on this one code; `/dashboard` returns the matching `409 no_active_semester`). (OQ-API-4 resolved.)
-- **`GET /settings/academic-years`** — Authz: `require_role(principal, secretary)`. Returns years + their 2 semesters + which is active.
-- **`GET /settings/semesters`** — Authz: `require_role(principal, secretary)`. Query `academic_year_id?`.
+- **`GET /settings/academic-years`** — Authz: **authenticated (any role)**. Returns years + their 2 semesters + which is active.
+- **`GET /settings/semesters`** — Authz: **authenticated (any role)**. Query `academic_year_id?`.
+  - ⚠️ **Widened from `require_role(principal, secretary)` on 2026-07-29 — this was a live defect, not a relaxation for convenience.** These two reads are the calendar every period picker in the app is built from: the staff per-module year filter (`useYearFilter`) runs on **teacher**-reachable screens (Grades, Attendance, Classes), and the student's global year·semester switcher needs each year's semesters. Under the old gate a teacher got a `403`, so the picker's year list came back empty, no `academic_year_id` was sent, and the filter silently did nothing — with no error anywhere. **The MSW handler had no role gate, so demo mode showed none of this** (that gap is now closed for the writes; `handlers/settings.ts::assertPrincipal`). Year and semester names/dates are not sensitive, and `GET /settings/active-term` already exposes the current pair to every role. All **writes** below remain `require_role(principal)` — the authority did not move. Pinned by `tests/test_settings.py::TestListAcademicStructure` (200 for teacher + student, 401 anonymous) and `tests/test_year_scoping.py::TestEveryRoleCanReadThePeriodCalendar` (which also asserts writes still 403 for a teacher).
 - **`POST /settings/academic-years`** — Authz: `require_role(principal)`. Body: `{ name, start_date, end_date, semesters:[ {name, sequence:1, start_date, end_date}, {name, sequence:2, ...} ] }` — service **creates exactly two semesters** (D10; schema enforces `sequence IN (1,2)`). Creating an active year requires no other active year (`uq_academic_years_one_active`) → else `409 active_year_exists`. Also seeds the year's `grading_scales` + default bands (D11). Success `201`.
 - **`PATCH /settings/semesters/{id}/activate`** — Authz: `require_role(principal)`. Sets this semester active (clears the prior active; one-active invariant). Success `200`.
 - **`POST /settings/academic-years/{id}/archive`** — Authz: `require_role(principal)` (FR-SET-07). **The freeze trigger:** computes & writes `term_grade_snapshots` (per student/`class_subject`/semester, with frozen `subject_id` + `effective_policy`) and `report_card_snapshots` (jsonb), sets `grading_scales.is_frozen`, `academic_years.status='archived'`, `classes.is_archived=true` (schema §10.4). Success `202 { snapshots_written: int, no_active_year_remaining: bool }` (batch; may be async, §8).

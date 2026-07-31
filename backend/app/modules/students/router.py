@@ -93,12 +93,20 @@ def list_students(
     responses={401: _ERR, 403: _ERR, 404: _ERR},
 )
 def get_my_student(
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_student_only),
 ) -> StudentDetail:
     """Server-derived scope: the profile is resolved from the token, never a param
-    (§3.2). 404 no_student_profile if the login isn't linked to a student."""
-    return service.get_my_student(db, caller=caller)
+    (§3.2). 404 no_student_profile if the login isn't linked to a student.
+
+    `academic_year_id` rescopes `current_section` to the section the caller sat in that
+    year — the student half of what `GET /{student_id}` already did for staff. WHICH
+    student is still resolved from the token only; the param narrows the view of their
+    own record and can never widen it to anyone else's."""
+    return service.get_my_student(
+        db, caller=caller, academic_year_id=academic_year_id
+    )
 
 
 @router.get(

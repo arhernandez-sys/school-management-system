@@ -10,8 +10,8 @@ Endpoints (all mount under `/api/v1` via app/main.py):
     POST   /settings/school/logo                   principal      -> LogoUploadResponse
   Academic structure:
     GET    /settings/active-term                   authenticated  -> ActiveTerm | 409
-    GET    /settings/academic-years                P/S            -> AcademicYearList
-    GET    /settings/semesters                     P/S            -> SemesterList
+    GET    /settings/academic-years                authenticated  -> AcademicYearList
+    GET    /settings/semesters                     authenticated  -> SemesterList
     POST   /settings/academic-years                principal      -> AcademicYearDetail (201)
     PATCH  /settings/semesters/{id}/activate        principal      -> SemesterDetail
     POST   /settings/academic-years/{id}/archive    principal      -> ArchiveYearResponse (202)
@@ -148,27 +148,39 @@ def get_active_term(
 @router.get(
     "/academic-years",
     response_model=AcademicYearList,
-    summary="All academic years + their semesters (P/S; api-spec §5.11)",
-    responses={401: _ERR, 403: _ERR},
+    summary="All academic years + their semesters (authenticated; api-spec §5.11)",
+    responses={401: _ERR},
 )
 def list_academic_years(
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(get_current_user),
 ) -> AcademicYearList:
+    """Readable by EVERY authenticated role, not just P/S.
+
+    This is the calendar every module's period picker is built from: `useYearFilter`
+    (staff `?year=` filter on Grades/Attendance/Classes/Students) and the student's
+    global year·semester switcher both read it. Gated to P/S, a teacher's picker got a
+    403, so `years` came back empty, no `academic_year_id` was sent, and the picker
+    silently vanished — while the MSW handler, which has no role gate, made it all look
+    fine in demo mode. Year names and dates are not sensitive (`/settings/active-term`
+    already exposes the current pair to everyone); the WRITES below stay principal-only,
+    which is where the actual authority lives.
+    """
     return AcademicYearList(items=service.list_academic_years(db))
 
 
 @router.get(
     "/semesters",
     response_model=SemesterList,
-    summary="Semesters, optionally filtered by year (P/S; api-spec §5.11)",
-    responses={401: _ERR, 403: _ERR},
+    summary="Semesters, optionally filtered by year (authenticated; api-spec §5.11)",
+    responses={401: _ERR},
 )
 def list_semesters(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(get_current_user),
 ) -> SemesterList:
+    """Authenticated — same reasoning as `/academic-years` above."""
     return SemesterList(
         items=service.list_semesters(db, academic_year_id=academic_year_id)
     )

@@ -1,26 +1,40 @@
 import { useState } from 'react';
-import { Button, Menu, MenuItem } from '@mui/material';
+import { Button, ListSubheader, Menu, MenuItem } from '@mui/material';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useSelectedYear } from '@app/providers/YearContext';
 
 /**
- * Student-only top-bar academic-year switcher. Shows the selected year (e.g.
- * "2025-2026 · Semester 1" for the active year) and opens a dropdown of the years the
- * student was enrolled in. Picking one re-scopes their whole view via YearContext.
- * Renders nothing until the student's years have loaded.
+ * Student-only top-bar academic-period switcher. Lists every year·semester pair the
+ * student was enrolled in (grouped by year, newest first) and re-scopes their whole
+ * view via YearContext. Renders nothing until the pairs have loaded.
+ *
+ * It used to list YEARS only, appending "· Semester 1" to the active year's label from
+ * the school's active term — so it displayed a semester it could not actually select,
+ * and screens below it scoped to the whole year. Every entry is now selectable, which
+ * is what makes "My Assessments for Semester 2" possible.
+ *
+ * The year name is repeated in each option's group header rather than in the option
+ * text, because semester names are NOT unique across years ("Semester 1" exists in
+ * every one) — an option reading just "Semester 1" would be ambiguous, which is the
+ * same trap `features/reports/components/TermPicker.tsx` documents.
  */
 export function StudentYearSwitcher() {
-  const { selectedYearId, setSelectedYearId, years, activeYearId, activeSemesterName } =
-    useSelectedYear();
+  const { periods, selectedPeriod, setSelectedPeriod } = useSelectedYear();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
-  if (years.length === 0) return null;
+  if (periods.length === 0 || !selectedPeriod) return null;
 
-  const labelFor = (yearName: string, isActive: boolean) =>
-    isActive && activeSemesterName ? `${yearName} · ${activeSemesterName}` : yearName;
-
-  const selected = years.find((y) => y.id === selectedYearId) ?? years[0]!;
+  // Group the flat list by year, preserving its newest-first order.
+  const yearOrder: string[] = [];
+  const byYear = new Map<string, typeof periods>();
+  for (const p of periods) {
+    if (!byYear.has(p.yearId)) {
+      byYear.set(p.yearId, []);
+      yearOrder.push(p.yearId);
+    }
+    byYear.get(p.yearId)!.push(p);
+  }
 
   return (
     <>
@@ -30,23 +44,35 @@ export function StudentYearSwitcher() {
         startIcon={<CalendarMonthIcon />}
         endIcon={<ArrowDropDownIcon />}
         sx={{ textTransform: 'none', fontWeight: 600 }}
-        aria-label="Change academic year"
+        aria-label="Change academic year and semester"
       >
-        {labelFor(selected.name, selected.id === activeYearId)}
+        {selectedPeriod.label}
       </Button>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
-        {years.map((y) => (
-          <MenuItem
-            key={y.id}
-            selected={y.id === selected.id}
-            onClick={() => {
-              setSelectedYearId(y.id);
-              setAnchor(null);
-            }}
-          >
-            {labelFor(y.name, y.id === activeYearId)}
-          </MenuItem>
-        ))}
+        {yearOrder.flatMap((yearId) => {
+          const group = byYear.get(yearId)!;
+          const year = group[0]!;
+          return [
+            <ListSubheader key={`hdr-${yearId}`} sx={{ lineHeight: '2rem' }}>
+              {year.isActiveYear ? `${year.yearName} · current` : year.yearName}
+            </ListSubheader>,
+            ...group.map((p) => (
+              <MenuItem
+                key={p.semesterId}
+                selected={p.semesterId === selectedPeriod.semesterId}
+                onClick={() => {
+                  setSelectedPeriod(p.yearId, p.semesterId);
+                  setAnchor(null);
+                }}
+                // The label is the meaning; "current term" is never colour-only
+                // (design-system §5 #12).
+                aria-label={`${p.label}${p.isActiveSemester ? ' (current term)' : ''}`}
+              >
+                {p.isActiveSemester ? `${p.semesterName} · current term` : p.semesterName}
+              </MenuItem>
+            )),
+          ];
+        })}
       </Menu>
     </>
   );

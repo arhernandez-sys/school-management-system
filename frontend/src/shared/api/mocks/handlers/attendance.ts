@@ -299,14 +299,24 @@ export const attendanceHandlers: RequestHandler[] = [
       return errorResponse(403, 'forbidden', 'Only a student can view their own attendance.');
     }
     const studentId = actingStudentId();
-    // Global student year switcher: restrict to the selected year's semesters.
+    // Global student year·semester switcher: restrict to the selected year's semesters,
+    // then to the one selected semester if given.
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const semesterId = url.searchParams.get('semester_id');
     const yearSemIds = new Set(
       D.semesters.filter((s) => !yearId || s.academic_year_id === yearId).map((s) => s.id),
     );
     const rows = D.attendance_records
-      .filter((r) => r.student_id === studentId && yearSemIds.has(r.semester_id))
+      .filter(
+        (r) =>
+          r.student_id === studentId &&
+          yearSemIds.has(r.semester_id) &&
+          // ADDITIONAL to the year fan-out, not instead of it — mirroring the backend.
+          // A semester paired with a foreign year intersects to nothing, and empty is
+          // the right answer rather than showing one period under another's heading.
+          (!semesterId || r.semester_id === semesterId),
+      )
       .sort((a, b) => b.attendance_date.localeCompare(a.attendance_date));
 
     return HttpResponse.json({

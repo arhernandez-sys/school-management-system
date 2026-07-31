@@ -24,7 +24,10 @@ export const gradeKeys = {
   classSubjectOptions: (academicYearId?: string | null) =>
     [...gradeKeys.all, 'class-subjects', academicYearId ?? null] as const,
   gradebook: (classSubjectId: string) => [...gradeKeys.all, 'gradebook', classSubjectId] as const,
-  me: (academicYearId?: string | null) => [...gradeKeys.all, 'me', academicYearId ?? null] as const,
+  // Both period ids are part of the key — this is what makes the global switcher
+  // actually refetch instead of serving the previously-selected period from cache.
+  me: (academicYearId?: string | null, semesterId?: string | null) =>
+    [...gradeKeys.all, 'me', academicYearId ?? null, semesterId ?? null] as const,
 };
 
 /** GET /grades/class-subjects — the picker (teacher own / P·S all), year-scoped. */
@@ -75,9 +78,9 @@ export function useSetRelease(classSubjectId: string | null) {
 }
 
 /** GET /grades/me — the student's own released grades (year-scoped). */
-export function useMyGrades(academicYearId?: string) {
+export function useMyGrades(academicYearId?: string, semesterId?: string) {
   return useQuery({
-    queryKey: gradeKeys.me(academicYearId),
-    queryFn: ({ signal }) => fetchMyGrades(academicYearId, signal),
+    queryKey: gradeKeys.me(academicYearId, semesterId),
+    queryFn: ({ signal }) => fetchMyGrades(academicYearId, semesterId, signal),
   });
 }

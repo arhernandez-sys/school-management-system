@@ -88,6 +88,7 @@ const school_profile: DemoSchoolProfile = {
 const YEAR_ARCHIVED = 'ay-2024';
 const YEAR_ACTIVE = 'ay-2025';
 const SEM_ACTIVE = 'sem-2025-1'; // Semester 1 of active year = active term
+const SEM_2025_2 = 'sem-2025-2'; // Semester 2 of the active year (upcoming)
 
 const academic_years: DemoAcademicYear[] = [
   {
@@ -411,6 +412,14 @@ for (const cs of class_subjects) {
 }
 
 // ── Assessments: a few per class_subject (quiz/test/project mix) ────────────────
+//
+// `semester` on each template is what makes the student's year·SEMESTER switcher
+// demonstrable. Every active-year assessment used to be seeded into `SEM_ACTIVE`
+// (Semester 1), so switching to "2025-2026 · Semester 2" filtered correctly and showed
+// an empty table — indistinguishable from the filter being broken. The two Semester 2
+// rows below sit inside `sem-2025-2`'s real window (2026-01-19 → 2026-06-26), which is
+// after DEMO_TODAY, so they are `published`/unreleased: an upcoming term, which is both
+// realistic and exactly what a student would expect to see there.
 const assessments: DemoAssessment[] = [];
 let asmtCounter = 0;
 const ASMT_TEMPLATES: ReadonlyArray<{
@@ -419,14 +428,21 @@ const ASMT_TEMPLATES: ReadonlyArray<{
   catSuffix: 'q' | 't' | null;
   max: number;
   weight: number;
+  /** Days from DEMO_TODAY for a Semester 1 row; ignored when `date` is given. */
   offsetDays: number;
+  /** Absolute date for a row that must land inside a specific semester's window. */
+  date?: string;
+  semester: string;
   status: DemoAssessment['status'];
   released: boolean;
 }> = [
-  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, status: 'graded', released: true },
-  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, status: 'graded', released: true },
-  { title: 'Unit Test 1', type: 'test', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, status: 'graded', released: false },
-  { title: 'Project', type: 'assignment', catSuffix: null, max: 100, weight: 1, offsetDays: 7, status: 'published', released: false },
+  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, semester: SEM_ACTIVE, status: 'graded', released: true },
+  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, semester: SEM_ACTIVE, status: 'graded', released: true },
+  { title: 'Unit Test 1', type: 'test', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, semester: SEM_ACTIVE, status: 'graded', released: false },
+  { title: 'Project', type: 'assignment', catSuffix: null, max: 100, weight: 1, offsetDays: 7, semester: SEM_ACTIVE, status: 'published', released: false },
+  // ── Semester 2 of the active year ──
+  { title: 'Quiz 3', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', semester: SEM_2025_2, status: 'published', released: false },
+  { title: 'Midterm Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', semester: SEM_2025_2, status: 'published', released: false },
 ];
 for (const cs of class_subjects) {
   if (!cs.is_active) continue;
@@ -435,13 +451,13 @@ for (const cs of class_subjects) {
     assessments.push({
       id: `asmt-${asmtCounter}`,
       class_subject_id: cs.id,
-      semester_id: SEM_ACTIVE,
+      semester_id: tmpl.semester,
       category_id: tmpl.catSuffix ? `cat-${cs.id}-${tmpl.catSuffix}` : null,
       title: tmpl.title,
       type: tmpl.type,
       max_score: tmpl.max,
       weight: tmpl.weight,
-      assessment_date: addDays(DEMO_TODAY, tmpl.offsetDays),
+      assessment_date: tmpl.date ?? addDays(DEMO_TODAY, tmpl.offsetDays),
       status: tmpl.status,
       is_released: tmpl.released,
     });

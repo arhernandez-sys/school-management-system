@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { MenuItem, Stack, TextField } from '@mui/material';
 import { FormDialog } from '@shared/components';
-import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
+import { schoolToday } from '@shared/utils/schoolDate';
 import type { StudentDetail, StudentWritePayload } from '../types';
 import { useSectionOptions } from '../hooks/useSections';
 
@@ -38,7 +38,9 @@ export function StudentFormDialog({
   const [fullName, setFullName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [gender, setGender] = useState<'male' | 'female'>('female');
-  const [enrollmentDate, setEnrollmentDate] = useState(DEMO_TODAY);
+  // New enrollments default to the actual school-local today, not the demo dataset's
+  // fixed date — otherwise every student created in production is stamped 2025-10-15.
+  const [enrollmentDate, setEnrollmentDate] = useState(schoolToday());
   const [sectionId, setSectionId] = useState('');
   const [guardianName, setGuardianName] = useState('');
   const [guardianPhone, setGuardianPhone] = useState('');
@@ -52,7 +54,7 @@ export function StudentFormDialog({
       setFullName(student?.full_name ?? '');
       setDateOfBirth(student?.date_of_birth ?? '');
       setGender(student?.gender ?? 'female');
-      setEnrollmentDate(student?.enrollment_date ?? DEMO_TODAY);
+      setEnrollmentDate(student?.enrollment_date ?? schoolToday());
       setSectionId(student?.current_section?.id ?? '');
       setGuardianName(student?.guardian_name ?? '');
       setGuardianPhone(student?.guardian_phone ?? '');

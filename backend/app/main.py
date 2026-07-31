@@ -133,11 +133,16 @@ def _build_health_router() -> APIRouter:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
-    # Fail fast on insecure prod config (default JWT secret outside `local`,
-    # empty/`*` CORS). Raises RuntimeError → uvicorn refuses to start (§8.4).
-    settings.validate_runtime()
-
+    # Logging FIRST, so the hardening advisories `validate_runtime()` emits are
+    # formatted and routed like every other log line. Configuring it afterwards meant
+    # anything logged during validation was dropped or printed bare — and a warning an
+    # operator never sees is the same as no warning at all.
     configure_logging()
+
+    # Fail fast on insecure prod config (default/weak JWT secret, cheap password
+    # hashing, default DATABASE_URL, empty/`*` CORS outside `local`) and log advisories
+    # for the optional hardening. Raises RuntimeError → uvicorn refuses to start (§8.4).
+    settings.validate_runtime()
 
     app = FastAPI(
         title="School Management System API",

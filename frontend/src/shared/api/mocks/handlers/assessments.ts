@@ -15,6 +15,7 @@ import {
   getSubject,
   gradesForAssessment,
   paginate,
+  sectionForStudentInYear,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAssessment,
@@ -146,8 +147,22 @@ export const assessmentsHandlers: RequestHandler[] = [
     let rows: DemoClassSubject[];
     const student = currentDemoStudent(role);
     if (student) {
-      // Student scope: only the subjects taught in their own section (FR-CLS-07).
-      rows = classSubjectsForSection(student.section_id ?? '').filter((cs) => cs.is_active);
+      /**
+       * Student scope: the subjects taught in the section they sat in THAT YEAR
+       * (FR-CLS-07). Two bugs lived in this branch and made the student's global
+       * switcher look broken on "My Assessments":
+       *
+       *  1. `yearCsIds` was computed above and then never applied here, and the section
+       *     came from `student.section_id` — a denormalisation of the ACTIVE-semester
+       *     section only. So the dropdown listed this year's subjects whichever year was
+       *     selected. Resolved via `sectionForStudentInYear` (enrollments) instead.
+       *  2. `.filter(cs => cs.is_active)` emptied the dropdown for every archived year,
+       *     because a past year's offerings are all inactive by design. Section
+       *     membership already scopes the rows to the year, so the flag is redundant
+       *     here and actively harmful. `handlers/grades.ts` documents the same trap.
+       */
+      const section = yearId ? sectionForStudentInYear(student.id, yearId) : undefined;
+      rows = classSubjectsForSection(section?.id ?? student.section_id ?? '');
     } else if (scope === 'me' && teacherId) {
       rows = classSubjectsOwnedByTeacher(teacherId);
       if (yearCsIds) rows = rows.filter((cs) => yearCsIds.has(cs.id));
@@ -276,13 +291,30 @@ export const assessmentsHandlers: RequestHandler[] = [
     const scope = url.searchParams.get('scope');
     const teacherId = resolveTeacherId(url.searchParams.get('teacher_profile_id'));
 
+    const semesterId = url.searchParams.get('semester_id');
+
     let rows: DemoAssessment[];
     const student = currentDemoStudent(role);
     if (student) {
-      // Student scope (server-enforced): only assessments taught in their own section,
-      // and never unpublished drafts. A requested class_subject_id must be one of theirs.
+      /**
+       * Student scope (server-enforced): only assessments taught in the section they sat
+       * in the SELECTED YEAR, and never unpublished drafts. A requested
+       * class_subject_id must be one of theirs.
+       *
+       * This branch previously ignored `academic_year_id` entirely and resolved the
+       * section from `student.section_id` (the active-semester denormalisation), so the
+       * student's global year switcher had no effect on their own assessment list — the
+       * defect this whole change set is about. `is_active` is deliberately NOT filtered:
+       * a past year's offerings are all inactive, and section membership already scopes
+       * the rows to the year.
+       */
+      const studentYearId =
+        url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+      const section = studentYearId
+        ? sectionForStudentInYear(student.id, studentYearId)
+        : undefined;
       const ownIds = new Set(
-        classSubjectsForSection(student.section_id ?? '').map((cs) => cs.id),
+        classSubjectsForSection(section?.id ?? student.section_id ?? '').map((cs) => cs.id),
       );
       const visibleIds =
         classSubjectId && ownIds.has(classSubjectId)
@@ -306,6 +338,11 @@ export const assessmentsHandlers: RequestHandler[] = [
           : yearCsIds;
       rows = D.assessments.filter((a) => visibleIds.has(a.class_subject_id));
     }
+    // Narrows within the year — the student's year·semester switcher sends this so
+    // "My Assessments" shows one term instead of the whole year. Applied after every
+    // scope branch above so it composes with all of them (matching the backend, where
+    // it is one more WHERE clause beside `academic_year_id`).
+    if (semesterId) rows = rows.filter((a) => a.semester_id === semesterId);
     if (type) rows = rows.filter((a) => a.type === type);
     if (status) rows = rows.filter((a) => a.status === status);
 

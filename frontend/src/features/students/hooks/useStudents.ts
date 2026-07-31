@@ -24,7 +24,10 @@ export const studentKeys = {
   all: ['students'] as const,
   list: (params: StudentsListParams) => [...studentKeys.all, 'list', params] as const,
   detail: (id: string) => [...studentKeys.all, 'detail', id] as const,
-  me: () => [...studentKeys.all, 'me'] as const,
+  // The year is part of the key: without it the switcher would serve the first year's
+  // cached profile for every subsequent year and look like it does nothing.
+  me: (academicYearId?: string | null) =>
+    [...studentKeys.all, 'me', academicYearId ?? null] as const,
   assessments: (id: string) => [...studentKeys.all, id, 'assessments'] as const,
   years: (id: string) => [...studentKeys.all, id, 'years'] as const,
 };
@@ -58,12 +61,17 @@ export function useStudentYears(studentId: string | undefined) {
   });
 }
 
-/** GET /students/me — the acting student's own record. */
-export function useMyStudentRecord(enabled: boolean) {
+/**
+ * GET /students/me — the acting student's own record, optionally scoped to a year.
+ *
+ * `academicYearId` comes from the global year·semester switcher, so "My Profile" shows
+ * the section/grade the student sat in that year instead of always the current one.
+ */
+export function useMyStudentRecord(enabled: boolean, academicYearId?: string) {
   return useQuery({
-    queryKey: studentKeys.me(),
+    queryKey: studentKeys.me(academicYearId),
     enabled,
-    queryFn: ({ signal }) => getMyStudentRecord(signal),
+    queryFn: ({ signal }) => getMyStudentRecord(academicYearId, signal),
   });
 }
 

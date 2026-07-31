@@ -58,15 +58,20 @@ def list_assessments(
     params: PageParams = Depends(page_params),
     class_subject_id: Annotated[uuid.UUID | None, Query()] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
     type: Annotated[AssessmentType | None, Query()] = None,
     status_filter: Annotated[AssessmentStatus | None, Query(alias="status")] = None,
     scope: Annotated[str | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_any),
 ) -> Page[AssessmentListItem]:
+    """`academic_year_id` and `semester_id` compose: the year filters on the SECTION's
+    year, the semester on the assessment's own `semester_id`. The student's global
+    year·semester switcher sends both, which is how "my assessments for Semester 2"
+    stops listing the whole year."""
     return service.list_assessments(
         db, caller=caller, params=params, class_subject_id=class_subject_id,
-        academic_year_id=academic_year_id,
+        academic_year_id=academic_year_id, semester_id=semester_id,
         type_filter=type.value if type else None,
         status_filter=status_filter.value if status_filter else None, scope=scope,
     )

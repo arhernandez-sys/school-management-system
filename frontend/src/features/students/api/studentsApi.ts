@@ -47,9 +47,22 @@ export async function getStudentYears(id: string, signal?: AbortSignal): Promise
   return res.data.items;
 }
 
-/** GET /students/me — the acting student's own record. */
-export async function getMyStudentRecord(signal?: AbortSignal): Promise<StudentDetail> {
-  const res = await api.get<StudentDetail>('/students/me', { signal });
+/**
+ * GET /students/me — the acting student's own record.
+ *
+ * `academicYearId` scopes `current_section` to the section the caller sat in that year,
+ * exactly as it does on `getStudent` above. WHICH student is read still comes from the
+ * token alone (api-spec §3.2), so this narrows the caller's own record and can never
+ * reach anyone else's.
+ */
+export async function getMyStudentRecord(
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<StudentDetail> {
+  const res = await api.get<StudentDetail>('/students/me', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }
 

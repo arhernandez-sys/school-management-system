@@ -16,7 +16,7 @@ import {
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
+import { schoolToday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import {
   useAttendanceRegister,
@@ -49,7 +49,10 @@ function formatRecordedAt(iso: string): string {
 export function AttendanceRegisterScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const sectionId = searchParams.get('section_id');
-  const date = searchParams.get('date') ?? DEMO_TODAY;
+  // Defaults to the school-local today (America/Belize), matching the backend's
+  // `school_today()`. Previously the demo dataset's fixed 2025-10-15, so against the
+  // real API the register opened on a date months in the past.
+  const date = searchParams.get('date') ?? schoolToday();
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
   const sectionsQuery = useAttendanceSections(yearId);
@@ -81,7 +84,7 @@ export function AttendanceRegisterScreen() {
         (prev) => {
           const next = new URLSearchParams(prev);
           next.set('section_id', sectionsQuery.data!.items[0]!.id);
-          if (!next.get('date')) next.set('date', DEMO_TODAY);
+          if (!next.get('date')) next.set('date', schoolToday());
           return next;
         },
         { replace: true },

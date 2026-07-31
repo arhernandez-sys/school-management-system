@@ -164,9 +164,40 @@ Set once in `components` so every instance is consistent:
 └────────────┴─────────────────────────────────────────────────┘
 ```
 
-- **App bar (top, fixed):** hamburger toggle (collapses drawer), school name + logo (from Settings/branding, FR-SET-01), an **active-semester switcher** (reflects D10's active term — selecting a past semester scopes data views), a **notifications/announcements bell** (unread count of targeted announcements), and the **user menu** (avatar → name, role, "My account/Settings", "Log out").
+- **App bar (top, fixed):** hamburger toggle (collapses drawer), school name + logo (from Settings/branding, FR-SET-01), the **student year·semester switcher** (student role only — see below), a **notifications/announcements bell** (unread count of targeted announcements), and the **user menu** (avatar → name, role, "My account/Settings", "Log out").
 - **Left drawer (permanent on desktop):** role-aware nav items grouped into sections. Active item is highlighted with `primary` accent + a left indicator bar. Collapsible to a mini icon-rail to reclaim space.
-- **The semester switcher is global context.** It sets the term scope that list/report/dashboard queries read (feeds TanStack Query keys, architecture §7.1). Active semester is the default; viewing a closed semester renders data read-only (FR-CLS-06, FR-SET-07).
+
+#### Academic-period selection — TWO mechanisms, not one
+
+> ⚠️ **Corrected 2026-07-29.** This section previously specified a single global
+> `SemesterSwitcher` for **all** roles. That is not what is built, and it is not what is
+> wanted: the component was removed and replaced by the two mechanisms below. The
+> stakeholder confirmed the split ("only student has a global switch and I want it like
+> that"). Recorded here because the old text described a component that no longer exists.
+
+- **Student → ONE global year·semester switcher** (`app/layout/StudentYearSwitcher.tsx`,
+  state in `app/providers/YearContext.tsx`). Lists every year·semester pair the student was
+  **enrolled in**, grouped by year, newest first (`2025-2026 · Semester 1`). Picking one
+  re-scopes their whole session: My Assessments, My Grades, My Attendance, My Classes and
+  My Profile. Options come from `GET /students/me/years` joined client-side to
+  `GET /settings/academic-years` (which carries each year's semesters). The selection
+  persists in `sessionStorage` so it survives a reload, mirroring how staff's `?year=`
+  survives one. Screens send `semester_id` for semester-keyed data (assessments, grades,
+  attendance) and `academic_year_id` for year-keyed data (sections, enrollment).
+  - Semester names are **not** unique across years — every year has a "Semester 1" — so
+    the id is the only safe identity and any label must carry the year.
+- **Staff (principal / secretary / teacher) → a per-module year filter**, not a global one.
+  `<YearSelect>` + `useYearFilter`, persisted in the URL as `?year=` so it survives
+  refresh and back. Present on Students, Teachers, Classes, Grades, Attendance and the
+  Assessments list; `StudentDetailPage` has its own variant listing only the years *that*
+  student was enrolled in. Reports uses `<TermPicker>` for a per-semester report card.
+- **Announcements and Calendar are deliberately NOT period-scoped** in either mechanism —
+  announcements have no year or semester column at all (targeting is by audience plus
+  `published_at`/`expires_at`), and the calendar is the same shared school calendar for
+  everyone. The Dashboard is always the current term.
+- Viewing a closed semester renders data read-only (FR-CLS-06, FR-SET-07). Both mechanisms
+  feed TanStack Query keys (architecture §7.1), which is what makes a change refetch
+  rather than re-serve the previous period from cache.
 
 ### 3.2 Per-role navigation map
 
@@ -217,7 +248,7 @@ AppShell
 ├── TopBar (AppBar)
 │   ├── MenuToggle (hamburger)            — toggles Sidebar
 │   ├── Brand (logo + school name)        — from Settings
-│   ├── SemesterSwitcher                  — global term context
+│   ├── StudentYearSwitcher               — year·semester context (STUDENT ROLE ONLY)
 │   ├── NotificationsBell                 — unread announcements → popover list
 │   └── UserMenu (Avatar)                 — name, RoleChip, My account, Log out
 ├── Sidebar (Drawer, role-aware)
@@ -294,7 +325,8 @@ Every routed page follows this template via the shared `PageHeader` (§5):
 | 11 | **RoleChip** | Displays a user's role consistently. | `role: Principal\|Secretary\|Teacher\|Student`. | `Chip` (color-mapped) |
 | 12 | **StatusBadge** | Single source of truth for status display (color **+ label + icon**). | `status`, `domain: 'student'\|'attendance'\|'assessment'\|'grade'\|'announcement'`. | `Chip` / `Box` + `SvgIcon` |
 | 13 | **ErrorState** | Inline error surface for failed queries with retry. | `title`, `message`, `onRetry`. | `Alert`, `Button` |
-| 14 | **SemesterSwitcher** | Global active-term selector (app bar). | `terms[]`, `active`, `onChange`. | `Select` / `Menu` |
+| 14 | **StudentYearSwitcher** | Global year·semester selector in the app bar, **student role only**. Reads/writes `YearContext`; no props. Staff instead get a per-module `<YearSelect>` (`?year=`) — see §3.1. | — (context) | `Button` + `Menu` + `ListSubheader` |
+| 14b | **YearSelect** | Per-module academic-year filter for staff list screens, beside the search bar. | `value`, `onChange`, `years[]`, `activeYearId`, `isLoading`, `label?`. | `TextField select` |
 | 15 | **NotificationsBell** | Unread-announcement indicator → popover list → deep link. | `count`, `items[]`. | `Badge`, `IconButton`, `Popover`, `List` |
 | 16 | **UserMenu** | Avatar → identity + account + logout. | `user`, `role`, `onLogout`. | `Avatar`, `Menu`, `MenuItem`, `RoleChip` |
 | 17 | **AppShell / Sidebar / TopBar** | The shell (see §4). | role-aware nav from permission map. | `AppBar`, `Drawer`, `Toolbar`, `List`, `Breadcrumbs` |
@@ -754,7 +786,7 @@ Every chart is wrapped in `ChartWithTable` so a non-visual user gets an equivale
 
 ### 9.3 Focus management — dialogs, menus, drawers (WCAG 2.4.3)
 - **Dialogs/FormDialog/ConfirmDialog** (MUI `Dialog`): focus moves in on open, is **trapped**, returns to the trigger on close; `Esc` closes (except in-progress destructive confirms); backdrop click closes non-destructive dialogs only.
-- **Menus/Popovers/SemesterSwitcher/UserMenu:** open with focus on first item, arrow-key navigation, `Esc` closes and restores focus.
+- **Menus/Popovers/StudentYearSwitcher/UserMenu:** open with focus on first item, arrow-key navigation, `Esc` closes and restores focus.
 - **Temporary nav drawer (mobile):** traps focus while open, `Esc`/scrim closes, restores focus to the hamburger.
 - **Route changes:** focus moves to the page `h2` (PageHeader title) / main region, and the title is announced.
 

@@ -296,7 +296,11 @@ export const studentsHandlers = [
   }),
 
   // ── GET /students/me — the student's own profile (student role only) ────────────
-  http.get(`${API_BASE_URL}/students/me`, ({ cookies }) => {
+  // `?academic_year_id=` scopes `current_section` to that year, exactly as the staff
+  // `/students/{id}` route below already did. It was missing here, so "My Profile" kept
+  // showing the CURRENT section while every other screen followed the global switcher —
+  // and the student sits in a different section each year.
+  http.get(`${API_BASE_URL}/students/me`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     if (role !== 'student') {
       return errorResponse(403, 'forbidden', 'Only students may read /students/me.');
@@ -304,7 +308,8 @@ export const studentsHandlers = [
     const id = currentStudentId(role);
     const student = id ? getStudent(id) : undefined;
     if (!student) return errorResponse(404, 'no_student_profile', 'No student profile.');
-    return HttpResponse.json(studentDetail(student));
+    const yearId = new URL(request.url).searchParams.get('academic_year_id');
+    return HttpResponse.json(studentDetail(student, yearId));
   }),
 
   // ── GET /students/{id}/years — academic years this student was enrolled in ──────

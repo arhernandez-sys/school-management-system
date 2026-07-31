@@ -291,20 +291,36 @@ class TestListAcademicStructure:
         )
         assert resp.status_code == 200, resp.text
 
-    def test_list_years_teacher_403(self, client, make_user, auth_headers) -> None:
+    # ── The two READS are open to every authenticated role ────────────────────
+    # Changed 2026-07-29 (was P/S-only, asserted 403 here). This endpoint is the
+    # calendar every period picker is built from: the staff `?year=` filter
+    # (`useYearFilter`) runs on teacher-reachable screens, and the student's global
+    # year·semester switcher needs each year's semesters. Gated to P/S, a teacher's
+    # picker got a 403, silently emptied, and sent no `academic_year_id` at all — and
+    # because the MSW mock has no role gate, demo mode hid it completely. Year names
+    # and dates are not sensitive; `/settings/active-term` already exposes the current
+    # pair to everyone. The WRITES stay principal-only (asserted further down).
+    def test_list_years_teacher_allowed(self, client, make_user, auth_headers) -> None:
         teacher = make_user(role=Role.TEACHER)
         resp = client.get(
             ACADEMIC_YEARS, headers=auth_headers(user_id=teacher.id, role=Role.TEACHER)
         )
-        assert resp.status_code == 403
-        _assert_envelope(resp.json(), code="forbidden")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["items"], "a teacher's year picker must not come back empty"
 
-    def test_list_years_student_403(self, client, make_user, auth_headers) -> None:
+    def test_list_years_student_allowed(self, client, make_user, auth_headers) -> None:
         student = make_user(role=Role.STUDENT)
         resp = client.get(
             ACADEMIC_YEARS, headers=auth_headers(user_id=student.id, role=Role.STUDENT)
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200, resp.text
+        # The student switcher joins this against /students/me/years for the semesters,
+        # so every year must carry them.
+        assert all("semesters" in y for y in resp.json()["items"])
+
+    def test_list_years_requires_auth(self, client) -> None:
+        """Widened to 'authenticated', NOT to anonymous."""
+        assert client.get(ACADEMIC_YEARS).status_code == 401
 
     def test_list_semesters_filter_by_year(
         self, client, make_user, auth_headers, db_session
@@ -326,12 +342,16 @@ class TestListAcademicStructure:
         assert len(body["items"]) == 2  # D10: exactly two semesters per year
         assert {s["sequence"] for s in body["items"]} == {1, 2}
 
-    def test_list_semesters_teacher_403(self, client, make_user, auth_headers) -> None:
+    def test_list_semesters_teacher_allowed(self, client, make_user, auth_headers) -> None:
+        """Authenticated, same reasoning as `/academic-years` above."""
         teacher = make_user(role=Role.TEACHER)
         resp = client.get(
             SEMESTERS, headers=auth_headers(user_id=teacher.id, role=Role.TEACHER)
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200, resp.text
+
+    def test_list_semesters_requires_auth(self, client) -> None:
+        assert client.get(SEMESTERS).status_code == 401
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -16,12 +16,23 @@ reverse proxy at all.
 from __future__ import annotations
 
 import ipaddress
+import logging
 from functools import lru_cache
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger("sis.config")
+
 _INSECURE_DEFAULT_SECRET = "change-me-in-prod-use-a-32+-byte-random-secret"
+
+#: Minimum JWT signing-key length outside `local`. 32 chars is the shortest value
+#: that is plausibly random rather than a word someone typed.
+_MIN_JWT_SECRET_LENGTH = 32
+
+#: Argon2id memory floor (KiB) outside `local` — OWASP's Argon2id guidance is 19 MiB.
+#: The shipped default is 64 MiB; this is the line below which we refuse to run.
+_MIN_ARGON2_MEMORY_COST = 19 * 1024
 
 #: The developer-convenience DATABASE_URL baked in below. Exported because two
 #: other places need to recognise "this is the default, not a real database":
@@ -198,11 +209,47 @@ class Settings(BaseSettings):
         return v
 
     def validate_runtime(self) -> None:
-        """Fail fast on insecure production config. Called from the app factory."""
+        """Fail fast on insecure production config. Called from the app factory.
+
+        Split into two tiers on purpose:
+
+          * **RuntimeError** for anything that would silently make the deployment
+            unsafe — a guessable token signing key, cheap password hashing, a
+            default database. These are all cases where the app would work fine and
+            the operator would never find out, so refusing to boot is the only
+            reliable signal.
+          * **A logged warning** for hardening that is genuinely optional or
+            deployment-shaped (host allow-list, throttling). Refusing to boot there
+            would break legitimate setups — a PaaS with a generated hostname, or a
+            site whose reverse proxy already rate-limits.
+        """
         if not self.is_local and self.jwt_secret == _INSECURE_DEFAULT_SECRET:
             raise RuntimeError(
                 "JWT_SECRET must be set to a strong random value outside 'local' "
                 "environment; refusing to start with the insecure default."
+            )
+        if not self.is_local and len(self.jwt_secret) < _MIN_JWT_SECRET_LENGTH:
+            # Rejecting only the exact built-in default let `JWT_SECRET=secret`
+            # through, which is worse than the default: it looks configured. Every
+            # access token in the system is signed with this, so a guessable value
+            # means anyone can mint a principal token.
+            raise RuntimeError(
+                f"JWT_SECRET must be at least {_MIN_JWT_SECRET_LENGTH} characters "
+                f"outside 'local' environment (got {len(self.jwt_secret)}). "
+                "Generate one with: openssl rand -hex 32"
+            )
+        if not self.is_local and self.argon2_memory_cost < _MIN_ARGON2_MEMORY_COST:
+            # The test harness exports a deliberately cheap work factor to keep the
+            # suite fast (~1ms vs ~96ms per hash). That is correct for tests and
+            # catastrophic in production, and the two are one exported shell variable
+            # apart — a server started from a shell that had run the tests would hash
+            # every password at 1 MiB and nothing would look wrong.
+            raise RuntimeError(
+                f"ARGON2_MEMORY_COST is {self.argon2_memory_cost} KiB, below the "
+                f"{_MIN_ARGON2_MEMORY_COST} KiB floor required outside 'local' "
+                "environment. This is the password-hashing work factor — a low value "
+                "makes every stored password cheap to crack. Unset the test override "
+                "or set ARGON2_MEMORY_COST=65536."
             )
         if not self.is_local and self.database_url == LOCAL_DEFAULT_DATABASE_URL:
             # The default is a plausible-looking localhost MariaDB URL, so a
@@ -219,6 +266,33 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "CORS_ORIGINS must not contain '*' — credentialed CORS requires an "
                 "explicit allow-list (architecture.md §3.1)."
+            )
+
+        # ── Advisory tier: log, do not refuse ─────────────────────────────────
+        if self.is_local:
+            return
+        if self.trusted_host_list == ["*"]:
+            logger.warning(
+                "hardening_advisory trusted_hosts='*' — the Host header is not "
+                "checked, so this instance answers to any hostname pointed at it. "
+                "Set TRUSTED_HOSTS to your real hostname(s) once the domain is fixed."
+            )
+        if not self.rate_limit_enabled:
+            logger.warning(
+                "hardening_advisory rate_limit_enabled=false — failed logins and "
+                "refresh attempts are not throttled. Only safe if something in front "
+                "of this app is throttling them instead."
+            )
+        if not self.trusted_proxies:
+            # Not wrong on its own (the safe default is to ignore X-Forwarded-For),
+            # but on a public site the app is almost always behind a proxy, and then
+            # every client looks like the proxy: one rate-limit bucket for the whole
+            # internet and a `login_attempts` trail that records only the proxy's IP.
+            logger.warning(
+                "hardening_advisory TRUSTED_PROXIES is empty — X-Forwarded-For is "
+                "ignored and the recorded client IP is the direct TCP peer. If a "
+                "reverse proxy fronts this app, set TRUSTED_PROXIES to its address "
+                "and start uvicorn with --forwarded-allow-ips=\"\" (see RUNBOOK §9)."
             )
 
 

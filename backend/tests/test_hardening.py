@@ -62,6 +62,15 @@ def _build_app(**overrides):  # noqa: ANN201 - FastAPI app + the Settings used
         "jwt_secret": _TEST_SECRET,
         "database_url": _TEST_DB_URL,
         "rate_limit_enabled": True,
+        # Production-grade Argon2 params, stated explicitly. Cases below build apps
+        # with `environment="production"`, and `validate_runtime()` refuses to start
+        # outside `local` with a work factor below the OWASP floor. Unspecified fields
+        # fall back to the ENVIRONMENT, and the suite exports a deliberately weak
+        # ARGON2_MEMORY_COST for speed (see conftest), so without these the factory
+        # would reject its own test app.
+        "argon2_time_cost": 3,
+        "argon2_memory_cost": 65_536,
+        "argon2_parallelism": 4,
     }
     base.update(overrides)
     settings = Settings(**base)  # type: ignore[arg-type]

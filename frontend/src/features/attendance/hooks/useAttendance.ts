@@ -22,7 +22,10 @@ export const attendanceKeys = {
   register: (sectionId: string, date: string) =>
     [...attendanceKeys.all, 'register', sectionId, date] as const,
   summary: (sectionId: string) => [...attendanceKeys.all, 'summary', sectionId] as const,
-  me: (academicYearId?: string | null) => [...attendanceKeys.all, 'me', academicYearId ?? null] as const,
+  // Both period ids are in the key so the global switcher refetches rather than
+  // re-serving the previous period.
+  me: (academicYearId?: string | null, semesterId?: string | null) =>
+    [...attendanceKeys.all, 'me', academicYearId ?? null, semesterId ?? null] as const,
 };
 
 /** Sections the caller may view/record (drives the section picker), year-scoped. */
@@ -53,11 +56,11 @@ export function useAttendanceSummary(sectionId: string | null) {
   });
 }
 
-/** The signed-in student's own attendance (self-scoped), year-scoped. */
-export function useMyAttendance(academicYearId?: string) {
+/** The signed-in student's own attendance (self-scoped), year·semester-scoped. */
+export function useMyAttendance(academicYearId?: string, semesterId?: string) {
   return useQuery({
-    queryKey: attendanceKeys.me(academicYearId),
-    queryFn: ({ signal }) => getMyAttendance(academicYearId, signal),
+    queryKey: attendanceKeys.me(academicYearId, semesterId),
+    queryFn: ({ signal }) => getMyAttendance(academicYearId, semesterId, signal),
   });
 }
 

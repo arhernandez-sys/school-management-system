@@ -46,6 +46,37 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Argon2id cost reduction FOR THE TEST PROCESS ONLY (added in Phase 8).
+# ──────────────────────────────────────────────────────────────────────────────
+# This block must stay ABOVE every `app.*` import in this file. `app.core.security`
+# builds its `PasswordHasher` at MODULE IMPORT time from the lru_cached Settings,
+# so the cost parameters are frozen the first time anything imports it. Setting
+# them here — before that import can happen — is the only point of control.
+#
+# WHY: production runs Argon2id at memory_cost=64 MiB / time_cost=3, which is
+# ~100ms per hash and correct for a password store. But `make_user` mints a real
+# hash for every user in every test, and the suite creates thousands of them, so
+# that single parameter accounted for the overwhelming majority of a ~18-minute
+# run. A test suite that slow stops being run, which costs far more safety than
+# hashing test fixtures cheaply.
+#
+# WHAT THIS DOES NOT WEAKEN: the algorithm is untouched (still Argon2id, still
+# the real `hash_password`/`verify_password` code path, still a genuine
+# `$argon2id$` hash in the DB), so login, lockout, rehash and password-reset
+# behaviour are exercised exactly as in production — only the work factor differs.
+# `tests/test_qa_foundation.py` pins the PRODUCTION defaults independently, so
+# this reduction cannot silently become a weakened production config.
+#
+# `setdefault` so an explicit export always wins, and `SIS_TEST_FULL_ARGON2=1`
+# runs the suite at production cost when you want to verify timing or the params
+# themselves. argon2-cffi requires memory_cost >= 8 * parallelism; 1 MiB with
+# parallelism 1 is far above that floor.
+if not os.environ.get("SIS_TEST_FULL_ARGON2"):
+    os.environ.setdefault("ARGON2_TIME_COST", "1")
+    os.environ.setdefault("ARGON2_MEMORY_COST", "1024")  # KiB (1 MiB)
+    os.environ.setdefault("ARGON2_PARALLELISM", "1")
+
 if TYPE_CHECKING:  # import only for type checkers; avoids hard runtime coupling
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -301,18 +332,32 @@ def _maybe_db_session(request: pytest.FixtureRequest) -> "Session | None":
     return request.getfixturevalue("db_session")
 
 
-@pytest.fixture
-def app(_maybe_db_session: "Session | None") -> Iterator["FastAPI"]:
-    """The FastAPI app built by 7.0a's `create_app()`.
+@pytest.fixture(scope="session")
+def _application() -> "FastAPI":
+    """Build the FastAPI app ONCE per test session (Phase 8 performance fix).
 
-    When a test DB is available, `get_db` is overridden to yield the transactional
-    rollback session so the code under test never commits to shared Supabase. When
-    no DB is configured, the override is skipped — DB-free routes (e.g. health)
-    still work; any route that actually calls `get_db` will fail loudly, which is
-    the correct signal to provide a DATABASE_URL.
+    ⚠️ THIS IS THE SINGLE LARGEST DETERMINANT OF SUITE RUNTIME. `create_app()`
+    costs ~1.3s — it registers 99 operations, and FastAPI builds a request/response
+    validator-serializer pair for each. Function-scoped, that was paid by every one
+    of the ~900 tests: ~20 minutes of the ~18-minute suite was route construction,
+    with the database at ~1ms per test and Argon2 a distant second. Session scope
+    pays it once.
 
-    Skips cleanly only if `app.main.create_app` is not importable yet (7.0a). When
-    7.0a landed, this fixture needed NO change — it imports the factory as-is.
+    (The progress tracker previously attributed the runtime to Argon2id. Measured:
+    Argon2 at production cost is ~96ms/hash, so it was real but minor. Both are
+    fixed — the cost reduction at the top of this file, and this fixture.)
+
+    SAFE TO SHARE because the app object holds no per-test state: the rate limiter
+    lives in a module singleton (reset by `_reset_rate_limiter`), the security-header
+    and logging middleware are stateless, and `net.py::_peer_rewrite_warned` is a
+    module global that was already process-wide. The only per-test mutation is the
+    `get_db` dependency override, which the `app` fixture applies and removes around
+    each test.
+
+    ⚠️ A test that needs DIFFERENT SETTINGS must build its own app rather than use
+    this fixture — settings are read by the factory (middleware) and cannot be
+    changed after construction. `tests/test_hardening.py::_build_app` is the pattern:
+    `create_app(settings)` plus a `get_settings` dependency override.
     """
     create_app = _import_create_app()
     if create_app is None:
@@ -320,10 +365,28 @@ def app(_maybe_db_session: "Session | None") -> Iterator["FastAPI"]:
             "app.main.create_app is not importable yet (sub-phase 7.0a not landed); "
             "skipping client/app-dependent tests cleanly."
         )
+    return create_app()
 
+
+@pytest.fixture
+def app(
+    _application: "FastAPI", _maybe_db_session: "Session | None"
+) -> Iterator["FastAPI"]:
+    """The session-built app, with this test's DB override applied.
+
+    When a test DB is available, `get_db` is overridden to yield the transactional
+    rollback session so the code under test never commits to the shared database.
+    When no DB is configured, the override is skipped — DB-free routes (e.g. health)
+    still work; any route that actually calls `get_db` will fail loudly, which is
+    the correct signal to provide a DATABASE_URL.
+
+    The override is REMOVED in teardown, so the shared app never carries one test's
+    session into the next: a leak there would be invisible (the next test would just
+    read a closed session) rather than loud, hence the unconditional `finally`.
+    """
     from app.core.deps import get_db
 
-    application = create_app()
+    application = _application
 
     if _maybe_db_session is not None:
         def _override_get_db() -> Iterator["Session"]:

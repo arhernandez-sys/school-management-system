@@ -93,11 +93,17 @@ def get_summary(
 )
 def get_my_attendance(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_student),
 ) -> MyAttendanceResponse:
-    """Student-only, self-scoped. History is newest-first."""
-    return service.get_my_attendance(db, actor=actor, academic_year_id=academic_year_id)
+    """Student-only, self-scoped. History is newest-first.
+
+    `semester_id` narrows within the selected year; omitted, the history spans the
+    whole year exactly as before."""
+    return service.get_my_attendance(
+        db, actor=actor, academic_year_id=academic_year_id, semester_id=semester_id
+    )
 
 
 @router.get(

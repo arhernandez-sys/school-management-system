@@ -205,6 +205,7 @@ def list_assessments(
     params: PageParams,
     class_subject_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None,
+    semester_id: uuid.UUID | None,
     type_filter: str | None,
     status_filter: str | None,
     scope: str | None,
@@ -221,6 +222,10 @@ def list_assessments(
         stmt = stmt.where(Assessment.class_subject_id == class_subject_id)
     if academic_year_id is not None:
         stmt = stmt.where(Class.academic_year_id == academic_year_id)
+    if semester_id is not None:
+        # Narrows WITHIN a year: `Assessment.semester_id` is the assessment's own term,
+        # while `academic_year_id` above filters on the section's year. Both may be sent.
+        stmt = stmt.where(Assessment.semester_id == semester_id)
     if type_filter is not None:
         stmt = stmt.where(Assessment.type == type_filter)
     if status_filter is not None:

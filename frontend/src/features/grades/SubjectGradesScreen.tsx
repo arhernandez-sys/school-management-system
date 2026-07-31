@@ -25,7 +25,7 @@ import {
   type DataTableColumn,
 } from '@shared/components';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
-import { DEMO_IDS } from '@shared/api/mocks/demo/dataset';
+import { useSelectedYear } from '@app/providers/YearContext';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useAssessmentCategories,
@@ -80,6 +80,10 @@ export function SubjectGradesScreen({
   const [formError, setFormError] = useState<string | null>(null);
   const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string[]>>({});
   const categoriesQuery = useAssessmentCategories(formOpen ? classSubjectId : null);
+  // Every assessment write needs the REAL active semester id. Read from YearContext,
+  // which already holds `GET /settings/active-term` — no extra request. It was a
+  // hardcoded demo-dataset id here, which no real database contains.
+  const { activeSemesterId } = useSelectedYear();
 
   const openCreate = () => {
     setEditing(null);
@@ -118,10 +122,18 @@ export function SubjectGradesScreen({
         { onSuccess: () => setFormOpen(false), onError },
       );
     } else {
+      // No active semester → the write cannot be formed. Say so instead of posting a
+      // request the server will reject with an error nobody can act on.
+      if (!activeSemesterId) {
+        setFormError(
+          'No active semester is set for the school. An administrator must set the active term before assessments can be created.',
+        );
+        return;
+      }
       createMut.mutate(
         {
           class_subject_id: classSubjectId,
-          semester_id: DEMO_IDS.activeSemesterId,
+          semester_id: activeSemesterId,
           title: values.title,
           type: values.type,
           category_id: values.category_id,

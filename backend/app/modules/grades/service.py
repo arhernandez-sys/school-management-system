@@ -820,13 +820,25 @@ def upsert_grades(
 # GET /grades/me
 # ──────────────────────────────────────────────────────────────────────────────
 def get_my_grades(
-    db: Session, *, actor: User, academic_year_id: uuid.UUID | None
+    db: Session,
+    *,
+    actor: User,
+    academic_year_id: uuid.UUID | None,
+    semester_id: uuid.UUID | None = None,
 ) -> MyGrades:
     """A student's own released results, grouped by subject.
 
     Release filtering happens twice on purpose: unreleased assessments are dropped
     from the listing, AND the term average is computed with `released_only=True`,
     so the number a student sees is always derivable from the rows shown to them.
+
+    `semester_id` narrows within the resolved year (the student's global switcher picks
+    a year·semester pair). It is threaded into the ONE `_assessments_for` call below,
+    which feeds both the listing and `compute_term_grade` — so "term average" stays
+    derivable from the rows shown rather than silently averaging the whole year. A
+    semester that belongs to some OTHER year simply matches nothing, which is the
+    correct empty answer and not a mislabelling (same reasoning as the year fallback
+    guard below).
     """
     student = db.scalar(
         select(StudentProfile).where(
@@ -856,7 +868,26 @@ def get_my_grades(
             .order_by(ClassEnrollment.enrolled_at.desc())
             .limit(1)
         )
-    if section is None:
+    # Fallback to the student's current enrollment ONLY when no year was asked for.
+    #
+    # ⚠️ This condition is the fix for a real defect. The fallback used to run whenever
+    # `section is None`, including when the caller had explicitly named a year the
+    # student has no enrollment in — so `/grades/me?academic_year_id=<other-or-stale>`
+    # silently returned the CURRENT year's grades under the requested year's heading.
+    # The student's own year switcher only offers years they were enrolled in, so this
+    # was not reachable by clicking; a stale bookmark or a hand-edited URL reached it.
+    # No cross-user exposure (every query here is already keyed to `student.id`) — the
+    # bug is mislabelling: the reader believes they are looking at another year.
+    #
+    # Keeping the fallback for the `academic_year_id is None` case is deliberate: that
+    # is the "school has no active year configured" path, where showing the student
+    # their most recent enrollment is better than showing nothing.
+    #
+    # With a year requested and no enrollment in it, the correct answer is an EMPTY
+    # result, which is what `/attendance/me` already does for the same situation
+    # (it filters records by that year's semesters with no fallback). Matching it
+    # keeps the two student year-switcher surfaces consistent with each other.
+    if section is None and academic_year_id is None:
         section = db.scalar(
             select(Class)
             .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
@@ -888,7 +919,7 @@ def get_my_grades(
 
     by_subject: list[MyGradeSubject] = []
     for cs, subject in offerings:
-        assessments = _assessments_for(db, cs.id, None)
+        assessments = _assessments_for(db, cs.id, semester_id)
         assessment_ids = [a.id for a in assessments]
         student_grades = {
             g.assessment_id: g

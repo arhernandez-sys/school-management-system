@@ -29,7 +29,9 @@ import type { ClassSubjectItem } from './types';
  * render its subjects via GET /classes/{id}/subjects.
  */
 export function StudentClassesPage() {
-  const { selectedYearId } = useSelectedYear();
+  const { selectedYearId, selectedPeriod } = useSelectedYear();
+  // Sections are YEAR-keyed (`sections.academic_year_id`), so only the year is sent —
+  // a semester would narrow nothing here.
   const sectionQuery = useClassesList({ sort: 'name', academic_year_id: selectedYearId });
   const section = sectionQuery.data?.items[0] ?? null;
   const subjectsQuery = useClassSubjects(section?.id);
@@ -102,13 +104,32 @@ export function StudentClassesPage() {
     </Button>
   );
 
-  const activeSubjects = (subjectsQuery.data ?? []).filter((s) => s.is_active).length;
+  /**
+   * NO `is_active` filter — deliberately, and this is a fix rather than an omission.
+   *
+   * A past year's `class_subjects` are all INACTIVE by design (that is what closing a
+   * year means), so filtering on `is_active` emptied this table for every archived year
+   * the switcher can reach: the correct historical section resolved, the header named
+   * it, and then the subject list read "No subjects yet". Scope comes from section
+   * membership instead — the section is already year-resolved by the query above, so
+   * every row belongs to the selected year by construction. `/grades/me` documents and
+   * avoids the same trap ("past-year offerings are inactive, so scope by section
+   * membership rather than is_active").
+   */
+  const subjects = subjectsQuery.data ?? [];
 
   return (
     <Box>
       <PageHeader
         title="My Classes"
-        subtitle={`You're in ${section.name} — ${section.grade_level}. These are the subjects taught in your homeroom.`}
+        // Tense follows the selected period: present for the active year, past for an
+        // archived one. A single hardcoded present tense misdescribed every past year
+        // the switcher can reach.
+        subtitle={
+          selectedPeriod && !selectedPeriod.isActiveYear
+            ? `In ${selectedPeriod.yearName} you were in ${section.name} — ${section.grade_level}. These are the subjects that were taught in that homeroom.`
+            : `You're in ${section.name} — ${section.grade_level}. These are the subjects taught in your homeroom.`
+        }
       />
 
       <Box
@@ -127,8 +148,8 @@ export function StudentClassesPage() {
           helperText={`${section.enrolled_count} classmates`}
         />
         <StatCard
-          label="Subjects I take"
-          value={activeSubjects || section.subject_count}
+          label={selectedPeriod && !selectedPeriod.isActiveYear ? 'Subjects taken' : 'Subjects I take'}
+          value={subjects.length || section.subject_count}
           loading={subjectsQuery.isLoading}
           icon={<MenuBookIcon />}
           color="info"
@@ -138,14 +159,14 @@ export function StudentClassesPage() {
       <DataTable<ClassSubjectItem>
         caption={`Subjects taught in ${section.name}`}
         columns={columns}
-        rows={(subjectsQuery.data ?? []).filter((s) => s.is_active)}
+        rows={subjects}
         getRowId={(cs) => cs.class_subject_id}
         isLoading={subjectsQuery.isLoading}
         isError={subjectsQuery.isError}
         onRetry={() => void subjectsQuery.refetch()}
         page={0}
         pageSize={100}
-        total={subjectsQuery.data?.length ?? 0}
+        total={subjects.length}
         rowsPerPageOptions={[100]}
         onPageChange={() => undefined}
         onPageSizeChange={() => undefined}

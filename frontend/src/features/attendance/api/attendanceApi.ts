@@ -56,13 +56,21 @@ export async function getAttendanceSummary(
   return res.data;
 }
 
-/** GET /attendance/me — the signed-in student's own attendance (year-scoped). */
+/**
+ * GET /attendance/me — the signed-in student's own attendance, scoped to the selected
+ * period. `semesterId` narrows within the year; the summary is then computed over the
+ * same records as the history, so the percentage describes what is on screen.
+ */
 export async function getMyAttendance(
   academicYearId?: string,
+  semesterId?: string,
   signal?: AbortSignal,
 ): Promise<MyAttendanceResponse> {
+  const params: Record<string, string> = {};
+  if (academicYearId) params.academic_year_id = academicYearId;
+  if (semesterId) params.semester_id = semesterId;
   const res = await api.get<MyAttendanceResponse>('/attendance/me', {
-    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    params: Object.keys(params).length ? params : undefined,
     signal,
   });
   return res.data;

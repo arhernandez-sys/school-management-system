@@ -121,12 +121,18 @@ def list_term_grades(
 )
 def get_my_grades(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_student),
 ) -> MyGrades:
     """Student-only. Unreleased assessments are omitted AND excluded from the term
-    average, so the number shown is derivable from the rows shown."""
-    return service.get_my_grades(db, actor=actor, academic_year_id=academic_year_id)
+    average, so the number shown is derivable from the rows shown.
+
+    `semester_id` narrows within the year the student's global switcher selected; with
+    it omitted the response spans every semester of that year, as before."""
+    return service.get_my_grades(
+        db, actor=actor, academic_year_id=academic_year_id, semester_id=semester_id
+    )
 
 
 @assessment_grades_router.put(

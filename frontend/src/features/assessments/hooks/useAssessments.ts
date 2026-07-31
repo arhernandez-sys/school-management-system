@@ -54,6 +54,12 @@ export interface AssessmentListParams {
   type?: AssessmentType;
   status?: AssessmentStatus;
   academic_year_id?: string;
+  /**
+   * Narrows within the year — sent by the student's global year·semester switcher so
+   * "My Assessments" lists one term rather than the whole year. Composes with
+   * `academic_year_id` (the year filters the section, the semester the assessment).
+   */
+  semester_id?: string;
   page?: number;
   page_size?: number;
   sort?: string;

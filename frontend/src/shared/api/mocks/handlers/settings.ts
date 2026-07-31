@@ -20,6 +20,29 @@ import { paginate } from '@shared/api/mocks/demo/dataset';
  */
 const D = DEMO_DATASET;
 
+/**
+ * Role gate for the academic-structure WRITES, mirroring `require_role(PRINCIPAL)` on
+ * the real router.
+ *
+ * ⚠️ WHY THIS EXISTS. This file used to apply no role checks at all, which hid a real
+ * defect for the whole project: `GET /settings/academic-years` was principal/secretary-
+ * only on the server, but `useYearFilter` — the staff `?year=` picker — runs on
+ * teacher-reachable screens (Grades, Attendance, Classes). Against the live backend a
+ * teacher got a 403, the picker silently emptied and no `academic_year_id` was sent;
+ * in demo everything looked perfect. The reads are now deliberately open to every
+ * authenticated role (that was the fix), so the gate belongs on the writes — and it is
+ * here so the demo can no longer certify an authz mismatch as working.
+ *
+ * The demo has no tokens; the acting role is the `sis_mock_session` cookie auth.ts sets.
+ */
+function assertPrincipal(cookies: Record<string, string>) {
+  const role = cookies['sis_mock_session'] ?? 'principal';
+  if (role !== 'principal') {
+    return errorResponse(403, 'forbidden', 'Only the principal can change the academic structure.');
+  }
+  return null;
+}
+
 function schoolProfileRead() {
   const p = D.school_profile;
   return {
@@ -112,6 +135,10 @@ export const settingsHandlers = [
   }),
 
   // ── Academic years + semesters ──────────────────────────────────────────────────
+  // The two READS are intentionally ungated: they are open to every authenticated role
+  // on the real server too (widened 2026-07-29), because every period picker in the app
+  // is built from them — staff's `?year=` filter and the student's global year·semester
+  // switcher, which joins this response's `semesters` to /students/me/years.
   http.get(`${API_BASE_URL}/settings/academic-years`, () =>
     HttpResponse.json({ items: D.academic_years.map((y) => academicYearDetail(y.id)) }),
   ),
@@ -131,7 +158,9 @@ export const settingsHandlers = [
       })),
     });
   }),
-  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params }) => {
+  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
     const target = D.semesters.find((s) => s.id === params.semesterId);
     if (!target) return errorResponse(404, 'not_found', 'Semester not found.');
     D.semesters.forEach((s) => {
@@ -146,7 +175,9 @@ export const settingsHandlers = [
       is_active: true,
     });
   }),
-  http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params }) => {
+  http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
     const year = D.academic_years.find((y) => y.id === params.yearId);
     if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
     if (year.status === 'archived') {

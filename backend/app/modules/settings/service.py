@@ -270,7 +270,17 @@ def list_semesters(
     stmt = select(Semester)
     if academic_year_id is not None:
         stmt = stmt.where(Semester.academic_year_id == academic_year_id)
-    stmt = stmt.order_by(Semester.academic_year_id, Semester.sequence)
+    # Chronological, newest year first, then term order within the year.
+    #
+    # This previously ordered by `Semester.academic_year_id` — a UUID, so across
+    # multiple years the terms came back in an arbitrary (and stable-looking, hence
+    # deceptive) order. With no `academic_year_id` this endpoint returns EVERY year's
+    # terms, and its only consumer is the report-card term picker, so "Semester 1" from
+    # some random year could sort ahead of the current one.
+    stmt = (
+        stmt.join(AcademicYear, Semester.academic_year_id == AcademicYear.id)
+        .order_by(AcademicYear.start_date.desc(), Semester.sequence)
+    )
     rows = db.execute(stmt).scalars().all()
     return [SemesterDetail.model_validate(s) for s in rows]
 
