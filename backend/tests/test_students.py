@@ -277,7 +277,7 @@ class TestListStudents:
         if body["items"]:
             item = body["items"][0]
             assert {"id", "student_number", "full_name", "status"} <= set(item.keys())
-            assert "current_section" in item and "guardian_name" in item
+            assert "year_group" in item and "class_count" in item and "guardian_name" in item
 
     def test_list_secretary_allowed(self, client, make_user, auth_headers) -> None:
         secretary = make_user(role=Role.SECRETARY)
@@ -442,8 +442,7 @@ class TestGetStudent:
         body = resp.json()
         assert body["id"] == str(student.id)
         assert "audit" in body
-        assert body["current_section"] is not None
-        assert body["current_section"]["id"] == str(section.id)
+        assert [c["id"] for c in body["current_classes"]] == [str(section.id)]
 
     def test_get_unknown_404(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)
@@ -519,7 +518,7 @@ class TestCreateStudent:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         assert body["status"] == "active"
-        assert body["current_section"] is None  # no section_id given
+        assert body["current_classes"] == []  # no class_ids given
         n_audit = db_session.scalar(
             select(func.count()).select_from(AuditLog).where(
                 AuditLog.action == "student.create",
@@ -619,19 +618,18 @@ class TestCreateStudent:
     def test_create_with_enroll_into_section_201(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        """FR-STU-05: section_id enrolls into the active semester in the same txn;
-        current_section is populated on the response."""
+        """FR-STU-05: class_ids enrols into the active semester in the same txn;
+        current_classes is populated on the response."""
         section = _make_section(db_session)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(section_id=str(section.id)),
+            json=self._payload(class_ids=[str(section.id)]),
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert body["current_section"] is not None
-        assert body["current_section"]["id"] == str(section.id)
+        assert [c["id"] for c in body["current_classes"]] == [str(section.id)]
         # An enrollment row was created for the active semester.
         n_enr = db_session.scalar(
             select(func.count()).select_from(ClassEnrollment).where(
@@ -647,7 +645,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(section_id=str(uuid.uuid4())),
+            json=self._payload(class_ids=[str(uuid.uuid4())]),
         )
         assert resp.status_code == 404, resp.text
         _assert_envelope(resp.json(), code="section_not_found")
@@ -662,7 +660,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(section_id=str(archived_section.id)),
+            json=self._payload(class_ids=[str(archived_section.id)]),
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="section_archived")
@@ -688,7 +686,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(section_id=str(section.id)),
+            json=self._payload(class_ids=[str(section.id)]),
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="section_archived")
@@ -1311,15 +1309,15 @@ class TestStudentAssessments:
 # ════════════════════════════════════════════════════════════════════════════
 class TestYearScoping:
     """`academic_year_id` was previously undeclared on both endpoints, so FastAPI
-    dropped it silently: the profile header showed the CURRENT section while the
+    dropped it silently: the profile header showed the CURRENT classes while the
     assessments tab showed the past year's — contradictory data on one screen.
 
-    Contract (MSW `handlers/students.ts`):
-      * detail — `scopedSectionFor`: with a year, the section that year (strictly,
-        `null` if none); without, the current section.
-      * list — `selectors.listStudents`: a PAST year FILTERS the student set; the
-        active year / no year lists the whole directory. Row `current_section` is
-        never rescoped (`studentListItem` always uses `currentSectionFor`).
+    Contract:
+      * detail — with a year, the classes sat that year (strictly, `[]` if none);
+        without, the current classes.
+      * list — a PAST year FILTERS the student set; the active year / no year lists
+        the whole directory. Row `class_count` is never rescoped — it describes the
+        student's live load.
     """
 
     def _two_year_student(self, db_session, *, tag=None):  # noqa: ANN001
@@ -1341,7 +1339,7 @@ class TestYearScoping:
         return student, past_year, past_section, current_section
 
     # ── GET /students/{id} ──────────────────────────────────────────────────
-    def test_detail_explicit_past_year_returns_that_years_section(
+    def test_detail_explicit_past_year_returns_that_years_classes(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         student, past_year, past_section, current_section = self._two_year_student(
@@ -1356,12 +1354,13 @@ class TestYearScoping:
             headers=headers,
         )
         assert past.status_code == 200, past.text
-        assert past.json()["current_section"]["id"] == str(past_section.id)
-        assert past.json()["current_section"]["id"] != str(current_section.id), (
-            "the year switcher must not fall through to the live section"
+        past_ids = [c["id"] for c in past.json()["current_classes"]]
+        assert past_ids == [str(past_section.id)]
+        assert str(current_section.id) not in past_ids, (
+            "the year switcher must not fall through to the live classes"
         )
 
-    def test_detail_no_year_param_returns_current_section(
+    def test_detail_no_year_param_returns_current_classes(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         student, _, past_section, current_section = self._two_year_student(db_session)
@@ -1371,14 +1370,15 @@ class TestYearScoping:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["current_section"]["id"] == str(current_section.id)
-        assert resp.json()["current_section"]["id"] != str(past_section.id)
+        ids = [c["id"] for c in resp.json()["current_classes"]]
+        assert ids == [str(current_section.id)]
+        assert str(past_section.id) not in ids
 
-    def test_detail_explicit_unmatched_year_returns_null_section(
+    def test_detail_explicit_unmatched_year_returns_no_classes(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         """Strictness, consistent with the assessments tab: an explicit year the
-        student never sat in yields null — never another year's section."""
+        student never sat in yields an empty list — never another year's classes."""
         student, _, _, _ = self._two_year_student(db_session)
         stranger_year = _make_year(db_session, start=date(2014, 9, 1))
         principal = make_user(role=Role.PRINCIPAL)
@@ -1388,13 +1388,13 @@ class TestYearScoping:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["current_section"] is None
+        assert resp.json()["current_classes"] == []
 
     def test_detail_and_assessments_agree_on_the_same_year(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         """The regression this fix exists for: both screens must name the SAME
-        section for the selected year."""
+        classes for the selected year."""
         student, past_year, past_section, _ = self._two_year_student(db_session)
         past_cs = _make_class_subject(db_session, section=past_section)
         _make_assessment(
@@ -1414,7 +1414,7 @@ class TestYearScoping:
             f"{STUDENTS}/{student.id}/assessments", params=params, headers=headers
         )
         assert detail.status_code == 200 and asmts.status_code == 200
-        assert detail.json()["current_section"]["id"] == str(past_section.id)
+        assert [c["id"] for c in detail.json()["current_classes"]] == [str(past_section.id)]
         assert {g["class_subject_id"] for g in asmts.json()["items"]} == {str(past_cs.id)}
 
     def test_detail_year_param_does_not_widen_teacher_scope(
@@ -1458,11 +1458,12 @@ class TestYearScoping:
         assert str(sat.id) in ids
         assert str(never.id) not in ids, "past year must exclude students not enrolled then"
 
-    def test_list_past_year_keeps_rows_current_section(
+    def test_list_past_year_keeps_rows_current_class_count(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        """Rows are NOT rescoped — the field is `current_section` and the mock's
-        `studentListItem` always resolves it without a year."""
+        """Rows are NOT rescoped — `class_count` describes the student's LIVE load, so
+        selecting a past year filters WHICH students appear without changing the count
+        shown for each."""
         tag = uuid.uuid4().hex[:6]
         student, past_year, past_section, current_section = self._two_year_student(
             db_session, tag=tag
@@ -1479,8 +1480,9 @@ class TestYearScoping:
         )
         assert resp.status_code == 200, resp.text
         row = next(i for i in resp.json()["items"] if i["id"] == str(student.id))
-        assert row["current_section"]["id"] == str(current_section.id)
-        assert row["current_section"]["id"] != str(past_section.id)
+        # The student sits exactly one live class (`current_section`), so the live
+        # count is 1 regardless of the past year being selected.
+        assert row["class_count"] == 1
 
     def test_list_active_year_does_not_filter_the_directory(
         self, client, make_user, auth_headers, db_session

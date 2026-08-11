@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS `academic_years` (
   CONSTRAINT `ck_academic_years_drop_nonneg` CHECK (`drop_lowest_count` is null or `drop_lowest_count` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.academic_years: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.announcement_reads
 CREATE TABLE IF NOT EXISTS `announcement_reads` (
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS `announcement_reads` (
   CONSTRAINT `fk_announcement_reads_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.announcement_reads: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.announcements
 CREATE TABLE IF NOT EXISTS `announcements` (
@@ -92,12 +92,35 @@ CREATE TABLE IF NOT EXISTS `announcements` (
   CONSTRAINT `ck_announcements_class_audience` CHECK (`audience` = 'class' = (`class_id` is not null))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.announcements: ~0 rows (approximately)
+-- Data exporting was unselected.
 
--- Dumping structure for table sims.assesment_categories
-IF NOT EXISTS ;
+-- Dumping structure for table sims.assessment_categories
+CREATE TABLE IF NOT EXISTS `assessment_categories` (
+  `id` uuid NOT NULL COMMENT 'PK',
+  `class_subject_id` uuid NOT NULL COMMENT 'FK → class_subjects',
+  `name` text NOT NULL COMMENT '''Quizzes'', ''Exams''',
+  `weight` decimal(5,2) NOT NULL COMMENT 'Category weight',
+  `absent_as_zero` tinyint(1) DEFAULT NULL COMMENT 'Category-level override; NULL = inherit',
+  `allow_makeup` tinyint(1) DEFAULT NULL COMMENT 'Category-level override; NULL = inherit',
+  `drop_lowest_count` smallint(6) DEFAULT NULL COMMENT 'Category-level override; NULL = inherit',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `created_by` uuid DEFAULT NULL,
+  `updated_by` uuid DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_categories_class_subject_name` (`class_subject_id`,`name`) USING HASH,
+  KEY `fk_categories_class_subject` (`class_subject_id`),
+  KEY `fk_assessment_categories_created_by` (`created_by`),
+  KEY `fk_assessment_categories_updated_by` (`updated_by`),
+  CONSTRAINT `fk_assessment_categories_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_assessment_categories_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_categories_class_subject` FOREIGN KEY (`class_subject_id`) REFERENCES `class_subjects` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT `ck_categories_weight` CHECK (`weight` >= 0),
+  CONSTRAINT `ck_categories_drop_nonneg` CHECK (`drop_lowest_count` is null or `drop_lowest_count` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.assesment_categories: ~0 rows (approximately)
+-- Data exporting was unselected.
+
 -- Dumping structure for table sims.assessment_grades
 CREATE TABLE IF NOT EXISTS `assessment_grades` (
   `id` uuid NOT NULL COMMENT 'PK',
@@ -132,7 +155,7 @@ CREATE TABLE IF NOT EXISTS `assessment_grades` (
   CONSTRAINT `chk_score_limit` CHECK (`score` <= `max_score`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.assessment_grades: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.assessment_policies
 CREATE TABLE IF NOT EXISTS `assessment_policies` (
@@ -153,7 +176,7 @@ CREATE TABLE IF NOT EXISTS `assessment_policies` (
   CONSTRAINT `ck_assessment_policies_drop_nonneg` CHECK (`drop_lowest_count` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.assessment_policies: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.assessments
 CREATE TABLE IF NOT EXISTS `assessments` (
@@ -194,7 +217,7 @@ CREATE TABLE IF NOT EXISTS `assessments` (
   CONSTRAINT `ck_assessments_drop_nonneg` CHECK (`drop_lowest_count` is null or `drop_lowest_count` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.assessments: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.attendance_records
 CREATE TABLE IF NOT EXISTS `attendance_records` (
@@ -225,7 +248,7 @@ CREATE TABLE IF NOT EXISTS `attendance_records` (
   CONSTRAINT `fk_attendance_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.attendance_records: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.audit_log
 CREATE TABLE IF NOT EXISTS `audit_log` (
@@ -240,9 +263,9 @@ CREATE TABLE IF NOT EXISTS `audit_log` (
   KEY `k_audit_actor` (`actor_user_id`),
   CONSTRAINT `k_audit_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION,
   CONSTRAINT `summary` CHECK (json_valid(`summary`))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3450 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.audit_log: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.cat_assessment
 CREATE TABLE IF NOT EXISTS `cat_assessment` (
@@ -252,7 +275,7 @@ CREATE TABLE IF NOT EXISTS `cat_assessment` (
   PRIMARY KEY (`assessmentID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.cat_assessment: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.class_enrollments
 CREATE TABLE IF NOT EXISTS `class_enrollments` (
@@ -280,7 +303,7 @@ CREATE TABLE IF NOT EXISTS `class_enrollments` (
   CONSTRAINT `fk_enroll_student` FOREIGN KEY (`student_id`) REFERENCES `student_profiles` (`id`) ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.class_enrollments: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.class_subjects
 CREATE TABLE IF NOT EXISTS `class_subjects` (
@@ -305,7 +328,7 @@ CREATE TABLE IF NOT EXISTS `class_subjects` (
   CONSTRAINT `fk_class_subjects_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.class_subjects: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.class_teachers
 CREATE TABLE IF NOT EXISTS `class_teachers` (
@@ -329,7 +352,7 @@ CREATE TABLE IF NOT EXISTS `class_teachers` (
   CONSTRAINT `fk_class_teachers_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.class_teachers: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.classes
 CREATE TABLE IF NOT EXISTS `classes` (
@@ -360,7 +383,33 @@ CREATE TABLE IF NOT EXISTS `classes` (
   CONSTRAINT `ck_classes_capacity` CHECK (`capacity` is null or `capacity` > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.classes: ~0 rows (approximately)
+-- Data exporting was unselected.
+
+-- Dumping structure for table sims.events
+CREATE TABLE IF NOT EXISTS `events` (
+  `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
+  `title` varchar(150) NOT NULL,
+  `description` text DEFAULT NULL,
+  `category` enum('holiday','exam','meeting','activity','other') NOT NULL DEFAULT 'other',
+  `visibility` enum('global','internal') NOT NULL DEFAULT 'global' COMMENT 'global = everyone; internal = staff only',
+  `start_date` date NOT NULL,
+  `end_date` date DEFAULT NULL COMMENT 'NULL = single-day event',
+  `all_day` tinyint(1) NOT NULL DEFAULT 1,
+  `start_time` time DEFAULT NULL COMMENT 'HH:mm; only when all_day = 0',
+  `end_time` time DEFAULT NULL,
+  `location` varchar(200) DEFAULT NULL,
+  `created_by_user_id` uuid NOT NULL COMMENT 'FK -> users (author)',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `ix_events_start_date` (`start_date`),
+  KEY `ix_events_date_range` (`start_date`,`end_date`),
+  KEY `fk_events_created_by` (`created_by_user_id`),
+  CONSTRAINT `fk_events_created_by` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `ck_events_dates` CHECK (`end_date` is null or `end_date` >= `start_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.grades
 CREATE TABLE IF NOT EXISTS `grades` (
@@ -379,7 +428,7 @@ CREATE TABLE IF NOT EXISTS `grades` (
   PRIMARY KEY (`gradeID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.grades: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.grading_scale_bands
 CREATE TABLE IF NOT EXISTS `grading_scale_bands` (
@@ -398,7 +447,7 @@ CREATE TABLE IF NOT EXISTS `grading_scale_bands` (
   CONSTRAINT `ck_bands_range` CHECK (`min_score` >= 0 and `max_score` <= 100 and `min_score` <= `max_score`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.grading_scale_bands: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.grading_scales
 CREATE TABLE IF NOT EXISTS `grading_scales` (
@@ -420,7 +469,7 @@ CREATE TABLE IF NOT EXISTS `grading_scales` (
   CONSTRAINT `ck_grading_scales_passmark` CHECK (`pass_mark` between 0 and 100)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.grading_scales: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.login_attempts
 CREATE TABLE IF NOT EXISTS `login_attempts` (
@@ -429,13 +478,13 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
   `user_id` uuid DEFAULT NULL COMMENT 'FK → users if resolved',
   `succeeded` tinyint(1) NOT NULL,
   `ip_address` inet6 DEFAULT NULL,
-  `attempted_at` datetime NOT NULL,
+  `attempted_at` datetime NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `fk_login_attempts_user` (`user_id`),
   CONSTRAINT `fk_login_attempts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.login_attempts: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.password_reset_tokens
 CREATE TABLE IF NOT EXISTS `password_reset_tokens` (
@@ -455,15 +504,15 @@ CREATE TABLE IF NOT EXISTS `password_reset_tokens` (
   CONSTRAINT `fk_pwreset_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.password_reset_tokens: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.refresh_sessions
 CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK; also the token''s jti',
   `user_id` uuid NOT NULL COMMENT 'FK → users',
   `token_hash` varchar(64) NOT NULL COMMENT 'SHA-256 hex of the refresh token (64 chars)',
-  `issued_at` datetime NOT NULL,
-  `last_used_at` datetime NOT NULL COMMENT 'Idle-timeout basis',
+  `issued_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `last_used_at` datetime NOT NULL DEFAULT current_timestamp(),
   `expires_at` datetime NOT NULL COMMENT 'Absolute expiry (~7 days)',
   `is_revoked` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Logout/reset/lockout sets true',
   `revoked_at` datetime DEFAULT NULL,
@@ -477,7 +526,7 @@ CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   CONSTRAINT `fk_refresh_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.refresh_sessions: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.report_card_snapshots
 CREATE TABLE IF NOT EXISTS `report_card_snapshots` (
@@ -496,7 +545,7 @@ CREATE TABLE IF NOT EXISTS `report_card_snapshots` (
   CONSTRAINT `fk_report_card_student` FOREIGN KEY (`student_id`) REFERENCES `student_profiles` (`id`) ON DELETE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.report_card_snapshots: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.school_profile
 CREATE TABLE IF NOT EXISTS `school_profile` (
@@ -520,7 +569,7 @@ CREATE TABLE IF NOT EXISTS `school_profile` (
   CONSTRAINT `ck_school_profile_singleton` CHECK (`id` = 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.school_profile: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.semesters
 CREATE TABLE IF NOT EXISTS `semesters` (
@@ -542,7 +591,7 @@ CREATE TABLE IF NOT EXISTS `semesters` (
   CONSTRAINT `ck_semesters_dates` CHECK (`end_date` > `start_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.semesters: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.staff
 CREATE TABLE IF NOT EXISTS `staff` (
@@ -563,7 +612,7 @@ CREATE TABLE IF NOT EXISTS `staff` (
   PRIMARY KEY (`staffID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.staff: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.student_documents
 CREATE TABLE IF NOT EXISTS `student_documents` (
@@ -589,7 +638,7 @@ CREATE TABLE IF NOT EXISTS `student_documents` (
   CONSTRAINT `fk_student_documents_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.student_documents: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.student_profiles
 CREATE TABLE IF NOT EXISTS `student_profiles` (
@@ -622,7 +671,7 @@ CREATE TABLE IF NOT EXISTS `student_profiles` (
   CONSTRAINT `fk_student_profiles_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.student_profiles: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.students
 CREATE TABLE IF NOT EXISTS `students` (
@@ -644,7 +693,7 @@ CREATE TABLE IF NOT EXISTS `students` (
   PRIMARY KEY (`studentID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.students: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.subjects
 CREATE TABLE IF NOT EXISTS `subjects` (
@@ -654,16 +703,17 @@ CREATE TABLE IF NOT EXISTS `subjects` (
   `category` varchar(20) DEFAULT NULL,
   `elective` bit(1) DEFAULT NULL,
   `deleted_at` timestamp NULL DEFAULT NULL,
-  `is_active` int(11) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) VIRTUAL,
   `unique_code` varchar(255) GENERATED ALWAYS AS (if(`deleted_at` is null,`code`,NULL)) STORED,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `active_name` varchar(70) GENERATED ALWAYS AS (if(`deleted_at` is null,`name`,NULL)) STORED,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `subjectName_is_active` (`name`,`is_active`),
-  UNIQUE KEY `uq_subjects_code` (`unique_code`)
+  UNIQUE KEY `uq_subjects_code` (`unique_code`),
+  UNIQUE KEY `uq_subjects_name` (`active_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.subjects: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.teacher_profiles
 CREATE TABLE IF NOT EXISTS `teacher_profiles` (
@@ -700,7 +750,7 @@ CREATE TABLE IF NOT EXISTS `teacher_profiles` (
   CONSTRAINT `ck_teacher_profiles_expertise_json` CHECK (`expertise` is null or json_valid(`expertise`))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.teacher_profiles: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.term_grade_snapshots
 CREATE TABLE IF NOT EXISTS `term_grade_snapshots` (
@@ -728,7 +778,7 @@ CREATE TABLE IF NOT EXISTS `term_grade_snapshots` (
   CONSTRAINT `fk_term_snapshot_subject` FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`) ON DELETE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.term_grade_snapshots: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.user_preferences
 CREATE TABLE IF NOT EXISTS `user_preferences` (
@@ -744,7 +794,7 @@ CREATE TABLE IF NOT EXISTS `user_preferences` (
   CONSTRAINT `ck_user_preferences_page_size` CHECK (`default_page_size` between 5 and 200)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.user_preferences: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 -- Dumping structure for table sims.users
 CREATE TABLE IF NOT EXISTS `users` (
@@ -776,7 +826,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   CONSTRAINT `ck_users_failed_login_nonneg` CHECK (`failed_login_count` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='Authentication principal. One role per user. Principal/Secretary are admin accounts; Teacher/Student users link 1:1 to a profile row.';
 
--- Dumping data for table sims.users: ~0 rows (approximately)
+-- Data exporting was unselected.
 
 /*!40103 SET TIME_ZONE=IFNULL(@OLD_TIME_ZONE, 'system') */;
 /*!40101 SET SQL_MODE=IFNULL(@OLD_SQL_MODE, '') */;

@@ -53,6 +53,7 @@ from app.modules.settings.router import router as settings_router
 from app.modules.students.router import router as students_router
 from app.modules.subjects.router import router as subjects_router
 from app.modules.teachers.router import router as teachers_router
+from app.modules.timetable.router import router as timetable_router
 
 API_V1_PREFIX = "/api/v1"
 
@@ -77,6 +78,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     dashboard_router,  # 7.9a — serves GET /api/v1/dashboard (api-spec §5 Module 2)
     reports_router,  # 7.9b — serves /api/v1/reports/* (api-spec §5 Module 10)
     events_router,  # 12 — serves /api/v1/events/* (scope addition; see progress-tracker)
+    timetable_router,  # 13 — serves /api/v1/timetable/* (D29 sixth-form schedule)
 ]
 
 

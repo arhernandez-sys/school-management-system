@@ -28,6 +28,9 @@ export const strings = {
     myProfile: 'My Profile',
     // Student possessive labels (design-system §3.2)
     myClasses: 'My Classes',
+    // Same label for a student and a teacher: both mean "my own week". The page differs
+    // only in whose classes it lists, which the server decides.
+    myTimetable: 'My Timetable',
     myGrades: 'My Grades',
     myAttendance: 'My Attendance',
   },

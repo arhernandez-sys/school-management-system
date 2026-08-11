@@ -123,6 +123,9 @@ class _Graph:
             date_of_birth=date(2012, 3, 4),
             enrollment_date=date(2025, 9, 1),
             status="active",
+            # D29: the level lives on the student, not on a homeroom, and the report
+            # card header reads it from here.
+            year_group="Lower 6",
         )
         if with_login:
             user = self._make_user(role=Role.STUDENT, full_name=s.full_name)
@@ -254,10 +257,9 @@ class TestStudentPicker:
         item = next(i for i in body["items"] if i["id"] == str(graph.student.id))
         assert set(item.keys()) == {
             "id", "full_name", "student_number", "date_of_birth", "status",
-            "section_id", "section_name", "grade_level",
+            "year_group",
         }
-        assert item["section_name"] == graph.section.name
-        assert item["grade_level"] == "Form 1"
+        assert item["year_group"] == "Lower 6"
         assert item["date_of_birth"] == "2012-03-04"
 
     def test_search_by_name(self, client, graph) -> None:
@@ -295,9 +297,11 @@ class TestReportCard:
     def test_top_level_keys(self, client, graph) -> None:
         body = _card(client, graph, student_id=graph.student.id).json()
         assert set(body.keys()) == {
-            "student", "section", "semester", "school", "subjects",
+            "student", "year_group", "semester", "school", "subjects",
             "attendance_summary", "term_average", "term_average_letter", "is_frozen",
         }
+        # D29: the header names the student's LEVEL, not a homeroom.
+        assert body["year_group"] == "Lower 6"
 
     def test_unknown_student_404(self, client, graph) -> None:
         r = _card(client, graph, student_id=uuid.uuid4())

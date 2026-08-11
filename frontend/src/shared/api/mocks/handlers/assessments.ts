@@ -5,7 +5,6 @@ import {
   DEMO_DATASET,
   DEMO_IDS,
   assessmentsForClassSubject,
-  classSubjectsForSection,
   classSubjectsForYear,
   classSubjectsOwnedByTeacher,
   currentDemoStudent,
@@ -15,7 +14,7 @@ import {
   getSubject,
   gradesForAssessment,
   paginate,
-  sectionForStudentInYear,
+  classSubjectsForStudent,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAssessment,
@@ -161,8 +160,8 @@ export const assessmentsHandlers: RequestHandler[] = [
        *     membership already scopes the rows to the year, so the flag is redundant
        *     here and actively harmful. `handlers/grades.ts` documents the same trap.
        */
-      const section = yearId ? sectionForStudentInYear(student.id, yearId) : undefined;
-      rows = classSubjectsForSection(section?.id ?? student.section_id ?? '');
+      // D29: every class the student sits, not the offerings of their one section.
+      rows = classSubjectsForStudent(student.id, yearId);
     } else if (scope === 'me' && teacherId) {
       rows = classSubjectsOwnedByTeacher(teacherId);
       if (yearCsIds) rows = rows.filter((cs) => yearCsIds.has(cs.id));
@@ -310,11 +309,8 @@ export const assessmentsHandlers: RequestHandler[] = [
        */
       const studentYearId =
         url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
-      const section = studentYearId
-        ? sectionForStudentInYear(student.id, studentYearId)
-        : undefined;
       const ownIds = new Set(
-        classSubjectsForSection(section?.id ?? student.section_id ?? '').map((cs) => cs.id),
+        classSubjectsForStudent(student.id, studentYearId).map((cs) => cs.id),
       );
       const visibleIds =
         classSubjectId && ownIds.has(classSubjectId)

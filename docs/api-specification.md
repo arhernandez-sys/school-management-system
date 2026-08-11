@@ -243,9 +243,9 @@ AnnouncementAudience = all | students | teachers | class
 
 ### 5.0 Module index & endpoint counts
 
-> **⚙️ RECONCILED AGAINST THE SHIPPED BACKEND, 2026-07-28.** Phase 7 is complete; the
-> served OpenAPI (`backend/openapi.json`) is now the authoritative surface — **70 path
-> templates / 99 operations**. Where this document and the finished frontend disagreed,
+> **⚙️ RECONCILED AGAINST THE SHIPPED BACKEND, 2026-08-06 (D29).** Phase 7 is complete; the
+> served OpenAPI (`backend/openapi.json`) is the authoritative surface — **77 path
+> templates / 107 operations**. Where this document and the finished frontend disagreed,
 > **the frontend won** and the spec has been corrected here; every such change is listed
 > in §5.0a. The per-module counts below are the *operation* counts actually served.
 
@@ -255,7 +255,7 @@ AnnouncementAudience = all | students | teachers | class
 | 2 | Dashboard | 1 |
 | 3 | Students | 10 |
 | 4 | Teachers | 6 |
-| 5 | Classes/Sections (+ class_subjects, teachers, enrollment, categories) | 17 |
+| 5 | Classes (subject classes: + class_subjects, teachers, **meetings**, enrollment, categories) | 19 |
 | 5b | **Subjects (catalog — feeds the subject picker)** | 4 |
 | 6 | Assessments (+ status + release + the grade write) | 10 |
 | 7 | Grades | 4 |
@@ -264,8 +264,9 @@ AnnouncementAudience = all | students | teachers | class
 | 10 | Reports (incl. Transcript) | 7 |
 | 11 | Settings | 18 |
 | 12 | **Calendar / Events (scope addition, 2026-07)** | 4 |
+| 13 | **Timetable (D29 — Mon–Fri week)** | 2 |
 | — | Health | 1 |
-| | **Total** | **101** |
+| | **Total** | **109** |
 
 > **Count notes.** Module 5 (17) now includes the 4 assessment-category operations,
 > which are served under `/classes/{id}/subjects/{cs}/categories`. Module 6 (10) includes
@@ -448,31 +449,54 @@ Tables: `teacher_profiles`, `class_teachers`. FR-TCH-01..07.
 
 ---
 
-### Module 5 — Classes / Sections (+ class_subjects, teachers, enrollment)
-The hub (D23). Tables: `classes` (section), `class_subjects`, `class_teachers`, `class_enrollments`, `subjects`. FR-CLS-01..08. **All write paths reject mutations to a section whose academic year is `archived`** (FR-CLS-06; schema §5 rule 7) → `409 year_archived`.
+### Module 5 — Classes (subject classes: + class_subjects, teachers, meetings, enrollment)
+The hub (**D29**). Tables: `classes` (the subject class), `class_subjects` (exactly one per class), `class_teachers`, `class_meetings`, `class_enrollments`, `subjects`. FR-CLS-01..09, FR-SCH-01/02. **All write paths reject mutations to a class whose academic year is `archived`** (FR-CLS-06; schema §5 rule 7) → `409 year_archived`.
+
+> **D29 wire changes (breaking, intentional).**
+> * `ClassListItem` / `ClassDetail` gained `subject`, `class_subject_id`, `teachers`,
+>   `lead_teacher_id`, `meetings` — a subject-class row is unreadable without them, and
+>   fetching them per row would be N+1 from the client.
+> * `subject_count` is **gone** from `ClassListItem` (it is always 1).
+> * `POST /classes` requires `subject_id`, and accepts `teacher_ids` + `meetings` so a whole
+>   class is created in one request.
+> * `EnrollmentResult.transferred` is **gone**; `schedule_conflicts` replaces it.
 
 #### `GET /classes`
 - **Purpose:** sections list.
-- **Authz:** `require_role(principal, secretary, teacher, student)`. **Scope:** P/S = all; Teacher = sections owning any `class_subject` of; Student = their one enrolled section (`student_scope`).
-- **Query:** list params + `academic_year_id?` (default active), `grade_level?`, `search` (section name).
-- **Success `200`:** `Page[ClassListItem]` `{ id, name, grade_level, section?, capacity?, enrolled_count:int, subject_count:int, is_archived:bool }`.
+- **Authz:** `require_role(principal, secretary, teacher, student)`. **Scope:** P/S = all; Teacher = classes they teach; Student = **every class they are actively enrolled in** (`student_scope` — a LIST under D29, not one row).
+- **Query:** list params + `academic_year_id?` (default active), `grade_level?` (the year group a class is *for*), `subject_id?` (e.g. both Math classes), `search` (class name).
+- **Success `200`:** `Page[ClassListItem]` `{ id, name, grade_level, section?, capacity?, enrolled_count:int, is_archived:bool, subject: SubjectRef?, class_subject_id?, teachers: TeacherRef[], lead_teacher_id?, meetings: ClassMeeting[] }`.
 
 #### `GET /classes/{id}`
 - **Authz:** P/S; Teacher (owns any subject → else `404`); Student (enrolled → else `404`, limited fields).
-- **Success `200`:** `ClassDetail { id, name, grade_level, section?, capacity?, academic_year: AcademicYearRef, enrolled_count, over_capacity: bool, is_archived, audit: AuditStamp }`. `over_capacity` is the warn-only flag (D-Q6).
+- **Success `200`:** `ClassDetail { id, name, grade_level, section?, capacity?, academic_year: AcademicYearRef, enrolled_count, over_capacity: bool, is_archived, subject: SubjectRef?, class_subject_id?, teachers: TeacherRef[], lead_teacher_id?, meetings: ClassMeeting[], audit: AuditStamp }`. `over_capacity` is the warn-only flag (D-Q6).
 
 > **Naming (S5):** `over_capacity` (on `ClassDetail`/`ClassListItem`) is a **state** flag — "this section's roster currently exceeds `capacity`" — read any time. `over_capacity_warning` (returned by `POST .../enrollments`, §5) is an **action result** — "the enrollment you just performed pushed it over." Same underlying condition (D-Q6 warn-only), two intentionally distinct names: one is a persistent property of the section, the other is per-mutation feedback the SPA toasts. Neither ever blocks.
 
 #### `POST /classes`
 - **Authz:** `require_role(principal, secretary)` (FR-CLS-01).
-- **Request body `ClassCreate`:** `name` (unique per active year among live), `grade_level`, `section?`, `capacity?` (>0 if set; **advisory** only, D-Q6), `academic_year_id?` (default active).
-- **Success `201`:** `ClassDetail`. **Errors:** `409 duplicate_class_name` (per year), `422`, `409 year_archived`.
+- **Request body `ClassCreate`:** `name` (unique per active year among live), **`subject_id` (REQUIRED, D29)**, `grade_level` (the year group the class is for), `section?`, `capacity?` (>0 if set; **advisory** only, D-Q6), `academic_year_id?` (default active), `teacher_ids?`, `lead_teacher_id?`, `meetings?`.
+- The class, its single `class_subjects` row, its teachers and its meetings are created in **one transaction** — a class with no subject cannot be graded, scheduled or enrolled into, so a partial create would leave an unusable row.
+- **Success `201`:** `ClassDetail`. **Errors:** `409 duplicate_class_name` (per year), `404 subject_not_found`, `404 teacher_not_found`, `422` (incl. missing `subject_id`), `409 year_archived`.
 
 #### `PATCH /classes/{id}` / `DELETE /classes/{id}`
 - **Authz:** `require_role(principal, secretary)`.
 - `PATCH` edits name/grade_level/section/capacity. `DELETE` soft-deletes **only if** no `class_subjects` carry history (FK `RESTRICT`) → else `409 class_has_history` ("archive instead", FR-CLS-08). Whole-year archival is a Settings action (§5.11).
 
-#### Sub-resource: subjects within a section (`class_subjects`) — FR-CLS-01a
+#### Sub-resource: the weekly schedule (`class_meetings`) — FR-SCH-01/02
+
+##### `GET /classes/{id}/meetings`
+- **Authz:** anyone who can read the class (P/S any; Teacher owns; Student enrolled — else `404`).
+- **Success `200`:** `MeetingsResult { meetings: ClassMeeting[], conflicts: [] }` where `ClassMeeting = { id, day_of_week:1..5, start_time, end_time, room? }`, ordered Mon→Fri then earliest-first. `conflicts` is always empty on a read.
+
+##### `PUT /classes/{id}/meetings`
+- **Authz:** `require_role(principal, secretary)`.
+- **Request body `MeetingsReplace`:** `{ meetings: [{ day_of_week:1..5, start_time, end_time, room? }] }` — **REPLACES the whole week** (mirrors the teachers PUT). An empty list is valid and clears the schedule; replace-the-set means a retimed week cannot half-apply.
+- **Success `200`:** `MeetingsResult { meetings, conflicts: ScheduleConflict[] }`.
+- **`conflicts` IS NOT AN ERROR (FR-SCH-06).** A teacher or room double-booking, or a self-overlap in the submitted week, is **reported and the write still succeeds** — the same warn-only call as over-capacity enrollment (D-Q6). Clients must not treat `conflicts.length > 0` as failure. `ScheduleConflict = { kind: 'teacher'|'room'|'student', label, with_class_id, with_class_name, day_of_week, start_time, end_time, message }`; `message` is server-rendered so the identical sentence appears in every surface.
+- **Errors:** `409 year_archived`, `409 subject_not_set` (a pre-D29 class with no offering has nothing to schedule), `422` (day outside 1..5, or `end_time <= start_time`).
+
+#### Sub-resource: the class's subject (`class_subjects`) — FR-CLS-01a
 
 ##### `GET /classes/{id}/subjects`
 - **Authz:** P/S; Teacher (owns any subject in section); Student (enrolled).
@@ -497,7 +521,7 @@ The hub (D23). Tables: `classes` (section), `class_subjects`, `class_teachers`, 
 - **Success `200`:** `ClassSubjectItem` (updated `teachers`). Reconciles `class_teachers` rows in one transaction; `audit_log("class_subject.assign_teachers")`. An **empty set is allowed** (offering temporarily unstaffed; Secretary dashboard flags "needs setup").
 - **Errors:** `404 teacher_not_found`/`404 class_subject_not_found`, `409 year_archived`, `422`.
 
-#### Sub-resource: section roster / enrollment (`class_enrollments`) — FR-CLS-02, FR-STU-05
+#### Sub-resource: class roster / enrollment (`class_enrollments`) — FR-CLS-02, FR-STU-05
 
 ##### `GET /classes/{id}/roster`
 - **Authz:** P/S; Teacher (owns any subject → read-only roster); **Student does NOT get peer roster** (privacy, UI §7.5) → `404`.
@@ -505,12 +529,14 @@ The hub (D23). Tables: `classes` (section), `class_subjects`, `class_teachers`, 
 - **Success `200`:** `RosterEntry[]` `{ enrollment_id, student: StudentRef, enrolled_at, unenrolled_at? }`. `unenrolled_at` is null for active members; present (and only returned) for withdrawn/transferred entries when `include=withdrawn`. Not paginated (a section is ≤ ~35).
 - **Note (S3, ties M3):** the **roster** is active membership; a transferred/withdrawn student's *grade and attendance history* on this section does **not** disappear with their roster row — it remains in the gradebook (§5.7 read = grade rows ∪ active roster) and in `/grades/term` / report cards, keyed by `class_subject`+semester regardless of enrollment state.
 
-##### `POST /classes/{id}/enrollments` — enroll (incl. bulk) / transfer
-- **Purpose:** enroll one or more students into **this section** for a semester (FR-CLS-02, FR-STU-05). Since a student is in **exactly one section** per semester, enrolling one already enrolled elsewhere is a **transfer** (service `unenrolled_at`-stamps the prior active enrollment and creates the new one, one transaction).
+##### `POST /classes/{id}/enrollments` — enroll (incl. bulk)
+- **Purpose:** enroll one or more students into **this subject class** for a semester (FR-CLS-02, FR-STU-05).
+- **PURELY ADDITIVE (D29) — it is NOT a transfer.** This endpoint used to `unenrolled_at`-stamp the student's active enrollment anywhere else in the semester, because a student could sit only one section. Under the subject-class model that is **data loss**: adding Freddy to Biology would silently drop him from Math. A student holds many concurrent enrollments; the only way to leave a class is `DELETE .../enrollments/{id}`.
 - **Authz:** `require_role(principal, secretary)`.
-- **Request body:** `{ student_ids: uuid[], semester_id?: uuid }` (default active).
+- **Request body:** `{ student_ids: uuid[], semester_id?: uuid }` (default active). Idempotent — re-enrolling into the same class adds no second row.
 - **Behavior (capacity):** **warn-only** (D-Q6) — enrollment **succeeds** even over `capacity`; response carries `over_capacity_warning: true`. The API never hard-blocks on capacity.
-- **Success `200`:** `{ enrolled: RosterEntry[], transferred:{ student_id, from_class_id }[], over_capacity_warning: bool }`. `audit_log` per student (`enrollment.enroll`/`enrollment.transfer`).
+- **Behavior (timetable):** also warn-only. If the class's week overlaps one the student already sits, the clash is returned in `schedule_conflicts` and **the enrollment still succeeds** (FR-SCH-06).
+- **Success `200`:** `{ enrolled: RosterEntry[], over_capacity_warning: bool, schedule_conflicts: ScheduleConflict[] }`. **`transferred` is GONE** (D29) — it reported behaviour that no longer exists. `audit_log` per student (`class.enroll`).
 - **Errors:** `409 year_archived`, `404 student_not_found`, `422`.
 
 ##### `DELETE /classes/{class_id}/enrollments/{enrollment_id}` — withdraw from roster
@@ -520,7 +546,7 @@ The hub (D23). Tables: `classes` (section), `class_subjects`, `class_teachers`, 
 
 > **Enrollment is the assessment-first enforcement point (schema §3.D/§10).** There is **no** endpoint to create a grade for a non-enrolled student; grade rows seed from this roster (§5.7). Transfer/withdraw never fabricates or destroys grades — it stamps `unenrolled_at` and leaves history intact (FKs `RESTRICT`).
 
-> **Transferred-student grade/term provenance (M3) — the explicit contract.** When a student transfers (prior `class_enrollments` row gets `unenrolled_at` set; a new row created in the destination section), the rules are:
+> **Withdrawn/switched-student grade provenance (M3) — the explicit contract.** D29 removed the automatic transfer, but a student can still **switch classes** — the office withdraws them from Math-1 and enrolls them into Math-2, two explicit actions. The provenance rules below are unchanged and still govern that case (read "transfers" as "is withdrawn from one class and enrolled into another"):
 > 1. **Prior `assessment_grades` are preserved** — they reference the old `enrollment_id`, whose `class_enrollments` row still exists (it is only `unenrolled_at`-stamped, never deleted; the grade→enrollment FK is `RESTRICT`). No grade is moved, copied, or dropped on transfer.
 > 2. **The prior section's gradebook still shows that student's historical rows.** The gradebook read (§5.7) is defined as **grade rows ∪ active roster**, *not* active roster alone: any student who has an `assessment_grade` for an assessment of that `class_subject` appears in the grid (flagged `withdrawn` so the teacher knows they left), so the data the teacher entered never becomes invisible. A purely-active-roster read would have hidden it — explicitly avoided.
 > 3. **`/grades/term` and the report card aggregate per `(student, class_subject, semester)`** — they sum the student's `assessment_grades` for that subject+semester **regardless of which enrollment sourced each row**. A student who took half the term in section A and transferred to section B *for the same subject offering* would (in the section model, D23) have grades under whichever `class_subject` rows applied; each `(student, class_subject, semester)` term grade is computed independently from its own grade rows. The term grade is **not** keyed on `enrollment_id`, so a transfer never splits or double-counts it.
@@ -708,8 +734,8 @@ Tables: `assessment_grades`, `term_grade_snapshots`. **Compute-on-read term grad
 
 ---
 
-### Module 8 — Attendance (per-section, per-day; FR-ATT-01..09; D-Q4)
-Table: `attendance_records`. Section-scoped (homeroom), **not** per subject (schema §3.E).
+### Module 8 — Attendance (per subject class, per-day; FR-ATT-01..09; D-Q4, D29)
+Table: `attendance_records`. **Per SUBJECT CLASS**, once per day (D29 — it was per homeroom; with no homeroom, the subject class is the only roster there is). A student can be present in Biology and absent in Math on the same day. D-Q4's per-day granularity is unchanged, and so is the wire shape: `class_id` / `section_id` still address a `classes` row, which is what they always did.
 
 #### `GET /attendance/class/{class_id}` — daily register read
 - **Purpose:** the attendance sheet for a section + date; full roster + existing rows (FR-ATT-02 default-present is a UI default). UI §7.6.
@@ -874,6 +900,31 @@ Tables: `school_profile`, `academic_years`, `semesters`, `grading_scales`, `grad
 > *(Settings = 17 endpoints: school 3; academic 6 (active-term, list-years, list-semesters, create-year, activate-semester, archive-year); grading-scale 2; assessment-policy 2; users 3; account 2 → 18 listed; the index rounds the active-term lightweight read into the academic group → 17. The list above is authoritative over the count.)*
 
 ---
+
+### Module 13 — Timetable (D29; FR-SCH-03..05)
+No tables of its own — it reads `class_meetings` through `class_subjects` and joins to either `class_enrollments` (a student's week) or `class_teachers` (a teacher's week). It lives in its own module rather than inside Classes because it spans two different notions of "my classes" and belongs to neither Students nor Teachers.
+
+> **Response shape.** The week is **pre-bucketed by weekday** — `days: [{ day_of_week, day_name, entries }]` — rather than a flat meeting list. Every consumer renders five columns (or five day-groups on mobile), so grouping server-side means the client never re-derives it, and **an empty day is explicit**: a flat list makes "Wednesday has no classes" indistinguishable from "Wednesday is missing from the data". All five weekdays are always present.
+>
+> **`unscheduled`** lists classes the viewer belongs to that have **no meetings yet**. Reported rather than omitted: such a class would otherwise be invisible here while still appearing under My Classes, which reads as a bug to the user and hides genuinely missing data from the office.
+
+#### `GET /timetable/me`
+- **Purpose:** the caller's own Mon–Fri week (FR-SCH-03/04).
+- **Authz:** `authenticated`. **Scope is server-derived from the token, never a param.** Student → the classes they are actively enrolled in; Teacher → the classes they teach; **P/S → an empty week, not a `403`** (they have no personal timetable and the nav never offers them this screen; returning empty keeps the endpoint honest for a client that asks anyway).
+- **Query:** `academic_year_id?` (default active) — scopes to one year so an archived year's classes are never interleaved into the current week.
+- **Success `200`:** `TimetableView { student: StudentRef?, academic_year_id?, days: TimetableDay[], unscheduled: UnscheduledClass[] }` where `TimetableDay = { day_of_week:1..5, day_name, entries: TimetableEntry[] }` and `TimetableEntry = { meeting_id, class_id, class_name, class_subject_id, subject: SubjectRef, teachers: TeacherRef[], room?, day_of_week, start_time, end_time }`. Entries are start-time ordered. `student` is null for a teacher's own week.
+- **Errors:** `401`, `404 student_not_found` (a student login with no linked profile).
+
+#### `GET /timetable/students/{student_id}`
+- **Purpose:** any student's week (FR-SCH-05) — the office checks it before enrolling them into one more class, which is the cheapest moment to catch a clash.
+- **Authz:** `require_role(principal, secretary)`.
+- **Query:** `academic_year_id?` (default active).
+- **Success `200`:** `TimetableView` (with `student` set). **Errors:** `403`, `404 student_not_found`.
+
+> There is deliberately **no whole-school timetable endpoint**. That is a room/teacher-utilisation report, not a personal week, and it belongs to Reports if it is ever needed.
+
+---
+
 
 ## 6. Pagination, Filtering, Sorting
 

@@ -1,8 +1,9 @@
 """Student domain models (database-schema.md §3.B, §3.G).
 
 `student_profiles` (PII + linkage), `student_documents` (metadata + storage key).
-Enrollment lives in classes/ (class_enrollments) to keep the section roster with
-the academic-structure module.
+Enrollment lives in classes/ (class_enrollments) to keep the class roster with the
+academic-structure module — and under D29 a student has MANY active enrollments, one
+per subject class they take.
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     full_name: Mapped[str] = mapped_column(Text(), nullable=False)
     date_of_birth: Mapped[date] = mapped_column(Date(), nullable=False)
     gender: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    #: The student's own level — "Lower 6" / "Upper 6" (D29). Free text, not an enum,
+    #: because the school names its levels and a v1 enum would force a migration to
+    #: rename them. Pre-D29 this was read off the student's homeroom
+    #: (`classes.grade_level`); with no homeroom to read, the report-card header and
+    #: the student-list level column come from here. Nullable so existing rows load.
+    year_group: Mapped[str | None] = mapped_column(Text(), nullable=True)
     enrollment_date: Mapped[date] = mapped_column(Date(), nullable=False)
     status: Mapped[StudentStatus] = mapped_column(
         enum_col(StudentStatus), nullable=False, server_default=text("'active'")

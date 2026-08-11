@@ -801,17 +801,24 @@ def _student_payload(
         # A student login with no profile still gets a renderable page.
         return StudentDashboard(**base, stats=StudentStats())
 
-    section = db.scalar(
-        select(Class)
-        .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
-        .where(
-            ClassEnrollment.student_id == student.id,
-            ClassEnrollment.semester_id == semester.id,
-            ClassEnrollment.unenrolled_at.is_(None),
+    # D29: EVERY subject class the student sits this term, not one homeroom. Taking
+    # the first (`.limit(1)`) used to be correct when a student had exactly one; now
+    # it would show one subject and silently drop the rest of their timetable.
+    class_ids = list(
+        dict.fromkeys(
+            db.scalars(
+                select(ClassEnrollment.class_id)
+                .join(Class, ClassEnrollment.class_id == Class.id)
+                .where(
+                    ClassEnrollment.student_id == student.id,
+                    ClassEnrollment.semester_id == semester.id,
+                    ClassEnrollment.unenrolled_at.is_(None),
+                    Class.deleted_at.is_(None),
+                )
+            ).all()
         )
-        .limit(1)
     )
-    if section is None:
+    if not class_ids:
         return StudentDashboard(
             **base,
             stats=StudentStats(),
@@ -822,7 +829,7 @@ def _student_payload(
         select(ClassSubject, Subject)
         .join(Subject, ClassSubject.subject_id == Subject.id)
         .where(
-            ClassSubject.class_id == section.id,
+            ClassSubject.class_id.in_(class_ids),
             ClassSubject.deleted_at.is_(None),
             ClassSubject.is_active.is_(True),
         )

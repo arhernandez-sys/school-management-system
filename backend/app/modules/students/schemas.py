@@ -26,22 +26,31 @@ from app.common.schemas import AuditStamp, ClassRef, SubjectRef
 # Read models (api-spec §5.3)
 # ──────────────────────────────────────────────────────────────────────────────
 class StudentListItem(BaseModel):
-    """GET /students item (api-spec §5.3)."""
+    """GET /students item (api-spec §5.3).
+
+    D29 replaced `current_section` (one homeroom) with `year_group` + `class_count`.
+    The list needs a scannable level and "how many subjects do they take"; the class
+    NAMES belong on the detail page, and putting a variable-length list in a table cell
+    was the alternative.
+    """
 
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     student_number: str
     full_name: str
     status: StudentStatus
-    current_section: ClassRef | None = None
+    #: The student's own level, e.g. "Lower 6" (D29). Was read off their homeroom.
+    year_group: str | None = None
+    #: Active subject classes for the resolved semester.
+    class_count: int = 0
     guardian_name: str | None = None
 
 
 class StudentDetail(BaseModel):
     """GET /students/{id}, /students/me + POST/PATCH/status responses.
 
-    Mirrors `student_profiles` (schema §3.B) plus the derived `current_section`
-    (the student's active section for the active semester) and the audit stamp.
+    Mirrors `student_profiles` (schema §3.B) plus the derived `current_classes` (every
+    subject class the student actively sits, D29) and the audit stamp.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -50,6 +59,7 @@ class StudentDetail(BaseModel):
     full_name: str
     date_of_birth: date
     gender: str | None = None
+    year_group: str | None = None
     enrollment_date: date
     status: StudentStatus
     guardian_name: str | None = None
@@ -57,7 +67,8 @@ class StudentDetail(BaseModel):
     guardian_email: str | None = None
     address: str | None = None
     phone: str | None = None
-    current_section: ClassRef | None = None
+    #: Every subject class the student is actively enrolled in, name-ordered.
+    current_classes: list[ClassRef] = Field(default_factory=list)
     audit: AuditStamp | None = None
 
 
@@ -150,9 +161,11 @@ class StudentCreateRequest(BaseModel):
     """POST /students (api-spec §5.3, FR-STU-01/02/05).
 
     `status` is accepted here (defaults active). Lifecycle CHANGES after creation
-    go through POST /students/{id}/status — not PATCH. `section_id`, if present,
-    enrolls the student into that section for the active semester in the same
-    transaction.
+    go through POST /students/{id}/status — not PATCH.
+
+    D29: `class_ids` replaces the old single `section_id` and enrols the student into
+    every listed subject class for the active semester in the same transaction, so the
+    office can register a sixth-former and their whole subject load in one action.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -160,6 +173,7 @@ class StudentCreateRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=160)
     date_of_birth: date
     gender: str | None = Field(default=None, max_length=40)
+    year_group: str | None = Field(default=None, max_length=50)
     enrollment_date: date
     status: StudentStatus = StudentStatus.ACTIVE
     guardian_name: str | None = Field(default=None, max_length=160)
@@ -167,7 +181,7 @@ class StudentCreateRequest(BaseModel):
     guardian_email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=500)
     phone: str | None = Field(default=None, max_length=40)
-    section_id: UUID | None = None
+    class_ids: list[UUID] = Field(default_factory=list)
 
 
 class StudentUpdateRequest(BaseModel):
@@ -175,8 +189,9 @@ class StudentUpdateRequest(BaseModel):
 
     All fields optional (partial update). `status` is intentionally ABSENT — it is
     NOT editable here; lifecycle goes through the dedicated status endpoint
-    (auditable, guarded). `section_id` is likewise not a PATCH field — enrollment/
-    transfer is a Classes-module action.
+    (auditable, guarded). Class enrolment is likewise not a PATCH field — it is a
+    Classes-module action (`POST /classes/{id}/enrollments`), and under D29 a student
+    has many enrolments, so "set them from here" would be ambiguous about removals.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -184,6 +199,7 @@ class StudentUpdateRequest(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
     date_of_birth: date | None = None
     gender: str | None = Field(default=None, max_length=40)
+    year_group: str | None = Field(default=None, max_length=50)
     enrollment_date: date | None = None
     guardian_name: str | None = Field(default=None, max_length=160)
     guardian_phone: str | None = Field(default=None, max_length=40)

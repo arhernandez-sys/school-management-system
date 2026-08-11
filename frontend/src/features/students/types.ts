@@ -9,12 +9,18 @@
 import type { Page } from '@shared/types/api';
 import type { StudentStatus, AssessmentType, GradeStatus } from '@shared/types/enums';
 
-/** Lightweight ref to the student's current (active-semester) section. */
-export interface StudentSectionRef {
+/**
+ * Lightweight ref to one subject class the student is enrolled in.
+ *
+ * `grade_level` here is the YEAR GROUP THE CLASS IS FOR, not the student's own level —
+ * the student's level is `year_group` on the profile (D29). The two are usually equal
+ * and are still distinct fields.
+ */
+export interface StudentClassRef {
   id: string;
   name: string;
   grade_level: string;
-  section: string;
+  section: string | null;
 }
 
 /** Row in GET /students. */
@@ -23,7 +29,10 @@ export interface StudentListItem {
   student_number: string;
   full_name: string;
   status: StudentStatus;
-  current_section: StudentSectionRef | null;
+  /** The student's own level, e.g. "Lower 6" (D29 — replaced the homeroom's grade). */
+  year_group: string | null;
+  /** How many subject classes they actively sit this term (D29). */
+  class_count: number;
   guardian_name: string | null;
 }
 
@@ -34,6 +43,7 @@ export interface StudentDetail {
   full_name: string;
   date_of_birth: string;
   gender: 'male' | 'female';
+  year_group: string | null;
   enrollment_date: string;
   status: StudentStatus;
   guardian_name: string;
@@ -41,7 +51,12 @@ export interface StudentDetail {
   guardian_email: string;
   address: string;
   phone: string;
-  current_section: StudentSectionRef | null;
+  /**
+   * EVERY subject class the student actively sits (D29 — was `current_section`, one
+   * homeroom). Name-ordered. Empty when they are not enrolled anywhere, which is a
+   * normal state for a newly registered student.
+   */
+  current_classes: StudentClassRef[];
 }
 
 /** One assessment line under a subject group (GET /students/{id}/assessments). */
@@ -98,6 +113,7 @@ export interface StudentWritePayload {
   full_name: string;
   date_of_birth: string;
   gender?: 'male' | 'female';
+  year_group?: string | null;
   enrollment_date: string;
   status?: StudentStatus;
   guardian_name?: string;
@@ -105,7 +121,13 @@ export interface StudentWritePayload {
   guardian_email?: string;
   address?: string;
   phone?: string;
-  section_id?: string | null;
+  /**
+   * Subject classes to enrol into, in the same transaction as the create (D29 —
+   * replaced the single `section_id`). CREATE ONLY: PATCH rejects it, because with many
+   * enrolments "set them from here" would be ambiguous about removals. Later changes go
+   * through `POST /classes/{id}/enrollments`.
+   */
+  class_ids?: string[];
 }
 
 /** One academic year the student was enrolled in (GET /students/{id}/years). */
@@ -122,8 +144,13 @@ export interface StudentsListParams {
   sort?: string;
   search?: string;
   status?: StudentStatus;
+  /** Narrow to the roster of ONE subject class. */
   class_id?: string;
-  grade_level?: string;
+  /**
+   * Filter on the student's own level (D29 — replaced `grade_level`, which resolved
+   * through the homeroom and would now answer the wrong question).
+   */
+  year_group?: string;
   /** Per-module year switcher: restrict to students enrolled in this academic year. */
   academic_year_id?: string;
 }

@@ -13,6 +13,7 @@ import DashboardIcon from '@mui/icons-material/DashboardOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutline';
 import SchoolIcon from '@mui/icons-material/SchoolOutlined';
 import ClassIcon from '@mui/icons-material/ClassOutlined';
+import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
 import AssignmentIcon from '@mui/icons-material/AssignmentOutlined';
 import GradeIcon from '@mui/icons-material/GradingOutlined';
 import EventAvailableIcon from '@mui/icons-material/EventAvailableOutlined';
@@ -73,6 +74,14 @@ function buildSections(role: Role): NavSection[] {
           label: isStudent ? nav.myClasses : nav.classes,
           path: ROUTES.classes,
           icon: <ClassIcon />,
+        },
+        {
+          // Directly after Classes: the two answer "what do I take / teach" and "when and
+          // where is it", and are the pair a student uses most (D29).
+          module: 'timetable',
+          label: nav.myTimetable,
+          path: ROUTES.timetable,
+          icon: <ScheduleIcon />,
         },
         {
           module: 'assessments',

@@ -19,6 +19,18 @@ FastAPI/SQLAlchemy ORM models and the finished React frontend expect.
   a MariaDB UNIQUE), reusing the pattern already in `sims.sql`
   (`active_flag` / `is_active_number` / `unique_code` / `active_username`).
 
+## Run order
+
+Apply in numeric order; each is re-runnable. `010_seed_demo.sql` / `seed_demo.py` load
+demo data and are not part of the schema chain.
+
+| File | What it does |
+|---|---|
+| `001_missing_fields.sql` | The bulk reconciliation documented below. |
+| `002_column_defaults.sql` | `CURRENT_TIMESTAMP` defaults on three non-mixin timestamp columns (without them, every login fails with ERROR 1364). |
+| `003_subjects_is_active.sql` | Makes `subjects.is_active` a real column — 001 modelled it as generated, which MariaDB refuses to let the service write (ERROR 1906). |
+| `004_subject_class_model.sql` | **D29 sixth-form subject-class model:** new `class_meetings` table + `student_profiles.year_group`. See that file's header for why the reframe needed so little DDL. |
+
 ## Mixin column reference (from `db/base.py`)
 
 | Mixin | Columns added (MariaDB) |

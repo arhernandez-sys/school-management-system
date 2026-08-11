@@ -46,7 +46,7 @@ export function StudentPicker({ value, onChange, label = 'Student' }: StudentPic
       renderOption={(props, option) => (
         <li {...props} key={option.id}>
           {option.full_name} · {option.student_number}
-          {option.section_name ? ` · ${option.section_name}` : ''}
+          {option.year_group ? ` · ${option.year_group}` : ''}
         </li>
       )}
       sx={{ width: { xs: '100%', sm: 360 } }}

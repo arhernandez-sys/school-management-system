@@ -75,6 +75,24 @@ class AnnouncementAudience(str, enum.Enum):
     CLASS = "class"
 
 
+class DayOfWeek(int, enum.Enum):
+    """ISO weekday of a class meeting (D29 timetable).
+
+    Deliberately NOT in `PG_ENUM_NAMES`: this one is stored as a plain SmallInteger
+    rather than a native enum so `ORDER BY day_of_week, start_time` yields Mon→Fri
+    order for the timetable grid (a native enum would sort by label text). The DB
+    CHECK is `BETWEEN 1 AND 5` — sixth-form timetables are weekday-only, so there is
+    no SATURDAY/SUNDAY member; ISO numbering leaves room to relax that later without
+    renumbering the weekdays.
+    """
+
+    MONDAY = 1
+    TUESDAY = 2
+    WEDNESDAY = 3
+    THURSDAY = 4
+    FRIDAY = 5
+
+
 # Maps each Python enum to its Postgres native enum type name (schema §1.5).
 # The migration creates these types explicitly (create_type) before any table
 # uses them; the model columns reference the same names with create_type=False.

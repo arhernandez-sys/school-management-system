@@ -1,6 +1,7 @@
-"""Classes (sections) router (api-spec §5 Module 5) — 13 endpoints.
+"""Classes router (api-spec §5 Module 5) — 15 endpoints.
 
-Thin transport; the service owns DB + transactions. Mounts under `/api/v1`.
+A class is one SUBJECT CLASS ("Math-1") under D29. Thin transport; the service owns
+DB + transactions. Mounts under `/api/v1`.
 
   GET    /classes                                             P/S/T/Student  -> Page[ClassListItem]
   POST   /classes                                             P/S            -> ClassDetail (201)
@@ -11,6 +12,8 @@ Thin transport; the service owns DB + transactions. Mounts under `/api/v1`.
   POST   /classes/{id}/subjects                                P/S            -> ClassSubjectItem (201)
   DELETE /classes/{id}/subjects/{cs_id}                        P/S            -> 204
   PUT    /classes/{id}/subjects/{cs_id}/teachers               P/S            -> ClassSubjectItem
+  GET    /classes/{id}/meetings                                P/S/T/Student  -> MeetingsResult
+  PUT    /classes/{id}/meetings                                P/S            -> MeetingsResult
   GET    /classes/{id}/roster                                  P/S/T          -> RosterEntry[]
   GET    /classes/{id}/enrollable-students                     P/S            -> {items: StudentRef[]}
   POST   /classes/{id}/enrollments                             P/S            -> EnrollmentResult
@@ -40,6 +43,8 @@ from app.modules.classes.schemas import (
     EnrollableStudents,
     EnrollmentResult,
     EnrollRequest,
+    MeetingsReplaceRequest,
+    MeetingsResult,
     RosterEntry,
     TeacherAssignRequest,
 )
@@ -64,12 +69,14 @@ def list_classes(
     search: Annotated[str | None, Query(max_length=160)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     grade_level: Annotated[str | None, Query(max_length=50)] = None,
+    subject_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_any),
 ) -> Page[ClassListItem]:
     return service.list_classes(
         db, caller=caller, params=params, search=search,
         academic_year_id=academic_year_id, grade_level=grade_level,
+        subject_id=subject_id,
     )
 
 
@@ -202,9 +209,38 @@ def assign_teachers(
 
 
 @router.get(
+    "/{class_id}/meetings",
+    response_model=MeetingsResult,
+    summary="Weekly schedule of a class (P/S/T/Student scoped; FR-SCH-01)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def list_meetings(
+    class_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    caller: User = Depends(_any),
+) -> MeetingsResult:
+    return service.list_meetings(db, caller=caller, class_id=class_id)
+
+
+@router.put(
+    "/{class_id}/meetings",
+    response_model=MeetingsResult,
+    summary="Replace a class's weekly schedule (P/S; conflicts warn, never block; FR-SCH-02)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def replace_meetings(
+    class_id: uuid.UUID,
+    payload: MeetingsReplaceRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_manage),
+) -> MeetingsResult:
+    return service.replace_meetings(db, actor=actor, class_id=class_id, payload=payload)
+
+
+@router.get(
     "/{class_id}/roster",
     response_model=list[RosterEntry],
-    summary="Section roster (P/S; Teacher owns else 404; api-spec §5.5)",
+    summary="Class roster (P/S; Teacher owns else 404; api-spec §5.5)",
     responses={401: _ERR, 403: _ERR, 404: _ERR},
 )
 def get_roster(
@@ -240,7 +276,7 @@ def enrollable_students(
 @router.post(
     "/{class_id}/enrollments",
     response_model=EnrollmentResult,
-    summary="Enroll students into a section (P/S; transfer-aware; api-spec §5.5)",
+    summary="Enroll students into a subject class (P/S; additive — never transfers; D29)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def enroll_students(

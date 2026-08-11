@@ -5,15 +5,20 @@
 
 export type GradeReportStatus = 'graded' | 'pending';
 
+/**
+ * The student as printed on a report card / transcript / picker row.
+ *
+ * D29 replaced `section_id` / `section_name` / `grade_level` — all read off the
+ * student's homeroom — with `year_group`, the student's own level. A sixth-former sits
+ * many subject classes, so there is no single class whose name could head their card.
+ */
 export interface StudentRef {
   id: string;
   full_name: string;
   student_number: string;
   date_of_birth: string;
   status: string;
-  section_id: string | null;
-  section_name: string | null;
-  grade_level: string | null;
+  year_group: string | null;
 }
 
 export interface SchoolIdentity {
@@ -65,7 +70,11 @@ export interface AttendanceSummary {
 
 export interface ReportCard {
   student: StudentRef;
-  section: { id: string; name: string; grade_level: string } | null;
+  /**
+   * The student's level, e.g. "Lower 6". Replaced the old `section` block: the card
+   * covers every subject class they sit, so there is no one class to name (D29).
+   */
+  year_group: string | null;
   semester: SemesterRef;
   school: SchoolIdentity;
   subjects: ReportCardSubjectRow[];

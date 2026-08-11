@@ -10,7 +10,7 @@ import {
   getClassSubject,
   getSection,
   getStudent,
-  sectionForStudentInYear,
+  classSubjectsForStudent,
   getSubject,
   getTeacher,
   gradebookFor,
@@ -406,11 +406,8 @@ export const gradesHandlers = [
     if (scope === 'me' || role === 'student') {
       const studentId = currentStudentId(role) ?? url.searchParams.get('student_id');
       if (!studentId) return errorResponse(404, 'not_found', 'Student not found.');
-      const stu = getStudent(studentId);
-      const sectionId = stu?.section_id ?? null;
-      const offerings = sectionId
-        ? D.class_subjects.filter((c) => c.section_id === sectionId && c.is_active)
-        : [];
+      // D29: one term grade per subject class the student takes.
+      const offerings = classSubjectsForStudent(studentId).filter((c) => c.is_active);
       const items = offerings.map((cs) => {
         const term = computeTermGrade(studentId, cs.id);
         return {
@@ -448,19 +445,18 @@ export const gradesHandlers = [
     const role = sessionRole(cookies);
     const studentId = currentStudentId(role) ?? currentStudentId('student');
     if (!studentId) return errorResponse(404, 'not_found', 'Student profile not found.');
-    const stu = getStudent(studentId);
-    // Global student year switcher: resolve the section for the selected year (falls
-    // back to the current section). Past-year offerings are inactive, so scope by
-    // section membership rather than is_active.
+    // Global student year switcher: resolve the CLASSES the student sat that year (D29 —
+    // there is no single section). Past-year offerings are inactive, so scope by class
+    // membership rather than is_active.
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
     // Narrows within the year — the switcher now picks a year·semester pair, so both the
     // listed rows AND the term average below must come from the same semester (see the
     // note on computeReleasedTermGrade).
     const semesterId = url.searchParams.get('semester_id');
-    const section = yearId ? sectionForStudentInYear(studentId, yearId) : undefined;
-    const sectionId = section?.id ?? stu?.section_id ?? null;
-    const offerings = sectionId ? D.class_subjects.filter((c) => c.section_id === sectionId) : [];
+    // No `is_active` filter — a past year's offerings are all inactive by design, and the
+    // year switcher must still render them (the trap documented above).
+    const offerings = classSubjectsForStudent(studentId, yearId);
 
     const bySubject = offerings.map((cs) => {
       const csRef = classSubjectRef(cs.id);

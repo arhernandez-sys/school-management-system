@@ -4,7 +4,8 @@ import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
   attendanceSummaryForSection,
-  classSubjectsForSection,
+  classSubjectsForStudent,
+  rosterFor,
   computeTermGrade,
   getActiveSemester,
   getActiveYear,
@@ -65,17 +66,21 @@ function selfStudent(): DemoStudent | undefined {
 
 // ── Response shape builders ───────────────────────────────────────────────────────
 
+/**
+ * The student as printed on a report card / transcript / picker row.
+ *
+ * D29: `section_id` / `section_name` / `grade_level` are gone — all three were read off the
+ * student's homeroom, and a sixth-former has no single class to head their card with.
+ * `year_group` (their own level) replaces them.
+ */
 function studentRef(s: DemoStudent) {
-  const section = s.section_id ? getSection(s.section_id) : undefined;
   return {
     id: s.id,
     full_name: s.full_name,
     student_number: s.student_number,
     date_of_birth: s.date_of_birth,
     status: s.status,
-    section_id: s.section_id,
-    section_name: section?.name ?? null,
-    grade_level: section?.grade_level ?? null,
+    year_group: s.year_group,
   };
 }
 
@@ -116,8 +121,8 @@ function offeringFullyReleased(cs: DemoClassSubject): boolean {
  * `status:"pending"` with no numeric (AC 5.5) — P/S/teacher always see the computed value.
  */
 function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFilter: boolean) {
-  const section = student.section_id ? getSection(student.section_id) : undefined;
-  const offerings = section ? classSubjectsForSection(section.id).filter((cs) => cs.is_active) : [];
+  // D29: one row per subject class the student sits, not per subject of one homeroom.
+  const offerings = classSubjectsForStudent(student.id).filter((cs) => cs.is_active);
 
   const subjects = offerings
     .map((cs) => {
@@ -142,13 +147,23 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
       ? Math.round((graded.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / graded.length) * 100) / 100
       : null;
 
-  const att = section
-    ? attendanceSummaryForSection(section.id)
-    : { present: 0, absent: 0, late: 0, excused: 0, pct_present: 0 };
+  // D29: the student's own attendance across every class they sit, matching the backend
+  // (which scopes by student + semester, never by one class).
+  const attRows = D.attendance_records.filter((r) => r.student_id === student.id);
+  const attCounts = { present: 0, absent: 0, late: 0, excused: 0 };
+  for (const r of attRows) attCounts[r.status] += 1;
+  const att = {
+    ...attCounts,
+    pct_present: attRows.length
+      ? Math.round((attCounts.present / attRows.length) * 1000) / 10
+      : 0,
+  };
 
   return {
     student: studentRef(student),
-    section: section ? { id: section.id, name: section.name, grade_level: section.grade_level } : null,
+    // The `section` block is gone (D29) — the card spans every class the student sits, so
+    // there is no one class to name. The header shows their level instead.
+    year_group: student.year_group,
     semester: semesterRef(semester),
     school: schoolIdentity(),
     subjects,
@@ -170,9 +185,8 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
  * the active semester only, so completed/empty semesters render with no subjects.
  */
 function buildTranscript(student: DemoStudent) {
-  const section = student.section_id ? getSection(student.section_id) : undefined;
   const activeSemester = getActiveSemester();
-  const offerings = section ? classSubjectsForSection(section.id).filter((cs) => cs.is_active) : [];
+  const offerings = classSubjectsForStudent(student.id).filter((cs) => cs.is_active);
 
   const years = [...D.academic_years]
     .sort((a, b) => b.name.localeCompare(a.name))
@@ -322,7 +336,8 @@ export const reportsHandlers = [
     const cs = D.class_subjects.find((c) => c.id === classSubjectId);
     if (!cs) return errorResponse(404, 'not_found', 'Class subject not found.');
     const subject = getSubject(cs.subject_id);
-    const students = D.students.filter((s) => s.section_id === cs.section_id);
+    // The roster of THIS class — read from enrollments now that a student has many.
+    const students = rosterFor(cs.section_id);
     const rows = students
       .map((s) => {
         const term = computeTermGrade(s.id, cs.id);
@@ -382,19 +397,19 @@ export const reportsHandlers = [
       return errorResponse(403, 'forbidden', 'Enrollment reports are restricted to principals and secretaries.');
     }
     const activeStudents = D.students.filter((s) => s.status === 'active');
+    // D29: bucket by the student's OWN year group. Bucketing by their classes would count
+    // one student once per class they take.
     const byGradeMap = new Map<string, number>();
     for (const s of activeStudents) {
-      if (!s.section_id) continue;
-      const sec = getSection(s.section_id);
-      if (!sec) continue;
-      byGradeMap.set(sec.grade_level, (byGradeMap.get(sec.grade_level) ?? 0) + 1);
+      if (!s.year_group) continue;
+      byGradeMap.set(s.year_group, (byGradeMap.get(s.year_group) ?? 0) + 1);
     }
     const byGrade = [...byGradeMap.entries()]
       .map(([grade_level, count]) => ({ grade_level, count }))
       .sort((a, b) => a.grade_level.localeCompare(b.grade_level));
     const byClass = D.sections.map((sec) => ({
       class_ref: { id: sec.id, name: sec.name, grade_level: sec.grade_level },
-      enrolled: activeStudents.filter((s) => s.section_id === sec.id).length,
+      enrolled: rosterFor(sec.id).length,
       capacity: sec.capacity,
     }));
     return HttpResponse.json({

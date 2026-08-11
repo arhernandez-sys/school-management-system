@@ -17,6 +17,8 @@ import type {
   ClassListResponse,
   ClassSubjectItem,
   EnrollmentResult,
+  MeetingsReplaceBody,
+  MeetingsResult,
   RosterEntry,
   StudentRef,
   TeacherAssignBody,
@@ -28,12 +30,13 @@ export const classKeys = {
   detail: (id: string) => [...classKeys.all, 'detail', id] as const,
   subjects: (id: string) => [...classKeys.all, id, 'subjects'] as const,
   roster: (id: string) => [...classKeys.all, id, 'roster'] as const,
+  meetings: (id: string) => [...classKeys.all, id, 'meetings'] as const,
   enrollable: (id: string, search: string) =>
     [...classKeys.all, id, 'enrollable', search] as const,
 };
 
 // ── Reads ──────────────────────────────────────────────────────────────────────
-/** GET /classes — paginated sections list. */
+/** GET /classes — paginated subject-class list. */
 export function useClassesList(params: ClassListParams) {
   return useQuery({
     queryKey: classKeys.list(params),
@@ -69,6 +72,18 @@ export function useClassSubjects(classId: string | undefined) {
   });
 }
 
+/** GET /classes/{id}/meetings — the class's weekly schedule (any role that can read it). */
+export function useClassMeetings(classId: string | undefined) {
+  return useQuery({
+    queryKey: classKeys.meetings(classId ?? ''),
+    enabled: Boolean(classId),
+    queryFn: async ({ signal }) => {
+      const res = await api.get<MeetingsResult>(`/classes/${classId}/meetings`, { signal });
+      return res.data;
+    },
+  });
+}
+
 /** GET /classes/{id}/roster — active roster (not paginated). */
 export function useClassRoster(classId: string | undefined) {
   return useQuery({
@@ -98,7 +113,13 @@ export function useEnrollableStudents(classId: string | undefined, search: strin
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────────
-/** POST /classes — create a section. Invalidates the list on success. */
+/**
+ * POST /classes — create a subject class.
+ *
+ * The body carries the subject (required), and optionally the teachers and the weekly
+ * meetings, so one call creates the whole thing. Teachers are invalidated too because
+ * their `assignment_count` / `classes_taught` change when a class is created with one.
+ */
 export function useCreateClass() {
   const qc = useQueryClient();
   return useMutation({
@@ -108,6 +129,33 @@ export function useCreateClass() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
+      void qc.invalidateQueries({ queryKey: teacherKeys.all });
+    },
+  });
+}
+
+/**
+ * PUT /classes/{id}/meetings — replace the class's whole weekly schedule (P/S only).
+ *
+ * Returns `conflicts` alongside the saved meetings: a teacher or room double-booking is
+ * reported but does NOT fail the write, so callers must render the warning rather than
+ * treat a non-empty `conflicts` as an error.
+ *
+ * Invalidates the timetable reads as well as the class's own — retiming a class changes
+ * the week of every student enrolled in it.
+ */
+export function useReplaceMeetings(classId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: MeetingsReplaceBody) => {
+      const res = await api.put<MeetingsResult>(`/classes/${classId}/meetings`, body);
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: classKeys.meetings(classId) });
+      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
+      void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
+      void qc.invalidateQueries({ queryKey: ['timetable'] });
     },
   });
 }
@@ -127,6 +175,10 @@ export function useEnrollStudents(classId: string) {
       void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, classId, 'enrollable'] });
+      // Roster changes alter the affected student's own week, and their profile's
+      // current_classes / class_count.
+      void qc.invalidateQueries({ queryKey: ['timetable'] });
+      void qc.invalidateQueries({ queryKey: ['students'] });
     },
   });
 }
@@ -158,53 +210,15 @@ export function useAssignTeachers(classId: string) {
   });
 }
 
-/**
- * POST /classes/{id}/subjects — attach a subject to this section (P/S only).
+/*
+ * NOTE — no `useAttachSubject` / `useDetachSubject`.
  *
- * This is the entry point for the whole D23 offering lifecycle: until a subject is
- * attached there is no `class_subject`, and therefore nothing to assign a teacher to,
- * no gradebook, and no assessments. 409 when the subject is already offered here.
- *
- * Invalidates the subjects list plus the section detail (whose subject count changes).
+ * Under D29 a class teaches exactly ONE subject, and `POST /classes` attaches it as part
+ * of the create, so there is no UI path that adds or removes a subject afterwards (the
+ * server would 409 a second attach anyway). The endpoints still exist to backfill a
+ * pre-D29 class that has no offering; if that ever needs a screen, add the hooks back
+ * rather than reviving the retired Subjects tab.
  */
-export function useAttachSubject(classId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (subjectId: string) => {
-      const res = await api.post<ClassSubjectItem>(`/classes/${classId}/subjects`, {
-        subject_id: subjectId,
-      });
-      return res.data;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: classKeys.subjects(classId) });
-      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
-    },
-  });
-}
-
-/**
- * DELETE /classes/{id}/subjects/{csId} — detach a subject offering (P/S only).
- *
- * The API refuses (409) once the offering has history — assessments or grades — so
- * this only ever removes something added by mistake. Teacher assignments also count
- * against it, so callers should surface the server's message rather than assuming
- * success.
- */
-export function useDetachSubject(classId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (classSubjectId: string) => {
-      await api.delete(`/classes/${classId}/subjects/${classSubjectId}`);
-      return classSubjectId;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: classKeys.subjects(classId) });
-      void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
-      void qc.invalidateQueries({ queryKey: teacherKeys.all });
-    },
-  });
-}
 
 /** DELETE /classes/{id}/enrollments/{enrollmentId} — withdraw from the roster. */
 export function useWithdrawStudent(classId: string) {
@@ -218,6 +232,10 @@ export function useWithdrawStudent(classId: string) {
       void qc.invalidateQueries({ queryKey: classKeys.detail(classId) });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, 'list'] });
       void qc.invalidateQueries({ queryKey: [...classKeys.all, classId, 'enrollable'] });
+      // Roster changes alter the affected student's own week, and their profile's
+      // current_classes / class_count.
+      void qc.invalidateQueries({ queryKey: ['timetable'] });
+      void qc.invalidateQueries({ queryKey: ['students'] });
     },
   });
 }

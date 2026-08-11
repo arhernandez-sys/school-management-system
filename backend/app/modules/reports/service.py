@@ -135,42 +135,64 @@ def _semester_ref(db: Session, semester: Semester) -> ReportSemesterRef:
     )
 
 
-def _section_for(db: Session, student_id: uuid.UUID, semester_id: uuid.UUID | None) -> Class | None:
-    """The section the student sat in for a given term, else their latest section."""
+def _classes_for(
+    db: Session, student_id: uuid.UUID, semester_id: uuid.UUID | None
+) -> list[Class]:
+    """Every subject class the student sat in for a given term (D29).
+
+    Was `_section_for`, which returned one homeroom — a report card built from it
+    would have printed a single subject for a sixth-former taking four.
+
+    Falls back to their whole enrollment history when no term is given, so a card
+    requested without a semester still lists something rather than nothing.
+    """
     if semester_id is not None:
-        section = db.scalar(
-            select(Class)
-            .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
-            .where(
-                ClassEnrollment.student_id == student_id,
-                ClassEnrollment.semester_id == semester_id,
-                ClassEnrollment.unenrolled_at.is_(None),
-            )
-            .limit(1)
+        rows = list(
+            db.scalars(
+                select(Class)
+                .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+                .where(
+                    ClassEnrollment.student_id == student_id,
+                    ClassEnrollment.semester_id == semester_id,
+                    ClassEnrollment.unenrolled_at.is_(None),
+                    Class.deleted_at.is_(None),
+                )
+                .order_by(Class.name.asc())
+            ).all()
         )
-        if section is not None:
-            return section
-    return db.scalar(
-        select(Class)
-        .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
-        .where(ClassEnrollment.student_id == student_id)
-        .order_by(ClassEnrollment.enrolled_at.desc())
-        .limit(1)
+        if rows:
+            return _dedupe_classes(rows)
+    return _dedupe_classes(
+        list(
+            db.scalars(
+                select(Class)
+                .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+                .where(
+                    ClassEnrollment.student_id == student_id,
+                    Class.deleted_at.is_(None),
+                )
+                .order_by(Class.name.asc())
+            ).all()
+        )
     )
 
 
-def _student_ref(
-    db: Session, student: StudentProfile, section: Class | None
-) -> ReportStudentRef:
+def _dedupe_classes(rows: list[Class]) -> list[Class]:
+    """Same class enrolled across both semesters yields two rows; keep one."""
+    seen: dict[uuid.UUID, Class] = {}
+    for cls in rows:
+        seen.setdefault(cls.id, cls)
+    return list(seen.values())
+
+
+def _student_ref(db: Session, student: StudentProfile) -> ReportStudentRef:
     return ReportStudentRef(
         id=student.id,
         full_name=student.full_name,
         student_number=student.student_number,
         date_of_birth=student.date_of_birth,
         status=student.status.value if hasattr(student.status, "value") else student.status,
-        section_id=section.id if section else None,
-        section_name=section.name if section else None,
-        grade_level=section.grade_level if section else None,
+        year_group=student.year_group,
     )
 
 
@@ -242,25 +264,37 @@ def _subject_results(
     db: Session,
     *,
     student_id: uuid.UUID,
-    section: Class,
+    sections: list[Class],
     semester: Semester,
     year: AcademicYear | None,
     frozen: bool,
 ) -> list[_SubjectResult]:
-    """Per-subject term grades for (student, section, semester).
+    """Per-subject term grades for (student, their classes, semester).
+
+    D29: `sections` is every subject class the student sits, so a report card lists
+    one row per subject the student actually takes.
 
     `frozen` → read `term_grade_snapshots`; otherwise compute from live grades.
     Sorted by subject name, which is the order the documents print.
     """
+    if not sections:
+        return []
+
     offerings = db.execute(
         select(ClassSubject, Subject)
         .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.class_id == section.id, ClassSubject.deleted_at.is_(None))
+        .where(
+            ClassSubject.class_id.in_([s.id for s in sections]),
+            ClassSubject.deleted_at.is_(None),
+        )
     ).all()
     if not offerings:
         return []
 
-    bands, _pass_mark = _bands(db, section.academic_year_id)
+    # Bands come from the SEMESTER's year, not a class's. Every class on one card
+    # belongs to that term by construction, and it removes the need to pick one class
+    # to be authoritative over the others.
+    bands, _pass_mark = _bands(db, semester.academic_year_id)
 
     if frozen:
         snapshots = {
@@ -417,14 +451,8 @@ def list_students(
             .offset((params.page - 1) * params.page_size)
         ).all()
     )
-    active = db.scalar(
-        select(Semester).where(Semester.is_active.is_(True))
-    )
     return StudentPickerPage(
-        items=[
-            _student_ref(db, s, _section_for(db, s.id, active.id if active else None))
-            for s in rows
-        ],
+        items=[_student_ref(db, s) for s in rows],
         total=total,
         page=params.page,
         page_size=params.page_size,
@@ -452,17 +480,17 @@ def _resolve_semester(db: Session, semester_id: uuid.UUID | None) -> Semester:
 def _build_report_card(
     db: Session, *, student: StudentProfile, semester: Semester, release_filter: bool
 ) -> ReportCard:
-    section = _section_for(db, student.id, semester.id)
+    sections = _classes_for(db, student.id, semester.id)
     year = db.get(AcademicYear, semester.academic_year_id)
     frozen = year is not None and year.archived_at is not None
-    bands, _pass_mark = _bands(db, section.academic_year_id if section else None)
+    bands, _pass_mark = _bands(db, semester.academic_year_id)
 
     subjects: list[ReportCardSubjectRow] = []
     graded_numerics: list[Decimal] = []
 
-    if section is not None:
+    if sections:
         results = _subject_results(
-            db, student_id=student.id, section=section, semester=semester,
+            db, student_id=student.id, sections=sections, semester=semester,
             year=year, frozen=frozen,
         )
         teachers = _lead_teacher_names(db, [r.cs_id for r in results])
@@ -486,25 +514,22 @@ def _build_report_card(
 
     term_average = _mean(graded_numerics)
 
-    statuses: list = []
-    if section is not None:
-        statuses = list(
-            db.scalars(
-                select(AttendanceRecord.status).where(
-                    AttendanceRecord.student_id == student.id,
-                    AttendanceRecord.semester_id == semester.id,
-                )
-            ).all()
-        )
+    # Attendance is student+semester scoped, never class-scoped, so it already spans
+    # every subject class the student sits and needed no change under D29. The guard
+    # is dropped with it: a student with no classes can still have a register.
+    statuses = list(
+        db.scalars(
+            select(AttendanceRecord.status).where(
+                AttendanceRecord.student_id == student.id,
+                AttendanceRecord.semester_id == semester.id,
+            )
+        ).all()
+    )
     counts = _summarize(statuses)
 
     return ReportCard(
-        student=_student_ref(db, student, section),
-        section=(
-            ReportSectionRef(id=section.id, name=section.name, grade_level=section.grade_level)
-            if section
-            else None
-        ),
+        student=_student_ref(db, student),
+        year_group=student.year_group,
         semester=_semester_ref(db, semester),
         school=_school(db),
         subjects=subjects,
@@ -617,12 +642,12 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
         year_term_averages: list[Decimal] = []
 
         for semester in semesters:
-            section = _section_for(db, student.id, semester.id)
+            sections = _classes_for(db, student.id, semester.id)
             rows: list[TranscriptSubjectRow] = []
             numerics: list[Decimal] = []
-            if section is not None:
+            if sections:
                 results = _subject_results(
-                    db, student_id=student.id, section=section, semester=semester,
+                    db, student_id=student.id, sections=sections, semester=semester,
                     year=year, frozen=frozen,
                 )
                 teachers = _lead_teacher_names(db, [r.cs_id for r in results])
@@ -678,7 +703,7 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
         )
 
     return Transcript(
-        student=_student_ref(db, student, _section_for(db, student.id, None)),
+        student=_student_ref(db, student),
         school=_school(db),
         issued_at=utcnow(),
         years=out_years,
@@ -731,15 +756,17 @@ def get_class_grades(
     rows: list[ClassGradesStudentRow] = []
     numerics: list[Decimal] = []
     for student in students:
+        # Scoped to THIS class only — the class-grades report is about one gradebook,
+        # not the student's whole load, so it must not fan out to their other classes.
         results = _subject_results(
-            db, student_id=student.id, section=section, semester=semester,
+            db, student_id=student.id, sections=[section], semester=semester,
             year=year, frozen=frozen,
         )
         mine = next((r for r in results if r.cs_id == cs.id), None)
         numeric = mine.numeric if mine else None
         rows.append(
             ClassGradesStudentRow(
-                student=_student_ref(db, student, section),
+                student=_student_ref(db, student),
                 numeric=_f(numeric),
                 letter=mine.letter if mine else None,
             )

@@ -22,17 +22,22 @@ export interface AttendanceToolbarProps {
 }
 
 /**
- * Year + section (+ optional date) pickers for attendance. Section is required; date
+ * Year + class (+ optional date) pickers for attendance. Class is required; date
  * defaults to the school-local today (`schoolToday()`, America/Belize — matching the
  * backend's `school_today()`) and is capped there so future dates cannot be chosen
  * (FR-ATT-05) — the server also rejects them with `future_date_not_allowed`. Selections
  * are lifted to the parent, which persists them to the URL (?section_id=&date=).
  *
+ * **D29** — the register is per SUBJECT CLASS, so this picker lists the classes the caller
+ * teaches ("Math-1"), not homerooms. A student can be present in Biology and absent in Math
+ * on the same day. The `section_id` wire/param name is unchanged: it addresses a `classes`
+ * row, which is what it always did.
+ *
  * Teacher / Form / Section narrowing filters used to live here for principal/secretary;
- * they now belong to the Grades module. The summary is scoped by Year + Class/homeroom only.
+ * they now belong to the Grades module. The summary is scoped by Year + Class only.
  *
  * All controls use `size="small"` and top-align so the year picker lines up with the
- * class/homeroom field regardless of which fields reserve a helper-text row.
+ * class field regardless of which fields reserve a helper-text row.
  */
 export function AttendanceToolbar({
   sections,
@@ -72,7 +77,7 @@ export function AttendanceToolbar({
       <TextField
         select
         size="small"
-        label="Class / homeroom"
+        label="Class"
         value={sectionId ?? ''}
         onChange={(e) => onSectionChange(e.target.value)}
         disabled={disabled || sections.length === 0}

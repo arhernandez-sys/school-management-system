@@ -21,6 +21,7 @@ from app.modules.teachers.models import TeacherProfile  # noqa: F401
 from app.modules.classes.models import (  # noqa: F401
     Class,
     ClassEnrollment,
+    ClassMeeting,
     ClassSubject,
     ClassTeacher,
     Subject,

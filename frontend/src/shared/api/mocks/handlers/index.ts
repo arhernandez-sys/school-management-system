@@ -23,6 +23,7 @@ import { announcementsHandlers } from './announcements';
 import { eventsHandlers } from './events';
 import { dashboardHandlers } from './dashboard';
 import { reportsHandlers } from './reports';
+import { timetableHandlers } from './timetable';
 
 export const handlers = [
   ...authHandlers,
@@ -38,4 +39,5 @@ export const handlers = [
   ...eventsHandlers,
   ...dashboardHandlers,
   ...reportsHandlers,
+  ...timetableHandlers,
 ];

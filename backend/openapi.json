@@ -11,7 +11,7 @@
           "health"
         ],
         "summary": "Liveness probe (no auth)",
-        "description": "Unauthenticated 200. Does NOT touch the database \u2014 it is a pure\nliveness signal so the app reports healthy even if Postgres is\nunreachable (DB connectivity is per-request, architecture \u00a71).",
+        "description": "Unauthenticated 200. Does NOT touch the database — it is a pure\nliveness signal so the app reports healthy even if MariaDB is\nunreachable (DB connectivity is per-request, architecture §1).\n\nThis behaviour is DELIBERATE and must not change: a liveness probe wired\nto the database restarts the app every time the database hiccups, which\nturns a recoverable 60-second DB blip into a crash loop that is still\nfailing long after the database came back. Use `/ready` for anything that\nshould drain traffic instead of killing the process.",
         "operationId": "health_api_v1_health_get",
         "responses": {
           "200": {
@@ -31,13 +31,36 @@
         }
       }
     },
+    "/api/v1/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe — verifies database reachability (no auth)",
+        "description": "Unauthenticated. 200 when the app can reach MariaDB, 503 when it\ncannot — the signal a load balancer should use to stop sending traffic to\nthis instance (as opposed to `/health`, which decides whether to KILL it).\n\nDeliberately reports no driver text, host, or exception detail: an\nunauthenticated endpoint must not describe the internals of a failure.\nThe full error is logged server-side for the operator.",
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "A dependency is unreachable."
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Authenticate by identifier + password (api-spec \u00a72.3)",
-        "description": "Establish a session: mint an access token + set the HttpOnly refresh\ncookie. Non-enumerating 401 for a wrong identifier OR password; 423 (with\n`retry_after_seconds`) while locked; 403 for inactive accounts (api-spec \u00a72.3).",
+        "summary": "Authenticate by identifier + password (api-spec §2.3)",
+        "description": "Establish a session: mint an access token + set the HttpOnly refresh\ncookie. Non-enumerating 401 for a wrong identifier OR password; 423 (with\n`retry_after_seconds`) while locked; 403 for inactive accounts (api-spec §2.3).\n\nAdditionally 429 (with `retry_after_seconds`) once ONE client IP has failed\ntoo many times in the configured window. The per-account lockout in\n`service.login` cannot see a password spray — one failure each across a\nhundred accounts trips nothing — so the IP budget is what covers it.\nGuarding BEFORE the service call also stops each miss appending a\n`login_attempts` row (OQ-DB6 write amplification).",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -118,8 +141,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Rotate the refresh token and re-issue an access token (api-spec \u00a72.3)",
-        "description": "Cookie-only auth + the custom `X-Refresh: 1` header (CSRF defense, \u00a72.2).\nValidates + ROTATES the refresh session. On ANY failure \u2192 401 refresh_invalid\nAND the cookie is cleared.\n\nNOTE: every failure path RETURNS a `JSONResponse` (rather than raising) so the\nclearing `Set-Cookie` is attached to the response that is actually sent. If we\nraised, FastAPI would route to the global handler and DISCARD this `response`\nobject \u2014 the clearing cookie would never reach the browser (api-spec \u00a72.3\nrequires a refresh failure to clear the cookie).",
+        "summary": "Rotate the refresh token and re-issue an access token (api-spec §2.3)",
+        "description": "Cookie-only auth + the custom `X-Refresh: 1` header (CSRF defense, §2.2).\nValidates + ROTATES the refresh session. On ANY failure → 401 refresh_invalid\nAND the cookie is cleared.\n\nNOTE: every failure path RETURNS a `JSONResponse` (rather than raising) so the\nclearing `Set-Cookie` is attached to the response that is actually sent. If we\nraised, FastAPI would route to the global handler and DISCARD this `response`\nobject — the clearing cookie would never reach the browser (api-spec §2.3\nrequires a refresh failure to clear the cookie).\n\nThe 429 is the ONE exception to that rule and deliberately RAISES: being\nthrottled says nothing about the validity of the cookie, so clearing it would\nconvert a \"wait a moment\" into a forced re-login for every legitimate tab\nsharing the address. Only genuine refresh failures clear the cookie.\n\nFailures counted here include the missing `X-Refresh` header — a request\nwithout it is either a forged cross-site call or a broken client, and neither\nshould be allowed to retry indefinitely.",
         "operationId": "refresh_api_v1_auth_refresh_post",
         "parameters": [
           {
@@ -188,8 +211,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Terminate the current session (idempotent, api-spec \u00a72.3)",
-        "description": "Authenticated; revoke the refresh session named by the cookie and clear it.\nIdempotent \u2014 an already-logged-out caller still gets 204.",
+        "summary": "Terminate the current session (idempotent, api-spec §2.3)",
+        "description": "Authenticated; revoke the refresh session named by the cookie and clear it.\nIdempotent — an already-logged-out caller still gets 204.",
         "operationId": "logout_api_v1_auth_logout_post",
         "responses": {
           "204": {
@@ -218,7 +241,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "The signed-in user's identity, role and preferences (api-spec \u00a72.3)",
+        "summary": "The signed-in user's identity, role and preferences (api-spec §2.3)",
         "description": "Resolve the CurrentUser payload (profile ids + preferences).",
         "operationId": "me_api_v1_auth_me_get",
         "responses": {
@@ -255,8 +278,8 @@
         "tags": [
           "auth"
         ],
-        "summary": "Change your own password (api-spec \u00a72.3, FR-AUTH-09)",
-        "description": "Self only. `current_password` required UNLESS must_change_password is set.\nNew password is validated against the policy \u2192 422 weak_password. On success,\nall OTHER refresh sessions are revoked (the current one is kept).",
+        "summary": "Change your own password (api-spec §2.3, FR-AUTH-09)",
+        "description": "Self only. `current_password` required UNLESS must_change_password is set.\nNew password is validated against the policy → 422 weak_password. On success,\nall OTHER refresh sessions are revoked (the current one is kept).",
         "operationId": "change_my_password_api_v1_auth_me_password_patch",
         "requestBody": {
           "content": {
@@ -305,7 +328,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Admin-initiated password reset (api-spec \u00a72.3, FR-SET-04)",
+        "summary": "Admin-initiated password reset (api-spec §2.3, FR-SET-04)",
         "description": "Principal/Secretary reset another user. A Secretary may NOT reset a\nPrincipal (403); cannot reset self (409 cannot_reset_self); unknown target\n(404 user_not_found). Returns a generated temporary password ONCE.",
         "operationId": "reset_user_password_api_v1_auth_users__user_id__reset_password_post",
         "security": [
@@ -394,8 +417,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "School identity / branding (api-spec \u00a75.11)",
-        "description": "Authenticated read \u2014 every role needs identity for report headers.",
+        "summary": "School identity / branding (api-spec §5.11)",
+        "description": "Authenticated read — every role needs identity for report headers.",
         "operationId": "get_school_api_v1_settings_school_get",
         "responses": {
           "200": {
@@ -429,7 +452,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update school identity (principal; api-spec \u00a75.11)",
+        "summary": "Update school identity (principal; api-spec §5.11)",
         "description": "Principal only (Secretary read-only per matrix). Audited.",
         "operationId": "update_school_api_v1_settings_school_put",
         "requestBody": {
@@ -496,8 +519,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "Upload the school logo (principal, multipart; api-spec \u00a75.11)",
-        "description": "Principal only; multipart/form-data image.\n\nNOTE: real object-storage upload is stubbed \u2014 see service.upload_logo\nTODO(OQ-DB5). Validation (415 unsupported_media_type, 413 file_too_large) is\nreal; the endpoint returns {logo_url} (None until storage is provisioned).",
+        "summary": "Upload the school logo (principal, multipart; api-spec §5.11)",
+        "description": "Principal only; multipart/form-data image.\n\nNOTE: real object-storage upload is stubbed — see service.upload_logo\nTODO(OQ-DB5). Validation (415 unsupported_media_type, 413 file_too_large) is\nreal; the endpoint returns {logo_url} (None until storage is provisioned).",
         "operationId": "upload_school_logo_api_v1_settings_school_logo_post",
         "requestBody": {
           "content": {
@@ -583,7 +606,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "The active academic year + semester (api-spec \u00a75.11)",
+        "summary": "The active academic year + semester (api-spec §5.11)",
         "description": "Authenticated. 409 no_active_semester is the uniform system-wide degrade\nsignal (fresh install or only-active-year just archived).",
         "operationId": "get_active_term_api_v1_settings_active_term_get",
         "responses": {
@@ -630,7 +653,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "All academic years + their semesters (P/S; api-spec \u00a75.11)",
+        "summary": "All academic years + their semesters (authenticated; api-spec §5.11)",
+        "description": "Readable by EVERY authenticated role, not just P/S.\n\nThis is the calendar every module's period picker is built from: `useYearFilter`\n(staff `?year=` filter on Grades/Attendance/Classes/Students) and the student's\nglobal year·semester switcher both read it. Gated to P/S, a teacher's picker got a\n403, so `years` came back empty, no `academic_year_id` was sent, and the picker\nsilently vanished — while the MSW handler, which has no role gate, made it all look\nfine in demo mode. Year names and dates are not sensitive (`/settings/active-term`\nalready exposes the current pair to everyone); the WRITES below stay principal-only,\nwhich is where the actual authority lives.",
         "operationId": "list_academic_years_api_v1_settings_academic_years_get",
         "responses": {
           "200": {
@@ -652,16 +676,6 @@
                 }
               }
             }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         },
         "security": [
@@ -674,7 +688,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Create an academic year + exactly 2 semesters (principal; api-spec \u00a75.11)",
+        "summary": "Create an academic year + exactly 2 semesters (principal; api-spec §5.11)",
         "description": "Principal. Creates EXACTLY 2 semesters (D10), seeds grading scale + default\nbands (D11). 409 active_year_exists when an active year already exists.",
         "operationId": "create_academic_year_api_v1_settings_academic_years_post",
         "requestBody": {
@@ -751,7 +765,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "Semesters, optionally filtered by year (P/S; api-spec \u00a75.11)",
+        "summary": "Semesters, optionally filtered by year (authenticated; api-spec §5.11)",
+        "description": "Authenticated — same reasoning as `/academic-years` above.",
         "operationId": "list_semesters_api_v1_settings_semesters_get",
         "security": [
           {
@@ -798,16 +813,6 @@
             },
             "description": "Unauthorized"
           },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -826,7 +831,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Activate a semester (principal; one-active invariant; api-spec \u00a75.11)",
+        "summary": "Activate a semester (principal; one-active invariant; api-spec §5.11)",
         "description": "Principal. Clears the prior active semester, sets this one active.",
         "operationId": "activate_semester_api_v1_settings_semesters__semester_id__activate_patch",
         "security": [
@@ -915,8 +920,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "Archive (freeze) an academic year (principal; api-spec \u00a75.11)",
-        "description": "Principal. Computes and writes `term_grade_snapshots` +\n`report_card_snapshots` (schema \u00a710.4), then applies the state transitions;\n`snapshots_written` reports the term-grade rows frozen. 409 year_already_archived\nif already archived.",
+        "summary": "Archive (freeze) an academic year (principal; api-spec §5.11)",
+        "description": "Principal. Computes and writes `term_grade_snapshots` +\n`report_card_snapshots` (schema §10.4), then applies the state transitions;\n`snapshots_written` reports the term-grade rows frozen. 409 year_already_archived\nif already archived.",
         "operationId": "archive_academic_year_api_v1_settings_academic_years__year_id__archive_post",
         "security": [
           {
@@ -1004,8 +1009,8 @@
         "tags": [
           "settings"
         ],
-        "summary": "The grading scale + bands (authenticated; default active; api-spec \u00a75.11)",
-        "description": "Authenticated \u2014 Grades/Reports/SPA need it to display letters.",
+        "summary": "The grading scale + bands (authenticated; default active; api-spec §5.11)",
+        "description": "Authenticated — Grades/Reports/SPA need it to display letters.",
         "operationId": "get_grading_scale_api_v1_settings_grading_scale_get",
         "security": [
           {
@@ -1078,7 +1083,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update the grading scale (principal; api-spec \u00a75.11, FR-SET-03/06)",
+        "summary": "Update the grading scale (principal; api-spec §5.11, FR-SET-03/06)",
         "description": "Principal (Secretary cannot, FR-SET-04). 422 grading_bands_invalid on\nnon-contiguous bands; 409 scale_frozen on a frozen scale.",
         "operationId": "update_grading_scale_api_v1_settings_grading_scale_put",
         "security": [
@@ -1165,7 +1170,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "School-default grading policy (P/S; api-spec \u00a75.11, DB-14)",
+        "summary": "School-default grading policy (P/S; api-spec §5.11, DB-14)",
         "operationId": "get_assessment_policy_api_v1_settings_assessment_policy_get",
         "responses": {
           "200": {
@@ -1219,7 +1224,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update the school-default grading policy (principal; api-spec \u00a75.11)",
+        "summary": "Update the school-default grading policy (principal; api-spec §5.11)",
         "operationId": "update_assessment_policy_api_v1_settings_assessment_policy_put",
         "requestBody": {
           "content": {
@@ -1295,7 +1300,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "List users (P/S; api-spec \u00a75.11, FR-SET-04)",
+        "summary": "List users (P/S; api-spec §5.11, FR-SET-04)",
         "operationId": "list_users_api_v1_settings_users_get",
         "security": [
           {
@@ -1439,7 +1444,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Create a user login (P/S; principal-only for privileged roles; \u00a75.11)",
+        "summary": "Create a user login (P/S; principal-only for privileged roles; §5.11)",
         "description": "P/S may create teacher/student logins; assigning principal/secretary is\nPrincipal-only (403 role_change_forbidden). 409 duplicate_email. New users get\nmust_change_password=true; a generated temp password is returned ONCE.",
         "operationId": "create_user_api_v1_settings_users_post",
         "security": [
@@ -1516,7 +1521,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update a user (P for role/active; P/S for benign edits; \u00a75.11)",
+        "summary": "Update a user (P for role/active; P/S for benign edits; §5.11)",
         "description": "role/is_active are Principal-only; a Secretary cannot edit a Principal (403).\nAudited on role/active changes.",
         "operationId": "update_user_api_v1_settings_users__user_id__patch",
         "security": [
@@ -1615,7 +1620,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Own account + preferences (authenticated self; api-spec \u00a75.11)",
+        "summary": "Own account + preferences (authenticated self; api-spec §5.11)",
         "operationId": "get_account_api_v1_settings_account_get",
         "responses": {
           "200": {
@@ -1649,7 +1654,7 @@
         "tags": [
           "settings"
         ],
-        "summary": "Update own contact info + preferences (authenticated self; \u00a75.11)",
+        "summary": "Update own contact info + preferences (authenticated self; §5.11)",
         "operationId": "update_account_api_v1_settings_account_patch",
         "requestBody": {
           "content": {
@@ -1705,7 +1710,7 @@
         "tags": [
           "subjects"
         ],
-        "summary": "The subject catalog / picker (authenticated; api-spec \u00a75b)",
+        "summary": "The subject catalog / picker (authenticated; api-spec §5b)",
         "description": "Everyone may read the catalog (reference data, no PII). Default is_active\nfilter hides retired subjects from the picker.",
         "operationId": "list_subjects_api_v1_subjects_get",
         "security": [
@@ -1824,7 +1829,7 @@
         "tags": [
           "subjects"
         ],
-        "summary": "Create a subject (P/S; api-spec \u00a75b, FR-CLS-01a)",
+        "summary": "Create a subject (P/S; api-spec §5b, FR-CLS-01a)",
         "description": "409 duplicate_subject_name / duplicate_subject_code.",
         "operationId": "create_subject_api_v1_subjects_post",
         "security": [
@@ -1901,7 +1906,7 @@
         "tags": [
           "subjects"
         ],
-        "summary": "Update a subject (P/S; api-spec \u00a75b)",
+        "summary": "Update a subject (P/S; api-spec §5b)",
         "description": "Edits name/code/is_active. Renaming is safe for history (frozen subject_id).",
         "operationId": "update_subject_api_v1_subjects__subject_id__patch",
         "security": [
@@ -1998,7 +2003,7 @@
         "tags": [
           "subjects"
         ],
-        "summary": "Soft-delete a subject if unused (P/S; api-spec \u00a75b)",
+        "summary": "Soft-delete a subject if unused (P/S; api-spec §5b)",
         "description": "Soft-delete only if no class_subjects offering references it; else 409\nsubject_in_use (retire via PATCH is_active=false instead).",
         "operationId": "delete_subject_api_v1_subjects__subject_id__delete",
         "security": [
@@ -2080,8 +2085,8 @@
         "tags": [
           "students"
         ],
-        "summary": "List students (P/S/Teacher; api-spec \u00a75.3, FR-STU-06)",
-        "description": "Teacher results auto-restrict to students in a section they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).",
+        "summary": "List students (P/S/Teacher; api-spec §5.3, FR-STU-06)",
+        "description": "Teacher results auto-restrict to students in a class they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).\n\n`year_group` filters on the student's own level (D29 — it replaced `grade_level`,\nwhich used to be read off the student's homeroom). `class_id` narrows to one\nsubject class. `academic_year_id` (year switcher) restricts the directory to\nstudents enrolled in that year when it is a PAST year; the active year lists\neveryone.",
         "operationId": "list_students_api_v1_students_get",
         "security": [
           {
@@ -2140,20 +2145,37 @@
             }
           },
           {
-            "name": "grade_level",
+            "name": "year_group",
             "in": "query",
             "required": false,
             "schema": {
               "anyOf": [
                 {
                   "type": "string",
-                  "maxLength": 40
+                  "maxLength": 50
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Grade Level"
+              "title": "Year Group"
+            }
+          },
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
             }
           },
           {
@@ -2243,7 +2265,7 @@
         "tags": [
           "students"
         ],
-        "summary": "Create a student (P/S; api-spec \u00a75.3, FR-STU-01/02/05)",
+        "summary": "Create a student (P/S; api-spec §5.3, FR-STU-01/02/05)",
         "description": "Optionally enrolls into `section_id` for the active semester in one txn.\n409 duplicate_student_number / section_archived / no_active_semester.",
         "operationId": "create_student_api_v1_students_post",
         "security": [
@@ -2330,9 +2352,33 @@
         "tags": [
           "students"
         ],
-        "summary": "The signed-in student's own profile (student; api-spec \u00a75.3, FR-STU-09)",
-        "description": "Server-derived scope: the profile is resolved from the token, never a param\n(\u00a73.2). 404 no_student_profile if the login isn't linked to a student.",
+        "summary": "The signed-in student's own profile (student; api-spec §5.3, FR-STU-09)",
+        "description": "Server-derived scope: the profile is resolved from the token, never a param\n(§3.2). 404 no_student_profile if the login isn't linked to a student.\n\n`academic_year_id` rescopes `current_classes` to the classes the caller sat in that\nyear — the student half of what `GET /{student_id}` already did for staff. WHICH\nstudent is still resolved from the token only; the param narrows the view of their\nown record and can never widen it to anyone else's.",
         "operationId": "get_my_student_api_v1_students_me_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2340,6 +2386,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StudentDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students/me/years": {
+      "get": {
+        "tags": [
+          "students"
+        ],
+        "summary": "Academic years the signed-in student was enrolled in (student; §5.3)",
+        "description": "Backs the student-only top-bar year switcher. Server-derived scope (§3.2);\n404 no_student_profile if the login isn't linked. Declared before\n`/{student_id}/years` so \"me\" is never parsed as a UUID.",
+        "operationId": "list_my_years_api_v1_students_me_years_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentYearsResponse"
                 }
               }
             }
@@ -2387,8 +2495,8 @@
         "tags": [
           "students"
         ],
-        "summary": "Student detail (P/S/Teacher; api-spec \u00a75.3, FR-STU-07)",
-        "description": "Teacher must own a section the student is enrolled in, else 404 (\u00a73.3).\nStudents are denied at the role gate (403 \u2192 use /students/me).",
+        "summary": "Student detail (P/S/Teacher; api-spec §5.3, FR-STU-07)",
+        "description": "Teacher must own a class the student is enrolled in, else 404 (§3.3).\nStudents are denied at the role gate (403 → use /students/me).\n\n`academic_year_id` rescopes `current_classes` to the classes the student sat in\nthat year, so the profile header agrees with the assessments tab.",
         "operationId": "get_student_api_v1_students__student_id__get",
         "security": [
           {
@@ -2404,6 +2512,23 @@
               "type": "string",
               "format": "uuid",
               "title": "Student Id"
+            }
+          },
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
             }
           }
         ],
@@ -2464,8 +2589,8 @@
         "tags": [
           "students"
         ],
-        "summary": "Update a student's profile (P/S; api-spec \u00a75.3, FR-STU-03)",
-        "description": "`status` is NOT editable here \u2014 use POST /students/{id}/status. Re-checks\nstudent_number uniqueness on change.",
+        "summary": "Update a student's profile (P/S; api-spec §5.3, FR-STU-03)",
+        "description": "`status` is NOT editable here — use POST /students/{id}/status. Re-checks\nstudent_number uniqueness on change.",
         "operationId": "update_student_api_v1_students__student_id__patch",
         "security": [
           {
@@ -2561,8 +2686,8 @@
         "tags": [
           "students"
         ],
-        "summary": "Soft-delete a student if no academic history (P/S; \u00a75.3, FR-STU-10)",
-        "description": "Blocked if any grade/attendance references the student (FK RESTRICT) \u2192 409\nhas_academic_history (deactivate instead).",
+        "summary": "Soft-delete a student if no academic history (P/S; §5.3, FR-STU-10)",
+        "description": "Blocked if any grade/attendance references the student (FK RESTRICT) → 409\nhas_academic_history (deactivate instead).",
         "operationId": "delete_student_api_v1_students__student_id__delete",
         "security": [
           {
@@ -2638,13 +2763,92 @@
         }
       }
     },
+    "/api/v1/students/{student_id}/years": {
+      "get": {
+        "tags": [
+          "students"
+        ],
+        "summary": "Academic years the student was enrolled in (P/S/Teacher; §5.3)",
+        "description": "Backs the per-student year filter on the profile page. Teacher must own a\nsection the student is in, else 404 (§3.3). Students are denied at the role\ngate (403 → use /students/me/years).",
+        "operationId": "list_student_years_api_v1_students__student_id__years_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentYearsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/students/{student_id}/assessments": {
       "get": {
         "tags": [
           "students"
         ],
-        "summary": "Assessments for the student's section subjects (P/S/Teacher; \u00a75.3)",
-        "description": "Teacher must own a section the student is in, else 404. (A student self uses\nGET /assessments?scope=me in the Assessments module.)",
+        "summary": "Assessments + term grades grouped by subject (P/S/Teacher; §5.3)",
+        "description": "Teacher must own a section the student is in, else 404. `academic_year_id`\nscopes to the section the student sat in that YEAR (a year spans both\nsemesters). A student self uses GET /grades/me.",
         "operationId": "list_student_assessments_api_v1_students__student_id__assessments_get",
         "security": [
           {
@@ -2663,7 +2867,7 @@
             }
           },
           {
-            "name": "semester_id",
+            "name": "academic_year_id",
             "in": "query",
             "required": false,
             "schema": {
@@ -2676,7 +2880,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Semester Id"
+              "title": "Academic Year Id"
             }
           }
         ],
@@ -2686,11 +2890,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentAssessmentItem"
-                  },
-                  "title": "Response List Student Assessments Api V1 Students  Student Id  Assessments Get"
+                  "$ref": "#/components/schemas/StudentAssessmentsResponse"
                 }
               }
             }
@@ -2743,7 +2943,7 @@
         "tags": [
           "students"
         ],
-        "summary": "Change a student's lifecycle status (P/S; api-spec \u00a75.3, FR-STU-04)",
+        "summary": "Change a student's lifecycle status (P/S; api-spec §5.3, FR-STU-04)",
         "description": "Auditable, guarded lifecycle change. 422 invalid_transition on an illegal\nmove (FR-STU-04).",
         "operationId": "change_student_status_api_v1_students__student_id__status_post",
         "security": [
@@ -2832,8 +3032,8 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Teacher directory (P/S/Teacher RO; api-spec \u00a75.4, FR-TCH-05)",
-        "description": "Read-only for teachers; students are denied at the gate (403).",
+        "summary": "Teacher directory (P/S/Teacher RO; api-spec §5.4, FR-TCH-05)",
+        "description": "Read-only for teachers; students are denied at the gate (403).\n\n`academic_year_id` backs the module's year switcher — a PAST year narrows the\ndirectory to staff who taught that year; the active year does not filter (see\n`service.list_teachers`).",
         "operationId": "list_teachers_api_v1_teachers_get",
         "security": [
           {
@@ -2889,6 +3089,23 @@
                 }
               ],
               "title": "Specialization"
+            }
+          },
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
             }
           },
           {
@@ -2978,7 +3195,7 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Create a teacher (P/S; api-spec \u00a75.4, FR-TCH-01)",
+        "summary": "Create a teacher (P/S; api-spec §5.4, FR-TCH-01)",
         "description": "409 duplicate_staff_number / duplicate_email. `create_login` provisions a\nlinked teacher account; its temp password is returned ONCE.",
         "operationId": "create_teacher_api_v1_teachers_post",
         "security": [
@@ -3055,7 +3272,7 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Teacher detail (P/S/Teacher RO; api-spec \u00a75.4)",
+        "summary": "Teacher detail (P/S/Teacher RO; api-spec §5.4)",
         "operationId": "get_teacher_api_v1_teachers__teacher_id__get",
         "security": [
           {
@@ -3131,7 +3348,7 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Update a teacher's profile (P/S; api-spec \u00a75.4, FR-TCH-03)",
+        "summary": "Update a teacher's profile (P/S; api-spec §5.4, FR-TCH-03)",
         "description": "Benign profile edits only. Deactivation = POST /teachers/{id}/status\n(Principal-only).",
         "operationId": "update_teacher_api_v1_teachers__teacher_id__patch",
         "security": [
@@ -3228,8 +3445,8 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Soft-delete a teacher if unassigned (Principal; \u00a75.4, FR-TCH-03/06)",
-        "description": "Blocked if assigned to any active class_subject (FK RESTRICT) \u2192 409\nteacher_has_active_assignments.",
+        "summary": "Soft-delete a teacher if unassigned (Principal; §5.4, FR-TCH-03/06)",
+        "description": "Blocked if assigned to any active class_subject (FK RESTRICT) → 409\nteacher_has_active_assignments.",
         "operationId": "delete_teacher_api_v1_teachers__teacher_id__delete",
         "security": [
           {
@@ -3310,8 +3527,8 @@
         "tags": [
           "teachers"
         ],
-        "summary": "Activate/deactivate a teacher (Principal; api-spec \u00a75.4, FR-TCH-03)",
-        "description": "Deactivating a teacher with active class_subject assignments is blocked \u2192\n409 teacher_has_active_assignments (with offending refs, FR-TCH-06).",
+        "summary": "Activate/deactivate a teacher (Principal; api-spec §5.4, FR-TCH-03)",
+        "description": "Deactivating a teacher with active class_subject assignments is blocked →\n409 teacher_has_active_assignments (with offending refs, FR-TCH-06).",
         "operationId": "change_teacher_status_api_v1_teachers__teacher_id__status_post",
         "security": [
           {
@@ -3409,7 +3626,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "List sections (all roles; Teacher/Student auto-scoped; api-spec \u00a75.5)",
+        "summary": "List sections (all roles; Teacher/Student auto-scoped; api-spec §5.5)",
         "operationId": "list_classes_api_v1_classes_get",
         "security": [
           {
@@ -3466,6 +3683,23 @@
                 }
               ],
               "title": "Grade Level"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
             }
           },
           {
@@ -3555,7 +3789,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Create a section (P/S; api-spec \u00a75.5)",
+        "summary": "Create a section (P/S; api-spec §5.5)",
         "operationId": "create_class_api_v1_classes_post",
         "security": [
           {
@@ -3717,7 +3951,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Update a section (P/S; api-spec \u00a75.5)",
+        "summary": "Update a section (P/S; api-spec §5.5)",
         "operationId": "update_class_api_v1_classes__class_id__patch",
         "security": [
           {
@@ -3813,7 +4047,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Soft-delete a section if it has no history (P/S; api-spec \u00a75.5)",
+        "summary": "Soft-delete a section if it has no history (P/S; api-spec §5.5)",
         "operationId": "delete_class_api_v1_classes__class_id__delete",
         "security": [
           {
@@ -3894,7 +4128,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Subjects offered in a section (P/S/T/Student scoped; api-spec \u00a75.5)",
+        "summary": "Subjects offered in a section (P/S/T/Student scoped; api-spec §5.5)",
         "operationId": "list_class_subjects_api_v1_classes__class_id__subjects_get",
         "security": [
           {
@@ -3974,7 +4208,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Attach a subject to a section (P/S; api-spec \u00a75.5)",
+        "summary": "Attach a subject to a section (P/S; api-spec §5.5)",
         "operationId": "attach_subject_api_v1_classes__class_id__subjects_post",
         "security": [
           {
@@ -4072,7 +4306,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Detach a subject offering if it has no history (P/S; api-spec \u00a75.5)",
+        "summary": "Detach a subject offering if it has no history (P/S; api-spec §5.5)",
         "operationId": "detach_subject_api_v1_classes__class_id__subjects__class_subject_id__delete",
         "security": [
           {
@@ -4163,7 +4397,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Set the teachers for a subject offering (P/S; api-spec \u00a75.5)",
+        "summary": "Set the teachers for a subject offering (P/S; api-spec §5.5)",
         "operationId": "assign_teachers_api_v1_classes__class_id__subjects__class_subject_id__teachers_put",
         "security": [
           {
@@ -4266,12 +4500,186 @@
         }
       }
     },
+    "/api/v1/classes/{class_id}/meetings": {
+      "get": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Weekly schedule of a class (P/S/T/Student scoped; FR-SCH-01)",
+        "operationId": "list_meetings_api_v1_classes__class_id__meetings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingsResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "classes"
+        ],
+        "summary": "Replace a class's weekly schedule (P/S; conflicts warn, never block; FR-SCH-02)",
+        "operationId": "replace_meetings_api_v1_classes__class_id__meetings_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "class_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Class Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingsReplaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingsResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/classes/{class_id}/roster": {
       "get": {
         "tags": [
           "classes"
         ],
-        "summary": "Section roster (P/S; Teacher owns else 404; api-spec \u00a75.5)",
+        "summary": "Class roster (P/S; Teacher owns else 404; api-spec §5.5)",
         "operationId": "get_roster_api_v1_classes__class_id__roster_get",
         "security": [
           {
@@ -4499,7 +4907,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Enroll students into a section (P/S; transfer-aware; api-spec \u00a75.5)",
+        "summary": "Enroll students into a subject class (P/S; additive — never transfers; D29)",
         "operationId": "enroll_students_api_v1_classes__class_id__enrollments_post",
         "security": [
           {
@@ -4597,7 +5005,7 @@
         "tags": [
           "classes"
         ],
-        "summary": "Unenroll a student from a section (P/S; api-spec \u00a75.5)",
+        "summary": "Unenroll a student from a section (P/S; api-spec §5.5)",
         "operationId": "unenroll_student_api_v1_classes__class_id__enrollments__enrollment_id__delete",
         "security": [
           {
@@ -4688,7 +5096,8 @@
         "tags": [
           "assessments"
         ],
-        "summary": "List assessments (scoped; api-spec \u00a76)",
+        "summary": "List assessments (scoped; api-spec §6)",
+        "description": "`academic_year_id` and `semester_id` compose: the year filters on the SECTION's\nyear, the semester on the assessment's own `semester_id`. The student's global\nyear·semester switcher sends both, which is how \"my assessments for Semester 2\"\nstops listing the whole year.",
         "operationId": "list_assessments_api_v1_assessments_get",
         "security": [
           {
@@ -4728,6 +5137,23 @@
                 }
               ],
               "title": "Academic Year Id"
+            }
+          },
+          {
+            "name": "semester_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Semester Id"
             }
           },
           {
@@ -4855,7 +5281,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Create an assessment (teacher; owns class_subject; api-spec \u00a76)",
+        "summary": "Create an assessment (teacher; owns class_subject; api-spec §6)",
         "operationId": "create_assessment_api_v1_assessments_post",
         "security": [
           {
@@ -5006,7 +5432,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Assessment detail (scoped; api-spec \u00a76)",
+        "summary": "Assessment detail (scoped; api-spec §6)",
         "operationId": "get_assessment_api_v1_assessments__assessment_id__get",
         "security": [
           {
@@ -5082,7 +5508,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Update an assessment (teacher; api-spec \u00a76)",
+        "summary": "Update an assessment (teacher; api-spec §6)",
         "operationId": "update_assessment_api_v1_assessments__assessment_id__patch",
         "security": [
           {
@@ -5178,7 +5604,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Delete an assessment if it has no grades (teacher; api-spec \u00a76)",
+        "summary": "Delete an assessment if it has no grades (teacher; api-spec §6)",
         "operationId": "delete_assessment_api_v1_assessments__assessment_id__delete",
         "security": [
           {
@@ -5259,7 +5685,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Transition assessment lifecycle status (teacher; api-spec \u00a76)",
+        "summary": "Transition assessment lifecycle status (teacher; api-spec §6)",
         "operationId": "change_status_api_v1_assessments__assessment_id__status_post",
         "security": [
           {
@@ -5358,7 +5784,7 @@
           "assessments"
         ],
         "summary": "Release grades for an assessment (teacher)",
-        "description": "Body is optional. Omitted \u2192 whole-column release (what the frontend sends);\n`{student_ids:[...]}` \u2192 per-student release (api-spec \u00a77).",
+        "description": "Body is optional. Omitted → whole-column release (what the frontend sends);\n`{student_ids:[...]}` → per-student release (api-spec §7).",
         "operationId": "release_api_v1_assessments__assessment_id__release_post",
         "security": [
           {
@@ -5564,12 +5990,111 @@
         }
       }
     },
+    "/api/v1/assessments/{assessment_id}/nudge-release": {
+      "post": {
+        "tags": [
+          "assessments"
+        ],
+        "summary": "Remind the teacher to release this assessment's grades (principal/secretary)",
+        "description": "No body. The reminder's recipients are derived from the offering's assigned\nteachers, never supplied by the caller.\n\n409 when nothing is marked-and-hidden (`nothing_awaiting_release`) or the\noffering is unstaffed (`no_assigned_teacher`); 429 inside the cooldown, which\ncarries `retry_after_seconds` so the SPA can re-enable the control at the right\nmoment.",
+        "operationId": "nudge_release_api_v1_assessments__assessment_id__nudge_release_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assessment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Assessment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NudgeReleaseResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/classes/{class_id}/subjects/{class_subject_id}/categories": {
       "get": {
         "tags": [
           "assessments"
         ],
-        "summary": "List assessment categories (scoped; api-spec \u00a76)",
+        "summary": "List assessment categories (scoped; api-spec §6)",
         "operationId": "list_categories_api_v1_classes__class_id__subjects__class_subject_id__categories_get",
         "security": [
           {
@@ -5655,7 +6180,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Create an assessment category (teacher; api-spec \u00a76)",
+        "summary": "Create an assessment category (teacher; api-spec §6)",
         "operationId": "create_category_api_v1_classes__class_id__subjects__class_subject_id__categories_post",
         "security": [
           {
@@ -5763,7 +6288,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Update an assessment category (teacher; api-spec \u00a76)",
+        "summary": "Update an assessment category (teacher; api-spec §6)",
         "operationId": "update_category_api_v1_classes__class_id__subjects__class_subject_id__categories__category_id__patch",
         "security": [
           {
@@ -5879,7 +6404,7 @@
         "tags": [
           "assessments"
         ],
-        "summary": "Delete an assessment category (teacher; api-spec \u00a76)",
+        "summary": "Delete an assessment category (teacher; api-spec §6)",
         "operationId": "delete_category_api_v1_classes__class_id__subjects__class_subject_id__categories__category_id__delete",
         "security": [
           {
@@ -5970,8 +6495,8 @@
         "tags": [
           "grades"
         ],
-        "summary": "Gradebook picker \u2014 offerings the caller may grade or view",
-        "description": "Teacher \u2192 offerings they own; P/S \u2192 all offerings of the year. Students have\nno gradebook access (they use `/grades/me`) \u2192 403.",
+        "summary": "Gradebook picker — offerings the caller may grade or view",
+        "description": "Teacher → offerings they own; P/S → all offerings of the year. Students have\nno gradebook access (they use `/grades/me`) → 403.",
         "operationId": "list_class_subjects_api_v1_grades_class_subjects_get",
         "security": [
           {
@@ -6297,7 +6822,7 @@
           "grades"
         ],
         "summary": "The signed-in student's own released grades",
-        "description": "Student-only. Unreleased assessments are omitted AND excluded from the term\naverage, so the number shown is derivable from the rows shown.",
+        "description": "Student-only. Unreleased assessments are omitted AND excluded from the term\naverage, so the number shown is derivable from the rows shown.\n\n`semester_id` narrows within the year the student's global switcher selected; with\nit omitted the response spans every semester of that year, as before.",
         "operationId": "get_my_grades_api_v1_grades_me_get",
         "security": [
           {
@@ -6320,6 +6845,23 @@
                 }
               ],
               "title": "Academic Year Id"
+            }
+          },
+          {
+            "name": "semester_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Semester Id"
             }
           }
         ],
@@ -6383,7 +6925,7 @@
           "grades"
         ],
         "summary": "Bulk grade entry for an assessment (teacher + ownership)",
-        "description": "The only grade write (api-spec \u00a77 \u2014 assessment-first, no `POST /grades`).\n\nAll-or-nothing: 422 duplicate_entry / student_not_enrolled / score_exceeds_max /\nscore_status_conflict / makeup_not_allowed, 409 year_archived, 404 unknown.",
+        "description": "The only grade write (api-spec §7 — assessment-first, no `POST /grades`).\n\nAll-or-nothing: 422 duplicate_entry / student_not_enrolled / score_exceeds_max /\nscore_status_conflict / makeup_not_allowed, 409 year_archived, 404 unknown.",
         "operationId": "upsert_grades_api_v1_assessments__assessment_id__grades_put",
         "security": [
           {
@@ -6482,7 +7024,7 @@
           "attendance"
         ],
         "summary": "Sections the caller may view or mark",
-        "description": "Teacher \u2192 sections where they own any subject offering; P/S \u2192 all sections\nof the year. `can_record` is true only for a teacher.",
+        "description": "Teacher → sections where they own any subject offering; P/S → all sections\nof the year. `can_record` is true only for a teacher.",
         "operationId": "list_sections_api_v1_attendance_sections_get",
         "security": [
           {
@@ -6671,7 +7213,7 @@
           "attendance"
         ],
         "summary": "The signed-in student's own attendance history",
-        "description": "Student-only, self-scoped. History is newest-first.",
+        "description": "Student-only, self-scoped. History is newest-first.\n\n`semester_id` narrows within the selected year; omitted, the history spans the\nwhole year exactly as before.",
         "operationId": "get_my_attendance_api_v1_attendance_me_get",
         "security": [
           {
@@ -6694,6 +7236,23 @@
                 }
               ],
               "title": "Academic Year Id"
+            }
+          },
+          {
+            "name": "semester_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Semester Id"
             }
           }
         ],
@@ -6757,7 +7316,7 @@
           "attendance"
         ],
         "summary": "The daily register for one (section, date)",
-        "description": "`section_id` is required \u2014 omitting it is a 422. `date` defaults to today.\nAn unmarked student has `status: null`, which is not an attendance value.",
+        "description": "`section_id` is required — omitting it is a 422. `date` defaults to today.\nAn unmarked student has `status: null`, which is not an attendance value.",
         "operationId": "get_register_api_v1_attendance_get",
         "security": [
           {
@@ -7153,7 +7712,7 @@
           "announcements"
         ],
         "summary": "Sections the caller may target with a class announcement",
-        "description": "P/S \u2192 all live sections; teacher \u2192 only sections they own a subject in;\nstudent \u2192 empty (the compose UI is hidden from them anyway).",
+        "description": "P/S → all live sections; teacher → only sections they own a subject in;\nstudent → empty (the compose UI is hidden from them anyway).",
         "operationId": "target_classes_api_v1_announcements_target_classes_get",
         "responses": {
           "200": {
@@ -7190,7 +7749,7 @@
           "announcements"
         ],
         "summary": "Full announcement (must target the caller)",
-        "description": "404 unless the announcement targets the caller \u2014 except that an author may\nalways read their own and a principal may read anything.",
+        "description": "404 unless the announcement targets the caller — except that an author may\nalways read their own and a principal may read anything.",
         "operationId": "get_announcement_api_v1_announcements__announcement_id__get",
         "security": [
           {
@@ -7415,7 +7974,7 @@
           "announcements"
         ],
         "summary": "Mark an announcement read (idempotent)",
-        "description": "404 unless it targets the caller \u2014 answering 204 would leak that it exists.",
+        "description": "404 unless it targets the caller — answering 204 would leak that it exists.",
         "operationId": "mark_read_api_v1_announcements__announcement_id__read_post",
         "security": [
           {
@@ -7477,7 +8036,7 @@
           "dashboard"
         ],
         "summary": "Composite role-shaped dashboard payload",
-        "description": "409 `no_active_semester` when no active term is configured \u2014 every variant's\nheader and scoping depend on it, so a sparse dashboard would mislead.",
+        "description": "409 `no_active_semester` when no active term is configured — every variant's\nheader and scoping depend on it, so a sparse dashboard would mislead.",
         "operationId": "get_dashboard_api_v1_dashboard_get",
         "responses": {
           "200": {
@@ -7560,7 +8119,7 @@
                               "title": "Body"
                             },
                             "audience": {
-                              "$ref": "#/components/schemas/AnnouncementAudience"
+                              "$ref": "#/$defs/AnnouncementAudience"
                             },
                             "published_at": {
                               "type": "string",
@@ -7582,7 +8141,7 @@
                             "published_at"
                           ],
                           "title": "DashboardAnnouncement",
-                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` \u2014 the dashboard card renders the whole notice."
+                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` — the dashboard card renders the whole notice."
                         },
                         "DashboardPerson": {
                           "properties": {
@@ -7609,7 +8168,7 @@
                             "status": {
                               "anyOf": [
                                 {
-                                  "$ref": "#/components/schemas/PersonStatus"
+                                  "$ref": "#/$defs/PersonStatus"
                                 },
                                 {
                                   "type": "null"
@@ -7732,46 +8291,46 @@
                           "default": "principal"
                         },
                         "stats": {
-                          "$ref": "#/components/schemas/AdminStats"
+                          "$ref": "#/$defs/AdminStats"
                         },
                         "enrollment_by_grade": {
                           "items": {
-                            "$ref": "#/components/schemas/EnrollmentByGradeItem"
+                            "$ref": "#/$defs/EnrollmentByGradeItem"
                           },
                           "type": "array",
                           "title": "Enrollment By Grade"
                         },
                         "grade_distribution": {
                           "items": {
-                            "$ref": "#/components/schemas/GradeDistributionItem"
+                            "$ref": "#/$defs/GradeDistributionItem"
                           },
                           "type": "array",
                           "title": "Grade Distribution"
                         },
                         "enrollment_trend": {
                           "items": {
-                            "$ref": "#/components/schemas/EnrollmentTrendItem"
+                            "$ref": "#/$defs/EnrollmentTrendItem"
                           },
                           "type": "array",
                           "title": "Enrollment Trend"
                         },
                         "recent_teachers": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardPerson"
+                            "$ref": "#/$defs/DashboardPerson"
                           },
                           "type": "array",
                           "title": "Recent Teachers"
                         },
                         "recent_students": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardPerson"
+                            "$ref": "#/$defs/DashboardPerson"
                           },
                           "type": "array",
                           "title": "Recent Students"
                         },
                         "recent_announcements": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardAnnouncement"
+                            "$ref": "#/$defs/DashboardAnnouncement"
                           },
                           "type": "array",
                           "title": "Recent Announcements"
@@ -7812,7 +8371,7 @@
                               "title": "Body"
                             },
                             "audience": {
-                              "$ref": "#/components/schemas/AnnouncementAudience"
+                              "$ref": "#/$defs/AnnouncementAudience"
                             },
                             "published_at": {
                               "type": "string",
@@ -7834,7 +8393,7 @@
                             "published_at"
                           ],
                           "title": "DashboardAnnouncement",
-                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` \u2014 the dashboard card renders the whole notice."
+                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` — the dashboard card renders the whole notice."
                         },
                         "SecretaryEnrollmentItem": {
                           "properties": {
@@ -7937,18 +8496,18 @@
                           "default": "secretary"
                         },
                         "stats": {
-                          "$ref": "#/components/schemas/SecretaryStats"
+                          "$ref": "#/$defs/SecretaryStats"
                         },
                         "recent_enrollments": {
                           "items": {
-                            "$ref": "#/components/schemas/SecretaryEnrollmentItem"
+                            "$ref": "#/$defs/SecretaryEnrollmentItem"
                           },
                           "type": "array",
                           "title": "Recent Enrollments"
                         },
                         "recent_announcements": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardAnnouncement"
+                            "$ref": "#/$defs/DashboardAnnouncement"
                           },
                           "type": "array",
                           "title": "Recent Announcements"
@@ -7999,7 +8558,7 @@
                               "title": "Body"
                             },
                             "audience": {
-                              "$ref": "#/components/schemas/AnnouncementAudience"
+                              "$ref": "#/$defs/AnnouncementAudience"
                             },
                             "published_at": {
                               "type": "string",
@@ -8021,7 +8580,7 @@
                             "published_at"
                           ],
                           "title": "DashboardAnnouncement",
-                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` \u2014 the dashboard card renders the whole notice."
+                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` — the dashboard card renders the whole notice."
                         },
                         "TeacherAssessmentItem": {
                           "properties": {
@@ -8057,7 +8616,7 @@
                               "title": "Assessment Date"
                             },
                             "status": {
-                              "$ref": "#/components/schemas/AssessmentStatus"
+                              "$ref": "#/$defs/AssessmentStatus"
                             }
                           },
                           "type": "object",
@@ -8067,6 +8626,63 @@
                             "status"
                           ],
                           "title": "TeacherAssessmentItem"
+                        },
+                        "TeacherAwaitingReleaseItem": {
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "title": "Id"
+                            },
+                            "title": {
+                              "type": "string",
+                              "title": "Title"
+                            },
+                            "subject_name": {
+                              "type": "string",
+                              "title": "Subject Name",
+                              "default": ""
+                            },
+                            "section_name": {
+                              "type": "string",
+                              "title": "Section Name",
+                              "default": ""
+                            },
+                            "assessment_date": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "date"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Assessment Date"
+                            },
+                            "status": {
+                              "$ref": "#/$defs/AssessmentStatus"
+                            },
+                            "class_subject_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "title": "Class Subject Id"
+                            },
+                            "graded_unreleased_count": {
+                              "type": "integer",
+                              "title": "Graded Unreleased Count",
+                              "default": 0
+                            }
+                          },
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "title",
+                            "status",
+                            "class_subject_id"
+                          ],
+                          "title": "TeacherAwaitingReleaseItem",
+                          "description": "An assessment holding marked-but-hidden work — the awaiting-release tile's rows.\n\nExtends `TeacherAssessmentItem` (same id/title/subject/section/date/status) and\nadds the two things the row needs to be ACTIONABLE rather than merely informative:\n\n* `class_subject_id` — the gradebook is addressed by offering, not by assessment\n  (`/grades?class_subject_id=…`), and the base item deliberately does not carry\n  one. Without it the tile could only link to the gradebook picker.\n* `graded_unreleased_count` — how many students are still waiting, so the teacher\n  can tell a whole unreleased column from one straggler left hidden by an earlier\n  per-student unrelease.\n\n`status` here is inherited and remains the ASSESSMENT lifecycle status, not a\ngrade status."
                         },
                         "TeacherStats": {
                           "properties": {
@@ -8088,6 +8704,11 @@
                             "ungraded_items": {
                               "type": "integer",
                               "title": "Ungraded Items",
+                              "default": 0
+                            },
+                            "awaiting_release_items": {
+                              "type": "integer",
+                              "title": "Awaiting Release Items",
                               "default": 0
                             }
                           },
@@ -8170,25 +8791,32 @@
                           "default": "teacher"
                         },
                         "stats": {
-                          "$ref": "#/components/schemas/TeacherStats"
+                          "$ref": "#/$defs/TeacherStats"
                         },
                         "today_classes": {
                           "items": {
-                            "$ref": "#/components/schemas/TeacherTodayClass"
+                            "$ref": "#/$defs/TeacherTodayClass"
                           },
                           "type": "array",
                           "title": "Today Classes"
                         },
                         "recent_assessments": {
                           "items": {
-                            "$ref": "#/components/schemas/TeacherAssessmentItem"
+                            "$ref": "#/$defs/TeacherAssessmentItem"
                           },
                           "type": "array",
                           "title": "Recent Assessments"
                         },
+                        "awaiting_release": {
+                          "items": {
+                            "$ref": "#/$defs/TeacherAwaitingReleaseItem"
+                          },
+                          "type": "array",
+                          "title": "Awaiting Release"
+                        },
                         "recent_announcements": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardAnnouncement"
+                            "$ref": "#/$defs/DashboardAnnouncement"
                           },
                           "type": "array",
                           "title": "Recent Announcements"
@@ -8229,7 +8857,7 @@
                               "title": "Body"
                             },
                             "audience": {
-                              "$ref": "#/components/schemas/AnnouncementAudience"
+                              "$ref": "#/$defs/AnnouncementAudience"
                             },
                             "published_at": {
                               "type": "string",
@@ -8251,7 +8879,7 @@
                             "published_at"
                           ],
                           "title": "DashboardAnnouncement",
-                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` \u2014 the dashboard card renders the whole notice."
+                          "description": "Feed teaser. Note this carries the FULL `body`, unlike the announcements\nmodule's `body_preview` — the dashboard card renders the whole notice."
                         },
                         "StudentClassItem": {
                           "properties": {
@@ -8425,32 +9053,32 @@
                           "default": "student"
                         },
                         "stats": {
-                          "$ref": "#/components/schemas/StudentStats"
+                          "$ref": "#/$defs/StudentStats"
                         },
                         "my_classes": {
                           "items": {
-                            "$ref": "#/components/schemas/StudentClassItem"
+                            "$ref": "#/$defs/StudentClassItem"
                           },
                           "type": "array",
                           "title": "My Classes"
                         },
                         "recent_grades": {
                           "items": {
-                            "$ref": "#/components/schemas/StudentGradeItem"
+                            "$ref": "#/$defs/StudentGradeItem"
                           },
                           "type": "array",
                           "title": "Recent Grades"
                         },
                         "upcoming_assessments": {
                           "items": {
-                            "$ref": "#/components/schemas/StudentUpcomingItem"
+                            "$ref": "#/$defs/StudentUpcomingItem"
                           },
                           "type": "array",
                           "title": "Upcoming Assessments"
                         },
                         "announcements": {
                           "items": {
-                            "$ref": "#/components/schemas/DashboardAnnouncement"
+                            "$ref": "#/$defs/DashboardAnnouncement"
                           },
                           "type": "array",
                           "title": "Announcements"
@@ -8635,7 +9263,7 @@
           "reports"
         ],
         "summary": "The signed-in student's own report card",
-        "description": "A subject with any unreleased graded work shows as `status=\"pending\"` with no\nnumeric (AC 5.5) \u2014 an official document must not print a partial average.",
+        "description": "A subject with any unreleased graded work shows as `status=\"pending\"` with no\nnumeric (AC 5.5) — an official document must not print a partial average.",
         "operationId": "get_my_report_card_api_v1_reports_report_card_me_get",
         "security": [
           {
@@ -8721,7 +9349,7 @@
           "reports"
         ],
         "summary": "A student's report card (P/S/Teacher)",
-        "description": "404 `semester_not_found` for an unknown `semester_id` \u2014 no silent fallback to\nthe active term, which would mask a client bug.",
+        "description": "404 `semester_not_found` for an unknown `semester_id` — no silent fallback to\nthe active term, which would mask a client bug.",
         "operationId": "get_report_card_api_v1_reports_report_card_get",
         "security": [
           {
@@ -8816,8 +9444,8 @@
         "tags": [
           "reports"
         ],
-        "summary": "A student's multi-year transcript (principal/secretary only \u2014 D26)",
-        "description": "Archived years read frozen snapshots; the live year computes on read (\u00a710.6).",
+        "summary": "A student's multi-year transcript (principal/secretary only — D26)",
+        "description": "Archived years read frozen snapshots; the live year computes on read (§10.6).",
         "operationId": "get_transcript_api_v1_reports_transcript_get",
         "security": [
           {
@@ -8896,7 +9524,7 @@
           "reports"
         ],
         "summary": "Per-offering grade summary + letter distribution",
-        "description": "No frontend caller today \u2014 FR-RPT-02 is served by the real gradebook.",
+        "description": "No frontend caller today — FR-RPT-02 is served by the real gradebook.",
         "operationId": "get_class_grades_api_v1_reports_class_grades_get",
         "security": [
           {
@@ -8992,7 +9620,7 @@
           "reports"
         ],
         "summary": "Per-section attendance summary",
-        "description": "No frontend caller today \u2014 FR-RPT-03 is served by `/attendance/summary`.\nSerialized by alias so the section key is emitted as `class`, matching the mock.",
+        "description": "No frontend caller today — FR-RPT-03 is served by `/attendance/summary`.\nSerialized by alias so the section key is emitted as `class`, matching the mock.",
         "operationId": "get_attendance_report_api_v1_reports_attendance_get",
         "security": [
           {
@@ -9071,7 +9699,7 @@
           "reports"
         ],
         "summary": "Headcount by grade and section (principal/secretary only)",
-        "description": "No frontend caller today \u2014 FR-RPT-04 is served by the principal dashboard.",
+        "description": "No frontend caller today — FR-RPT-04 is served by the principal dashboard.",
         "operationId": "get_enrollment_report_api_v1_reports_enrollment_get",
         "responses": {
           "200": {
@@ -9353,7 +9981,7 @@
           "events"
         ],
         "summary": "Delete a calendar event (P/S)",
-        "description": "Hard delete \u2014 the `events` table has no soft-delete column.",
+        "description": "Hard delete — the `events` table has no soft-delete column.",
         "operationId": "delete_event_api_v1_events__event_id__delete",
         "security": [
           {
@@ -9375,6 +10003,186 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/timetable/me": {
+      "get": {
+        "tags": [
+          "timetable"
+        ],
+        "summary": "The caller's own Mon–Fri week (Student = enrolled classes, Teacher = taught classes)",
+        "operationId": "my_timetable_api_v1_timetable_me_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimetableView"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/timetable/students/{student_id}": {
+      "get": {
+        "tags": [
+          "timetable"
+        ],
+        "summary": "Any student's Mon–Fri week (P/S; FR-SCH-05)",
+        "operationId": "student_timetable_api_v1_timetable_students__student_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "student_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Student Id"
+            }
+          },
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimetableView"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -9459,7 +10267,7 @@
           "semesters"
         ],
         "title": "AcademicYearCreateRequest",
-        "description": "POST /settings/academic-years \u2014 service creates EXACTLY 2 semesters (D10).\n\nThe two provided semesters must carry sequence 1 and 2 (schema enforces\n`sequence IN (1,2)` + the per-year uniqueness on sequence)."
+        "description": "POST /settings/academic-years — service creates EXACTLY 2 semesters (D10).\n\nThe two provided semesters must carry sequence 1 and 2 (schema enforces\n`sequence IN (1,2)` + the per-year uniqueness on sequence)."
       },
       "AcademicYearDetail": {
         "properties": {
@@ -9531,7 +10339,7 @@
           "items"
         ],
         "title": "AcademicYearList",
-        "description": "GET /settings/academic-years \u2014 not paginated; a school has few years."
+        "description": "GET /settings/academic-years — not paginated; a school has few years."
       },
       "AcademicYearRef": {
         "properties": {
@@ -9801,7 +10609,7 @@
           "published_at"
         ],
         "title": "AnnouncementDetail",
-        "description": "Full announcement \u2014 the POST/PATCH response and the detail read."
+        "description": "Full announcement — the POST/PATCH response and the detail read."
       },
       "AnnouncementListItem": {
         "properties": {
@@ -9952,7 +10760,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "AnnouncementUpdateRequest",
-        "description": "PATCH \u2014 all fields optional. `None` is meaningful for `expires_at` (clearing\nan expiry), so the service reads `model_dump(exclude_unset=True)` rather than\ntesting for `None`."
+        "description": "PATCH — all fields optional. `None` is meaningful for `expires_at` (clearing\nan expiry), so the service reads `model_dump(exclude_unset=True)` rather than\ntesting for `None`."
       },
       "ArchiveYearResponse": {
         "properties": {
@@ -10764,7 +11572,7 @@
           "grade_level"
         ],
         "title": "AttendanceSectionRef",
-        "description": "`section` and `homeroom_label` are nullable columns but non-nullable\n`string` in `features/attendance/types.ts`, so the service coerces `None` \u2192 \"\"\nrather than emitting a null the screens would render as \"null\"."
+        "description": "`section` and `homeroom_label` are nullable columns but non-nullable\n`string` in `features/attendance/types.ts`, so the service coerces `None` → \"\"\nrather than emitting a null the screens would render as \"null\"."
       },
       "AttendanceSectionsResponse": {
         "properties": {
@@ -11193,6 +12001,11 @@
             "minLength": 1,
             "title": "Name"
           },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          },
           "grade_level": {
             "type": "string",
             "maxLength": 50,
@@ -11234,16 +12047,44 @@
               }
             ],
             "title": "Academic Year Id"
+          },
+          "teacher_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Teacher Ids"
+          },
+          "lead_teacher_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Teacher Id"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ClassMeetingInput"
+            },
+            "type": "array",
+            "title": "Meetings"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "name",
+          "subject_id",
           "grade_level"
         ],
         "title": "ClassCreateRequest",
-        "description": "POST /classes (P/S). `academic_year_id` defaults to the active year."
+        "description": "POST /classes (P/S) — create a subject class.\n\n`subject_id` is required: a subject class without a subject cannot be graded,\nscheduled, or enrolled into. Teachers and meetings are optional here but accepted\nso the whole \"Math-1, Mr. Smith, Room A, Mon 08:00–09:30\" can be created in one\nrequest instead of three. `academic_year_id` defaults to the active year."
       },
       "ClassDetail": {
         "properties": {
@@ -11298,6 +12139,54 @@
           "is_archived": {
             "type": "boolean",
             "title": "Is Archived"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "class_subject_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Subject Id"
+          },
+          "teachers": {
+            "items": {
+              "$ref": "#/components/schemas/app__common__schemas__TeacherRef"
+            },
+            "type": "array",
+            "title": "Teachers"
+          },
+          "lead_teacher_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Teacher Id"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ClassMeetingItem"
+            },
+            "type": "array",
+            "title": "Meetings"
           },
           "audit": {
             "anyOf": [
@@ -11492,14 +12381,57 @@
             "title": "Enrolled Count",
             "default": 0
           },
-          "subject_count": {
-            "type": "integer",
-            "title": "Subject Count",
-            "default": 0
-          },
           "is_archived": {
             "type": "boolean",
             "title": "Is Archived"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "class_subject_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Subject Id"
+          },
+          "teachers": {
+            "items": {
+              "$ref": "#/components/schemas/app__common__schemas__TeacherRef"
+            },
+            "type": "array",
+            "title": "Teachers"
+          },
+          "lead_teacher_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Teacher Id"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ClassMeetingItem"
+            },
+            "type": "array",
+            "title": "Meetings"
           }
         },
         "type": "object",
@@ -11510,7 +12442,91 @@
           "is_archived"
         ],
         "title": "ClassListItem",
-        "description": "GET /classes item. `enrolled_count`/`subject_count` are derived and attached\npost-query (defaults let `model_validate` shape the ORM row directly)."
+        "description": "GET /classes item — one subject class.\n\nEverything below `is_archived` is derived and attached post-query (the defaults\nlet `model_validate` shape the ORM row directly). They are on the LIST item, not\njust the detail, because a subject-class row is unreadable without its subject,\nteacher, and times — and fetching those per row would be N+1 from the client."
+      },
+      "ClassMeetingInput": {
+        "properties": {
+          "day_of_week": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Day Of Week"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "day_of_week",
+          "start_time",
+          "end_time"
+        ],
+        "title": "ClassMeetingInput",
+        "description": "One meeting in a PUT /classes/{id}/meetings payload."
+      },
+      "ClassMeetingItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "day_of_week": {
+            "type": "integer",
+            "title": "Day Of Week"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "day_of_week",
+          "start_time",
+          "end_time"
+        ],
+        "title": "ClassMeetingItem",
+        "description": "One weekly meeting of a subject class — \"Mon 08:00–09:30, Room A\"."
       },
       "ClassRef": {
         "properties": {
@@ -11561,7 +12577,7 @@
           "subject_id"
         ],
         "title": "ClassSubjectCreateRequest",
-        "description": "POST /classes/{id}/subjects (P/S) \u2014 attach a subject to the section."
+        "description": "POST /classes/{id}/subjects (P/S) — attach a subject to the section."
       },
       "ClassSubjectItem": {
         "properties": {
@@ -11709,7 +12725,7 @@
         },
         "type": "object",
         "title": "ClassSubjectPickerList",
-        "description": "GET /assessments/class-subjects \u2014 picker feed for assessment authoring."
+        "description": "GET /assessments/class-subjects — picker feed for assessment authoring."
       },
       "ClassTaught": {
         "properties": {
@@ -11795,7 +12811,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ClassUpdateRequest",
-        "description": "PATCH /classes/{id} (P/S). Partial. Year is not re-assignable here."
+        "description": "PATCH /classes/{id} (P/S). Partial. Year is not re-assignable here.\n\nThe subject is not editable either: changing it would silently reinterpret every\nexisting assessment and grade under the class. Create a new class instead."
       },
       "CurrentUser": {
         "properties": {
@@ -12002,22 +13018,22 @@
             "type": "array",
             "title": "Enrolled"
           },
-          "transferred": {
-            "items": {
-              "$ref": "#/components/schemas/TransferItem"
-            },
-            "type": "array",
-            "title": "Transferred"
-          },
           "over_capacity_warning": {
             "type": "boolean",
             "title": "Over Capacity Warning",
             "default": false
+          },
+          "schedule_conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleConflict"
+            },
+            "type": "array",
+            "title": "Schedule Conflicts"
           }
         },
         "type": "object",
         "title": "EnrollmentResult",
-        "description": "POST /classes/{id}/enrollments response."
+        "description": "POST /classes/{id}/enrollments response.\n\nD29 removed `transferred`. It existed because enrolling a student used to close\ntheir enrolment elsewhere in the semester — the \"one homeroom\" rule. In a sixth\nform that behaviour is a data-loss bug (adding Freddy to Biology would drop him\nfrom Math), so both the transfer and its report are gone. `schedule_conflicts`\ntakes its place: the clash is surfaced, the enrolment still succeeds."
       },
       "EnrollmentTotals": {
         "properties": {
@@ -12835,7 +13851,7 @@
           "sort_order"
         ],
         "title": "GradingBand",
-        "description": "A single contiguous band. Read + write share this shape; on write the\nservice validates contiguity over 0..100 (no gaps/overlaps, schema \u00a75)."
+        "description": "A single contiguous band. Read + write share this shape; on write the\nservice validates contiguity over 0..100 (no gaps/overlaps, schema §5)."
       },
       "GradingScaleRead": {
         "properties": {
@@ -13017,6 +14033,42 @@
         "title": "LogoUploadResponse",
         "description": "200 body of POST /settings/school/logo."
       },
+      "MeetingsReplaceRequest": {
+        "properties": {
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ClassMeetingInput"
+            },
+            "type": "array",
+            "title": "Meetings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MeetingsReplaceRequest",
+        "description": "PUT /classes/{id}/meetings (P/S).\n\nREPLACES the class's whole weekly schedule, mirroring `TeacherAssignRequest`\nrather than inventing per-meeting POST/PATCH/DELETE routes: the UI edits the week\nas one form, and replace-the-set means a reordered or retimed week cannot half-apply.\nAn empty list is valid and clears the schedule."
+      },
+      "MeetingsResult": {
+        "properties": {
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ClassMeetingItem"
+            },
+            "type": "array",
+            "title": "Meetings"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleConflict"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          }
+        },
+        "type": "object",
+        "title": "MeetingsResult",
+        "description": "GET/PUT /classes/{id}/meetings response.\n\n`conflicts` is advisory. Overlapping a teacher or a room is a real scheduling\nmistake but not always an error (a room can be shared, a clash may be fixed\nminutes later), and hard-blocking would make an otherwise-valid week unsaveable.\nSo the write succeeds and the UI warns — the same warn-only call already made for\nover-capacity enrolment (D-Q6)."
+      },
       "MyAttendanceHistoryItem": {
         "properties": {
           "date": {
@@ -13130,6 +14182,70 @@
           "student"
         ],
         "title": "MyGrades"
+      },
+      "NudgeReleaseResult": {
+        "properties": {
+          "assessment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Assessment Id"
+          },
+          "awaiting_release_count": {
+            "type": "integer",
+            "title": "Awaiting Release Count"
+          },
+          "teachers": {
+            "items": {
+              "$ref": "#/components/schemas/NudgedTeacher"
+            },
+            "type": "array",
+            "title": "Teachers"
+          },
+          "last_nudged_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Nudged At"
+          },
+          "next_nudge_allowed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Next Nudge Allowed At"
+          },
+          "cooldown_seconds": {
+            "type": "integer",
+            "title": "Cooldown Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "assessment_id",
+          "awaiting_release_count",
+          "last_nudged_at",
+          "next_nudge_allowed_at",
+          "cooldown_seconds"
+        ],
+        "title": "NudgeReleaseResult",
+        "description": "POST /assessments/{id}/nudge-release.\n\n`last_nudged_at` is read back out of `audit_log` after the write, so it is the\nsame value a subsequent read reports — the UI never has to guess when the\ncooldown started. `cooldown_seconds` is returned rather than hardcoded in the\nSPA so the window can be retuned server-side without a frontend release."
+      },
+      "NudgedTeacher": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "full_name"
+        ],
+        "title": "NudgedTeacher",
+        "description": "A teacher the reminder was addressed to (teacher PROFILE id, not user id)."
       },
       "Page_AnnouncementListItem_": {
         "properties": {
@@ -13460,7 +14576,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ReleaseRequest",
-        "description": "Optional body for release/unrelease (api-spec \u00a77).\n\nOmitted (the frontend's current behavior) \u2192 whole-column release: flip\n`assessments.is_released` for everyone. Supplied \u2192 per-student release, which\nflips only `assessment_grades.is_released` on the named rows."
+        "description": "Optional body for release/unrelease (api-spec §7).\n\nOmitted (the frontend's current behavior) → whole-column release: flip\n`assessments.is_released` for everyone. Supplied → per-student release, which\nflips only `assessment_grades.is_released` on the named rows."
       },
       "ReleaseResult": {
         "properties": {
@@ -13542,15 +14658,16 @@
           "student": {
             "$ref": "#/components/schemas/ReportStudentRef"
           },
-          "section": {
+          "year_group": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ReportSectionRef"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Year Group"
           },
           "semester": {
             "$ref": "#/components/schemas/ReportSemesterRef"
@@ -13807,19 +14924,7 @@
             "type": "string",
             "title": "Status"
           },
-          "section_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Section Id"
-          },
-          "section_name": {
+          "year_group": {
             "anyOf": [
               {
                 "type": "string"
@@ -13828,18 +14933,7 @@
                 "type": "null"
               }
             ],
-            "title": "Section Name"
-          },
-          "grade_level": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Grade Level"
+            "title": "Year Group"
           }
         },
         "type": "object",
@@ -13849,7 +14943,8 @@
           "student_number",
           "status"
         ],
-        "title": "ReportStudentRef"
+        "title": "ReportStudentRef",
+        "description": "The student as printed on a report card / transcript / picker row.\n\nD29 replaced `section_id` / `section_name` / `grade_level` — all read off the\nstudent's homeroom — with `year_group`, which is the student's own level. A\nsixth-former has no single class whose name could head their report card."
       },
       "ReportSubjectRef": {
         "properties": {
@@ -13906,7 +15001,7 @@
           "temporary_password"
         ],
         "title": "ResetPasswordResponse",
-        "description": "200 body of /auth/users/{id}/reset-password \u2014 returned ONCE."
+        "description": "200 body of /auth/users/{id}/reset-password — returned ONCE."
       },
       "Role": {
         "type": "string",
@@ -13954,6 +15049,63 @@
         ],
         "title": "RosterEntry",
         "description": "GET /classes/{id}/roster item + POST enrollments `enrolled` item."
+      },
+      "ScheduleConflict": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "teacher",
+              "room",
+              "student"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "with_class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "With Class Id"
+          },
+          "with_class_name": {
+            "type": "string",
+            "title": "With Class Name"
+          },
+          "day_of_week": {
+            "type": "integer",
+            "title": "Day Of Week"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "with_class_id",
+          "with_class_name",
+          "day_of_week",
+          "start_time",
+          "end_time",
+          "message"
+        ],
+        "title": "ScheduleConflict",
+        "description": "A timetable clash. Reported, never enforced — see MeetingsResult."
       },
       "SchoolProfileRead": {
         "properties": {
@@ -14011,7 +15163,7 @@
           "name"
         ],
         "title": "SchoolProfileRead",
-        "description": "GET /settings/school \u2014 SchoolIdentity plus nothing extra (identity is the\npublic read shape). `logo_url` is resolved from `logo_storage_key` + the\nSupabase public base when a key is present (TODO(OQ-DB5), see service)."
+        "description": "GET /settings/school — SchoolIdentity plus nothing extra (identity is the\npublic read shape). `logo_url` is resolved from `logo_storage_key` + the\nSupabase public base when a key is present (TODO(OQ-DB5), see service)."
       },
       "SchoolUpdateRequest": {
         "properties": {
@@ -14188,7 +15340,43 @@
         "title": "SemesterList",
         "description": "GET /settings/semesters?academic_year_id?"
       },
-      "StudentAssessmentItem": {
+      "StudentAssessmentGroup": {
+        "properties": {
+          "class_subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Subject Id"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "term_grade": {
+            "$ref": "#/components/schemas/StudentTermGrade"
+          },
+          "assessments": {
+            "items": {
+              "$ref": "#/components/schemas/StudentAssessmentLine"
+            },
+            "type": "array",
+            "title": "Assessments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_subject_id",
+          "term_grade"
+        ],
+        "title": "StudentAssessmentGroup",
+        "description": "GET /students/{id}/assessments group — one `class_subject` offering.\n\nThe numbers come from `grades.service.student_assessment_groups`, which routes\nthe arithmetic through the single grade engine (`grades/calc.py`); nothing is\nrecomputed here."
+      },
+      "StudentAssessmentLine": {
         "properties": {
           "id": {
             "type": "string",
@@ -14202,6 +15390,21 @@
           "type": {
             "$ref": "#/components/schemas/AssessmentType"
           },
+          "max_score": {
+            "type": "number",
+            "title": "Max Score"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          },
           "assessment_date": {
             "anyOf": [
               {
@@ -14214,24 +15417,35 @@
             ],
             "title": "Assessment Date"
           },
-          "max_score": {
-            "type": "number",
-            "title": "Max Score"
-          },
-          "class_subject_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Class Subject Id"
-          },
-          "class_ref": {
-            "$ref": "#/components/schemas/ClassRef"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/SubjectRef"
-          },
           "status": {
-            "type": "string",
-            "title": "Status"
+            "$ref": "#/components/schemas/GradeStatus"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "is_released": {
+            "type": "boolean",
+            "title": "Is Released"
+          },
+          "last_nudged_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Nudged At"
           }
         },
         "type": "object",
@@ -14240,13 +15454,30 @@
           "title",
           "type",
           "max_score",
-          "class_subject_id",
-          "class_ref",
-          "subject",
-          "status"
+          "status",
+          "is_released"
         ],
-        "title": "StudentAssessmentItem",
-        "description": "GET /students/{id}/assessments item (api-spec \u00a75.3, FR-ASMT-06).\n\nA student-detail-scoped assessment summary carrying exactly the fields the\napi-spec `AssessmentSummary` enumerates. Defined locally (not imported from an\nAssessments-module schema) because that module is not built yet; the Students\nendpoint reads assessments for the subjects in the student's section directly."
+        "title": "StudentAssessmentLine",
+        "description": "One assessment row under a subject group (GET /students/{id}/assessments).\n\n`status` is the **student's grade status** — `pending` when no\n`assessment_grades` row exists yet — NOT the assessment's lifecycle status.\n`score` is withheld (`null`) unless the result is released AND graded; the row\nitself is still listed, because the viewer here is an admin/teacher rather\nthan the student (contrast `GET /grades/me`, which drops unreleased rows)."
+      },
+      "StudentAssessmentsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudentAssessmentGroup"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "nudge_cooldown_seconds": {
+            "type": "integer",
+            "title": "Nudge Cooldown Seconds",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "StudentAssessmentsResponse",
+        "description": "GET /students/{id}/assessments (api-spec §5.3, FR-ASMT-06).\n\nAn `{items:[...]}` envelope, not a bare array — the frontend reads\n`res.data.items` (`features/students/api/studentsApi.ts`)."
       },
       "StudentCreateRequest": {
         "properties": {
@@ -14278,6 +15509,18 @@
               }
             ],
             "title": "Gender"
+          },
+          "year_group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year Group"
           },
           "enrollment_date": {
             "type": "string",
@@ -14348,17 +15591,13 @@
             ],
             "title": "Phone"
           },
-          "section_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Section Id"
+          "class_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Class Ids"
           }
         },
         "additionalProperties": false,
@@ -14370,7 +15609,7 @@
           "enrollment_date"
         ],
         "title": "StudentCreateRequest",
-        "description": "POST /students (api-spec \u00a75.3, FR-STU-01/02/05).\n\n`status` is accepted here (defaults active). Lifecycle CHANGES after creation\ngo through POST /students/{id}/status \u2014 not PATCH. `section_id`, if present,\nenrolls the student into that section for the active semester in the same\ntransaction."
+        "description": "POST /students (api-spec §5.3, FR-STU-01/02/05).\n\n`status` is accepted here (defaults active). Lifecycle CHANGES after creation\ngo through POST /students/{id}/status — not PATCH.\n\nD29: `class_ids` replaces the old single `section_id` and enrols the student into\nevery listed subject class for the active semester in the same transaction, so the\noffice can register a sixth-former and their whole subject load in one action."
       },
       "StudentDetail": {
         "properties": {
@@ -14402,6 +15641,17 @@
               }
             ],
             "title": "Gender"
+          },
+          "year_group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year Group"
           },
           "enrollment_date": {
             "type": "string",
@@ -14466,15 +15716,12 @@
             ],
             "title": "Phone"
           },
-          "current_section": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ClassRef"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "current_classes": {
+            "items": {
+              "$ref": "#/components/schemas/ClassRef"
+            },
+            "type": "array",
+            "title": "Current Classes"
           },
           "audit": {
             "anyOf": [
@@ -14497,7 +15744,7 @@
           "status"
         ],
         "title": "StudentDetail",
-        "description": "GET /students/{id}, /students/me + POST/PATCH/status responses.\n\nMirrors `student_profiles` (schema \u00a73.B) plus the derived `current_section`\n(the student's active section for the active semester) and the audit stamp."
+        "description": "GET /students/{id}, /students/me + POST/PATCH/status responses.\n\nMirrors `student_profiles` (schema §3.B) plus the derived `current_classes` (every\nsubject class the student actively sits, D29) and the audit stamp."
       },
       "StudentListItem": {
         "properties": {
@@ -14517,15 +15764,21 @@
           "status": {
             "$ref": "#/components/schemas/StudentStatus"
           },
-          "current_section": {
+          "year_group": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ClassRef"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Year Group"
+          },
+          "class_count": {
+            "type": "integer",
+            "title": "Class Count",
+            "default": 0
           },
           "guardian_name": {
             "anyOf": [
@@ -14547,7 +15800,7 @@
           "status"
         ],
         "title": "StudentListItem",
-        "description": "GET /students item (api-spec \u00a75.3)."
+        "description": "GET /students item (api-spec §5.3).\n\nD29 replaced `current_section` (one homeroom) with `year_group` + `class_count`.\nThe list needs a scannable level and \"how many subjects do they take\"; the class\nNAMES belong on the detail page, and putting a variable-length list in a table cell\nwas the alternative."
       },
       "StudentPickerPage": {
         "properties": {
@@ -14617,7 +15870,36 @@
           "status"
         ],
         "title": "StudentStatusRequest",
-        "description": "POST /students/{id}/status (api-spec \u00a75.3, FR-STU-04)."
+        "description": "POST /students/{id}/status (api-spec §5.3, FR-STU-04)."
+      },
+      "StudentTermGrade": {
+        "properties": {
+          "numeric": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numeric"
+          },
+          "letter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Letter"
+          }
+        },
+        "type": "object",
+        "title": "StudentTermGrade",
+        "description": "The student's computed term grade for one offering. Both members are null\nwhen nothing has participated yet (all pending / excused / zero weight)."
       },
       "StudentUpdateRequest": {
         "properties": {
@@ -14670,6 +15952,18 @@
               }
             ],
             "title": "Gender"
+          },
+          "year_group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year Group"
           },
           "enrollment_date": {
             "anyOf": [
@@ -14747,7 +16041,45 @@
         "additionalProperties": false,
         "type": "object",
         "title": "StudentUpdateRequest",
-        "description": "PATCH /students/{id} (api-spec \u00a75.3, FR-STU-03).\n\nAll fields optional (partial update). `status` is intentionally ABSENT \u2014 it is\nNOT editable here; lifecycle goes through the dedicated status endpoint\n(auditable, guarded). `section_id` is likewise not a PATCH field \u2014 enrollment/\ntransfer is a Classes-module action."
+        "description": "PATCH /students/{id} (api-spec §5.3, FR-STU-03).\n\nAll fields optional (partial update). `status` is intentionally ABSENT — it is\nNOT editable here; lifecycle goes through the dedicated status endpoint\n(auditable, guarded). Class enrolment is likewise not a PATCH field — it is a\nClasses-module action (`POST /classes/{id}/enrollments`), and under D29 a student\nhas many enrolments, so \"set them from here\" would be ambiguous about removals."
+      },
+      "StudentYearItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AcademicYearStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "StudentYearItem",
+        "description": "One academic year the student was actually enrolled in."
+      },
+      "StudentYearsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StudentYearItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "StudentYearsResponse",
+        "description": "GET /students/{id}/years and GET /students/me/years — newest year first.\n\nBacks the student year-switcher (`app/providers/YearContext.tsx`) and the\nper-student year filter on the profile page; both read `res.data.items`."
       },
       "SubjectCreateRequest": {
         "properties": {
@@ -14811,7 +16143,7 @@
           "is_active"
         ],
         "title": "SubjectDetail",
-        "description": "POST/PATCH /subjects response (api-spec \u00a75b)."
+        "description": "POST/PATCH /subjects response (api-spec §5b)."
       },
       "SubjectListItem": {
         "properties": {
@@ -14847,7 +16179,7 @@
           "is_active"
         ],
         "title": "SubjectListItem",
-        "description": "GET /subjects item (api-spec \u00a75b)."
+        "description": "GET /subjects item (api-spec §5b)."
       },
       "SubjectRef": {
         "properties": {
@@ -15039,7 +16371,7 @@
           "full_name"
         ],
         "title": "TeacherCreateRequest",
-        "description": "POST /teachers (api-spec \u00a75.4, FR-TCH-01)."
+        "description": "POST /teachers (api-spec §5.4, FR-TCH-01)."
       },
       "TeacherCreateResponse": {
         "properties": {
@@ -15138,7 +16470,7 @@
           "status"
         ],
         "title": "TeacherDetail",
-        "description": "GET /teachers/{id} + POST/PATCH/status responses (api-spec \u00a75.4)."
+        "description": "GET /teachers/{id} + POST/PATCH/status responses (api-spec §5.4)."
       },
       "TeacherListItem": {
         "properties": {
@@ -15185,7 +16517,7 @@
           "status"
         ],
         "title": "TeacherListItem",
-        "description": "GET /teachers item (api-spec \u00a75.4)."
+        "description": "GET /teachers item (api-spec §5.4)."
       },
       "TeacherLoginProvision": {
         "properties": {
@@ -15228,7 +16560,7 @@
           "status"
         ],
         "title": "TeacherStatusRequest",
-        "description": "POST /teachers/{id}/status (api-spec \u00a75.4, FR-TCH-03; Principal-only)."
+        "description": "POST /teachers/{id}/status (api-spec §5.4, FR-TCH-03; Principal-only)."
       },
       "TeacherUpdateRequest": {
         "properties": {
@@ -15300,7 +16632,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "TeacherUpdateRequest",
-        "description": "PATCH /teachers/{id} (api-spec \u00a75.4, FR-TCH-03).\n\nBenign profile edits only. `status` (deactivation) goes through\nPOST /teachers/{id}/status (Principal-only); role change is a Settings action."
+        "description": "PATCH /teachers/{id} (api-spec §5.4, FR-TCH-03).\n\nBenign profile edits only. `status` (deactivation) goes through\nPOST /teachers/{id}/status (Principal-only); role change is a Settings action."
       },
       "TermGradeItem": {
         "properties": {
@@ -15399,6 +16731,146 @@
         },
         "type": "object",
         "title": "TermGradeList"
+      },
+      "TimetableDay": {
+        "properties": {
+          "day_of_week": {
+            "type": "integer",
+            "title": "Day Of Week"
+          },
+          "day_name": {
+            "type": "string",
+            "title": "Day Name"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimetableEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day_of_week",
+          "day_name"
+        ],
+        "title": "TimetableDay",
+        "description": "One weekday, entries in start-time order. Present even when empty."
+      },
+      "TimetableEntry": {
+        "properties": {
+          "meeting_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Meeting Id"
+          },
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "class_subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Subject Id"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "teachers": {
+            "items": {
+              "$ref": "#/components/schemas/app__common__schemas__TeacherRef"
+            },
+            "type": "array",
+            "title": "Teachers"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room"
+          },
+          "day_of_week": {
+            "type": "integer",
+            "title": "Day Of Week"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "time",
+            "title": "End Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meeting_id",
+          "class_id",
+          "class_name",
+          "class_subject_id",
+          "subject",
+          "day_of_week",
+          "start_time",
+          "end_time"
+        ],
+        "title": "TimetableEntry",
+        "description": "One meeting of one subject class, as it appears in a week view."
+      },
+      "TimetableView": {
+        "properties": {
+          "student": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__common__schemas__StudentRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "academic_year_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Year Id"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/TimetableDay"
+            },
+            "type": "array",
+            "title": "Days"
+          },
+          "unscheduled": {
+            "items": {
+              "$ref": "#/components/schemas/UnscheduledClass"
+            },
+            "type": "array",
+            "title": "Unscheduled"
+          }
+        },
+        "type": "object",
+        "title": "TimetableView",
+        "description": "GET /timetable/me and GET /students/{id}/timetable.\n\n`unscheduled` is the point of the whole envelope: a class the viewer belongs to\nthat has no meetings yet would otherwise silently vanish from the timetable, and\n\"my Biology class is missing\" is indistinguishable from \"I'm not enrolled\". Listing\nthem separately makes the gap visible and tells the office what to schedule."
       },
       "Transcript": {
         "properties": {
@@ -15544,26 +17016,6 @@
         ],
         "title": "TranscriptYear"
       },
-      "TransferItem": {
-        "properties": {
-          "student_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Student Id"
-          },
-          "from_class_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "From Class Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "student_id",
-          "from_class_id"
-        ],
-        "title": "TransferItem"
-      },
       "UnreadCountResponse": {
         "properties": {
           "unread_count": {
@@ -15574,6 +17026,43 @@
         },
         "type": "object",
         "title": "UnreadCountResponse"
+      },
+      "UnscheduledClass": {
+        "properties": {
+          "class_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Id"
+          },
+          "class_name": {
+            "type": "string",
+            "title": "Class Name"
+          },
+          "class_subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Class Subject Id"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "teachers": {
+            "items": {
+              "$ref": "#/components/schemas/app__common__schemas__TeacherRef"
+            },
+            "type": "array",
+            "title": "Teachers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "class_id",
+          "class_name",
+          "class_subject_id",
+          "subject"
+        ],
+        "title": "UnscheduledClass",
+        "description": "A class the viewer belongs to that has no meetings set yet.\n\nSame identity fields as `TimetableEntry` minus the slot — there is no slot, which\nis exactly what makes it worth reporting."
       },
       "UserCreateRequest": {
         "properties": {
@@ -16084,7 +17573,7 @@
           "id"
         ],
         "title": "ClassSubjectRef",
-        "description": "Grades' class_subject ref \u2014 keyed on `id`, NOT `class_subject_id`."
+        "description": "Grades' class_subject ref — keyed on `id`, NOT `class_subject_id`."
       },
       "app__modules__grades__schemas__SemesterRef": {
         "properties": {

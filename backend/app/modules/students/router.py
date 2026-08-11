@@ -64,16 +64,19 @@ def list_students(
     search: Annotated[str | None, Query(max_length=160)] = None,
     status_filter: Annotated[StudentStatus | None, Query(alias="status")] = None,
     class_id: Annotated[uuid.UUID | None, Query()] = None,
-    grade_level: Annotated[str | None, Query(max_length=40)] = None,
+    year_group: Annotated[str | None, Query(max_length=50)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
 ) -> Page[StudentListItem]:
-    """Teacher results auto-restrict to students in a section they own any subject
+    """Teacher results auto-restrict to students in a class they own any subject
     of (FR-STU-08). Students are denied at the role gate (403).
 
-    `academic_year_id` (year switcher) restricts the directory to students enrolled
-    in that year when it is a PAST year; the active year lists everyone."""
+    `year_group` filters on the student's own level (D29 — it replaced `grade_level`,
+    which used to be read off the student's homeroom). `class_id` narrows to one
+    subject class. `academic_year_id` (year switcher) restricts the directory to
+    students enrolled in that year when it is a PAST year; the active year lists
+    everyone."""
     return service.list_students(
         db,
         caller=caller,
@@ -81,7 +84,7 @@ def list_students(
         search=search,
         status=status_filter,
         class_id=class_id,
-        grade_level=grade_level,
+        year_group=year_group,
         academic_year_id=academic_year_id,
     )
 
@@ -100,7 +103,7 @@ def get_my_student(
     """Server-derived scope: the profile is resolved from the token, never a param
     (§3.2). 404 no_student_profile if the login isn't linked to a student.
 
-    `academic_year_id` rescopes `current_section` to the section the caller sat in that
+    `academic_year_id` rescopes `current_classes` to the classes the caller sat in that
     year — the student half of what `GET /{student_id}` already did for staff. WHICH
     student is still resolved from the token only; the param narrows the view of their
     own record and can never widen it to anyone else's."""
@@ -137,10 +140,10 @@ def get_student(
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
 ) -> StudentDetail:
-    """Teacher must own a section the student is enrolled in, else 404 (§3.3).
+    """Teacher must own a class the student is enrolled in, else 404 (§3.3).
     Students are denied at the role gate (403 → use /students/me).
 
-    `academic_year_id` rescopes `current_section` to the section the student sat in
+    `academic_year_id` rescopes `current_classes` to the classes the student sat in
     that year, so the profile header agrees with the assessments tab."""
     return service.get_student(
         db, caller=caller, student_id=student_id, academic_year_id=academic_year_id

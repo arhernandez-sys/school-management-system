@@ -1,9 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
-import { Box, Breadcrumbs, Link as MuiLink, Stack, Typography } from '@mui/material';
+import {
+  Box,
+  Breadcrumbs,
+  Button,
+  Link as MuiLink,
+  Stack,
+  Typography,
+} from '@mui/material';
 import GroupsIcon from '@mui/icons-material/Groups';
-import MenuBookIcon from '@mui/icons-material/MenuBook';
+import ScheduleIcon from '@mui/icons-material/Schedule';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import {
   DetailTabs,
   LoadingState,
@@ -17,27 +25,34 @@ import {
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
-import { useClassDetail, useClassSubjects, useClassRoster } from './hooks/useClasses';
+import { useClassDetail, useClassRoster } from './hooks/useClasses';
 import { RosterTab } from './components/RosterTab';
-import { SubjectsTab } from './components/SubjectsTab';
+import { ScheduleTab } from './components/ScheduleTab';
+import { AssignTeachersDialog } from './components/AssignTeachersDialog';
+import { roomsOf, summarizeMeetings } from './meetingFormat';
 
 /**
- * Class (Section) detail (ui-design-system §7.5, api-spec §5 GET /classes/{id}). A D23
- * homeroom: one roster, many subjects. Header shows name · grade · academic year and a
- * capacity summary with a warn-only "Over capacity" chip (D-Q6). DetailTabs:
- *  - Roster: the section's enrolled students (P/S can enroll/withdraw).
- *  - Subjects: each `class_subject` offering (subject + teacher(s)), linking to its gradebook
- *    (P/S can staff each offering — teachers attach to the offering, not to the section).
- *  - Overview: at-a-glance section stats.
+ * Subject-class detail (ui-design-system §7.5, api-spec §5 GET /classes/{id}).
  *
- * Write capability (enroll/withdraw, assign teachers) is UX-gated by the `classes`
- * permission; the server remains authoritative.
+ * **D29** — one class, one subject, one teacher set, one weekly slot, one roster. Tabs:
+ *  - Roster: the students enrolled in THIS class (P/S enroll/withdraw).
+ *  - Schedule: the Mon–Fri meeting rows (P/S edit; others read).
+ *  - Overview: at-a-glance stats.
+ *
+ * The **Subjects tab is retired**. It existed because a homeroom taught many subjects, each
+ * needing its own row to staff and to reach a gradebook. A subject class has exactly one
+ * subject — fixed at creation — so that list would always hold a single row. The subject and
+ * its teachers moved into the header, where "Change teachers" reaches the same
+ * `PUT /classes/{id}/subjects/{cs}/teachers` the tab used.
+ *
+ * Write capability is UX-gated by the `classes` permission; the server stays authoritative.
  */
 export function ClassDetailPage() {
   const { classId } = useParams<{ classId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'classes') : false;
+  const [teachersOpen, setTeachersOpen] = useState(false);
 
   const detailQuery = useClassDetail(classId);
   const detail = detailQuery.data;
@@ -53,9 +68,11 @@ export function ClassDetailPage() {
         ),
       },
       {
-        value: 'subjects',
-        label: 'Subjects',
-        render: () => <SubjectsTab classId={classId} canManage={canManage} />,
+        value: 'schedule',
+        label: 'Schedule',
+        render: () => (
+          <ScheduleTab classId={classId} className={detail.name} canManage={canManage} />
+        ),
       },
       {
         value: 'overview',
@@ -78,16 +95,23 @@ export function ClassDetailPage() {
       <EmptyState
         variant="page"
         title="Class not found"
-        description="This section may have been removed or you may not have access to it."
+        description="This class may have been removed or you may not have access to it."
         action={{ label: 'Back to classes', onClick: () => navigate(ROUTES.classes) }}
       />
     );
   }
 
+  const capacity = detail.capacity ?? 0;
   const capacityText =
-    detail.capacity > 0
-      ? `${detail.enrolled_count}/${detail.capacity} students`
+    capacity > 0
+      ? `${detail.enrolled_count}/${capacity} students`
       : `${detail.enrolled_count} students`;
+  const teacherText =
+    detail.teachers.length > 0
+      ? detail.teachers.map((t) => t.full_name).join(', ')
+      : 'No teacher assigned';
+  const when = summarizeMeetings(detail.meetings);
+  const rooms = roomsOf(detail.meetings);
 
   return (
     <Box>
@@ -100,40 +124,82 @@ export function ClassDetailPage() {
 
       <PageHeader
         title={detail.name}
-        subtitle={`${detail.grade_level} · ${detail.academic_year.name}`}
+        subtitle={
+          detail.subject
+            ? `${detail.subject.name} · ${detail.grade_level} · ${detail.academic_year.name}`
+            : `${detail.grade_level} · ${detail.academic_year.name}`
+        }
+        primaryAction={
+          canManage && detail.class_subject_id ? (
+            <Button variant="outlined" onClick={() => setTeachersOpen(true)}>
+              Change teachers
+            </Button>
+          ) : undefined
+        }
       />
 
-      <Stack direction="row" spacing={1.5} sx={{ mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{ mb: 3, alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}
+      >
         <Typography variant="body2" color="text.secondary">
-          Homeroom · {capacityText}
+          {teacherText} · {capacityText}
+          {when ? ` · ${when}` : ''}
+          {rooms.length > 0 ? ` · ${rooms.join(' · ')}` : ''}
         </Typography>
+        {!detail.subject && <StatusBadge label="No subject" kind="warning" />}
+        {!when && <StatusBadge label="Not scheduled" kind="neutral" />}
         {detail.over_capacity && <StatusBadge label="Over capacity" kind="warning" />}
         {detail.is_archived && <StatusBadge label="Archived" kind="neutral" />}
       </Stack>
 
       {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Class detail sections" />}
+
+      {canManage && detail.class_subject_id && detail.subject && (
+        // The dialog's contract is unchanged from when the retired Subjects tab owned it —
+        // it only reads class_subject_id / teachers / lead_teacher_id — so the offering is
+        // synthesized from the class detail rather than reshaping a careful component.
+        // `assessment_count` is not used by it; `actionable_by_caller` is true because the
+        // button that opens this is already behind `canManage`.
+        <AssignTeachersDialog
+          open={teachersOpen}
+          classId={detail.id}
+          classSubject={{
+            class_subject_id: detail.class_subject_id,
+            subject: detail.subject,
+            teachers: detail.teachers,
+            lead_teacher_id: detail.lead_teacher_id,
+            assessment_count: 0,
+            is_active: true,
+            actionable_by_caller: true,
+          }}
+          onClose={() => setTeachersOpen(false)}
+          onAssigned={() => {
+            setTeachersOpen(false);
+            void detailQuery.refetch();
+          }}
+        />
+      )}
     </Box>
   );
 }
 
-/** Overview tab — reconciled at-a-glance section stats (reads the same endpoints). */
+/** Overview tab — at-a-glance stats for one subject class. */
 function OverviewTab({ classId }: { classId: string }) {
   const detailQuery = useClassDetail(classId);
-  const subjectsQuery = useClassSubjects(classId);
   const rosterQuery = useClassRoster(classId);
 
   const detail = detailQuery.data;
-  const activeSubjects = (subjectsQuery.data ?? []).filter((s) => s.is_active).length;
-  const unstaffed = (subjectsQuery.data ?? []).filter(
-    (s) => s.is_active && s.teachers.length === 0,
-  ).length;
+  const capacity = detail?.capacity ?? 0;
+  const meetingCount = detail?.meetings.length ?? 0;
 
   return (
     <Box
       sx={{
         display: 'grid',
         gap: 2,
-        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
+        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
       }}
     >
       <StatCard
@@ -142,21 +208,31 @@ function OverviewTab({ classId }: { classId: string }) {
         loading={rosterQuery.isLoading && detailQuery.isLoading}
         icon={<GroupsIcon />}
         color="primary"
-        helperText={detail && detail.capacity > 0 ? `Capacity ${detail.capacity}` : undefined}
+        helperText={capacity > 0 ? `Capacity ${capacity}` : 'No capacity limit'}
       />
       <StatCard
-        label="Subjects offered"
-        value={activeSubjects}
-        loading={subjectsQuery.isLoading}
-        icon={<MenuBookIcon />}
+        label="Teachers"
+        value={detail?.teachers.length ?? 0}
+        loading={detailQuery.isLoading}
+        icon={<PersonOutlineIcon />}
         color="info"
-        helperText={unstaffed > 0 ? `${unstaffed} need a teacher` : 'All staffed'}
+        helperText={
+          detail && detail.teachers.length === 0 ? 'Needs a teacher' : 'Assigned'
+        }
+      />
+      <StatCard
+        label="Meetings / week"
+        value={meetingCount}
+        loading={detailQuery.isLoading}
+        icon={<ScheduleIcon />}
+        color={meetingCount === 0 ? 'warning' : 'success'}
+        helperText={meetingCount === 0 ? 'Not on any timetable yet' : undefined}
       />
       <StatCard
         label="Capacity used"
         value={
-          detail && detail.capacity > 0
-            ? `${Math.round((detail.enrolled_count / detail.capacity) * 100)}%`
+          detail && capacity > 0
+            ? `${Math.round((detail.enrolled_count / capacity) * 100)}%`
             : '—'
         }
         loading={detailQuery.isLoading}

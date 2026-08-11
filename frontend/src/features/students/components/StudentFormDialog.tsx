@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { MenuItem, Stack, TextField } from '@mui/material';
+import { useEffect, useMemo, useState } from 'react';
+import { Autocomplete, MenuItem, Stack, TextField } from '@mui/material';
 import { FormDialog } from '@shared/components';
 import { schoolToday } from '@shared/utils/schoolDate';
 import type { StudentDetail, StudentWritePayload } from '../types';
-import { useSectionOptions } from '../hooks/useSections';
+import { useClassOptions } from '../hooks/useSections';
 
 export interface StudentFormDialogProps {
   open: boolean;
@@ -17,10 +17,18 @@ export interface StudentFormDialogProps {
 }
 
 /**
- * Create / edit a student (api-spec §5.3). Create requires student number, full name,
- * date of birth, and enrollment date; a section may be chosen to enroll on create. On
- * edit the section is not changed here (enrollment moves live under Classes). A 409
- * duplicate_student_number is surfaced by the parent.
+ * Create / edit a student (api-spec §5.3).
+ *
+ * Create requires student number, full name, date of birth and enrollment date. **D29**:
+ * `year_group` (the student's own level) is a field here, and MANY subject classes can be
+ * picked to enrol into on create — it used to be a single "Section" select, which cannot
+ * express a sixth-former's subject load.
+ *
+ * On edit, class enrollment is NOT changed here: the API rejects it on PATCH, because with
+ * many enrolments "set them from here" is ambiguous about removals. Enrollment moves live
+ * under Classes → Roster. Year group IS editable, since it is a plain profile field.
+ *
+ * A 409 duplicate_student_number is surfaced by the parent.
  */
 export function StudentFormDialog({
   open,
@@ -32,7 +40,9 @@ export function StudentFormDialog({
   onClose,
 }: StudentFormDialogProps) {
   const editing = Boolean(student);
-  const sectionsQuery = useSectionOptions();
+  // Only needed by the create form's class picker.
+  const classesQuery = useClassOptions(open && !editing);
+  const classOptions = useMemo(() => classesQuery.data ?? [], [classesQuery.data]);
 
   const [studentNumber, setStudentNumber] = useState('');
   const [fullName, setFullName] = useState('');
@@ -41,7 +51,8 @@ export function StudentFormDialog({
   // New enrollments default to the actual school-local today, not the demo dataset's
   // fixed date — otherwise every student created in production is stamped 2025-10-15.
   const [enrollmentDate, setEnrollmentDate] = useState(schoolToday());
-  const [sectionId, setSectionId] = useState('');
+  const [yearGroup, setYearGroup] = useState('');
+  const [classIds, setClassIds] = useState<string[]>([]);
   const [guardianName, setGuardianName] = useState('');
   const [guardianPhone, setGuardianPhone] = useState('');
   const [guardianEmail, setGuardianEmail] = useState('');
@@ -55,7 +66,8 @@ export function StudentFormDialog({
       setDateOfBirth(student?.date_of_birth ?? '');
       setGender(student?.gender ?? 'female');
       setEnrollmentDate(student?.enrollment_date ?? schoolToday());
-      setSectionId(student?.current_section?.id ?? '');
+      setYearGroup(student?.year_group ?? '');
+      setClassIds([]);
       setGuardianName(student?.guardian_name ?? '');
       setGuardianPhone(student?.guardian_phone ?? '');
       setGuardianEmail(student?.guardian_email ?? '');
@@ -92,8 +104,9 @@ export function StudentFormDialog({
           guardian_email: guardianEmail.trim(),
           address: address.trim(),
           phone: phone.trim(),
-          // Section only applies on create (enrollment moves live under Classes).
-          section_id: editing ? undefined : sectionId || null,
+          year_group: yearGroup.trim() || null,
+          // Enrollment only applies on create — the API rejects class_ids on PATCH.
+          class_ids: editing ? undefined : classIds,
         })
       }
     >
@@ -156,25 +169,41 @@ export function StudentFormDialog({
             error={Boolean(fieldErrors?.enrollment_date)}
             helperText={fieldErrors?.enrollment_date?.join(' ')}
           />
-          {!editing && (
-            <TextField
-              select
-              label="Section (optional)"
-              value={sectionId}
-              onChange={(e) => setSectionId(e.target.value)}
-              fullWidth
-              disabled={sectionsQuery.isLoading}
-              helperText="Enroll the student into a section now, or later under Classes."
-            >
-              <MenuItem value="">No section yet</MenuItem>
-              {(sectionsQuery.data ?? []).map((s) => (
-                <MenuItem key={s.id} value={s.id}>
-                  {s.name}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
+          <TextField
+            label="Year group"
+            value={yearGroup}
+            onChange={(e) => setYearGroup(e.target.value)}
+            fullWidth
+            placeholder="Lower 6"
+            error={Boolean(fieldErrors?.year_group)}
+            helperText={
+              fieldErrors?.year_group?.join(' ') ?? "The student's own level."
+            }
+          />
         </Stack>
+        {!editing && (
+          <Autocomplete
+            multiple
+            options={classOptions}
+            value={classOptions.filter((c) => classIds.includes(c.id))}
+            onChange={(_e, next) => setClassIds(next.map((c) => c.id))}
+            getOptionLabel={(c) => (c.subject_name ? `${c.name} — ${c.subject_name}` : c.name)}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
+            loading={classesQuery.isLoading}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Subject classes (optional)"
+                placeholder={classIds.length === 0 ? 'Enrol now, or later under Classes' : undefined}
+                error={Boolean(fieldErrors?.class_ids)}
+                helperText={
+                  fieldErrors?.class_ids?.join(' ') ??
+                  'Pick every class this student will take. You can change this later from a class roster.'
+                }
+              />
+            )}
+          />
+        )}
         <TextField
           label="Guardian name"
           value={guardianName}

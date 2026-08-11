@@ -458,11 +458,11 @@ class TestStudentsListYearFilter:
         )
         assert str(two.cur_only_student.id) in cur_ids
 
-    def test_section_resolves_to_that_years_section(self, client, two) -> None:
-        """`current_section` must follow the requested year, not the active one.
+    def test_classes_resolve_to_that_years_classes(self, client, two) -> None:
+        """`current_classes` must follow the requested year, not the active one.
 
         This is the assertion that actually proves the parameter reached the query: the
-        same student, two years, two different resolved sections.
+        same student, two years, two different resolved class sets.
         """
         prev = client.get(
             f"{V1}/students/{two.student.id}?academic_year_id={two.prev.year_id}", headers=two.P
@@ -472,11 +472,11 @@ class TestStudentsListYearFilter:
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        prev_section = (prev.json().get("current_section") or {}).get("id")
-        cur_section = (cur.json().get("current_section") or {}).get("id")
-        assert prev_section == two.prev.section_id, prev.json().get("current_section")
-        assert cur_section == two.cur.section_id, cur.json().get("current_section")
-        assert prev_section != cur_section
+        prev_ids = [c["id"] for c in prev.json()["current_classes"]]
+        cur_ids = [c["id"] for c in cur.json()["current_classes"]]
+        assert prev_ids == [two.prev.section_id], prev.json()["current_classes"]
+        assert cur_ids == [two.cur.section_id], cur.json()["current_classes"]
+        assert prev_ids != cur_ids
 
 
 class TestStudentAssessmentsYearFilter:
@@ -827,14 +827,14 @@ class TestMyAttendanceSemesterFilter:
 class TestMyProfileFollowsTheSwitcher:
     """`GET /students/me?academic_year_id=` — the student's own "My Profile".
 
-    This page showed the CURRENT section no matter which year the switcher named,
+    This page showed the CURRENT classes no matter which year the switcher named,
     because `/students/me` did not declare `academic_year_id` at all while
     `/students/{id}` had accepted it for staff since the year-filter work. The student
-    sat in a different section each year, so the header contradicted every other
+    sat in different classes each year, so the header contradicted every other
     screen the switcher re-scoped.
     """
 
-    def test_current_section_is_resolved_for_the_selected_year(self, client, two) -> None:
+    def test_current_classes_are_resolved_for_the_selected_year(self, client, two) -> None:
         prev = client.get(
             f"{V1}/students/me?academic_year_id={two.prev.year_id}", headers=two.STU
         )
@@ -843,11 +843,11 @@ class TestMyProfileFollowsTheSwitcher:
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        prev_section = prev.json()["current_section"]
-        cur_section = cur.json()["current_section"]
-        assert prev_section is not None and cur_section is not None
-        assert str(prev_section["id"]) == two.prev.section_id
-        assert str(cur_section["id"]) == two.cur.section_id
+        prev_ids = [c["id"] for c in prev.json()["current_classes"]]
+        cur_ids = [c["id"] for c in cur.json()["current_classes"]]
+        assert prev_ids and cur_ids
+        assert prev_ids == [two.prev.section_id]
+        assert cur_ids == [two.cur.section_id]
 
     def test_it_is_still_the_callers_own_record(self, client, two) -> None:
         """The param narrows the view of the caller's own record; it can never select

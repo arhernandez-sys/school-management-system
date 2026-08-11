@@ -86,31 +86,39 @@ export interface StudentProfileSummaryProps {
  * read as one system.
  *
  * A soft-shadow Card led by a palette-tinted gradient banner: a ringed {@link ProfileAvatar}
- * overlaps the band, then name + "Student #" + status/section chips, then divider-separated
+ * overlaps the band, then name + "Student #" + status/year-group chips, then divider-separated
  * sections (Statistics · Personal Information · Guardian · Address). Statistics are honest facts
- * derived from the record (age from date of birth, grade level, section) — never fabricated; the
- * whole section is omitted when none apply. Sections omit when their data is empty, keeping the
- * card compact for sparse profiles.
+ * derived from the record (age from date of birth, year group, how many subject classes) — never
+ * fabricated; the whole section is omitted when none apply. Sections omit when their data is
+ * empty, keeping the card compact for sparse profiles.
  */
 export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
-  const section = student.current_section;
+  const classCount = student.current_classes?.length ?? 0;
   const age = student.date_of_birth ? ageFrom(student.date_of_birth) : null;
 
+  // D29: the old Grade + Section tiles were read off the student's ONE homeroom. Year group
+  // is now the student's own field, and "how many subject classes" replaces the section
+  // letter — the classes themselves are listed by StudentEnrollmentPanel, so repeating their
+  // names here would just duplicate that card.
   const stats: Array<{ label: string; value: ReactNode; color: StatCardColor; icon: ReactNode }> = [
     ...(age !== null
       ? [{ label: 'Age', value: age, color: 'primary' as StatCardColor, icon: <CakeOutlinedIcon fontSize="small" /> }]
       : []),
-    ...(section
+    ...(student.year_group
       ? [
           {
-            label: 'Grade',
-            value: section.grade_level,
+            label: 'Year group',
+            value: student.year_group,
             color: 'secondary' as StatCardColor,
             icon: <SchoolOutlinedIcon fontSize="small" />,
           },
+        ]
+      : []),
+    ...(classCount > 0
+      ? [
           {
-            label: 'Section',
-            value: section.section,
+            label: classCount === 1 ? 'Class' : 'Classes',
+            value: classCount,
             color: 'info' as StatCardColor,
             icon: <ClassOutlinedIcon fontSize="small" />,
           },
@@ -160,11 +168,13 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
               label={STUDENT_STATUS_LABEL[student.status]}
               kind={STUDENT_STATUS_KIND[student.status]}
             />
-            {section && <StatusBadge label={section.name} kind="info" />}
+            {/* D29: the header chip names the student's LEVEL, not a homeroom — they no
+                longer have one class that identifies them. */}
+            {student.year_group && <StatusBadge label={student.year_group} kind="info" />}
           </Stack>
         </Stack>
 
-        {/* Statistics — honest facts only (age / grade / section). */}
+        {/* Statistics — honest facts only (age / year group / class count). */}
         {stats.length > 0 && (
           <>
             <Divider sx={{ my: 2 }} />

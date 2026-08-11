@@ -135,11 +135,77 @@ export function yearsForStudent(studentId: string): DemoAcademicYear[] {
     .filter((y) => yearIds.has(y.id))
     .sort((a, b) => b.name.localeCompare(a.name));
 }
-/** The section a student was enrolled in for a given year (undefined if none). */
-export function sectionForStudentInYear(studentId: string, yearId: string): DemoSection | undefined {
+/**
+ * EVERY subject class a student was enrolled in for a given year, name-ordered.
+ *
+ * D29 — this replaced `sectionForStudentInYear`, which returned the first matching
+ * enrollment on the premise that there was only ever one. A sixth-former sits several, and
+ * returning the first would silently hide the rest of their record.
+ *
+ * Ended enrollments (`unenrolled_at` set) still count: for a PAST year that is the normal
+ * state, so filtering them out would empty every archived-year screen.
+ */
+export function sectionsForStudentInYear(studentId: string, yearId: string): DemoSection[] {
   const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
-  const enr = D.enrollments.find((e) => e.student_id === studentId && semIds.has(e.semester_id));
-  return enr ? getSection(enr.section_id) : undefined;
+  const seen = new Map<string, DemoSection>();
+  for (const e of D.enrollments) {
+    if (e.student_id !== studentId || !semIds.has(e.semester_id)) continue;
+    const sec = getSection(e.section_id);
+    // Same class across both semesters yields two rows; keep one.
+    if (sec && !seen.has(sec.id)) seen.set(sec.id, sec);
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The subject classes a student is ACTIVELY enrolled in right now (active semester).
+ *
+ * Replaces the old `DemoStudent.section_id` denormalization, which could only name one.
+ */
+export function currentSectionsFor(studentId: string): DemoSection[] {
+  const seen = new Map<string, DemoSection>();
+  for (const e of D.enrollments) {
+    if (e.student_id !== studentId) continue;
+    if (e.semester_id !== DEMO_IDS.activeSemesterId || e.unenrolled_at) continue;
+    const sec = getSection(e.section_id);
+    if (sec && !seen.has(sec.id)) seen.set(sec.id, sec);
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * The offerings of a set of subject classes — the D29 replacement for
+ * `classSubjectsForSection(theStudentsOneSection)`.
+ *
+ * Deliberately NOT filtered on `is_active`: a past year's offerings are ALL inactive by
+ * design, so filtering would empty every archived-year screen. Membership in the classes
+ * already scopes the rows to the right year.
+ */
+export function classSubjectsForSections(sectionIds: string[]): DemoClassSubject[] {
+  const wanted = new Set(sectionIds);
+  return D.class_subjects.filter((cs) => wanted.has(cs.section_id));
+}
+
+/**
+ * Every offering a student sits — in `yearId` if given, else their live load.
+ *
+ * The one place the "which classes, therefore which gradebooks" question is answered, so
+ * the assessments tab, My Grades and the report card cannot disagree.
+ */
+export function classSubjectsForStudent(studentId: string, yearId?: string | null): DemoClassSubject[] {
+  const sections = yearId
+    ? sectionsForStudentInYear(studentId, yearId)
+    : currentSectionsFor(studentId);
+  return classSubjectsForSections(sections.map((s) => s.id));
+}
+
+/** The weekly meetings of one subject class, in Mon→Fri / earliest-first order. */
+export function meetingsForSection(sectionId: string) {
+  const cs = D.class_subjects.find((c) => c.section_id === sectionId);
+  if (!cs) return [];
+  return D.class_meetings
+    .filter((m) => m.class_subject_id === cs.id)
+    .sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time));
 }
 
 // ── Demo session scope (the login cookie carries only a role) ────────────────────
@@ -189,17 +255,18 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
     rows = rows.filter((s) => ids.has(s.id));
   }
   if (params.teacher_id) {
+    // D29: a student is in scope if ANY of their classes is one this teacher owns.
     const sectionIds = new Set(sectionsOwnedByTeacher(params.teacher_id).map((s) => s.id));
-    rows = rows.filter((s) => s.section_id && sectionIds.has(s.section_id));
+    rows = rows.filter((s) => currentSectionsFor(s.id).some((sec) => sectionIds.has(sec.id)));
   }
   if (params.status) rows = rows.filter((s) => s.status === params.status);
-  if (params.section_id) rows = rows.filter((s) => s.section_id === params.section_id);
-  if (params.grade_level) {
-    rows = rows.filter((s) => {
-      const sec = s.section_id ? getSection(s.section_id) : undefined;
-      return sec?.grade_level === params.grade_level;
-    });
+  if (params.section_id) {
+    const wanted = params.section_id;
+    rows = rows.filter((s) => currentSectionsFor(s.id).some((sec) => sec.id === wanted));
   }
+  // D29: the level filter reads the STUDENT's own year group, not a class's grade_level —
+  // those are different facts, and a student can sit a class labelled for another level.
+  if (params.year_group) rows = rows.filter((s) => s.year_group === params.year_group);
   if (params.search) {
     const q = params.search;
     rows = rows.filter((s) => textIncludes(s.full_name, q) || textIncludes(s.student_number, q));
@@ -437,6 +504,20 @@ export function attendanceSummaryForSection(sectionId: string): {
   const total = rows.length || 1;
   return { ...counts, pct_present: Math.round((counts.present / total) * 1000) / 10 };
 }
+/**
+ * One student's OWN attendance rate (%) across every class they sit.
+ *
+ * D29: attendance is per subject class, so a student has records in several. This averages
+ * over all of them — "my attendance" is the whole week, not one class's register. Late
+ * counts as present, matching `schoolAttendanceRate`.
+ */
+export function attendanceRateForStudent(studentId: string): number {
+  const rows = D.attendance_records.filter((r) => r.student_id === studentId);
+  if (rows.length === 0) return 0;
+  const present = rows.filter((r) => r.status === 'present' || r.status === 'late').length;
+  return Math.round((present / rows.length) * 1000) / 10;
+}
+
 /** School-wide attendance rate (%) over the recent window — Principal dashboard. */
 export function schoolAttendanceRate(): number {
   const activeSecIds = new Set(sectionsForYear(DEMO_IDS.activeYearId).map((s) => s.id));
@@ -479,7 +560,9 @@ export function announcementsForUser(userId: string) {
   const linkedSectionIds = new Set<string>();
   if (user.role === 'student') {
     const stu = D.students.find((s) => s.user_id === userId);
-    if (stu?.section_id) linkedSectionIds.add(stu.section_id);
+    // D29: a class-targeted announcement reaches the student if it targets ANY of their
+    // classes — they belong to several.
+    if (stu) for (const sec of currentSectionsFor(stu.id)) linkedSectionIds.add(sec.id);
   } else if (user.role === 'teacher') {
     const teacher = D.teachers.find((t) => t.user_id === userId);
     if (teacher) for (const sec of sectionsOwnedByTeacher(teacher.id)) linkedSectionIds.add(sec.id);
@@ -558,18 +641,25 @@ export function dashboardFor(role: string, userId?: string) {
     semester,
     stats: {
       term_average: null as number | null,
-      attendance_rate: stu?.section_id ? attendanceSummaryForSection(stu.section_id).pct_present : 0,
+      // D29: averaged across every class the student sits, since attendance is now taken
+      // per subject class — a single class's rate would not be "my attendance".
+      attendance_rate: stu ? attendanceRateForStudent(stu.id) : 0,
     },
   };
 }
 
+/**
+ * Active students per YEAR GROUP.
+ *
+ * D29: counts the student's own `year_group` rather than their homeroom's grade level. The
+ * old version bucketed by class, which under a subject-class model would count one student
+ * once per class they take.
+ */
 export function enrollmentByGrade(): Array<{ grade_level: string; count: number }> {
   const map = new Map<string, number>();
   for (const s of D.students) {
-    if (s.status !== 'active' || !s.section_id) continue;
-    const sec = getSection(s.section_id);
-    if (!sec) continue;
-    map.set(sec.grade_level, (map.get(sec.grade_level) ?? 0) + 1);
+    if (s.status !== 'active' || !s.year_group) continue;
+    map.set(s.year_group, (map.get(s.year_group) ?? 0) + 1);
   }
   return [...map.entries()]
     .map(([grade_level, count]) => ({ grade_level, count }))

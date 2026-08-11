@@ -1036,9 +1036,9 @@ class StudentSubjectAssessmentsData:
 
 
 def student_assessment_groups(
-    db: Session, *, student_id: uuid.UUID, section: Class | None
+    db: Session, *, student_id: uuid.UUID, sections: list[Class]
 ) -> list[StudentSubjectAssessmentsData]:
-    """One student's assessments + term grades for `section`, grouped by offering.
+    """One student's assessments + term grades across `sections`, grouped by offering.
 
     Backs `GET /students/{id}/assessments` (an admin/teacher read of somebody
     else's record). It lives here rather than in the Students module because the
@@ -1048,10 +1048,12 @@ def student_assessment_groups(
 
     Authorization is the CALLER's job — this function trusts `student_id`.
 
-    The caller also resolves `section` (which section the student sat in for the
-    year being viewed) via `students.service.section_in_year`. Which-section-in-
-    which-year is an enrollment question, and keeping it in one place there is what
-    stops the profile header and this tab from disagreeing. `None` → no groups.
+    D29: `sections` is a LIST — every subject class the student sits in the year being
+    viewed, resolved by `students.service.classes_in_year`. It used to be one homeroom,
+    which under a sixth-form model would have shown one subject and hidden the rest.
+    Which-classes-in-which-year is an enrollment question, and keeping it in one place
+    there is what stops the profile header and this tab from disagreeing. `[]` → no
+    groups.
 
     Three behaviours deliberately differ from `get_my_grades` (the student's own
     view of the same data):
@@ -1064,23 +1066,34 @@ def student_assessment_groups(
     * **Rows with no grade yet are listed as `pending`** rather than dropped, so
       the tab shows the full plan of work for the term.
 
-    Because the section carries the year, assessments are not filtered by semester
+    Because each class carries its year, assessments are not filtered by semester
     (a year spans both). Offerings are listed with no `is_active` filter —
     offerings of a past year are inactive and the year switcher must still render
     them (as in the gradebook picker).
     """
-    if section is None:
+    if not sections:
         return []
 
-    year = db.get(AcademicYear, section.academic_year_id)
     school = _school_policy(db)
-    bands, _pass_mark = _bands_for_section(db, section)
+    # Year and grading bands are resolved PER CLASS rather than once: the caller
+    # normally passes classes from a single year, but nothing here forces that, and
+    # applying one year's bands to another's grades would silently mislabel letters.
+    sections_by_id = {s.id: s for s in sections}
+    years = {
+        s.id: db.get(AcademicYear, s.academic_year_id) for s in sections_by_id.values()
+    }
+    bands_by_section = {
+        s.id: _bands_for_section(db, s)[0] for s in sections_by_id.values()
+    }
 
     offerings = db.execute(
         select(ClassSubject, Subject)
         .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.class_id == section.id, ClassSubject.deleted_at.is_(None))
-        .order_by(Subject.name.asc())
+        .where(
+            ClassSubject.class_id.in_(list(sections_by_id)),
+            ClassSubject.deleted_at.is_(None),
+        )
+        .order_by(Subject.name.asc(), ClassSubject.id.asc())
     ).all()
     if not offerings:
         return []
@@ -1110,6 +1123,8 @@ def student_assessment_groups(
 
     groups: list[StudentSubjectAssessmentsData] = []
     for cs, subject in offerings:
+        year = years.get(cs.class_id)
+        bands = bands_by_section.get(cs.class_id, [])
         assessments = assessments_by_cs.get(cs.id, [])
         student_grades = {
             a.id: grades_by_assessment[a.id]

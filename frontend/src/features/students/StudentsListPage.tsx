@@ -26,7 +26,7 @@ import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { useCreateStudent, useStudentsList } from './hooks/useStudents';
-import { useSectionOptions } from './hooks/useSections';
+import { useClassOptions, useYearGroupOptions } from './hooks/useSections';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import type { StudentListItem, StudentWritePayload, StudentsListParams } from './types';
 import type { StudentStatus } from '@shared/types/enums';
@@ -63,7 +63,8 @@ export function StudentsListPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
   const [status, setStatus] = useState<StudentStatus | ''>('');
-  const [sectionId, setSectionId] = useState('');
+  const [classId, setClassId] = useState('');
+  const [yearGroup, setYearGroup] = useState('');
   const [sortField, setSortField] = useState('full_name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
@@ -74,20 +75,34 @@ export function StudentsListPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
 
-  const sectionsQuery = useSectionOptions();
-  const sections = sectionsQuery.data ?? [];
+  const classesQuery = useClassOptions();
+  const classes = classesQuery.data ?? [];
+  const yearGroupsQuery = useYearGroupOptions();
+  const yearGroups = yearGroupsQuery.data ?? [];
 
   const params = useMemo<StudentsListParams>(
     () => ({
       search: debouncedSearch || undefined,
       status: status || undefined,
-      class_id: sectionId || undefined,
+      class_id: classId || undefined,
+      // D29: filters on the student's OWN level, not on a class's grade_level.
+      year_group: yearGroup || undefined,
       academic_year_id: yearId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
       sort: sortDirection === 'desc' ? `-${sortField}` : sortField,
     }),
-    [debouncedSearch, status, sectionId, yearId, page, pageSize, sortField, sortDirection],
+    [
+      debouncedSearch,
+      status,
+      classId,
+      yearGroup,
+      yearId,
+      page,
+      pageSize,
+      sortField,
+      sortDirection,
+    ],
   );
 
   const query = useStudentsList(params);
@@ -110,7 +125,7 @@ export function StudentsListPage() {
     });
   };
 
-  const hasFilters = Boolean(debouncedSearch || status || sectionId);
+  const hasFilters = Boolean(debouncedSearch || status || classId || yearGroup);
 
   const columns: DataTableColumn<StudentListItem>[] = [
     {
@@ -136,19 +151,20 @@ export function StudentsListPage() {
       render: (s) => <Typography variant="body2">{s.student_number}</Typography>,
     },
     {
-      field: 'section',
-      headerName: 'Section',
-      render: (s) => (
-        <Typography variant="body2">{s.current_section?.name ?? '—'}</Typography>
-      ),
+      // D29: the student's own level replaced the homeroom name. Their subject CLASSES are
+      // a variable-length list that belongs on the profile, not in a table cell — the count
+      // is what is scannable here, and the class filter above narrows by a specific one.
+      field: 'year_group',
+      headerName: 'Year group',
+      sortable: true,
+      render: (s) => <Typography variant="body2">{s.year_group || '—'}</Typography>,
     },
     {
-      field: 'grade_level',
-      headerName: 'Grade',
+      field: 'class_count',
+      headerName: 'Classes',
+      align: 'right',
       hideOnMobile: true,
-      render: (s) => (
-        <Typography variant="body2">{s.current_section?.grade_level ?? '—'}</Typography>
-      ),
+      render: (s) => <Typography variant="body2">{s.class_count}</Typography>,
     },
     {
       field: 'guardian_name',
@@ -224,19 +240,38 @@ export function StudentsListPage() {
             <TextField
               select
               size="small"
-              label="Section"
-              value={sectionId}
+              label="Year group"
+              value={yearGroup}
               onChange={(e) => {
-                setSectionId(e.target.value);
+                setYearGroup(e.target.value);
                 setPage(0);
               }}
-              disabled={sectionsQuery.isLoading}
-              sx={{ minWidth: 170 }}
+              disabled={yearGroupsQuery.isLoading}
+              sx={{ minWidth: 150 }}
             >
-              <MenuItem value="">All sections</MenuItem>
-              {sections.map((s) => (
-                <MenuItem key={s.id} value={s.id}>
-                  {s.name}
+              <MenuItem value="">All year groups</MenuItem>
+              {yearGroups.map((g) => (
+                <MenuItem key={g} value={g}>
+                  {g}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
+              label="Class"
+              value={classId}
+              onChange={(e) => {
+                setClassId(e.target.value);
+                setPage(0);
+              }}
+              disabled={classesQuery.isLoading}
+              sx={{ minWidth: 190 }}
+            >
+              <MenuItem value="">All classes</MenuItem>
+              {classes.map((c) => (
+                <MenuItem key={c.id} value={c.id}>
+                  {c.subject_name ? `${c.name} — ${c.subject_name}` : c.name}
                 </MenuItem>
               ))}
             </TextField>

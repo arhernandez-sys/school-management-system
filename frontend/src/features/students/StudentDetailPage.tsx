@@ -451,10 +451,12 @@ function StudentActions({ student }: { student: StudentDetail }) {
   const handleEdit = (values: StudentWritePayload) => {
     setEditError(null);
     setEditFieldErrors(undefined);
-    // Section + student_number are immutable on edit; send only benign profile fields.
-    const { student_number: _sn, section_id: _sid, ...patch } = values;
+    // Class enrollment + student_number are immutable on edit; send only benign profile
+    // fields. `class_ids` is create-only server-side (PATCH rejects it), so stripping it
+    // here keeps the request valid rather than relying on the 422.
+    const { student_number: _sn, class_ids: _cids, ...patch } = values;
     void _sn;
-    void _sid;
+    void _cids;
     updateMut.mutate(patch, {
       onSuccess: () => {
         setEditOpen(false);

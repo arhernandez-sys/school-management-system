@@ -44,12 +44,27 @@ _ERR = {"model": ErrorResponse}
             "description": "Role-discriminated payload; narrow on `role`.",
             "content": {
                 "application/json": {
+                    # NO `ref_template` — deliberately.
+                    #
+                    # It used to be `ref_template="#/components/schemas/{model}"`, which
+                    # rewrote every nested model reference to point at
+                    # `#/components/schemas/AdminStats` (etc.) — but nothing ever ADDS those
+                    # models to `components.schemas`. FastAPI only collects components from
+                    # `response_model`, which this route deliberately omits (see the module
+                    # docstring). The nested definitions are emitted inline, in each schema's
+                    # own `$defs`, so all 16 of those refs dangled: valid-looking JSON that no
+                    # resolver can follow. It surfaced as `MissingPointerError` the first time
+                    # the frontend regenerated its client from the full spec, which emitted
+                    # TypeScript importing modules that were never written.
+                    #
+                    # Pydantic's default template is `#/$defs/{model}`, which resolves against
+                    # the `$defs` that ARE present, making each variant self-contained.
                     "schema": {
                         "oneOf": [
-                            AdminDashboard.model_json_schema(ref_template="#/components/schemas/{model}"),
-                            SecretaryDashboard.model_json_schema(ref_template="#/components/schemas/{model}"),
-                            TeacherDashboard.model_json_schema(ref_template="#/components/schemas/{model}"),
-                            StudentDashboard.model_json_schema(ref_template="#/components/schemas/{model}"),
+                            AdminDashboard.model_json_schema(),
+                            SecretaryDashboard.model_json_schema(),
+                            TeacherDashboard.model_json_schema(),
+                            StudentDashboard.model_json_schema(),
                         ],
                         "discriminator": {"propertyName": "role"},
                     }

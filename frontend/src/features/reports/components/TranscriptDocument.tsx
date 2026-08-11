@@ -118,7 +118,7 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           DOB {student.date_of_birth} · Status: {student.status}
-          {student.section_name ? ` · ${student.section_name}` : ''}
+          {student.year_group ? ` · ${student.year_group}` : ''}
         </Typography>
       </Stack>
 

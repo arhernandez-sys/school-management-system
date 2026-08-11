@@ -64,16 +64,32 @@ export interface DemoSubject {
   is_active: boolean;
 }
 
-// ── Sections / classes (D23 homerooms) ──────────────────────────────────────────
+// ── Subject classes (D29) ───────────────────────────────────────────────────────
+/**
+ * One SUBJECT CLASS — "Math-1". Named `DemoSection` still because it maps to the
+ * `classes` table and the wire field is `section_id` throughout; what changed under D29 is
+ * what a row MEANS. It used to be a homeroom teaching many subjects; it is now one subject,
+ * one teacher set, one weekly slot, one roster — and a student belongs to several.
+ */
 export interface DemoSection {
   id: string;
   academic_year_id: string;
-  name: string; // e.g. "Form 1A"
-  grade_level: string; // e.g. "Form 1"
-  section: string; // e.g. "A"
-  homeroom_label: string; // display label for the homeroom
+  name: string; // e.g. "Math-1"
+  grade_level: string; // the YEAR GROUP the class is for, e.g. "Lower 6"
+  section: string | null; // division letter; usually null for a sixth-form subject class
+  homeroom_label: string | null; // legacy display label; null under D29
   capacity: number;
   is_archived: boolean;
+}
+
+// ── Weekly meetings: when and where a subject class meets ───────────────────────
+export interface DemoClassMeeting {
+  id: string;
+  class_subject_id: string;
+  day_of_week: 1 | 2 | 3 | 4 | 5; // ISO: 1 = Mon … 5 = Fri
+  start_time: string; // "HH:MM:SS"
+  end_time: string;
+  room: string | null;
 }
 
 // ── Teachers ────────────────────────────────────────────────────────────────────
@@ -111,8 +127,17 @@ export interface DemoStudent {
   guardian_email: string;
   address: string;
   phone: string;
-  /** Convenience denormalization: the student's ONE current section (active semester). */
-  section_id: string | null;
+  /**
+   * The student's own level — "Lower 6" / "Upper 6" (D29). Distinct from a class's
+   * `grade_level`, which says which level the CLASS is for.
+   */
+  year_group: string | null;
+  /**
+   * NOTE: there is deliberately no `section_id` here any more. It was a convenience
+   * denormalization of "the student's ONE current section", and under D29 a student sits
+   * many subject classes — any single-class field would be an arbitrary pick. Enrollment is
+   * read from `enrollments` (see `sectionsForStudent` in selectors).
+   */
 }
 
 // ── class_subjects: a subject taught within a section, with its teacher(s) ────────
@@ -273,6 +298,7 @@ export interface DemoDataset {
   teachers: DemoTeacher[];
   students: DemoStudent[];
   class_subjects: DemoClassSubject[];
+  class_meetings: DemoClassMeeting[];
   enrollments: DemoEnrollment[];
   assessment_categories: DemoAssessmentCategory[];
   assessments: DemoAssessment[];

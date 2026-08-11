@@ -77,7 +77,11 @@ export function AttendanceRegisterScreen() {
 
   const canRecord = registerQuery.data?.can_record ?? sectionsQuery.data?.can_record ?? false;
 
-  // Default the section to the caller's first available one (keeps the URL the source of truth).
+  // Preselect the caller's first available class (keeps the URL the source of truth).
+  //
+  // This `items[0]` is NOT the retired "a student has one homeroom" assumption that D29
+  // removed elsewhere — it just picks a starting class for the picker, which the user then
+  // changes. Every class in the list is equally valid; there is no primary one.
   useEffect(() => {
     if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
       setSearchParams(
@@ -197,7 +201,7 @@ export function AttendanceRegisterScreen() {
         subtitle={
           registerQuery.data
             ? `${registerQuery.data.section.name} · ${entries.length} students`
-            : 'Per-day homeroom register'
+            : 'Per-day register for one subject class'
         }
       />
 

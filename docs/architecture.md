@@ -4,7 +4,16 @@
 >
 > It does **not** define the detailed DB schema (Phase 4), UI design (Phase 3), or the full API spec (Phase 5) — but it makes the decisions those phases extend.
 
-_Last updated: 2026-06-26 — Phase 4.5 reconciliation (D23 section model + class_subjects ownership rescope / OQ-DB8; D24 transcript)_
+_Last updated: 2026-08-06 — **D29 subject-class model** (supersedes the D23 section model); Phase 4.5 reconciliation (class_subjects ownership rescope / OQ-DB8; D24 transcript)_
+
+> **D29 (2026-08-06) — a "class" is a SUBJECT CLASS, not a homeroom.** The school is a sixth
+> form: the office creates subject classes ("Math-1") and enrols each student into the ones
+> they take, so a student holds **many** concurrent enrolments. **The ownership model below is
+> unchanged** — a teacher is still assigned to a `class_subjects` row, and both helpers still
+> apply; what changed is that a class now has exactly one such row, so
+> `assert_teacher_owns_class_subject` and `assert_teacher_owns_section` answer the same
+> question for a D29 class. New: `class_meetings` (weekly slots) and Module 13 (Timetable).
+> See `requirements.md` §3.5/§3.5a and `database-schema.md` §3.C.
 
 ---
 
@@ -163,10 +172,10 @@ Each backend domain module owns its routes, service logic, and data access. Depe
 | 2 | **Dashboard** | Assembles role-scoped summary data (counts, rates, recent items) for the landing page via a **single composite `/dashboard` endpoint** (server-side scoping, one round trip) rather than client-side fan-out across modules. Read-only aggregator. | Students, Teachers, Classes, Attendance, Grades, Assessments, Announcements, Settings (active term). |
 | 3 | **Students** | CRUD + lifecycle/status (soft-delete) of student records, class assignment, search/filter/paginate. Source of student PII. | Classes (enrollment); referenced by Grades, Attendance, Reports. |
 | 4 | **Teachers** | CRUD + status of teacher records, subject specialization, search. Principal-only delete/role change. | Classes (assignment); referenced by Assessments, Announcements. |
-| 5 | **Classes** | Setup of **sections/homerooms** (e.g. "Form 1A") and the **`class_subjects`** taught within each (D23): per-section roster, capacity, term association, and per-(section,subject) teacher assignment via the **many-to-many `class_teachers` relation** (one or more teachers per `class_subject`). Students enroll in ONE section. The hub linking students, subjects, and teachers, and the **source of truth for teacher ownership** (`assert_teacher_owns_class_subject` / `assert_teacher_owns_section`). | Students (per-section roster), Subjects + Teachers (assignment via `class_subjects` + `class_teachers`), Settings (active year/term); referenced by Assessments, Attendance, Grades, Announcements, Reports. |
+| 5 | **Classes** | Setup of **subject classes** (e.g. "Math-1") — one subject each (**D29**), with per-class roster, capacity, weekly meeting times (`class_meetings`), term association, and teacher assignment via the **many-to-many `class_teachers` relation** (one or more teachers per `class_subject`). Students enrol in **each class individually** and hold many concurrent enrolments. The hub linking students, subjects, and teachers, and the **source of truth for teacher ownership** (`assert_teacher_owns_class_subject` / `assert_teacher_owns_section`). | Students (per-section roster), Subjects + Teachers (assignment via `class_subjects` + `class_teachers`), Settings (active year/term); referenced by Assessments, Attendance, Grades, Announcements, Reports. |
 | 6 | **Assessments** | Teacher-owned graded activities (quiz/test/exam/assignment) per **`class_subject`** (the subject-in-a-section): title, type, max score, weight, date, status. | Classes (`class_subject` ownership), Settings (active term); referenced by Grades. |
 | 7 | **Grades** | Score entry per student per assessment, scoped to a **`class_subject`**; **letter-grade derivation** + **weighted term-grade aggregation**; exempt/absent handling; grade-release gating; actor/timestamp audit. | Assessments (scores + weights), Students, Classes (`class_subject` ownership), Settings (grading scale). |
-| 8 | **Attendance** | Daily **per-section** attendance with status (the homeroom register, D23/D-Q4); no future dates; upsert (no duplicates); summaries (% present); actor/timestamp audit. | Classes (section roster + section ownership), Students, Settings (active term). |
+| 8 | **Attendance** | Daily **per-subject-class** attendance with status (**D29**/D-Q4 — each teacher takes their own class's register, so a student can be present in Biology and absent in Maths the same day); no future dates; upsert (no duplicates); summaries (% present); actor/timestamp audit. | Classes (class roster + ownership), Students, Settings (active term). |
 | 9 | **Announcements** | One-way broadcasts: school-wide (Principal/Secretary) or class-scoped (Teacher), audience targeting, publish/expiry, author/timestamp. | Classes (class-scoped targeting), Teachers (authorship); read by all roles per targeting. |
 | 10 | **Reports** | Aggregated, chart-ready, role-scoped outputs: report card (all subjects in a section), class grade summary, attendance summary, enrollment counts; print/PDF-friendly. **Now also assembles the multi-year transcript** (D24) — a student's full academic record across all years, combining archived snapshots + the current year. | Grades, Attendance, Students, Classes, Settings (school identity + grading scale + terms); archived-year snapshots for transcripts. Read-only consumer. |
 | 11 | **Settings** | School profile/branding, academic year + 2-semester structure + active term (D10), grading scale/cutoffs (D11), user/role management, per-user account settings. | Users (account/role mgmt); **consumed by nearly every other module** (active term, grading scale, school identity). |

@@ -38,7 +38,9 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
       meta={
         <>
           <div>Student No. {student.student_number}</div>
-          {student.section_name && <div>{student.section_name}</div>}
+          {/* D29: the letterhead names the student's LEVEL. A sixth-former sits many
+              subject classes, so there is no single class name to print here. */}
+          {student.year_group && <div>{student.year_group}</div>}
         </>
       }
     >
@@ -48,15 +50,14 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
           {student.full_name}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          {student.grade_level ?? '—'}
-          {student.section_name ? ` · ${student.section_name}` : ''}
+          {student.year_group ?? '—'}
         </Typography>
       </Stack>
 
       {subjects.length === 0 ? (
         <EmptyState
           title="No subjects to report"
-          description="This student's section has no active subjects for the selected term."
+          description="This student is not enrolled in any subject classes for the selected term."
           variant="card"
         />
       ) : (

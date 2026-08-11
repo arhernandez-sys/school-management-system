@@ -57,7 +57,8 @@ export function AttendanceSummaryScreen() {
       { replace: true },
     );
 
-  // Default to the caller's first available section.
+  // Preselect the caller's first available class. As in the register screen, this `items[0]`
+  // is a picker default, not a "primary class" assumption (D29).
   useEffect(() => {
     if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
       setSearchParams(

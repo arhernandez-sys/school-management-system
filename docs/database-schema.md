@@ -6,7 +6,19 @@
 >
 > **Target engine: PostgreSQL 15+** (managed, on Railway per D14). All types/features are Postgres-specific.
 
-_Last updated: 2026-06-26 — Phase 4.5 (D23 section model + D24 transcript rework)_
+> **D29 — SIXTH-FORM SUBJECT-CLASS MODEL (2026-08-06). Supersedes D23.** A `classes` row is
+> now one **SUBJECT CLASS** ("Math-1"), not a homeroom: exactly one live `class_subjects` row,
+> its own teachers, room, weekly meeting times, gradebook and roster. A student holds **many**
+> active `class_enrollments` — one per class they take.
+>
+> **Almost no DDL changed.** `class_enrollments` was already a plain join whose
+> `uq_enroll_active (class_id, student_id, semester_id)` permits one row per class, and
+> `attendance_records` is already keyed `(class_id, student_id, attendance_date)`. The "one
+> section per student" rule lived in *service code* (a transfer-on-enroll), not in the schema.
+> Only two things are new: **`class_meetings`** (§3.C) and **`student_profiles.year_group`**.
+> MariaDB DDL: `backend/db/mariadb/004_subject_class_model.sql`.
+
+_Last updated: 2026-08-06 — D29 subject-class model (supersedes the D23 section model)_
 
 ---
 
@@ -97,7 +109,7 @@ Single-school (D8) but **multi-year by design** — transcripts are the multi-ye
 
 - A single `academic_years` table; **at most one row has `status='active'`** (partial unique index, §5). Two `semesters` per year (D10), exactly one active at a time.
 - **Every term-scoped entity carries a direct `semester_id` FK** (enrollments, assessments, attendance, term-grade snapshots). `semester → academic_year` is a FK, so year is derivable, but the direct semester reference keeps hot queries (gradebook, attendance-by-date) single-join.
-- **Classes (sections) are scoped to an academic year** ("Form 1A" in 2025 ≠ the 2026 row), so rosters, ownership, and capacity are year-specific and a closed year's sections become read-only without affecting the new year. The subjects taught in a section are modeled by `class_subjects` (D23, §3.C), which is therefore year-scoped transitively through its section.
+- **Classes are scoped to an academic year** ("Math-1" in 2025 ≠ the 2026 row), so rosters, ownership, capacity and timetable are year-specific and a closed year's classes become read-only without affecting the new year. A class's subject is modeled by `class_subjects` (**D29: exactly one**, §3.C) and its weekly slots by `class_meetings`, both therefore year-scoped transitively through the class.
 - **Archived years freeze** via snapshot rows (`term_grade_snapshots`, `report_card_snapshots`) written at archival time (§10.4). Live years compute-on-read; archived years read the frozen snapshot.
 
 ---
@@ -119,9 +131,10 @@ erDiagram
     academic_years ||--o{ classes : "scopes"
     academic_years ||--|| grading_scales : "has one"
     grading_scales ||--o{ grading_scale_bands : "has"
-    classes ||--o{ class_subjects : "offers"
+    classes ||--|| class_subjects : "teaches (exactly 1, D29)"
     subjects ||--o{ class_subjects : "taught as"
     class_subjects ||--o{ class_teachers : "assigned"
+    class_subjects ||--o{ class_meetings : "meets weekly"
     teacher_profiles ||--o{ class_teachers : "teaches"
     classes ||--o{ class_enrollments : "rosters"
     student_profiles ||--o{ class_enrollments : "enrolled"
@@ -172,7 +185,7 @@ erDiagram
 - **Documents:** `student_documents`, `report_card_snapshots`
 - **System/Settings:** `school_profile`, `audit_log`
 
-**Table count: 27.** (D23 adds `class_subjects` — the section↔subject join that owns assessments and teacher assignments; `classes.subject_id` is removed. `assessment_policies` remains the school-default grading-policy row; per-year/category/assessment overrides are columns on existing tables. See DB-14, DB-15.)
+**Table count: 28.** (**D29** adds `class_meetings` — the weekly slots that build every timetable. D23 added `class_subjects`, the class↔subject join that owns assessments and teacher assignments; under D29 it is exactly one row per class, and `classes.subject_id` stays removed. `assessment_policies` remains the school-default grading-policy row; per-year/category/assessment overrides are columns on existing tables. See DB-14, DB-15.)
 
 ---
 
@@ -286,6 +299,7 @@ Student academic/PII record (FR-STU-01). **Linked 0..1 to a `users` row** — th
 | `full_name` | `text` | no | — | |
 | `date_of_birth` | `date` | no | — | |
 | `gender` | `text` | yes | — | Free/lookup text; not a fixed enum (inclusivity) |
+| `year_group` | `text` | yes | — | **New in D29.** The student's OWN level, e.g. "Lower 6". Free text, not an enum — the school names its own levels, and an enum would force a migration to rename one. Was previously read off the student's homeroom (`classes.grade_level`); with no homeroom, the report-card header and the student-directory filter read it from here (FR-CLS-09) |
 | `enrollment_date` | `date` | no | — | (FR-STU-01) |
 | `status` | `student_status` | no | `'active'` | active/inactive/transferred/graduated/withdrawn (FR-STU-04) |
 | `guardian_name` | `text` | yes | — | Parent/guardian contact (A-NO-PARENT-PORTAL: contact data, not a login) |
@@ -369,16 +383,18 @@ School-wide subject catalog, year-independent.
 
 - **Unique** `uq_subjects_name` partial `WHERE deleted_at IS NULL`; `uq_subjects_code` partial `WHERE deleted_at IS NULL AND code IS NOT NULL`
 
-#### `classes` — the SECTION / homeroom (D23)
-A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subject-agnostic** (D23). A section owns a single student roster and recurs yearly as distinct rows. The subjects taught within it live in `class_subjects` (below). **`classes.subject_id` is removed** (D23): a section is no longer one subject.
+#### `classes` — the SUBJECT CLASS (D29)
+One **subject class** in a specific academic year (e.g. "Math-1"): one subject, its own teacher(s), room, weekly slot, gradebook and roster. Two parallel classes of the same subject (Math-1, Math-2) are two rows. It owns exactly one live `class_subjects` row (below); `classes.subject_id` stays absent, because every assessment, grade and teacher assignment in the system keys off `class_subject_id`.
+
+> **The one-subject invariant is enforced in the SERVICE, not the DB.** No unique index forbids a second `class_subjects` row, so pre-D29 multi-subject rows still load and read correctly; the API answers 409 `subject_already_set` on an attempt to add a second.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
 | `academic_year_id` | `uuid` | no | — | FK → academic_years (FR-CLS-06 scoping) |
-| `name` | `text` | no | — | Section name, e.g. "Form 1A" |
-| `grade_level` | `text` | no | — | e.g. "1" / "7" (FR-CLS-01) |
-| `section` | `text` | yes | — | e.g. "A" |
+| `name` | `text` | no | — | Class name, e.g. "Math-1" |
+| `grade_level` | `text` | no | — | The **year group the class is FOR**, e.g. "Lower 6" — a filter, not a roster. The student's own level is `student_profiles.year_group` |
+| `section` | `text` | yes | — | Division letter; usually NULL for a sixth-form subject class |
 | `capacity` | `smallint` | yes | — | **Advisory only** — warn-only (D-Q6); not a hard constraint |
 | `is_archived` | `boolean` | no | `false` | Set when the year archives (FR-CLS-06/08) |
 | Mixins | | | | `TimestampMixin`, `AuditMixin`, `SoftDeleteMixin` |
@@ -387,8 +403,8 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 - **Unique** `uq_classes_year_name` partial `UNIQUE (academic_year_id, name) WHERE deleted_at IS NULL`
 - **Check** `ck_classes_capacity CHECK (capacity IS NULL OR capacity > 0)` — capacity does **not** constrain roster size (D-Q6 warn-only); enforcement is application-layer advisory.
 
-#### `class_subjects` — Section↔Subject (D23) — **the gradebook/ownership unit**
-**New in D23.** A section teaches many subjects; this join is the row that **owns assessments, teacher assignments, assessment categories, and term grades**. Conceptually it is "the Math offering inside Form 1A." Shape chosen: a **surrogate-PK join row** (not a bare composite-PK link table) because it is itself a parent of `class_teachers`, `assessment_categories`, `assessments`, and `term_grade_snapshots` — a stable single-column `id` keeps those child FKs and indexes narrow, and lets a (section, subject) offering carry its own attributes (`is_active`).
+#### `class_subjects` — Class↔Subject — **the gradebook/ownership unit**
+**D29: exactly ONE live row per class** (it was 1:many under D23). This join is the row that **owns assessments, teacher assignments, assessment categories, term grades and now `class_meetings`**. It survives as its own table rather than collapsing into a `classes.subject_id` column precisely because all of those children key off it. Shape chosen: a **surrogate-PK join row** (not a bare composite-PK link table) because it is itself a parent of `class_teachers`, `assessment_categories`, `assessments`, and `term_grade_snapshots` — a stable single-column `id` keeps those child FKs and indexes narrow, and lets a (section, subject) offering carry its own attributes (`is_active`).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
@@ -401,7 +417,9 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 - **FK** `fk_class_subjects_class (class_id) → classes(id) ON DELETE RESTRICT` (a section with subject offerings that carry assessments/grades can't be hard-deleted — archive instead, FR-CLS-08); `fk_class_subjects_subject (subject_id) → subjects(id) ON DELETE RESTRICT`
 - **Unique** `uq_class_subjects_class_subject` partial `UNIQUE (class_id, subject_id) WHERE deleted_at IS NULL` — a subject appears at most once per section (re-addable after soft-delete)
 
-> **Why a join row, not `classes.subject_id`:** the Caribbean/Commonwealth model (D23) is one roster (the section) with many subjects taught inside it, each subject having its own teacher(s) and its own gradebook. `class_subjects` is that "subject taught in this section" unit. The student roster stays on the **section** (`class_enrollments`, below) — a student enrolls in Form 1A *once* and is thereby a member of every subject offered in it; we do **not** re-enroll students per subject (matches how a homeroom secondary school actually operates and keeps rostering single-step).
+> **Why a join row, not `classes.subject_id` — the D29 answer.** Under D23 the join existed because one section taught many subjects. Under D29 a class teaches exactly ONE subject, so the obvious simplification would be to fold it back into a `classes.subject_id` column — **and that is deliberately not done.** Every assessment, assessment category, teacher assignment, term-grade snapshot and (now) class meeting in the system keys off `class_subject_id`; collapsing the table would rewrite all of those FKs to buy one saved join. The row also carries its own `is_active`, which is what lets a past year's offerings be retired without touching history.
+>
+> **The roster is per CLASS** (`class_enrollments`, below): a student enrols in Math-1 *and* Biology-10 *and* English-5 as three separate rows. This is the university/CAPE pattern the school actually runs — students move between rooms per subject, and two students in the same year group can hold entirely different timetables.
 
 #### `class_teachers` — Teacher↔(Section,Subject) M:N (D16/D-Q9, rescoped by D23)
 **The single source of truth for teacher ownership** (architecture §3.2). **Rescoped by D23:** a teacher now owns a **(section, subject)** — i.e. a `class_subjects` row — not a whole section. The natural ownership check becomes **`assert_teacher_owns_class_subject(user, class_subject_id)`** ("does a `class_teachers` row exist for `(class_subject_id, user→teacher_profiles.id)`?"). Membership = ownership; **all assigned teachers (incl. co-teachers) get full edit rights** (D-Q9). Co-teachers attach as additional `class_teachers` rows on the same `class_subject`.
@@ -420,13 +438,15 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 
 > **Ownership rescoping (call-out):** the architecture doc names a `assert_teacher_owns_class(user, class_id)` helper. Under D23 the unit of ownership is the (section, subject) offering, so the DB-correct helper is **`assert_teacher_owns_class_subject(user, class_subject_id)`**. Grade/attendance/assessment writes resolve the `class_subject_id` from the assessment (grades) or are passed it directly. Attendance, which is per-section (homeroom, see §3.E), keeps a section-level check `assert_teacher_owns_section(user, class_id)` = "teacher owns **any** `class_subject` of this section" (any subject teacher of the homeroom may take the daily register). The architecture helper will be updated separately to match; the DB here is the source of truth for the relation.
 
-#### `class_enrollments` — Student↔Section M:N (D23: roster is per SECTION)
-Roster membership of a **section** (FR-CLS-02, FR-STU-05). **A student enrolls in ONE section** and is thereby in every subject taught in it — there is no per-subject enrollment (D23). Semester-scoped so mid-year moves are tracked per term.
+#### `class_enrollments` — Student↔Subject-Class M:N (D29: roster is per SUBJECT CLASS)
+Roster membership of a **subject class** (FR-CLS-02, FR-STU-05). **A student enrolls in EACH class individually and holds many active rows** — Freddy sits Math-1, Biology-10 and English-5 concurrently (D29). Semester-scoped so mid-term moves are tracked per term.
+
+> **Enrolling is purely ADDITIVE.** The service used to close a student's active enrollment elsewhere in the semester and report it as a `transfer`; under D29 that is data loss (adding Freddy to Biology would drop him from Math), so it was removed. A timetable clash is *reported*, not resolved.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
-| `class_id` | `uuid` | no | — | FK → classes (**the section**) |
+| `class_id` | `uuid` | no | — | FK → classes (**the subject class**) |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `semester_id` | `uuid` | no | — | FK → semesters (term scoping) |
 | `enrolled_at` | `timestamptz` | no | `now()` | |
@@ -434,9 +454,31 @@ Roster membership of a **section** (FR-CLS-02, FR-STU-05). **A student enrolls i
 | Mixins | | | | `TimestampMixin`, `AuditMixin` |
 
 - **FK** `fk_enroll_class (class_id) → classes(id) ON DELETE RESTRICT`; `fk_enroll_student (student_id) → student_profiles(id) ON DELETE RESTRICT`; `fk_enroll_semester (semester_id) → semesters(id) ON DELETE RESTRICT`
-- **Unique** `uq_enroll_active` partial `UNIQUE (class_id, student_id, semester_id) WHERE unenrolled_at IS NULL` (enrolled at most once per section/semester at a time; re-enrollment after removal allowed)
+- **Unique** `uq_enroll_active` partial `UNIQUE (class_id, student_id, semester_id) WHERE unenrolled_at IS NULL` (enrolled at most once **per class** per semester; many classes concurrently; re-enrollment after removal allowed). This index is why D29 needed no change here — it was never a one-row-per-student constraint.
 
 > **`class_enrollments` is the enforcement point of the assessment-first rule (§10), now via the section→class_subjects→assessment chain:** an `assessment_grade` may only exist for a (student, assessment) pair where the student has an active enrollment in the **section** that owns the assessment's `class_subject`, for that semester. Because enrollment is per-section and the assessment hangs off a `class_subject` of that same section, the provenance FK (`assessment_grades.enrollment_id`) resolves to the student's single section enrollment — see §5.
+
+#### `class_meetings` — the weekly schedule of a subject class (**new in D29**)
+One recurring weekly meeting: "Mon 08:00–09:30, Room A" (FR-SCH-01/02). A class has zero or more; zero means it is not yet timetabled, which is a normal state and is reported explicitly rather than hidden.
+
+**Anchored on `class_subject_id`, not `class_id`** — teachers own `class_subjects` (see `class_teachers`), so a teacher's timetable is one join off this table, and the rows stay meaningful for any pre-D29 multi-subject class where "when does it meet" is only answerable per subject.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | no | `gen_random_uuid()` | PK |
+| `class_subject_id` | `uuid` | no | — | FK → class_subjects |
+| `day_of_week` | `smallint` | no | — | ISO weekday, **1 = Mon … 5 = Fri**. Stored as an int, NOT a native enum, so `ORDER BY day_of_week, start_time` yields Mon→Fri for the grid (an enum would sort by label text) |
+| `start_time` | `time` | no | — | Free-form; there is no fixed period grid (stakeholder decision, 2026-08-06) |
+| `end_time` | `time` | no | — | |
+| `room` | `text` | yes | — | e.g. "Room A" / "Lab 1" |
+| Mixins | | | | `TimestampMixin`, `AuditMixin`, `SoftDeleteMixin` |
+
+- **FK** `fk_class_meetings_class_subject (class_subject_id) → class_subjects(id) ON DELETE CASCADE` — a meeting is a recurring calendar slot, not a record of anything that happened, so it dies with its offering (attendance is keyed by date, and references nothing here)
+- **Check** `ck_class_meetings_day_of_week CHECK (day_of_week BETWEEN 1 AND 5)` — the timetable is weekday-only; ISO numbering leaves room to relax this later without renumbering
+- **Check** `ck_class_meetings_time_order CHECK (end_time > start_time)`
+- **Index** `ix_class_meetings_class_subject (class_subject_id) WHERE deleted_at IS NULL`; `ix_class_meetings_day_start (day_of_week, start_time)`
+
+> **Overlaps are NOT constrained.** A teacher double-booked, a room double-booked, or a student enrolled into two overlapping classes are all **reported as warnings by the service and never rejected** (FR-SCH-06) — the same warn-only call already made for over-capacity enrollment (D-Q6). Hard-blocking would make an otherwise-valid week unsaveable: a room can legitimately be shared, and a clash is often fixed by the next edit. Overlap test is half-open (`a.start < b.end AND b.start < a.end`), so back-to-back meetings do not clash.
 
 ### 3.D — Assessment & Grading
 
@@ -611,7 +653,7 @@ Teacher-owned graded activities (FR-ASMT-01). **Created independently** of grade
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
-| `class_id` | `uuid` | no | — | FK → classes (**the section**) |
+| `class_id` | `uuid` | no | — | FK → classes (**the subject class**) |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `enrollment_id` | `uuid` | no | — | FK → class_enrollments (section provenance, mirrors grades) |
 | `semester_id` | `uuid` | no | — | FK → semesters (summary scoping, FR-ATT-06) |

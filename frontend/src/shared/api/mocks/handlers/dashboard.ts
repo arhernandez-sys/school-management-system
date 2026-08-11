@@ -7,13 +7,15 @@ import {
   announcementsForUser,
   assessmentsForClassSubject,
   attendanceFor,
-  attendanceSummaryForSection,
   classSubjectsOwnedByTeacher,
   computeTermGrade,
   enrollmentByGrade,
   getActiveSemester,
   getActiveYear,
   getSection,
+  currentSectionsFor,
+  attendanceRateForStudent,
+  classSubjectsForStudent,
   getStudent,
   getSubject,
   getTeacher,
@@ -88,14 +90,12 @@ function adminPayload(user: DemoUser) {
   // Seats denominator for the "students" progress bar: sum of section capacities.
   const student_capacity = activeSections.reduce((sum, s) => sum + (s.capacity ?? 0), 0);
 
-  // New intake = the entry-grade (Form 1) cohort — students genuinely new to the school
-  // this year. Reconciles with the Form 1 bar in enrollment_by_grade.
-  const new_students_term = activeStudents.filter((s) => {
-    const sec = s.section_id ? getSection(s.section_id) : undefined;
-    return sec?.grade_level === 'Form 1';
-  }).length;
+  // New intake = the entry-year cohort. D29: read from the student's own `year_group`
+  // ("Lower 6" is the intake year for a sixth form) rather than from a homeroom's grade
+  // level. Reconciles with the Lower 6 bar in enrollment_by_grade, which counts the same way.
+  const new_students_term = activeStudents.filter((s) => s.year_group === 'Lower 6').length;
 
-  // Active subject offerings (a "course" = one subject taught in one section).
+  // Active subject classes.
   const total_courses = D.class_subjects.filter((cs) => cs.is_active).length;
 
   // Enrollment trend (demo series): six terms of believable growth, anchored so the
@@ -119,12 +119,13 @@ function adminPayload(user: DemoUser) {
     }));
 
   const recent_students = activeStudents
-    .filter((s) => s.section_id)
+    .filter((s) => currentSectionsFor(s.id).length > 0)
     .slice(0, 6)
     .map((s) => ({
       id: s.id,
       name: s.full_name,
-      secondary: (s.section_id ? getSection(s.section_id)?.name : undefined) ?? '—',
+      // D29: a student has no single class to name here, so the row shows their level.
+      secondary: s.year_group ?? '—',
       status: { label: 'Active', kind: 'success' as const },
     }));
 
@@ -304,9 +305,9 @@ function teacherPayload(user: DemoUser) {
 // ── Student — own data (released grades only) ───────────────────────────────────
 function studentPayload(user: DemoUser) {
   const student = D.students.find((s) => s.user_id === user.id);
-  const sectionId = student?.section_id ?? null;
-  const classSubjects = sectionId
-    ? D.class_subjects.filter((c) => c.section_id === sectionId && c.is_active)
+  // D29: every subject class the student takes, not the offerings of one homeroom.
+  const classSubjects = student
+    ? classSubjectsForStudent(student.id).filter((c) => c.is_active)
     : [];
 
   const my_classes = classSubjects.map((cs) => {
@@ -378,7 +379,9 @@ function studentPayload(user: DemoUser) {
     .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''))
     .slice(0, 5);
 
-  const attendance_rate = sectionId ? attendanceSummaryForSection(sectionId).pct_present : 0;
+  // D29: the student's OWN rate across every class they sit — attendance is per subject
+  // class now, so one class's register is not "my attendance".
+  const attendance_rate = student ? attendanceRateForStudent(student.id) : 0;
 
   return {
     role: 'student' as const,

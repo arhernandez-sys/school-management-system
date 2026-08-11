@@ -1,7 +1,7 @@
 /**
  * DEMO DATASET — the single in-memory fake dataset (frontend-only client demo).
  *
- * A realistic Belize secondary school. EVERYTHING reconciles: dashboards, lists,
+ * A realistic Belize **sixth form** (D29). EVERYTHING reconciles: dashboards, lists,
  * gradebooks, report cards and transcripts are all derived from THIS object by the
  * selectors in `selectors.ts`, so counts and grades agree across screens.
  *
@@ -12,6 +12,24 @@
  *
  * ⚠️ Module agents: treat this file as read-only reference data. Read via the
  * selectors; do not mutate it (handlers may mutate a working copy — see selectors).
+ *
+ * ────────────────────────────────────────────────────────────────────────────────
+ * D29 — WHY THIS DATASET IS SHAPED THE WAY IT IS
+ * ────────────────────────────────────────────────────────────────────────────────
+ * This used to be 8 homerooms ("Form 1A") each teaching 7 subjects, with every student
+ * enrolled in exactly one. A sixth form works like a university: the office creates
+ * SUBJECT CLASSES ("Math-1", "Math-2") and enrols each student into the ones they take.
+ *
+ * The dataset therefore hard-codes the scenario that PROVES the model, rather than
+ * generating one:
+ *
+ *     Freddy Lopez (stu-1)  →  Math-1 · Biology-10 · English-5 · Chemistry-3
+ *     John Garcia  (stu-2)  →  Math-2 · Biology-10 · English-5 · IT-2
+ *
+ * They share Biology and English but sit in DIFFERENT Math classes, so their timetables
+ * differ in exactly one slot. A homeroom model cannot express that at all — which is the
+ * point. `stu-1` is the seeded `student` login (DEMO_REPRESENTATIVE_USER_ID), so signing
+ * in as the demo student lands on Freddy.
  */
 import type {
   DemoAcademicYear,
@@ -21,6 +39,7 @@ import type {
   DemoAssessmentGrade,
   DemoAssessmentPolicy,
   DemoAttendanceRecord,
+  DemoClassMeeting,
   DemoClassSubject,
   DemoEvent,
   DemoDataset,
@@ -170,27 +189,75 @@ const subjects: DemoSubject[] = subjectSeed.map(([name, code]) => ({
 }));
 const subjectId = (code: string): string => `subj-${code.toLowerCase()}`;
 
-// ── Sections (~8 homerooms, all in the active year) ─────────────────────────────
-const sectionSeed: ReadonlyArray<[string, string, string, number]> = [
-  ['Form 1A', 'Form 1', 'A', 30],
-  ['Form 1B', 'Form 1', 'B', 30],
-  ['Form 2A', 'Form 2', 'A', 28],
-  ['Form 2B', 'Form 2', 'B', 28],
-  ['Form 3A', 'Form 3', 'A', 26],
-  ['Form 3B', 'Form 3', 'B', 26],
-  ['Form 4 Science', 'Form 4', 'Science', 24],
-  ['Form 4 Business', 'Form 4', 'Business', 24],
+// ── Subject classes (D29) ───────────────────────────────────────────────────────
+//
+// Each row is one class: a subject, the teacher who leads it, a room, a capacity, and the
+// weekly slots it meets in. Two parallel Math classes at Lower 6 are the whole reason this
+// dataset exists — they are what lets Freddy and John differ.
+//
+// Meetings are written as [ISO weekday, start, end]; rooms come from the class, since a
+// subject class in this school always meets in the same place.
+const YEAR_LOWER6 = 'Lower 6';
+const YEAR_UPPER6 = 'Upper 6';
+
+interface ClassSeed {
+  name: string;
+  /** Subject catalog code (see `subjectSeed`). */
+  code: string;
+  yearGroup: string;
+  /** Teacher codes; the first is the lead. Defaults to the subject's usual teacher. */
+  teacherCodes?: string[];
+  room: string;
+  capacity: number;
+  meetings: ReadonlyArray<[1 | 2 | 3 | 4 | 5, string, string]>;
+}
+
+const classSeed: readonly ClassSeed[] = [
+  // ── Lower 6 ──
+  { name: 'Math-1', code: 'MATH', yearGroup: YEAR_LOWER6, room: 'Room A', capacity: 20,
+    meetings: [[1, '08:00', '09:30'], [3, '08:00', '09:30']] },
+  // Math-2 is Math-1's parallel: same subject, same level, different teacher/room/time.
+  { name: 'Math-2', code: 'MATH', yearGroup: YEAR_LOWER6, teacherCodes: ['PHYS'], room: 'Room C', capacity: 20,
+    meetings: [[1, '10:00', '11:30'], [3, '10:00', '11:30']] },
+  { name: 'Biology-10', code: 'BIO', yearGroup: YEAR_LOWER6, room: 'Lab 1', capacity: 24,
+    meetings: [[2, '09:00', '10:30'], [4, '09:00', '10:30']] },
+  // Wednesday sits at 13:00, NOT 11:00: Math-2 runs Wed 10:00–11:30, and every student on
+  // a Math-2 load also takes English, so an 11:00 English would put 15 of them in two rooms
+  // at once. The seeded week must be one a real student could actually walk.
+  { name: 'English-5', code: 'ENG', yearGroup: YEAR_LOWER6, room: 'Room D', capacity: 26,
+    meetings: [[3, '13:00', '14:00'], [5, '11:00', '12:00']] },
+  { name: 'Chemistry-3', code: 'CHEM', yearGroup: YEAR_LOWER6, room: 'Lab 2', capacity: 18,
+    meetings: [[2, '11:00', '12:30']] },
+  { name: 'IT-2', code: 'IT', yearGroup: YEAR_LOWER6, room: 'Computer Lab', capacity: 22,
+    meetings: [[5, '08:00', '09:30']] },
+  // ── Upper 6 ──
+  { name: 'Math-3', code: 'MATH', yearGroup: YEAR_UPPER6, room: 'Room A', capacity: 18,
+    meetings: [[2, '08:00', '09:30'], [4, '11:00', '12:30']] },
+  { name: 'Physics-1', code: 'PHYS', yearGroup: YEAR_UPPER6, room: 'Lab 2', capacity: 16,
+    meetings: [[1, '13:00', '14:30']] },
+  { name: 'Business-1', code: 'POB', yearGroup: YEAR_UPPER6, room: 'Room B', capacity: 20,
+    meetings: [[4, '13:00', '14:30']] },
+  { name: 'Spanish-2', code: 'SPAN', yearGroup: YEAR_UPPER6, room: 'Room E', capacity: 20,
+    meetings: [[5, '13:00', '14:00']] },
 ];
-const sections: DemoSection[] = sectionSeed.map(([name, grade, section, capacity], i) => ({
+
+const sections: DemoSection[] = classSeed.map((c, i) => ({
   id: `sec-${i + 1}`,
   academic_year_id: YEAR_ACTIVE,
-  name,
-  grade_level: grade,
-  section,
-  homeroom_label: `${name} Homeroom`,
-  capacity,
+  name: c.name,
+  grade_level: c.yearGroup,
+  // A sixth-form subject class has no division letter, and no homeroom label — both
+  // belonged to the retired model.
+  section: null,
+  homeroom_label: null,
+  capacity: c.capacity,
   is_archived: false,
 }));
+const sectionByName = (name: string): DemoSection => {
+  const found = sections.find((s) => s.name === name);
+  if (!found) throw new Error(`demo dataset: no subject class named ${name}`);
+  return found;
+};
 
 // ── Teachers (~12, Belizean names) ──────────────────────────────────────────────
 type TeacherLike = 'active' | 'inactive';
@@ -255,42 +322,48 @@ const teacherByCode = (code: string): DemoTeacher => {
   return teachers.find((t) => t.status === 'active' && t.subject_specializations.includes(name))!;
 };
 
-// ── class_subjects: assign a subject set + teacher to each section ───────────────
-// Lower forms get a broad core; Form 4 tracks specialize.
-const CORE = ['MATH', 'ENG', 'BIO', 'HIST', 'SPAN', 'PE', 'IT'];
-const FORM3 = ['MATH', 'ENG', 'BIO', 'CHEM', 'GEO', 'SPAN', 'IT'];
-const FORM4_SCI = ['MATH', 'ENG', 'BIO', 'CHEM', 'PHYS', 'IT'];
-const FORM4_BUS = ['MATH', 'ENG', 'POB', 'GEO', 'IT', 'SPAN'];
-
-function subjectsForSection(sec: DemoSection): string[] {
-  if (sec.name === 'Form 4 Science') return FORM4_SCI;
-  if (sec.name === 'Form 4 Business') return FORM4_BUS;
-  if (sec.grade_level === 'Form 3') return FORM3;
-  return CORE;
-}
-
-const class_subjects: DemoClassSubject[] = [];
-let csCounter = 0;
-for (const sec of sections) {
-  const codes = subjectsForSection(sec);
-  for (const code of codes) {
-    csCounter += 1;
-    const lead = teacherByCode(code);
-    // Add a co-teacher on the first two Mathematics offerings for realism.
-    const coTeacher =
-      code === 'MATH' && csCounter <= 12 ? teachers.find((t) => t.id === 'teach-4') : undefined;
-    const teacher_ids = coTeacher && coTeacher.id !== lead.id ? [lead.id, coTeacher.id] : [lead.id];
-    class_subjects.push({
-      id: `cs-${csCounter}`,
-      section_id: sec.id,
-      subject_id: subjectId(code),
-      teacher_ids,
-      lead_teacher_id: lead.id,
-      is_active: true,
-      drop_lowest_count: code === 'MATH' ? 1 : 0,
+// ── class_subjects: EXACTLY ONE per subject class (D29) ─────────────────────────
+//
+// The join table survives (every assessment, grade and teacher assignment keys off
+// `class_subject_id`), but it is now 1:1 with the class rather than 1:many. `cs-N` lines up
+// with `sec-N`, which keeps the fixtures readable.
+const class_subjects: DemoClassSubject[] = classSeed.map((c, i) => {
+  const leadCode = c.teacherCodes?.[0] ?? c.code;
+  const lead = teacherByCode(leadCode);
+  const extra = (c.teacherCodes ?? []).slice(1).map((code) => teacherByCode(code).id);
+  // One co-taught class (Math-1) so the "many teachers per class" path (D16) is exercised.
+  const coTeacher = c.name === 'Math-1' ? teachers.find((t) => t.id === 'teach-4') : undefined;
+  const teacher_ids = [
+    lead.id,
+    ...extra,
+    ...(coTeacher && coTeacher.id !== lead.id ? [coTeacher.id] : []),
+  ];
+  return {
+    id: `cs-${i + 1}`,
+    section_id: `sec-${i + 1}`,
+    subject_id: subjectId(c.code),
+    teacher_ids: [...new Set(teacher_ids)],
+    lead_teacher_id: lead.id,
+    is_active: true,
+    drop_lowest_count: c.code === 'MATH' ? 1 : 0,
+  };
+});
+// ── class_meetings: the weekly slot(s) each subject class occupies ──────────────
+const class_meetings: DemoClassMeeting[] = [];
+let meetingCounter = 0;
+classSeed.forEach((c, i) => {
+  for (const [day, start, end] of c.meetings) {
+    meetingCounter += 1;
+    class_meetings.push({
+      id: `mtg-${meetingCounter}`,
+      class_subject_id: `cs-${i + 1}`,
+      day_of_week: day,
+      start_time: `${start}:00`,
+      end_time: `${end}:00`,
+      room: c.room,
     });
   }
-}
+});
 
 // ── Students (~45, Belizean names), each enrolled in ONE section ────────────────
 const FIRST_NAMES = [
@@ -306,30 +379,82 @@ const LAST_NAMES = [
   'Palacio',
 ];
 
+/**
+ * The subject load each student takes, by year group. A sixth-former picks a handful of
+ * subjects rather than receiving a fixed set, so the generator rotates students through
+ * these combinations — including the two parallel Math classes, which is what makes any
+ * two students' timetables genuinely different.
+ */
+const LOWER6_LOADS: ReadonlyArray<readonly string[]> = [
+  ['Math-1', 'Biology-10', 'English-5', 'Chemistry-3'],
+  ['Math-2', 'Biology-10', 'English-5', 'IT-2'],
+  ['Math-1', 'Biology-10', 'English-5', 'IT-2'],
+  ['Math-2', 'Chemistry-3', 'English-5', 'IT-2'],
+];
+const UPPER6_LOADS: ReadonlyArray<readonly string[]> = [
+  ['Math-3', 'Physics-1', 'Spanish-2'],
+  ['Business-1', 'Spanish-2', 'Math-3'],
+  ['Math-3', 'Physics-1', 'Business-1'],
+];
+
+/**
+ * The two named students the whole D29 demo turns on. Hard-coded rather than generated so
+ * the scenario cannot drift: same Biology, same English, DIFFERENT Math.
+ * `stu-1` is the seeded student login, so the demo lands on Freddy.
+ */
+const SCENARIO: Record<string, { name: string; yearGroup: string; classes: readonly string[] }> = {
+  'stu-1': {
+    name: 'Freddy Lopez',
+    yearGroup: YEAR_LOWER6,
+    classes: ['Math-1', 'Biology-10', 'English-5', 'Chemistry-3'],
+  },
+  'stu-2': {
+    name: 'John Garcia',
+    yearGroup: YEAR_LOWER6,
+    classes: ['Math-2', 'Biology-10', 'English-5', 'IT-2'],
+  },
+};
+
 const students: DemoStudent[] = [];
 const rngStu = makeRng(4242);
-// Distribute 45 students across the 8 sections (roughly even, deterministic).
-const sectionOrder = sections.map((s) => s.id);
+/** studentId → the class names they take. Built alongside students, consumed by enrollments. */
+const loadByStudent = new Map<string, readonly string[]>();
+
 for (let i = 0; i < 45; i += 1) {
+  const id = `stu-${i + 1}`;
+  const scenario = SCENARIO[id];
+  // Roughly two-thirds Lower 6 (the larger intake), the rest Upper 6.
+  const yearGroup = scenario?.yearGroup ?? (i % 3 === 2 ? YEAR_UPPER6 : YEAR_LOWER6);
   const first = FIRST_NAMES[i]!;
   const last = pick(rngStu, LAST_NAMES);
-  const sectionIdx = i % sectionOrder.length;
-  const sec = sections[sectionIdx]!;
-  // grade → base birth year: Form 1 ~ age 12, +1 per form.
-  const formNum = Number(sec.grade_level.replace('Form ', ''));
-  const birthYear = 2013 - (formNum - 1);
+  // Sixth-formers are ~16-18: Lower 6 born ~2008, Upper 6 ~2007.
+  const birthYear = yearGroup === YEAR_UPPER6 ? 2007 : 2008;
   const dob = `${birthYear}-${String(randInt(rngStu, 1, 12)).padStart(2, '0')}-${String(
     randInt(rngStu, 1, 28),
   ).padStart(2, '0')}`;
-  // Mostly active; a few inactive/graduated/withdrawn for realism.
+  // Mostly active; a few inactive/graduated/withdrawn for realism. The two scenario
+  // students are always active — the demo depends on their timetables rendering.
   let status: DemoStudent['status'] = 'active';
-  if (i === 7) status = 'inactive';
-  else if (i === 20) status = 'withdrawn';
-  else if (i === 33) status = 'transferred';
-  else if (i === 41) status = 'graduated';
-  const full_name = `${first} ${last}`;
+  if (!scenario) {
+    if (i === 7) status = 'inactive';
+    else if (i === 20) status = 'withdrawn';
+    else if (i === 33) status = 'transferred';
+    else if (i === 41) status = 'graduated';
+  }
+  const full_name = scenario?.name ?? `${first} ${last}`;
+
+  // Graduated / withdrawn students hold no active enrollment.
+  const load =
+    status === 'graduated' || status === 'withdrawn'
+      ? []
+      : (scenario?.classes ??
+        (yearGroup === YEAR_UPPER6
+          ? UPPER6_LOADS[i % UPPER6_LOADS.length]!
+          : LOWER6_LOADS[i % LOWER6_LOADS.length]!));
+  loadByStudent.set(id, load);
+
   students.push({
-    id: `stu-${i + 1}`,
+    id,
     user_id: i < 6 ? `user-stu-${i + 1}` : null, // first few have logins (demo student login)
     student_number: `S-${String(25001 + i)}`,
     full_name,
@@ -337,52 +462,44 @@ for (let i = 0; i < 45; i += 1) {
     gender: i % 2 === 0 ? 'female' : 'male',
     enrollment_date: '2025-09-01',
     status,
+    year_group: yearGroup,
     guardian_name: `${pick(rngStu, FIRST_NAMES)} ${last}`,
     guardian_phone: `+501-6${randInt(rngStu, 100000, 999999)}`,
     guardian_email: `${last.toLowerCase()}.guardian@example.bz`,
     address: `${randInt(rngStu, 1, 99)} ${pick(rngStu, ['Cedar', 'Mahogany', 'Bougainvillea', 'Hibiscus'])} Street, Belmopan`,
     phone: `+501-6${randInt(rngStu, 100000, 999999)}`,
-    section_id: status === 'graduated' || status === 'withdrawn' ? null : sec.id,
   });
 }
 
-// ── Enrollments: active-semester roster (student ↔ section) ─────────────────────
+// ── Enrollments: MANY per student (D29) — one row per subject class they take ───
 const enrollments: DemoEnrollment[] = [];
 let enrollCounter = 0;
 for (const stu of students) {
-  if (!stu.section_id) continue; // graduated/withdrawn: no active enrollment
-  enrollCounter += 1;
-  enrollments.push({
-    id: `enr-${enrollCounter}`,
-    student_id: stu.id,
-    section_id: stu.section_id,
-    semester_id: SEM_ACTIVE,
-    enrolled_at: '2025-09-01T08:00:00Z',
-    unenrolled_at: null,
-  });
+  for (const className of loadByStudent.get(stu.id) ?? []) {
+    enrollCounter += 1;
+    enrollments.push({
+      id: `enr-${enrollCounter}`,
+      student_id: stu.id,
+      section_id: sectionByName(className).id,
+      semester_id: SEM_ACTIVE,
+      enrolled_at: '2025-09-01T08:00:00Z',
+      unenrolled_at: null,
+    });
+  }
 }
-// One transferred student keeps a historical (unenrolled) row on their old section
-// plus an active row on the new one, to exercise the M3 "grade rows ∪ active roster".
-const transferStudent = students.find((s) => s.status === 'transferred');
-if (transferStudent) {
-  transferStudent.section_id = sections[2]!.id; // now in Form 2A
+// One student switched Math classes mid-term: a closed row on Math-1 plus an active row on
+// Math-2. Under D29 this is a genuine SWITCH of one subject class, not the old whole-student
+// "transfer" — and it still exercises the "grade rows ∪ active roster" path in Module 3.
+const switchStudent = students.find((s) => s.status === 'transferred');
+if (switchStudent) {
   enrollCounter += 1;
   enrollments.push({
     id: `enr-${enrollCounter}`,
-    student_id: transferStudent.id,
-    section_id: sections[0]!.id, // was in Form 1A
+    student_id: switchStudent.id,
+    section_id: sectionByName('Math-1').id,
     semester_id: SEM_ACTIVE,
     enrolled_at: '2025-09-01T08:00:00Z',
     unenrolled_at: '2025-09-25T08:00:00Z',
-  });
-  enrollCounter += 1;
-  enrollments.push({
-    id: `enr-${enrollCounter}`,
-    student_id: transferStudent.id,
-    section_id: sections[2]!.id,
-    semester_id: SEM_ACTIVE,
-    enrolled_at: '2025-09-26T08:00:00Z',
-    unenrolled_at: null,
   });
 }
 
@@ -827,41 +944,41 @@ for (const s of students) {
 const HIST_ANCHOR = '2025-01-10'; // a weekday inside Semester 1 of 2024-2025
 const SEM_2024_1 = 'sem-2024-1';
 
-// Historical sections mirror the active structure but belong to the archived year.
+// Historical subject classes mirror the active structure but belong to the archived year.
 // They carry is_archived=true and their offerings is_active=false so that EVERY
 // existing "active year" filter (`!is_archived`, `is_active`) keeps excluding them
 // by default — current screens are unchanged. The per-module year switcher selects
 // them explicitly by academic_year_id when a past year is chosen.
-const histSections: DemoSection[] = sectionSeed.map(([name, grade, section, capacity], i) => ({
+//
+// D29: last year's classes are last year's SUBJECT CLASSES — same names, so a student's
+// past-year record reads as "the Math-1 I sat last year". They get no `class_meetings`:
+// a timetable is about where to be now, and reconstructing an archived week would imply
+// the schedule is historical data, which it is not.
+const histSections: DemoSection[] = classSeed.map((c, i) => ({
   id: `sec-2024-${i + 1}`,
   academic_year_id: YEAR_ARCHIVED,
-  name,
-  grade_level: grade,
-  section,
-  homeroom_label: `${name} Homeroom`,
-  capacity,
+  name: c.name,
+  grade_level: c.yearGroup,
+  section: null,
+  homeroom_label: null,
+  capacity: c.capacity,
   is_archived: true,
 }));
 sections.push(...histSections);
 
-// Historical class_subjects: same subject sets + lead teachers as the active year.
-const histClassSubjects: DemoClassSubject[] = [];
-let histCsCounter = 0;
-for (const sec of histSections) {
-  for (const code of subjectsForSection(sec)) {
-    histCsCounter += 1;
-    const lead = teacherByCode(code);
-    histClassSubjects.push({
-      id: `cs-2024-${histCsCounter}`,
-      section_id: sec.id,
-      subject_id: subjectId(code),
-      teacher_ids: [lead.id],
-      lead_teacher_id: lead.id,
-      is_active: false,
-      drop_lowest_count: code === 'MATH' ? 1 : 0,
-    });
-  }
-}
+// Historical class_subjects: same subject + lead teacher as the active year's twin.
+const histClassSubjects: DemoClassSubject[] = classSeed.map((c, i) => {
+  const lead = teacherByCode(c.teacherCodes?.[0] ?? c.code);
+  return {
+    id: `cs-2024-${i + 1}`,
+    section_id: `sec-2024-${i + 1}`,
+    subject_id: subjectId(c.code),
+    teacher_ids: [lead.id],
+    lead_teacher_id: lead.id,
+    is_active: false,
+    drop_lowest_count: c.code === 'MATH' ? 1 : 0,
+  };
+});
 // Give the (now-inactive) teacher Trevor Neal a historical Geography assignment so
 // the Teachers directory scoped to 2024-2025 shows a believable past-year roster.
 const histGeo = histClassSubjects.find((c) => c.subject_id === subjectId('GEO'));
@@ -875,24 +992,33 @@ for (const cs of histClassSubjects) {
   );
 }
 
-// Historical enrollments: place each student into the historical section with the
-// same index they occupy this year, so past-year rosters are full and stable.
+// Historical enrollments: give each student the SAME subject load they carry this year,
+// against last year's twin of each class. D29 — this is many rows per student, not one, so
+// a past-year profile shows a full subject load rather than a single class.
+//
+// Graduated / withdrawn students hold no CURRENT load but did sit last year, so they fall
+// back to the Lower 6 default set — otherwise the archived year would show them enrolled in
+// nothing, which is exactly the record a transcript needs.
 const histEnrollmentId = new Map<string, string>(); // `${studentId}:${sectionId}` -> enrollment_id
 let histEnrollCounter = 0;
-for (let i = 0; i < students.length; i += 1) {
-  const stu = students[i]!;
-  const sec = histSections[i % histSections.length]!;
-  histEnrollCounter += 1;
-  const enrId = `enr-2024-${histEnrollCounter}`;
-  enrollments.push({
-    id: enrId,
-    student_id: stu.id,
-    section_id: sec.id,
-    semester_id: SEM_2024_1,
-    enrolled_at: '2024-09-02T08:00:00Z',
-    unenrolled_at: null,
-  });
-  histEnrollmentId.set(`${stu.id}:${sec.id}`, enrId);
+for (const stu of students) {
+  const current = loadByStudent.get(stu.id) ?? [];
+  const load = current.length > 0 ? current : LOWER6_LOADS[0]!;
+  for (const className of load) {
+    const idx = classSeed.findIndex((c) => c.name === className);
+    const sec = histSections[idx]!;
+    histEnrollCounter += 1;
+    const enrId = `enr-2024-${histEnrollCounter}`;
+    enrollments.push({
+      id: enrId,
+      student_id: stu.id,
+      section_id: sec.id,
+      semester_id: SEM_2024_1,
+      enrolled_at: '2024-09-02T08:00:00Z',
+      unenrolled_at: null,
+    });
+    histEnrollmentId.set(`${stu.id}:${sec.id}`, enrId);
+  }
 }
 function histRoster(sectionId: string): DemoStudent[] {
   const ids = enrollments
@@ -1014,6 +1140,7 @@ export const DEMO_DATASET: DemoDataset = {
   teachers,
   students,
   class_subjects,
+  class_meetings,
   enrollments,
   assessment_categories,
   assessments,

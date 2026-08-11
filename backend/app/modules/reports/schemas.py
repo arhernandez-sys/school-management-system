@@ -28,14 +28,19 @@ GradeReportStatus = Literal["graded", "pending"]
 
 
 class ReportStudentRef(BaseModel):
+    """The student as printed on a report card / transcript / picker row.
+
+    D29 replaced `section_id` / `section_name` / `grade_level` — all read off the
+    student's homeroom — with `year_group`, which is the student's own level. A
+    sixth-former has no single class whose name could head their report card.
+    """
+
     id: UUID
     full_name: str
     student_number: str
     date_of_birth: date | None = None
     status: str
-    section_id: UUID | None = None
-    section_name: str | None = None
-    grade_level: str | None = None
+    year_group: str | None = None
 
 
 class ReportSchool(BaseModel):
@@ -105,7 +110,10 @@ class ReportAttendanceSummary(BaseModel):
 
 class ReportCard(BaseModel):
     student: ReportStudentRef
-    section: ReportSectionRef | None = None
+    #: The student's level, e.g. "Lower 6". Replaces the old `section` block: under
+    #: D29 a card covers every subject class the student sits, so there is no one
+    #: class to name in the header.
+    year_group: str | None = None
     semester: ReportSemesterRef
     school: ReportSchool
     subjects: list[ReportCardSubjectRow] = Field(default_factory=list)

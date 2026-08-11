@@ -1,8 +1,9 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { Box, Button, Stack, Typography } from '@mui/material';
-import GroupsIcon from '@mui/icons-material/Groups';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import ScheduleIcon from '@mui/icons-material/Schedule';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import {
   DataTable,
   EmptyState,
@@ -15,120 +16,142 @@ import {
 } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
 import { useSelectedYear } from '@app/providers/YearContext';
-import { useClassesList, useClassSubjects } from './hooks/useClasses';
-import type { ClassSubjectItem } from './types';
+import { useClassesList } from './hooks/useClasses';
+import { roomsOf, summarizeMeetings } from './meetingFormat';
+import type { ClassListItem } from './types';
 
 /**
- * Student "My Classes" (FR-CLS-07). A student lives in ONE self-contained section and
- * simply receives every subject taught in it — they never roam between classrooms. So
- * this screen is NOT the school-wide sections list the admins see; it shows the
- * student's single homeroom and the subjects offered inside it.
+ * Student "My Classes" (FR-CLS-07).
  *
- * Scope is server-enforced: `GET /classes` returns only the caller's enrolled section
- * for a student (see mocks/handlers/classes.ts), so we read the first (only) row and
- * render its subjects via GET /classes/{id}/subjects.
+ * **D29 rewrite.** This screen used to read `items[0]` — the student's ONE homeroom — and
+ * list the subjects taught inside it, on the premise that students "never roam between
+ * classrooms". A sixth-former enrols in each subject class individually, so the list is now
+ * every class they take: subject, class name, teacher, room and times, one row each.
+ *
+ * `GET /classes` is server-scoped to the caller's enrolled classes for a student, so this
+ * renders the response directly with no client-side filtering. The timetable view is the
+ * better answer to "where do I need to be" — this table is the roster of what they take, and
+ * links there.
  */
 export function StudentClassesPage() {
   const { selectedYearId, selectedPeriod } = useSelectedYear();
-  // Sections are YEAR-keyed (`sections.academic_year_id`), so only the year is sent —
-  // a semester would narrow nothing here.
-  const sectionQuery = useClassesList({ sort: 'name', academic_year_id: selectedYearId });
-  const section = sectionQuery.data?.items[0] ?? null;
-  const subjectsQuery = useClassSubjects(section?.id);
+  // Classes are YEAR-keyed (`classes.academic_year_id`), so only the year is sent — a
+  // semester would narrow nothing here.
+  const query = useClassesList({
+    sort: 'name',
+    academic_year_id: selectedYearId,
+    page_size: 100,
+  });
+  const classes = query.data?.items ?? [];
 
-  if (sectionQuery.isLoading) {
-    return <LoadingState variant="page" label="Loading your class" />;
+  if (query.isLoading) {
+    return <LoadingState variant="page" label="Loading your classes" />;
   }
-  if (sectionQuery.isError) {
-    return <ErrorState onRetry={() => void sectionQuery.refetch()} />;
+  if (query.isError) {
+    return <ErrorState onRetry={() => void query.refetch()} />;
   }
-  if (!section) {
+  if (classes.length === 0) {
     return (
       <EmptyState
         variant="page"
-        title="You're not enrolled in a class yet"
-        description="Once the office enrols you in a homeroom, its subjects will appear here."
+        title="You're not enrolled in any classes yet"
+        description="Once the office enrols you in your subject classes, they'll appear here."
       />
     );
   }
 
-  const columns: DataTableColumn<ClassSubjectItem>[] = [
+  const scheduledCount = classes.filter((c) => c.meetings.length > 0).length;
+
+  const columns: DataTableColumn<ClassListItem>[] = [
     {
       field: 'subject',
       headerName: 'Subject',
       primary: true,
-      render: (cs) => (
+      render: (c) => (
         <Stack spacing={0.25}>
           <Typography variant="body2" sx={{ fontWeight: 500 }}>
-            {cs.subject.name}
+            {c.subject?.name ?? c.name}
           </Typography>
-          {cs.subject.code && (
-            <Typography variant="caption" color="text.secondary">
-              {cs.subject.code}
-            </Typography>
-          )}
+          <Typography variant="caption" color="text.secondary">
+            {/* The class name matters to a student now: it is how they tell their Math
+                class apart from the other one. */}
+            {c.name}
+            {c.subject?.code ? ` · ${c.subject.code}` : ''}
+          </Typography>
         </Stack>
       ),
     },
     {
       field: 'teachers',
-      headerName: 'Teacher(s)',
-      render: (cs) =>
-        cs.teachers.length > 0 ? (
-          // Product decision (2026-07): students no longer have access to teacher
-          // profiles, so teacher names render as plain text (no link).
-          <Typography variant="body2">
-            {cs.teachers.map((t) => t.full_name).join(', ')}
-          </Typography>
+      headerName: 'Teacher',
+      render: (c) =>
+        c.teachers.length > 0 ? (
+          // Product decision (2026-07): students have no access to teacher profiles, so
+          // teacher names render as plain text (no link).
+          <Typography variant="body2">{c.teachers.map((t) => t.full_name).join(', ')}</Typography>
         ) : (
           <StatusBadge label="Not assigned" kind="neutral" />
         ),
     },
     {
-      field: 'assessment_count',
-      headerName: 'Assessments',
-      align: 'right',
-      render: (cs) => <Typography variant="body2">{cs.assessment_count}</Typography>,
+      field: 'meetings',
+      headerName: 'When',
+      render: (c) => {
+        const when = summarizeMeetings(c.meetings);
+        return when ? (
+          <Typography variant="body2">{when}</Typography>
+        ) : (
+          <StatusBadge label="Not scheduled" kind="neutral" />
+        );
+      },
+    },
+    {
+      field: 'room',
+      headerName: 'Where',
+      render: (c) => {
+        const rooms = roomsOf(c.meetings);
+        return (
+          <Typography variant="body2" color={rooms.length ? undefined : 'text.secondary'}>
+            {rooms.length ? rooms.join(' · ') : '—'}
+          </Typography>
+        );
+      },
     },
   ];
 
-  const rowActions = (cs: ClassSubjectItem) => (
-    <Button
-      component={RouterLink}
-      to={`${ROUTES.assessments}?class_subject_id=${cs.class_subject_id}`}
-      size="small"
-      startIcon={<AssignmentOutlinedIcon fontSize="small" />}
-      aria-label={`See assessments for ${cs.subject.name}`}
-    >
-      Assessments
-    </Button>
-  );
+  const rowActions = (c: ClassListItem) =>
+    c.class_subject_id ? (
+      <Button
+        component={RouterLink}
+        to={`${ROUTES.assessments}?class_subject_id=${c.class_subject_id}`}
+        size="small"
+        startIcon={<AssignmentOutlinedIcon fontSize="small" />}
+        aria-label={`See assessments for ${c.subject?.name ?? c.name}`}
+      >
+        Assessments
+      </Button>
+    ) : null;
 
-  /**
-   * NO `is_active` filter — deliberately, and this is a fix rather than an omission.
-   *
-   * A past year's `class_subjects` are all INACTIVE by design (that is what closing a
-   * year means), so filtering on `is_active` emptied this table for every archived year
-   * the switcher can reach: the correct historical section resolved, the header named
-   * it, and then the subject list read "No subjects yet". Scope comes from section
-   * membership instead — the section is already year-resolved by the query above, so
-   * every row belongs to the selected year by construction. `/grades/me` documents and
-   * avoids the same trap ("past-year offerings are inactive, so scope by section
-   * membership rather than is_active").
-   */
-  const subjects = subjectsQuery.data ?? [];
+  const isPast = Boolean(selectedPeriod && !selectedPeriod.isActiveYear);
 
   return (
     <Box>
       <PageHeader
         title="My Classes"
-        // Tense follows the selected period: present for the active year, past for an
-        // archived one. A single hardcoded present tense misdescribed every past year
-        // the switcher can reach.
         subtitle={
-          selectedPeriod && !selectedPeriod.isActiveYear
-            ? `In ${selectedPeriod.yearName} you were in ${section.name} — ${section.grade_level}. These are the subjects that were taught in that homeroom.`
-            : `You're in ${section.name} — ${section.grade_level}. These are the subjects taught in your homeroom.`
+          isPast
+            ? `The subject classes you took in ${selectedPeriod?.yearName}.`
+            : 'Every subject class you take. Each has its own teacher, room and times.'
+        }
+        primaryAction={
+          <Button
+            component={RouterLink}
+            to={ROUTES.timetable}
+            variant="outlined"
+            startIcon={<CalendarMonthIcon />}
+          >
+            My timetable
+          </Button>
         }
       />
 
@@ -141,37 +164,40 @@ export function StudentClassesPage() {
         }}
       >
         <StatCard
-          label="My homeroom"
-          value={section.name}
-          icon={<GroupsIcon />}
+          label={isPast ? 'Classes taken' : 'Classes I take'}
+          value={classes.length}
+          icon={<MenuBookIcon />}
           color="primary"
-          helperText={`${section.enrolled_count} classmates`}
         />
         <StatCard
-          label={selectedPeriod && !selectedPeriod.isActiveYear ? 'Subjects taken' : 'Subjects I take'}
-          value={subjects.length || section.subject_count}
-          loading={subjectsQuery.isLoading}
-          icon={<MenuBookIcon />}
-          color="info"
+          label="On my timetable"
+          value={`${scheduledCount}/${classes.length}`}
+          icon={<ScheduleIcon />}
+          color={scheduledCount === classes.length ? 'success' : 'warning'}
+          helperText={
+            scheduledCount === classes.length
+              ? 'All classes have times'
+              : 'Some classes have no times yet'
+          }
         />
       </Box>
 
-      <DataTable<ClassSubjectItem>
-        caption={`Subjects taught in ${section.name}`}
+      <DataTable<ClassListItem>
+        caption="The subject classes I take"
         columns={columns}
-        rows={subjects}
-        getRowId={(cs) => cs.class_subject_id}
-        isLoading={subjectsQuery.isLoading}
-        isError={subjectsQuery.isError}
-        onRetry={() => void subjectsQuery.refetch()}
+        rows={classes}
+        getRowId={(c) => c.id}
+        isLoading={query.isLoading}
+        isError={query.isError}
+        onRetry={() => void query.refetch()}
         page={0}
         pageSize={100}
-        total={subjects.length}
+        total={classes.length}
         rowsPerPageOptions={[100]}
         onPageChange={() => undefined}
         onPageSizeChange={() => undefined}
-        emptyTitle="No subjects yet"
-        emptyDescription="Subjects for your class will appear here once they're set up."
+        emptyTitle="No classes yet"
+        emptyDescription="Your subject classes will appear here once you're enrolled."
         rowActions={rowActions}
       />
     </Box>

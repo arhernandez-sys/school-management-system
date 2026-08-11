@@ -3,7 +3,6 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_IDS,
-  DEMO_TODAY_ISO,
   classSubjectsForSection,
   getActiveYear,
   getClassSubject,
@@ -17,6 +16,7 @@ import {
   currentDemoStudent,
   currentDemoTeacher,
   sectionsOwnedByTeacher,
+  meetingsForSection,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoClassSubject,
@@ -65,6 +65,34 @@ function studentRef(student: DemoStudent) {
   };
 }
 
+function meetingItem(m: { id: string; day_of_week: number; start_time: string; end_time: string; room: string | null }) {
+  return {
+    id: m.id,
+    day_of_week: m.day_of_week,
+    start_time: m.start_time,
+    end_time: m.end_time,
+    room: m.room,
+  };
+}
+
+/**
+ * The D29 fields every class row carries: its single subject, teachers and weekly slots.
+ *
+ * Shared by the list and the detail so they cannot disagree — the real API attaches these
+ * to BOTH (a subject-class row is unreadable without them, and fetching per row would be
+ * N+1 from the client).
+ */
+function classCore(section: DemoSection) {
+  const cs = classSubjectsForSection(section.id)[0];
+  return {
+    subject: cs ? subjectRef(cs.subject_id) : null,
+    class_subject_id: cs?.id ?? null,
+    teachers: cs ? cs.teacher_ids.map(teacherRef) : [],
+    lead_teacher_id: cs?.lead_teacher_id ?? null,
+    meetings: meetingsForSection(section.id).map(meetingItem),
+  };
+}
+
 function classListItem(section: DemoSection) {
   return {
     id: section.id,
@@ -73,8 +101,9 @@ function classListItem(section: DemoSection) {
     section: section.section,
     capacity: section.capacity,
     enrolled_count: rosterFor(section.id).length,
-    subject_count: classSubjectsForSection(section.id).filter((c) => c.is_active).length,
     is_archived: section.is_archived,
+    // `subject_count` is gone (D29): a class teaches exactly one subject, so it was always 1.
+    ...classCore(section),
   };
 }
 
@@ -93,6 +122,7 @@ function classDetail(section: DemoSection) {
     enrolled_count: enrolled,
     over_capacity: section.capacity > 0 && enrolled > section.capacity,
     is_archived: section.is_archived,
+    ...classCore(section),
   };
 }
 
@@ -133,6 +163,62 @@ function assertWritable(section: DemoSection) {
   return year?.status === 'archived';
 }
 
+/** "Mon 08:00–09:30" — matches the server-rendered conflict messages. */
+const DAY_SHORT: Record<number, string> = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri' };
+function slotLabel(day: number, start: string, end: string): string {
+  return `${DAY_SHORT[day] ?? `Day ${day}`} ${start.slice(0, 5)}–${end.slice(0, 5)}`;
+}
+/** Half-open overlap: back-to-back meetings (09:30 end, 09:30 start) do NOT clash. */
+function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * Clashes between one class's week and what a student already sits (D29, warn-only).
+ *
+ * The real API computes this server-side and ships a rendered `message`, so the mock does
+ * the same rather than letting the UI format it — otherwise the demo and the live app would
+ * word the same warning differently.
+ */
+function scheduleConflictsForStudent(studentId: string, section: DemoSection, semesterId: string) {
+  const mine = meetingsForSection(section.id);
+  if (mine.length === 0) return [];
+  const student = getStudent(studentId);
+  const otherSectionIds = D.enrollments
+    .filter(
+      (e) =>
+        e.student_id === studentId &&
+        e.semester_id === semesterId &&
+        !e.unenrolled_at &&
+        e.section_id !== section.id,
+    )
+    .map((e) => e.section_id);
+
+  const out: Array<Record<string, unknown>> = [];
+  for (const otherId of otherSectionIds) {
+    const other = getSection(otherId);
+    if (!other) continue;
+    for (const m of meetingsForSection(otherId)) {
+      for (const want of mine) {
+        if (m.day_of_week !== want.day_of_week) continue;
+        if (!overlaps(want.start_time, want.end_time, m.start_time, m.end_time)) continue;
+        const slot = slotLabel(m.day_of_week, m.start_time, m.end_time);
+        out.push({
+          kind: 'student',
+          label: student?.full_name ?? 'Student',
+          with_class_id: other.id,
+          with_class_name: other.name,
+          day_of_week: m.day_of_week,
+          start_time: m.start_time,
+          end_time: m.end_time,
+          message: `${student?.full_name ?? 'This student'} already has ${other.name} at ${slot}.`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export const classesHandlers = [
   // ── GET /classes — sections list (Page[ClassListItem]) ─────────────────────────
   // Role-scoped like the real backend (FR-CLS-07): a Student sees ONLY their one
@@ -161,9 +247,10 @@ export const classesHandlers = [
           .filter((e) => e.student_id === student.id && yearSemIds.has(e.semester_id))
           .map((e) => e.section_id),
       );
-      rows = rows.filter((s) =>
-        studentSectionIds.size > 0 ? studentSectionIds.has(s.id) : s.id === student.section_id,
-      );
+      // D29: a student sees EVERY class they are enrolled in for the year. There is no
+      // fallback to "their one section" any more — the enrollment set IS the answer, and an
+      // empty set legitimately means "not enrolled in anything this year".
+      rows = rows.filter((s) => studentSectionIds.has(s.id));
     } else {
       const teacher = currentDemoTeacher(role);
       if (teacher) {
@@ -295,6 +382,109 @@ export const classesHandlers = [
     },
   ),
 
+  // ── GET /classes/{id}/meetings — the class's weekly schedule (D29, FR-SCH-01) ──
+  http.get(`${API_BASE_URL}/classes/:classId/meetings`, ({ params }) => {
+    const section = getSection(String(params.classId));
+    if (!section) return errorResponse(404, 'not_found', 'Class not found.');
+    return HttpResponse.json({
+      meetings: meetingsForSection(section.id).map(meetingItem),
+      conflicts: [],
+    });
+  }),
+
+  // ── PUT /classes/{id}/meetings — replace the whole week (D29, FR-SCH-02) ───────
+  //
+  // Conflicts WARN, they do not block: the write always succeeds and the clashes ride back
+  // in the response, matching the server (and the over-capacity precedent). A demo that
+  // rejected a clashing save would teach the opposite of how the real screen behaves.
+  http.put(`${API_BASE_URL}/classes/:classId/meetings`, async ({ params, request }) => {
+    const section = getSection(String(params.classId));
+    if (!section) return errorResponse(404, 'not_found', 'Class not found.');
+    if (assertWritable(section)) {
+      return errorResponse(409, 'year_archived', 'This class belongs to an archived year.');
+    }
+    const cs = classSubjectsForSection(section.id)[0];
+    if (!cs) {
+      return errorResponse(409, 'subject_not_set', 'This class has no subject yet.');
+    }
+    const body = (await request.json()) as {
+      meetings?: Array<{
+        day_of_week: number;
+        start_time: string;
+        end_time: string;
+        room?: string | null;
+      }>;
+    };
+    const wanted = body.meetings ?? [];
+
+    // Teacher / room clashes against every OTHER class in the same year.
+    const myTeacherIds = new Set(cs.teacher_ids);
+    const conflicts: Array<Record<string, unknown>> = [];
+    for (const other of D.sections) {
+      if (other.id === section.id) continue;
+      if (other.academic_year_id !== section.academic_year_id) continue;
+      const otherCs = classSubjectsForSection(other.id)[0];
+      for (const m of meetingsForSection(other.id)) {
+        for (const want of wanted) {
+          if (m.day_of_week !== want.day_of_week) continue;
+          if (!overlaps(want.start_time, want.end_time, m.start_time, m.end_time)) continue;
+          const slot = slotLabel(m.day_of_week, m.start_time, m.end_time);
+          for (const tid of otherCs?.teacher_ids ?? []) {
+            if (!myTeacherIds.has(tid)) continue;
+            const name = getTeacher(tid)?.full_name ?? 'This teacher';
+            conflicts.push({
+              kind: 'teacher',
+              label: name,
+              with_class_id: other.id,
+              with_class_name: other.name,
+              day_of_week: m.day_of_week,
+              start_time: m.start_time,
+              end_time: m.end_time,
+              message: `${name} also teaches ${other.name} at ${slot}.`,
+            });
+          }
+          // Room match is case/whitespace-insensitive, like the server: the office types
+          // "Lab 1" and "lab 1" interchangeably.
+          const wantRoom = (want.room ?? '').trim().toLowerCase();
+          const otherRoom = (m.room ?? '').trim().toLowerCase();
+          if (wantRoom && wantRoom === otherRoom) {
+            conflicts.push({
+              kind: 'room',
+              label: m.room ?? '',
+              with_class_id: other.id,
+              with_class_name: other.name,
+              day_of_week: m.day_of_week,
+              start_time: m.start_time,
+              end_time: m.end_time,
+              message: `${m.room} is already used by ${other.name} at ${slot}.`,
+            });
+          }
+        }
+      }
+    }
+
+    // Replace the set: drop this class's rows, then append the submitted week.
+    for (let i = D.class_meetings.length - 1; i >= 0; i -= 1) {
+      if (D.class_meetings[i]!.class_subject_id === cs.id) D.class_meetings.splice(i, 1);
+    }
+    wanted.forEach((w, i) => {
+      D.class_meetings.push({
+        id: `mtg-new-${cs.id}-${i + 1}`,
+        class_subject_id: cs.id,
+        day_of_week: w.day_of_week as 1 | 2 | 3 | 4 | 5,
+        // The editor submits "HH:MM"; the API serves "HH:MM:SS".
+        start_time: w.start_time.length === 5 ? `${w.start_time}:00` : w.start_time,
+        end_time: w.end_time.length === 5 ? `${w.end_time}:00` : w.end_time,
+        room: w.room?.trim() || null,
+      });
+    });
+
+    return HttpResponse.json({
+      meetings: meetingsForSection(section.id).map(meetingItem),
+      conflicts,
+    });
+  }),
+
   // ── GET /classes/{id}/roster — active roster (RosterEntry[], not paginated) ────
   http.get(`${API_BASE_URL}/classes/:classId/roster`, ({ params }) => {
     const section = getSection(String(params.classId));
@@ -330,6 +520,11 @@ export const classesHandlers = [
   }),
 
   // ── POST /classes/{id}/enrollments — enroll (bulk), warn-only capacity ─────────
+  //
+  // D29: enrolling is ADDITIVE. It used to close the student's active enrollment anywhere
+  // else in the semester and report it as a `transfer` — correct when a student had one
+  // homeroom, and data loss the moment they legitimately take Math AND Biology. Both the
+  // transfer and the `transferred` field are gone; `schedule_conflicts` replaces them.
   http.post(`${API_BASE_URL}/classes/:classId/enrollments`, async ({ params, request }) => {
     const section = getSection(String(params.classId));
     if (!section) return errorResponse(404, 'not_found', 'Class not found.');
@@ -341,24 +536,15 @@ export const classesHandlers = [
     const semesterId = body.semester_id ?? DEMO_IDS.activeSemesterId;
 
     const enrolled: ReturnType<typeof rosterEntry>[] = [];
-    const transferred: Array<{ student_id: string; from_class_id: string }> = [];
+    // Computed BEFORE the inserts: it asks what the student ALREADY sits that overlaps this
+    // class, and the new rows would otherwise be compared against themselves.
+    const schedule_conflicts = ids.flatMap((studentId) =>
+      scheduleConflictsForStudent(studentId, section, semesterId),
+    );
 
     for (const studentId of ids) {
       const student = getStudent(studentId);
       if (!student) return errorResponse(404, 'student_not_found', 'Student not found.');
-
-      // A student is in exactly one section per semester → enrolling elsewhere = transfer.
-      const priorActive = D.enrollments.find(
-        (e) =>
-          e.student_id === studentId &&
-          e.semester_id === semesterId &&
-          !e.unenrolled_at &&
-          e.section_id !== section.id,
-      );
-      if (priorActive) {
-        priorActive.unenrolled_at = DEMO_TODAY_ISO;
-        transferred.push({ student_id: studentId, from_class_id: priorActive.section_id });
-      }
 
       const alreadyHere = D.enrollments.find(
         (e) =>
@@ -377,7 +563,6 @@ export const classesHandlers = [
           unenrolled_at: null,
         };
         D.enrollments.push(newEnr);
-        student.section_id = section.id;
       }
       enrolled.push(rosterEntry(section, student));
     }
@@ -385,8 +570,8 @@ export const classesHandlers = [
     const enrolledCountNow = rosterFor(section.id).length;
     return HttpResponse.json({
       enrolled,
-      transferred,
       over_capacity_warning: section.capacity > 0 && enrolledCountNow > section.capacity,
+      schedule_conflicts,
     });
   }),
 
@@ -402,8 +587,8 @@ export const classesHandlers = [
       const enr = D.enrollments.find((e) => e.id === params.enrollmentId);
       if (!enr) return errorResponse(404, 'not_found', 'Enrollment not found.');
       enr.unenrolled_at = new Date().toISOString();
-      const student = getStudent(enr.student_id);
-      if (student && student.section_id === section.id) student.section_id = null;
+      // D29: nothing else to clear — the student's other enrollments are untouched, and
+      // there is no denormalized "current section" on the student any more.
       return new HttpResponse(null, { status: 204 });
     },
   ),

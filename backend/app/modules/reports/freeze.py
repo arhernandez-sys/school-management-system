@@ -122,10 +122,13 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
             for student in students:
                 # `frozen=False` — compute from live grades. This is the whole point of
                 # the freeze, and is why the caller must not have set `archived_at` yet.
+                # Scoped to THIS class: the outer loop already walks every class in
+                # the year, so passing the student's whole load here would recompute
+                # and re-freeze each subject once per class they take.
                 results = _subject_results(
                     db,
                     student_id=student.id,
-                    section=section,
+                    sections=[section],
                     semester=semester,
                     year=year,
                     frozen=False,

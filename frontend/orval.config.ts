@@ -28,6 +28,27 @@ export default defineConfig({
   sis: {
     input: {
       target: './openapi.json',
+      /**
+       * Generate ONLY the tags the app actually imports from `generated/`.
+       *
+       * Added 2026-08-06, during the D29 frontend work. Before this the config was
+       * unfiltered, and the committed `generated/` tree happened to hold just these four
+       * tags because `openapi.json` was a stale 4-tag snapshot. Refreshing the spec to the
+       * real 77-path surface therefore generated all 16 tags — including `dashboard`, which
+       * DOES NOT survive codegen: `GET /dashboard` is a role-discriminated `oneOf` with a
+       * hand-written schema (no `response_model` — see the backend router's docstring), and
+       * orval emits imports for its inline `$defs` models without writing those files,
+       * producing 19 TS2307 errors. So a routine "re-copy the spec and regenerate" broke
+       * `tsc` on code nothing imported.
+       *
+       * Filtering makes that refresh safe and deterministic. Every other module deliberately
+       * hand-authors its wire types in `features/<x>/types.ts` (each says so); to migrate one
+       * to codegen, add its tag here and replace those types in the same change — do not
+       * leave a generated copy sitting alongside a hand-authored one to drift.
+       */
+      filters: {
+        tags: ['auth', 'health', 'settings', 'subjects'],
+      },
       override: {
         // Strip the `/api/v1` prefix from every path so generated operations are
         // RELATIVE (`/auth/login`) and combine correctly with the axios `baseURL`

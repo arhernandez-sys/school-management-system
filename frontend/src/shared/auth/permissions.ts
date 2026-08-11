@@ -16,6 +16,8 @@ export type ModuleKey =
   | 'students'
   | 'teachers'
   | 'classes'
+  /** Student / teacher Mon–Fri week (D29). Staff have no personal timetable. */
+  | 'timetable'
   | 'assessments'
   | 'grades'
   | 'attendance'
@@ -38,6 +40,10 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     students: 'full',
     teachers: 'full',
     classes: 'full',
+    // No PERSONAL timetable for staff: they neither take nor teach classes, and
+    // `GET /timetable/me` correctly answers an empty week for them. Class times are
+    // managed per class (Classes → Schedule tab), which `classes: 'full'` already covers.
+    timetable: 'none',
     // Product decision (2026-07): Assessments are folded into Grades (subject cards →
     // drill-down). Staff manage assessments there, so the standalone nav is hidden.
     assessments: 'none',
@@ -54,6 +60,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     students: 'full',
     teachers: 'create-edit',
     classes: 'create-edit',
+    timetable: 'none', // see the principal note
     assessments: 'none', // folded into Grades (see principal note)
     grades: 'view-all',
     attendance: 'view-all',
@@ -70,6 +77,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // intentionally tightens requirements.md §2 (which allowed read-only View-all).
     teachers: 'none',
     classes: 'view-own',
+    timetable: 'view-own', // the classes they teach, Mon-Fri
     assessments: 'none', // folded into Grades — teachers author inside the Grades drill-down
     grades: 'create-edit',
     attendance: 'create-edit',
@@ -90,6 +98,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     students: 'none', // own profile via "My Profile" instead
     teachers: 'none',
     classes: 'view-own',
+    timetable: 'view-own', // the classes they are enrolled in, Mon-Fri
     assessments: 'view-own',
     grades: 'view-own',
     attendance: 'view-own',

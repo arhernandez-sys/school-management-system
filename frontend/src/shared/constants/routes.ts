@@ -11,6 +11,8 @@ export const ROUTES = {
   students: '/students',
   teachers: '/teachers',
   classes: '/classes',
+  /** Student / teacher Mon–Fri week (D29 subject-class schedule). */
+  timetable: '/timetable',
   assessments: '/assessments',
   grades: '/grades',
   /** Per-assessment class grading page: /grades/assessment/:assessmentId. */

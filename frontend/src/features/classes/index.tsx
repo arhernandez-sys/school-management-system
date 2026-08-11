@@ -6,19 +6,19 @@ import { ClassDetailPage } from './ClassDetailPage';
 import { StudentClassesPage } from './StudentClassesPage';
 
 /**
- * Classes feature module (Phase 7, D23). Mounted at `${ROUTES.classes}/*` (see
+ * Classes feature module (Phase 7, **D29**). Mounted at `${ROUTES.classes}/*` (see
  * app/router/routes.tsx) so it owns its nested routes, mirroring features/settings:
- *  - index → the sections (classes) list.
- *  - :classId → the section detail (Roster · Subjects · Overview tabs).
+ *  - index → the subject-class list.
+ *  - :classId → the class detail (Roster · Schedule · Overview tabs).
  *
- * A "class" here is a multi-subject SECTION/homeroom: one roster, many `class_subjects`,
- * each with its own teacher(s) and gradebook. All data comes from the shared axios
- * client + TanStack Query hooks (features/classes/hooks); the server enforces scope.
+ * A "class" here is one SUBJECT CLASS ("Math-1"): one subject, its own teacher(s), room,
+ * weekly times, gradebook and roster. All data comes from the shared axios client +
+ * TanStack Query hooks (features/classes/hooks); the server enforces scope.
  *
- * A STUDENT belongs to exactly one section and never roams (FR-CLS-07), so instead of
- * the admin sections list they get a dedicated "My Classes" view of that single
- * homeroom and its subjects — and the per-section detail (which exposes the roster) is
- * not theirs to browse, so it redirects back to their page.
+ * A STUDENT takes MANY subject classes (D29 — they used to belong to exactly one homeroom),
+ * so they get a dedicated "My Classes" list of all of them instead of the admin list. The
+ * per-class detail exposes the roster, so it is still not theirs to browse and redirects
+ * back to their page.
  */
 export function ClassesPage() {
   const { user } = useAuth();

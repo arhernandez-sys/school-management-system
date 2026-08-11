@@ -4,7 +4,23 @@
 
 > **Phase 4.5 reconciliation (2026-06-26):** Updated to reflect confirmed stakeholder decisions. **D23 — Class = multi-subject SECTION/homeroom:** a "class" is a section (e.g. "Form 1A") with one roster and many subjects taught within it, each subject having its own teacher(s) and gradebook; a student enrolls in one section. Terminology and FRs in Classes (§3.5), Assessments (§3.6), Grades (§3.7), Attendance (§3.8), and Reports (§3.10) clarified accordingly. **D24 — Multi-year transcript is a v1 feature:** new Transcript requirement set (FR-TRN-01..07) and acceptance criteria (§5.8) added. **D26 — Transcript visibility = Principal/Secretary ONLY** (resolves OQ-TRN; reverses the earlier teacher-scope assumption): Teachers and Students have no compiled-transcript access; US-PRIN-10/US-SEC-10 retained, US-STD-10 removed. **D25 — Grade exclusions are teacher-controlled & persisted** (resolves OQ-DB7): excused = always excluded (distinct from absent); teacher-configured, stored drop-lowest applied automatically (FR-GRD-05, FR-GRD-11). Authoritative model: `database-schema.md` (class_subjects, §10.6 transcript assembly; DB-14 grading policy).
 
-_Last updated: 2026-06-26_
+> **D29 — SIXTH-FORM SUBJECT-CLASS MODEL (2026-08-06). Supersedes D23.** The school is a
+> **sixth form**, which works like a university rather than a secondary school. A "class" is
+> now a **SUBJECT CLASS** ("Math-1"): one subject, one teacher set, one room and weekly slot,
+> one gradebook, one roster. The office creates subject classes and enrolls each student into
+> the ones they take, so a student holds **many** concurrent enrollments and two students in
+> the same year group can sit different Math classes while sharing Biology.
+>
+> What this changed: **A-SECTION-MODEL → A-SUBJECT-CLASS-MODEL** and **A-K12-SECONDARY →
+> A-SIXTH-FORM** (§8); Classes FRs rewritten (§3.5, FR-CLS-01..09); **new Timetable &
+> Scheduling requirement set (§3.5a, FR-SCH-01..06)**; attendance is now taken **per subject
+> class** rather than once per day per homeroom (§3.8, D-Q4's per-day granularity is
+> unchanged); a student's level moved from their homeroom onto their own record as
+> `year_group`; and enrolling a student is **purely additive** — the old transfer-on-enroll
+> silently withdrew them from their other class, which under this model is data loss.
+> Authoritative model: `database-schema.md` (`class_meetings`, `student_profiles.year_group`).
+
+_Last updated: 2026-08-06_
 
 ---
 
@@ -148,22 +164,39 @@ Management of teaching staff records.
 ### 3.5 Classes (CLS)
 Setup and management of **sections** (a "class" = a SECTION/homeroom, e.g. "Form 1A"), the **subjects taught within each section**, the per-(section, subject) teacher assignments, and the section roster.
 
-> **Terminology (D23 — section model).** A **class** in this system is a **SECTION/homeroom**: one named group (e.g. "Form 1A") with a **single student roster**, scoped to one academic year. A section is **not** a single subject. Within a section, **many subjects** are taught (e.g. Math, English, Science), and each **(section, subject)** offering has **its own teacher(s)** and **its own gradebook/assessments**. A **student enrolls in exactly ONE section** for the active term and is thereby a member of every subject taught in it (no per-subject enrollment). The phrase "their classes" for a Teacher means the **(section, subject) offerings they are assigned to teach**; for a Student it means the **one section they are enrolled in** (and all subjects within it).
+> **Terminology (D29 — subject-class model; supersedes D23).** A **class** in this system is a **SUBJECT CLASS**: one named group (e.g. "Math-1") teaching **exactly one subject**, scoped to one academic year, with **its own teacher(s)**, **its own room and weekly meeting times**, **its own gradebook/assessments** and **its own roster**. Two parallel classes of the same subject (Math-1, Math-2) are two separate classes with different teachers and timetable slots.
+>
+> A **student enrolls in EACH subject class individually** and therefore holds **many** concurrent enrollments — Freddy takes Math-1, Biology-10 and English-5; John takes Math-2, Biology-10 and English-5. They meet in Biology and English and never in Math. Enrolling a student into one class **never** removes them from another.
+>
+> The phrase "their classes" means **the subject classes they teach** for a Teacher, and **every subject class they are enrolled in** for a Student. A student's own level is `year_group` on their record ("Lower 6"), which is distinct from a class's `grade_level` (the level the class is *for*).
 
-- **FR-CLS-01:** Authorized roles (Principal, Secretary) shall create a **section** capturing at minimum: section name/identifier (e.g. "Form 1A"), grade level, section label, academic year, and capacity. A section is subject-agnostic — subjects are added to it per FR-CLS-01a.
-- **FR-CLS-01a:** Authorized roles shall add and remove **subjects taught within a section** (the "(section, subject)" offering). Each such offering carries its own assessments, gradebook, and teacher assignment(s). A given subject may appear at most once per section.
-- **FR-CLS-02:** The system shall support assigning and removing students from a **section roster**. A student is enrolled in one section at a time for the active term; enrollment in the section grants membership in all subjects taught in it.
-- **FR-CLS-03:** The system shall support assigning one or more teachers (lead and/or co-teachers) to a **(section, subject)** offering. All assigned teachers of an offering have full grade/attendance/assessment edit rights for that offering (D-Q9).
-- **FR-CLS-04:** The system shall display a **section** detail view: the student roster, the list of subjects taught in the section, the assigned teacher(s) per subject, and per-subject and section-level assessment/grade/attendance summaries.
-- **FR-CLS-05:** The system shall warn when a section roster exceeds the configured capacity but shall not hard-block (configurable — see Q6).
-- **FR-CLS-06:** The system shall scope sections (and the subjects/offerings within them) to the active academic year and prevent editing of sections belonging to a closed/archived academic year.
-- **FR-CLS-07:** A Teacher shall see only the **(section, subject) offerings they are assigned to teach**; a Student shall see only the **one section they are enrolled in** and all subjects taught within it.
-- **FR-CLS-08:** The system shall prevent deletion of a section (or a subject offering within it) that has recorded grades or attendance; such sections/offerings may be archived instead.
+- **FR-CLS-01:** Authorized roles (Principal, Secretary) shall create a **subject class** capturing at minimum: class name (e.g. "Math-1"), **its subject (required)**, the year group it is for, academic year, and optionally a capacity, its teacher(s) and its weekly meeting times. A class without a subject cannot be graded, scheduled or enrolled into and shall be rejected.
+- **FR-CLS-01a:** A subject class teaches **exactly one subject**, fixed at creation. The subject is not re-assignable afterwards — changing it would silently reinterpret every existing assessment and grade under the class; a different subject means a different class.
+- **FR-CLS-02:** The system shall support enrolling and withdrawing students **per subject class**. A student holds **many** concurrent enrollments, one per class they take, and enrolling into one class shall **never** withdraw them from another.
+- **FR-CLS-03:** The system shall support assigning one or more teachers (lead and/or co-teachers) to a **subject class**. All assigned teachers have full grade/attendance/assessment edit rights for that class (D-Q9).
+- **FR-CLS-04:** The system shall display a **subject class** detail view: its roster, its subject and assigned teacher(s), its weekly schedule, and its assessment/grade/attendance summaries.
+- **FR-CLS-05:** The system shall warn when a class roster exceeds the configured capacity but shall not hard-block (configurable — see Q6).
+- **FR-CLS-06:** The system shall scope classes to the active academic year and prevent editing of classes belonging to a closed/archived academic year.
+- **FR-CLS-07:** A Teacher shall see only the **subject classes they teach**; a Student shall see **every subject class they are enrolled in**.
+- **FR-CLS-08:** The system shall prevent deletion of a class that has recorded grades or attendance; such classes may be archived instead.
+- **FR-CLS-09:** The system shall record a student's own **year group** (e.g. "Lower 6") on their record, independent of the classes they take, and support filtering the student directory by it.
+
+### 3.5a Timetable & Scheduling (SCH)
+Weekly meeting times for each subject class, and the Mon–Fri timetable they produce (**D29**).
+
+> A subject class meets at one or more **weekly slots**: an ISO weekday (Mon–Fri), a start and end time, and a room. Times are **free-form**, not slots in a fixed period grid — no bell schedule has to be configured before a class can be scheduled (stakeholder decision, 2026-08-06). A student's timetable is assembled from the classes they are enrolled in; a teacher's from the classes they teach.
+
+- **FR-SCH-01:** The system shall display the weekly schedule of a subject class (day, start time, end time, room) to anyone who can read that class.
+- **FR-SCH-02:** Authorized roles (Principal, Secretary) shall set a class's weekly schedule, replacing it as a whole so a retimed week cannot half-apply. An empty schedule is valid and means the class is not yet timetabled.
+- **FR-SCH-03:** A Student shall see a **Mon–Fri timetable** assembled from every subject class they are enrolled in, showing subject, class name, teacher, room and times.
+- **FR-SCH-04:** A Teacher shall see a **Mon–Fri timetable** of the classes they teach.
+- **FR-SCH-05:** Principal and Secretary shall be able to view any student's timetable.
+- **FR-SCH-06:** The system shall **report** scheduling conflicts — a teacher or room double-booked, or a student enrolled into a class that overlaps one they already sit — as **warnings that do not block the write**, consistent with the warn-only treatment of over-capacity enrollment (Q6). A class that is enrolled in but not yet timetabled shall be listed explicitly rather than omitted from the timetable.
 
 ### 3.6 Assessments (ASMT)
-Creation and management of graded activities (quiz, test, exam, assignment) per **(section, subject) offering**.
+Creation and management of graded activities (quiz, test, exam, assignment) per **subject class**.
 
-> An assessment belongs to exactly one **subject taught within a section** (a "(section, subject)" offering, D23), which already determines both the section and the subject. The Math gradebook of Form 1A is independent of its English gradebook.
+> An assessment belongs to exactly one **subject class** (D29), which already determines both the class and its subject. Math-1's gradebook is independent of Math-2's, even though both teach Mathematics.
 
 - **FR-ASMT-01:** A Teacher shall create an assessment for a **(section, subject) offering they are assigned to teach**, capturing: title, type (quiz/test/exam/assignment), the offering (which fixes both section and subject), maximum score, weight/contribution to the term grade, and due/assessment date.
 - **FR-ASMT-02:** The system shall validate that maximum score is a positive number and that weight values are non-negative.
@@ -197,7 +230,7 @@ Entry and aggregation of student scores against assessments, with per-subject te
 ### 3.8 Attendance (ATT)
 Recording and reviewing student attendance per **section** per day.
 
-> Attendance is taken at the **section (homeroom) level**, once per day (D-Q4), against the section roster — not per subject. Any teacher assigned to **any subject** of the section may record the section's daily register (D23).
+> Attendance is taken **per subject class**, once per day (D-Q4), against that class's roster (**D29**). Each teacher records the register for the classes they teach, so a student can be present in Biology and absent in Math on the same day. It used to be taken once per day at the homeroom level; with no homeroom, the subject class is the only roster there is.
 
 - **FR-ATT-01:** A Teacher shall record attendance for each student in a **section** for a given date, choosing a status (e.g., Present, Absent, Late, Excused).
 - **FR-ATT-02:** The system shall default all students to "Present" on a fresh attendance sheet, allowing the teacher to mark exceptions.
@@ -296,6 +329,7 @@ Student `view-all` (global-visibility events only). Matches the frontend's
 - **US-PRIN-03:** As a Principal, I want to manage user accounts and assign roles so that staff and students have the correct access.
 - **US-PRIN-04:** As a Principal, I want to view all students', teachers', classes', grades', and attendance data so that I have full oversight without editing operational records.
 - **US-PRIN-05:** As a Principal, I want to post and remove school-wide announcements so that I can communicate with the whole school.
+- **US-PRIN-11:** As a Principal or Secretary, I want to set each subject class's weekly meeting times and room, and be warned (not blocked) when a teacher, room or student is double-booked, so that the timetable is workable. *(D29 — FR-SCH-02/05/06.)*
 - **US-PRIN-06:** As a Principal, I want to generate school-wide reports (enrollment, grade summaries, attendance) so that I can make informed decisions and report to stakeholders.
 - **US-PRIN-07:** As a Principal, I want to configure the school profile and logo so that reports and the system reflect our school's identity.
 - **US-PRIN-08:** As a Principal, I want to deactivate (not delete) staff and students so that historical academic records are preserved.
@@ -324,13 +358,15 @@ Student `view-all` (global-visibility events only). Matches the frontend's
 - **US-TCH-07:** As a Teacher, I want to enter grades privately and then release them so that students only see finalized results.
 - **US-TCH-08:** As a Teacher, I want to view the profiles of students in my classes so that I have context on whom I'm teaching.
 - **US-TCH-09:** As a Teacher, I want to post announcements to my class so that I can communicate with my students.
+- **US-TCH-10:** As a Teacher, I want a Mon–Fri timetable of the classes I teach, with room and time, so that I know where to be. *(D29 — FR-SCH-04.)*
 - **US-TCH-10:** As a Teacher, I want to view grade and attendance summaries for my classes so that I can identify struggling students.
 - **US-TCH-11:** As a Teacher, I want to print/export report data for my students so that I can share results.
 
 ### 4.4 Student (STD)
 - **US-STD-01:** As a Student, I want to log in securely so that only I can see my academic data.
 - **US-STD-02:** As a Student, I want a dashboard summarizing my grades, attendance, upcoming assessments, and announcements so that I stay informed.
-- **US-STD-03:** As a Student, I want to view my class schedule/enrolled classes so that I know my courses and teachers.
+- **US-STD-03:** As a Student, I want to view every subject class I am enrolled in — with its teacher, room and times — so that I know my courses. *(D29 — a student now takes several classes, not one homeroom.)*
+- **US-STD-03a:** As a Student, I want a **Mon–Fri timetable** built from my subject classes so that I know where to be each day. *(D29 — FR-SCH-03.)*
 - **US-STD-04:** As a Student, I want to view my grades per assessment and my term grade so that I can track my performance.
 - **US-STD-05:** As a Student, I want to view my attendance history and summary so that I can monitor my attendance.
 - **US-STD-06:** As a Student, I want to view upcoming and past assessments for my classes so that I can prepare.
@@ -441,8 +477,8 @@ Student `view-all` (global-visibility events only). Matches the frontend's
 3. **A-ACADEMIC-STRUCTURE:** The academic calendar is structured as one **academic year** divided into **terms/semesters** (e.g., 3 terms or 2 semesters, configurable). One academic year and one term are "active" at a time.
 4. **A-GRADING-SCALE:** Grading uses a **numeric score with a derived letter grade** (e.g., A/B/C/D/F) via configurable thresholds, plus a pass/fail boundary. Default scale to be confirmed.
 5. **A-WEIGHTED-GRADES:** Term grades are computed as a **weighted aggregate** of assessment scores; weights are set per assessment.
-6. **A-SECTION-MODEL [architecture-impacting]:** A **"class" is a SECTION/homeroom** (e.g. "Form 1A"): one roster, many subjects taught within it, each subject with its own teacher(s) and gradebook; a student enrolls in **one** section and takes all of its subjects. This is the Caribbean/Commonwealth (Belize secondary) model. *(Confirmed — D23.)*
-7. **A-K12-SECONDARY:** The target is a typical **K-12 / secondary school** with sections and a homeroom/section model (a student belongs to a section and takes subjects within it — see A-SECTION-MODEL).
+6. **A-SUBJECT-CLASS-MODEL [architecture-impacting]:** A **"class" is a SUBJECT CLASS** (e.g. "Math-1"): one subject, its own teacher(s), room, weekly meeting times, gradebook and roster. The office creates subject classes and **enrolls each student into the ones they take**, so two students in the same year group can sit different Math classes while sharing Biology. *(Confirmed — **D29**; supersedes A-SECTION-MODEL / D23, which modelled a class as a homeroom teaching many subjects with one roster.)*
+7. **A-SIXTH-FORM:** The target is a **sixth form / junior college** operating on the university pattern above — students move between rooms per subject. *(Confirmed — D29; supersedes A-K12-SECONDARY.)*
 8. **A-NO-PARENT-PORTAL:** Parents/guardians are **contact data on the student record**, not system users. No parent logins in v1.
 9. **A-IN-APP-ANNOUNCEMENTS:** Announcements are **shown in-app only**; no email/SMS/push delivery in v1.
 10. **A-SOFT-DELETE:** Students, teachers, and sections with academic history are **deactivated/archived, not hard-deleted**, to preserve records.

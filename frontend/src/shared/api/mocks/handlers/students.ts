@@ -3,13 +3,14 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_IDS,
-  classSubjectsForSection,
   computeTermGrade,
   getSection,
   getStudent,
   getSubject,
   listStudents,
-  sectionForStudentInYear,
+  sectionsForStudentInYear,
+  currentSectionsFor,
+  classSubjectsForStudent,
   sectionsOwnedByTeacher,
   yearsForStudent,
 } from '@shared/api/mocks/demo/dataset';
@@ -77,17 +78,14 @@ function sectionRef(section: DemoSection | undefined) {
   };
 }
 
-function currentSectionFor(student: DemoStudent) {
-  return student.section_id ? getSection(student.section_id) : undefined;
-}
-
 /**
- * The section that scopes a detail-style read. With a `yearId` this is the section the
- * student was enrolled in that year (historical view); without one it's their current
- * (active-semester) section.
+ * The subject classes that scope a detail-style read. With a `yearId` these are the classes
+ * the student sat that year (historical view); without one, their live load.
+ *
+ * D29: a LIST. It used to be one section, on the premise that a student had exactly one.
  */
-function scopedSectionFor(student: DemoStudent, yearId?: string | null) {
-  return yearId ? sectionForStudentInYear(student.id, yearId) : currentSectionFor(student);
+function scopedSectionsFor(student: DemoStudent, yearId?: string | null) {
+  return yearId ? sectionsForStudentInYear(student.id, yearId) : currentSectionsFor(student.id);
 }
 
 /** StudentListItem (GET /students). */
@@ -97,14 +95,17 @@ function studentListItem(s: DemoStudent) {
     student_number: s.student_number,
     full_name: s.full_name,
     status: s.status,
-    current_section: sectionRef(currentSectionFor(s)),
+    // D29: the row shows the student's own level + how many classes they take. Their class
+    // NAMES are a variable-length list that belongs on the detail page, not a table cell.
+    year_group: s.year_group,
+    class_count: currentSectionsFor(s.id).length,
     guardian_name: s.guardian_name || null,
   };
 }
 
 /**
  * StudentDetail (GET /students/{id}, /me, POST, PATCH, status). With `yearId` the
- * `current_section` reflects the section the student was enrolled in that year.
+ * `current_classes` reflect the classes the student sat that year.
  */
 function studentDetail(s: DemoStudent, yearId?: string | null) {
   return {
@@ -113,6 +114,7 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     full_name: s.full_name,
     date_of_birth: s.date_of_birth,
     gender: s.gender,
+    year_group: s.year_group,
     enrollment_date: s.enrollment_date,
     status: s.status,
     guardian_name: s.guardian_name,
@@ -120,7 +122,7 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     guardian_email: s.guardian_email,
     address: s.address,
     phone: s.phone,
-    current_section: sectionRef(scopedSectionFor(s, yearId)),
+    current_classes: scopedSectionsFor(s, yearId).map(sectionRef).filter(Boolean),
   };
 }
 
@@ -130,9 +132,8 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
  * student's computed term grade for that offering, and the per-assessment lines.
  */
 function assessmentsForStudent(student: DemoStudent, yearId?: string | null) {
-  const section = scopedSectionFor(student, yearId);
-  if (!section) return [];
-  const offerings = classSubjectsForSection(section.id).filter((cs) => cs.is_active);
+  // D29: spans every class the student sits, not the subjects of one homeroom.
+  const offerings = classSubjectsForStudent(student.id, yearId).filter((cs) => cs.is_active);
   return offerings.map((cs) => {
     const subject = getSubject(cs.subject_id);
     const term = computeTermGrade(student.id, cs.id);
@@ -197,7 +198,9 @@ function resolveScopedStudent(
   if (role === 'teacher') {
     const teacherId = currentTeacherId(role);
     const scope = teacherId ? teacherSectionIds(teacherId) : new Set<string>();
-    if (!student.section_id || !scope.has(student.section_id)) {
+    // D29: reachable if ANY of the student's classes is one this teacher owns.
+    const shared = currentSectionsFor(student.id).some((sec) => scope.has(sec.id));
+    if (!shared) {
       return { error: errorResponse(404, 'not_found', 'Student not found.') };
     }
   }
@@ -224,7 +227,9 @@ interface StudentWriteBody {
   guardian_email?: string;
   address?: string;
   phone?: string;
-  section_id?: string | null;
+  year_group?: string | null;
+  /** D29: many subject classes to enrol into on CREATE (replaced the single section_id). */
+  class_ids?: string[];
 }
 
 const LIVE_STATUSES: DemoStudent['status'][] = ['active', 'inactive', 'transferred'];
@@ -240,12 +245,17 @@ function isDuplicateNumber(num: string, exceptId?: string): boolean {
 
 /** Create an active-semester enrollment linking a student to a section (demo write). */
 function enrollStudent(student: DemoStudent, sectionId: string): void {
-  // Transfer semantics: stamp any prior active enrollment, then add the new one.
-  for (const e of D.enrollments) {
-    if (e.student_id === student.id && e.semester_id === DEMO_IDS.activeSemesterId && !e.unenrolled_at) {
-      e.unenrolled_at = new Date().toISOString();
-    }
-  }
+  // D29: ADDITIVE. This used to stamp every prior active enrollment closed ("transfer
+  // semantics"), which under a subject-class model would drop the student from Math the
+  // moment they were added to Biology.
+  const already = D.enrollments.some(
+    (e) =>
+      e.student_id === student.id &&
+      e.section_id === sectionId &&
+      e.semester_id === DEMO_IDS.activeSemesterId &&
+      !e.unenrolled_at,
+  );
+  if (already) return;
   const enrollment: DemoEnrollment = {
     id: `enr-new-${D.enrollments.length + 1}`,
     student_id: student.id,
@@ -255,7 +265,6 @@ function enrollStudent(student: DemoStudent, sectionId: string): void {
     unenrolled_at: null,
   };
   D.enrollments.push(enrollment);
-  student.section_id = sectionId;
 }
 
 export const studentsHandlers = [
@@ -369,10 +378,11 @@ export const studentsHandlers = [
         student_number: ['Already in use by a live student.'],
       });
     }
-    if (body.section_id) {
-      const section = getSection(body.section_id);
+    // D29: `class_ids` (many) replaced the single `section_id`.
+    for (const classId of body.class_ids ?? []) {
+      const section = getSection(classId);
       if (section?.is_archived) {
-        return errorResponse(409, 'section_archived', 'That section is archived.');
+        return errorResponse(409, 'section_archived', 'That class is archived.');
       }
     }
     const created: DemoStudent = {
@@ -389,10 +399,10 @@ export const studentsHandlers = [
       guardian_email: body.guardian_email ?? '',
       address: body.address ?? '',
       phone: body.phone ?? '',
-      section_id: null,
+      year_group: body.year_group ?? null,
     };
     D.students.push(created);
-    if (body.section_id) enrollStudent(created, body.section_id);
+    for (const classId of body.class_ids ?? []) enrollStudent(created, classId);
     return HttpResponse.json(studentDetail(created), { status: 201 });
   }),
 
@@ -420,7 +430,8 @@ export const studentsHandlers = [
     if (body.guardian_email !== undefined) student.guardian_email = body.guardian_email ?? '';
     if (body.address !== undefined) student.address = body.address ?? '';
     if (body.phone !== undefined) student.phone = body.phone ?? '';
-    if (body.section_id) enrollStudent(student, body.section_id);
+    if (body.year_group !== undefined) student.year_group = body.year_group ?? null;
+    // Enrollment is NOT a PATCH field (D29) — it moves under Classes → Roster.
     return HttpResponse.json(studentDetail(student));
   }),
 
