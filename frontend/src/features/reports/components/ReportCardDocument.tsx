@@ -15,20 +15,89 @@ import { GradeLetter } from './GradeLetter';
 import type { ReportCard } from '../types';
 
 /**
- * ReportCardDocument — the printable report card (design-system §7.8). Renders the
- * school-identity header, student info, the section's per-subject term grades
- * (numeric + letter + teacher), an attendance summary and the term average, all inside
- * `PrintLayout` so browser print (D27) produces the export.
+ * ReportCardDocument — the printable report card, laid out to match
+ * `BAJC MID SEMESTER REPORT TEMPLATE.pdf` (D30 §D13).
+ *
+ * **Rebuilt in Phase 3 from the sixth-form layout it started as.** The old table was
+ * `Subject | Score | Letter | Teacher` with a term-average footer; BAJC's document is
+ * `Course Code | Course Name | Credits | Instructor | Grade` over a labelled header
+ * block, closing on a GPA row and the Dean's signature block.
+ *
+ * Three things about it are deliberate:
+ *
+ * * **The grade column is the LETTER ONLY**, blank when ungraded. The sample prints no
+ *   percentages, and the numeric is still available to staff through the gradebook.
+ * * **Ungraded courses are still listed**, with a blank grade. They are what makes the
+ *   GPA denominator right (decision #4 — all enrolled credits), so hiding them would
+ *   leave a printed figure nobody could check by adding up the rows.
+ * * **`term_average` is still rendered alongside the GPA.** It is a 0-100 percentage
+ *   and the GPA is a 0-4 figure; they answer different questions and dropping the
+ *   average would lose information the school already had.
+ *
+ * `variant` switches only the heading. The filename of the source PDF says
+ * "mid semester" while the document inside is titled "End of Semester Report"; only
+ * one layout was ever supplied, and whether the two really differ is open with BAJC
+ * (plan §G item 4). So there is ONE template with a heading variant, rather than two
+ * templates guessing at a difference.
  */
 export interface ReportCardDocumentProps {
   data: ReportCard;
+  variant?: 'mid-semester' | 'end-of-semester';
 }
 
-export function ReportCardDocument({ data }: ReportCardDocumentProps) {
-  const { student, school, semester, subjects, attendance_summary, term_average, term_average_letter } =
-    data;
+/** The label block under the letterhead: Student ID · Name · Program · Semester · Period · Block. */
+function LabelBlock({ data }: { data: ReportCard }) {
+  const rows: Array<[string, string]> = [
+    ['Student ID', data.student.student_number],
+    ['Student Name', data.student.full_name],
+    ['Program', data.program_code ?? '—'],
+    // The sample leaves `Semester` blank and carries the term in `Period`. Both are
+    // printed: the semester name is genuinely useful and costs nothing.
+    ['Semester', data.semester.name],
+    ['Period', data.period ?? '—'],
+    ['Block', data.block ?? '-'],
+  ];
+  return (
+    <Box
+      component="dl"
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: 'max-content 1fr', sm: 'max-content 1fr max-content 1fr' },
+        columnGap: 2,
+        rowGap: 0.75,
+        m: 0,
+        mb: 3,
+      }}
+    >
+      {rows.map(([label, value]) => (
+        <Box key={label} sx={{ display: 'contents' }}>
+          <Typography component="dt" variant="body2" color="text.secondary">
+            {label}
+          </Typography>
+          <Typography component="dd" variant="body2" sx={{ m: 0, fontWeight: 500 }}>
+            {value}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+}
 
-  const documentTitle = `Report Card — ${semester.name}, ${semester.academic_year_name}`;
+export function ReportCardDocument({ data, variant = 'end-of-semester' }: ReportCardDocumentProps) {
+  const {
+    student,
+    school,
+    semester,
+    subjects,
+    attendance_summary,
+    term_average,
+    term_average_letter,
+    gpa,
+    total_credits,
+  } = data;
+
+  const heading = variant === 'mid-semester' ? 'Mid-Semester Report' : 'End of Semester Report';
+  const documentTitle = `${heading} — ${semester.name}, ${semester.academic_year_name}`;
 
   return (
     <PrintLayout
@@ -44,57 +113,54 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
         </>
       }
     >
-      {/* Student header */}
-      <Stack spacing={0.5} sx={{ mb: 2 }}>
-        <Typography variant="h4" component="h2">
-          {student.full_name}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {student.year_group ?? '—'}
-        </Typography>
-      </Stack>
+      <Typography variant="h4" component="h2" sx={{ textAlign: 'center', mb: 3 }}>
+        {heading}
+      </Typography>
+
+      <LabelBlock data={data} />
 
       {subjects.length === 0 ? (
         <EmptyState
-          title="No subjects to report"
-          description="This student is not enrolled in any subject classes for the selected term."
+          title="No courses to report"
+          description="This student is not enrolled in any courses for the selected term."
           variant="card"
         />
       ) : (
         <>
-          <TableContainer>
-            <Table size="small" aria-label="Subject grades">
+          {/* `overflow-x: auto` so five columns never make the page itself scroll. */}
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" aria-label="Course grades">
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ fontWeight: 600 }} scope="col">
-                    Subject
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 600 }} scope="col">
-                    Score
-                  </TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 600 }} scope="col">
-                    Letter
+                    Course Code
                   </TableCell>
                   <TableCell sx={{ fontWeight: 600 }} scope="col">
-                    Teacher
+                    Course Name
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }} scope="col">
+                    Credits
+                  </TableCell>
+                  <TableCell sx={{ fontWeight: 600 }} scope="col">
+                    Instructor
+                  </TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 600 }} scope="col">
+                    Grade
                   </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {subjects.map((row) => (
                   <TableRow key={row.subject.id}>
+                    <TableCell>{row.subject.code || '—'}</TableCell>
                     <TableCell>{row.subject.name}</TableCell>
-                    <TableCell align="right">
-                      {row.status === 'pending' || row.numeric == null ? (
-                        <Typography variant="body2" color="text.secondary" component="span">
-                          Pending
-                        </Typography>
-                      ) : (
-                        row.numeric.toFixed(1)
-                      )}
-                    </TableCell>
+                    <TableCell align="right">{row.credits ?? '—'}</TableCell>
+                    <TableCell>{row.teacher ?? '—'}</TableCell>
                     <TableCell align="center">
-                      {row.status === 'pending' ? (
+                      {/* Blank when ungraded or withheld — the sample prints nothing
+                          rather than a placeholder, and the row is still here so the
+                          credits are visibly part of the GPA denominator. */}
+                      {row.status === 'pending' || !row.letter ? (
                         <Typography variant="body2" color="text.secondary" component="span">
                           —
                         </Typography>
@@ -102,9 +168,25 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
                         <GradeLetter letter={row.letter} />
                       )}
                     </TableCell>
-                    <TableCell>{row.teacher ?? '—'}</TableCell>
                   </TableRow>
                 ))}
+
+                {/* Spacer row, then the GPA row — the sample's shape exactly. */}
+                <TableRow>
+                  <TableCell colSpan={5} sx={{ border: 0, height: 16, p: 0 }} />
+                </TableRow>
+                <TableRow>
+                  <TableCell colSpan={2} sx={{ fontWeight: 700 }}>
+                    GPA
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    {total_credits || '—'}
+                  </TableCell>
+                  <TableCell />
+                  <TableCell align="center" sx={{ fontWeight: 700, fontSize: '1.05rem' }}>
+                    {gpa != null ? gpa.toFixed(2) : '—'}
+                  </TableCell>
+                </TableRow>
               </TableBody>
             </Table>
           </TableContainer>
@@ -126,8 +208,12 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
             </Box>
             <Box sx={{ textAlign: { sm: 'right' } }}>
               <Typography variant="subtitle2">Term average</Typography>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: { sm: 'flex-end' } }}>
-                <Typography variant="h4" component="span">
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: 'center', justifyContent: { sm: 'flex-end' } }}
+              >
+                <Typography variant="h5" component="span">
                   {term_average != null ? term_average.toFixed(1) : '—'}
                 </Typography>
                 {term_average_letter && <GradeLetter letter={term_average_letter} />}
@@ -136,6 +222,30 @@ export function ReportCardDocument({ data }: ReportCardDocumentProps) {
           </Stack>
         </>
       )}
+
+      {/* Dean signature + contact footer (§D13). Two notes:
+
+          The signature IMAGE from the sample is NOT reproduced — there is no asset for
+          it in the repo, and generating one would be forging a signature onto an
+          official document. The signature LINE is printed so the Dean signs the sheet.
+
+          The addresses are literals from the source document. They are not in
+          `school_profile`, which carries the school's own `contact_email` rather than
+          the Dean's, so there is nothing to read them from yet; when that table gains
+          office contacts these two lines should come from it. */}
+      <Divider sx={{ mt: 4, mb: 2 }} />
+      <Stack spacing={0.25} sx={{ alignItems: 'flex-start' }}>
+        <Box sx={{ width: 220, borderBottom: '1px solid', borderColor: 'text.primary', mb: 0.5 }} />
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          Dean
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          Email: dean@bajc.edu.bz
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          Website: http://www.bajc.edu.bz
+        </Typography>
+      </Stack>
     </PrintLayout>
   );
 }

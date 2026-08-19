@@ -27,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.common.enums import AcademicYearStatus
+from app.common.enums import AcademicYearStatus, TermType
 from app.db.base import AuditMixin, Base, TimestampMixin, uuid_pk
 from app.db.types import GUID, JSONType, enum_col
 
@@ -65,6 +65,20 @@ class AcademicYear(Base, TimestampMixin, AuditMixin):
 
 
 class Semester(Base, TimestampMixin):
+    """One CALENDAR term. N per academic year since D30 (§D3).
+
+    `CHECK (sequence IN (1,2))` and the hard-coded two-term creation in
+    `POST /settings/academic-years` together made it impossible to record more than two
+    terms in a year, which BAJC needs: its programmes run Summer and Spring blocks
+    alongside the numbered semesters. `005_tertiary.sql` §6 dropped the CHECK and added
+    `term_type`; the per-year uniqueness on `sequence` is KEPT, and so is
+    `uq_semesters_one_active` — exactly one term is active school-wide at a time, and
+    having more terms does not change that.
+
+    Not to be confused with `program_courses.term_label`, which is a position in a
+    programme's PLAN rather than a dated term (§D3).
+    """
+
     __tablename__ = "semesters"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -74,9 +88,21 @@ class Semester(Base, TimestampMixin):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(Text(), nullable=False)
+    term_type: Mapped[TermType] = mapped_column(
+        enum_col(TermType), nullable=False, server_default=text("'semester'")
+    )
     sequence: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
     start_date: Mapped[date] = mapped_column(Date(), nullable=False)
     end_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    #: Brief §18 / D30 §D6 — the Lecturer grade-entry cutoff. Set by the Dean-only
+    #: `POST`/`PATCH /settings/semesters`; enforced by `_assert_grade_window_open` in
+    #: `grades/service.upsert_grades`, the single grade write path, as a 409
+    #: `grade_window_closed`. **NULL = no deadline, window open** — the default, and
+    #: deliberately so: a guessed cutoff would lock lecturers out of a live term.
+    #: Stored UTC (see `settings/service._to_utc`).
+    grade_submission_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("false")
     )
@@ -89,7 +115,9 @@ class Semester(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("is_active"),
         ),
-        CheckConstraint("sequence IN (1,2)", name="ck_semesters_sequence"),
+        # `ck_semesters_sequence` (sequence IN (1,2)) was dropped by 005 §6 — see the
+        # class docstring. `sequence` is still 1-based and unique within the year; the
+        # service enforces the lower bound.
         CheckConstraint("end_date > start_date", name="ck_semesters_dates"),
     )
 
@@ -128,6 +156,11 @@ class GradingScaleBand(Base, TimestampMixin):
     letter: Mapped[str] = mapped_column(Text(), nullable=False)
     min_score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
     max_score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    #: The band's value on the 4.00 scale (D30 §D5; column added by `005` §7).
+    #: NULL on every scale in the database today — seeding the BAJC 8-band scale is
+    #: Phase 3. `calc.meets_grade_point` falls back to `is_passing` while it is
+    #: absent, so prerequisite checks work before the seed and tighten after it.
+    grade_point: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
     is_passing: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("true")
     )

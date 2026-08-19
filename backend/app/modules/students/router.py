@@ -33,8 +33,11 @@ from app.common.enums import Role, StudentStatus
 from app.common.schemas import ErrorResponse, Page
 from app.core.deps import get_db, require_role
 from app.core.pagination import PageParams, page_params
-from app.modules.students import service
+from app.modules.students import academics, service
 from app.modules.students.schemas import (
+    AcademicHistory,
+    ProgramChangeRequest,
+    StudentProgramRef,
     StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
@@ -51,6 +54,9 @@ _ERR = {"model": ErrorResponse}
 _manage = require_role(Role.PRINCIPAL, Role.SECRETARY)
 _read = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
 _student_only = require_role(Role.STUDENT)
+#: A PROGRAMME change is the Dean's, unlike everything else in this module — it
+#: re-derives a degree plan and rules on what carries over (D30 §D12, §D14).
+_dean = require_role(Role.PRINCIPAL)
 
 
 @router.get(
@@ -257,3 +263,55 @@ def delete_student(
     has_academic_history (deactivate instead)."""
     service.delete_student(db, actor=actor, student_id=student_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Programme registration + derived academic history (D30 §D12, brief §12/§27)
+# ──────────────────────────────────────────────────────────────────────────────
+@router.get(
+    "/{student_id}/academic-history",
+    response_model=AcademicHistory,
+    summary="Derived academic history — completed / failed / transferred / remaining (P/S)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_academic_history(
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_manage),
+) -> AcademicHistory:
+    """**Entirely derived** (§D12) — nothing about it is stored.
+
+    Computed on every read from `class_enrollments` + `term_grade_snapshots` + approved
+    `credit_transfer_requests` + `program_courses`, so a corrected grade shows up at once
+    rather than leaving a cached figure to drift. The GPA comes from the single
+    `calc.compute_gpa` that the report card and transcript also use.
+    """
+    return academics.academic_history(db, student_id=student_id)
+
+
+@router.put(
+    "/{student_id}/program",
+    response_model=StudentProgramRef,
+    summary="Register or CHANGE a student's programme — DEAN ONLY (§D12, §D14)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def set_student_program(
+    student_id: uuid.UUID,
+    payload: ProgramChangeRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_dean),
+) -> StudentProgramRef:
+    """**Dean only**, unlike the rest of this module.
+
+    The Registrar owns the student record and admits students — but moving one between
+    programmes re-derives their whole degree plan and decides which completed courses count
+    toward the new award, which is academic authority (§D14). Assigning at ADMISSION goes
+    through the Registrar's accept flow instead (§D11).
+
+    Closes the open `student_program_history` row and opens a new one in the same
+    transaction, so history is never destroyed. 409 `program_unchanged` when the student is
+    already on that programme.
+    """
+    return academics.set_program(
+        db, actor=actor, student_id=student_id, payload=payload
+    )

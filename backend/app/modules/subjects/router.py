@@ -3,11 +3,21 @@
 Thin transport layer; the service owns DB + transactions. Mounts under `/api/v1`
 via app/main.py.
 
+D30 — THE COURSE CATALOG IS DEAN-ONLY TO WRITE.
+`subjects` is the course catalog for BAJC (a course code, name and, from 005, credits
+and component). The brief is explicit: "Only the Dean should have permission to create,
+edit, or delete academic courses. Do not allow the Registrar or Lecturer to create
+courses." So the three write endpoints moved from P/S to **principal only** (the Dean).
+
+Reading stays open to every authenticated user — it is reference data with no PII, and
+the picker on the offerings screen needs it. Scheduling an OFFERING of a course
+(`/classes`) remains Registrar work; only the catalog itself is reserved.
+
 Endpoints:
   GET    /subjects          authenticated  -> Page[SubjectListItem]
-  POST   /subjects          P/S            -> SubjectDetail (201)
-  PATCH  /subjects/{id}      P/S            -> SubjectDetail
-  DELETE /subjects/{id}      P/S            -> 204
+  POST   /subjects          Dean (P)       -> SubjectDetail (201)
+  PATCH  /subjects/{id}      Dean (P)       -> SubjectDetail
+  DELETE /subjects/{id}      Dean (P)       -> 204
 """
 
 from __future__ import annotations
@@ -34,7 +44,8 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/subjects", tags=["subjects"])
 
 _ERR = {"model": ErrorResponse}
-_principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY)
+# D30: the Dean alone owns the course catalog (brief §6). Was P/S.
+_dean_only = require_role(Role.PRINCIPAL)
 
 
 @router.get(
@@ -61,13 +72,13 @@ def list_subjects(
     "",
     response_model=SubjectDetail,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a subject (P/S; api-spec §5b, FR-CLS-01a)",
+    summary="Create a course in the catalog (Dean only; api-spec §5b, FR-CLS-01a)",
     responses={401: _ERR, 403: _ERR, 409: _ERR, 422: _ERR},
 )
 def create_subject(
     payload: SubjectCreateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_dean_only),
 ) -> SubjectDetail:
     """409 duplicate_subject_name / duplicate_subject_code."""
     return service.create_subject(db, actor=actor, payload=payload)
@@ -76,14 +87,14 @@ def create_subject(
 @router.patch(
     "/{subject_id}",
     response_model=SubjectDetail,
-    summary="Update a subject (P/S; api-spec §5b)",
+    summary="Update a course in the catalog (Dean only; api-spec §5b)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def update_subject(
     subject_id: uuid.UUID,
     payload: SubjectUpdateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_dean_only),
 ) -> SubjectDetail:
     """Edits name/code/is_active. Renaming is safe for history (frozen subject_id)."""
     return service.update_subject(
@@ -94,13 +105,13 @@ def update_subject(
 @router.delete(
     "/{subject_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Soft-delete a subject if unused (P/S; api-spec §5b)",
+    summary="Soft-delete a course if unused (Dean only; api-spec §5b)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR},
 )
 def delete_subject(
     subject_id: uuid.UUID,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_dean_only),
 ) -> Response:
     """Soft-delete only if no class_subjects offering references it; else 409
     subject_in_use (retire via PATCH is_active=false instead)."""

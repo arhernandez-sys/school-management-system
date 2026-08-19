@@ -91,8 +91,11 @@ class StudentPickerPage(BaseModel):
 # ── GET /reports/report-card ───────────────────────────────────────────────────
 class ReportCardSubjectRow(BaseModel):
     subject: ReportSubjectRef
-    #: Display name only — see the module docstring.
+    #: Display name only — see the module docstring. Printed as "Instructor" on the
+    #: BAJC layout (D30 §D13).
     teacher: str | None = None
+    #: The course's credit weight (D30 §D5). Printed, and the weight behind `ReportCard.gpa`.
+    credits: int | None = None
     numeric: float | None = None
     letter: str | None = None
     status: GradeReportStatus = "graded"
@@ -116,10 +119,31 @@ class ReportCard(BaseModel):
     year_group: str | None = None
     semester: ReportSemesterRef
     school: ReportSchool
+    #: The programme's CODE, e.g. `BMAD` — the BAJC layout's `Program` label (D30 §D13).
+    #: `None` until a student is assigned a programme, which is Phase 4 §D12; today
+    #: every `student_profiles.program_id` is NULL, so this prints blank rather than
+    #: inventing a value.
+    program_code: str | None = None
+    #: `"<Term>, <Mon YYYY> - <Mon YYYY>"`, e.g. `Summer, July 2026 - August 2026`.
+    #: The sample report card's `Period` label.
+    period: str | None = None
+    #: The layout's `Block` label. Always `None`: its meaning is unconfirmed with BAJC
+    #: (plan §G item 3) and the sample prints `-`. An empty real field is honest;
+    #: guessing what a block is would not be.
+    block: str | None = None
     subjects: list[ReportCardSubjectRow] = Field(default_factory=list)
     attendance_summary: ReportAttendanceSummary
     term_average: float | None = None
     term_average_letter: str | None = None
+    #: Credit-weighted GPA for the term (D30 §D5, decision #4): total quality points
+    #: over **all enrolled credits**, with ungraded courses contributing 0 quality
+    #: points and their full credits. `None` when no credits participated.
+    #:
+    #: Kept ALONGSIDE `term_average` rather than replacing it: the average is a 0-100
+    #: percentage and the GPA is a 0-4 figure, they answer different questions, and the
+    #: existing dashboards and gradebook screens read the average.
+    gpa: float | None = None
+    total_credits: int = 0
     #: True when the figures were read from `report_card_snapshots` /
     #: `term_grade_snapshots` rather than computed live (archived year, schema §10.4).
     is_frozen: bool = False
@@ -129,6 +153,7 @@ class ReportCard(BaseModel):
 class TranscriptSubjectRow(BaseModel):
     subject: ReportSubjectRef
     teacher: str | None = None
+    credits: int | None = None
     numeric: float | None = None
     #: Non-nullable here (unlike the report card) — the transcript only lists rows
     #: that actually resolved to a grade.
@@ -139,12 +164,23 @@ class TranscriptSemester(BaseModel):
     semester: ReportSemesterRef
     is_current: bool = False
     term_average: float | None = None
+    #: Term GPA (D30 §D5). Weighted over **every** credit the student was enrolled in
+    #: that term, INCLUDING courses whose rows are absent from `subjects` because they
+    #: never resolved to a grade — the transcript lists graded lines only, but the GPA
+    #: denominator is all enrolled credits (decision #4).
+    gpa: float | None = None
+    total_credits: int = 0
     subjects: list[TranscriptSubjectRow] = Field(default_factory=list)
 
 
 class TranscriptYear(BaseModel):
     academic_year: ReportAcademicYearRef
     year_average: float | None = None
+    #: Year GPA — recomputed over the year's own credits, NOT a mean of its terms'
+    #: GPAs. Averaging GPAs would weight a 6-credit summer block the same as a
+    #: 18-credit semester.
+    gpa: float | None = None
+    total_credits: int = 0
     semesters: list[TranscriptSemester] = Field(default_factory=list)
 
 
@@ -154,6 +190,10 @@ class Transcript(BaseModel):
     issued_at: datetime
     years: list[TranscriptYear] = Field(default_factory=list)
     cumulative_average: float | None = None
+    #: Cumulative GPA across every year — again recomputed from the underlying
+    #: credits, not averaged from the per-year figures.
+    cumulative_gpa: float | None = None
+    total_credits: int = 0
 
 
 # ── GET /reports/class-grades ──────────────────────────────────────────────────

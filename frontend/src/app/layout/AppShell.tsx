@@ -4,7 +4,7 @@ import { Outlet } from 'react-router-dom';
 import { TopBar } from './TopBar';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { useUnreadCount } from '@features/announcements/hooks/useAnnouncements';
+import { useNotifications } from './useNotifications';
 import { useDisclosure, useScrollToTop } from '@shared/hooks';
 import { LoadingState, PageContainer } from '@shared/components';
 import { strings } from '@i18n/strings';
@@ -18,16 +18,19 @@ import { strings } from '@i18n/strings';
  *
  * Students get a global academic-year switcher in the TopBar (YearContext) that
  * re-scopes their view; staff scope per-module. The unread announcements count comes
- * from the Announcements module (falls back to 0 when unavailable).
+ * from the Announcements module and now includes grade revisions awaiting the viewer
+ * (D30 §D8); it falls back to 0 when unavailable.
  */
 export function AppShell() {
   const { user, logout } = useAuth();
   const mobileDrawer = useDisclosure();
   const [collapsed, setCollapsed] = useState(false);
 
-  // Unread announcements count for the TopBar bell. Falls back to 0 while loading or
-  // if the endpoint is unavailable (e.g. real-backend mode before the module ships).
-  const { data: unreadCount = 0 } = useUnreadCount();
+  // The TopBar bell (D30 §D8): the server's summed count, plus the items the popover lists.
+  // Composed from unread announcements and pending grade revisions — there is no
+  // notifications table, and the popover was previously always empty because no `items`
+  // were ever passed.
+  const notifications = useNotifications();
 
   // Reset scroll to top on every route change (covers nested descendant routes).
   useScrollToTop();
@@ -67,7 +70,9 @@ export function AppShell() {
         user={user}
         onMenuToggle={handleMenuToggle}
         onLogout={() => void logout()}
-        unreadCount={unreadCount}
+        unreadCount={notifications.count}
+        notifications={notifications.items}
+        onNotificationSelect={notifications.onSelect}
       />
 
       <Sidebar

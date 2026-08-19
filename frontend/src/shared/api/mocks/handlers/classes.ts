@@ -17,6 +17,7 @@ import {
   currentDemoTeacher,
   sectionsOwnedByTeacher,
   meetingsForSection,
+  unmetPrerequisites,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoClassSubject,
@@ -541,6 +542,27 @@ export const classesHandlers = [
     const schedule_conflicts = ids.flatMap((studentId) =>
       scheduleConflictsForStudent(studentId, section, semesterId),
     );
+
+    // D30 §D4 — the prerequisite gate, checked for EVERY student BEFORE anything is
+    // written. Mirrors the server exactly, including the all-or-nothing behaviour: a
+    // failure part-way through the list would leave the batch half-enrolled.
+    const gatedCourseId = D.class_subjects.find(
+      (cs) => cs.section_id === section.id && cs.is_active,
+    )?.subject_id;
+    if (gatedCourseId) {
+      for (const studentId of ids) {
+        const unmet = unmetPrerequisites(studentId, gatedCourseId, semesterId);
+        if (unmet.length > 0) {
+          const student = getStudent(studentId);
+          const detail = unmet.map((u) => `${u.code} (${u.reason})`).join('; ');
+          return errorResponse(
+            409,
+            'prerequisite_not_met',
+            `${student?.full_name ?? 'This student'} has not met the prerequisites: ${detail}.`,
+          );
+        }
+      }
+    }
 
     for (const studentId of ids) {
       const student = getStudent(studentId);

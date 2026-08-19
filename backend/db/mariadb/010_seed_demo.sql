@@ -16,7 +16,10 @@ DELETE FROM `class_subjects`;
 DELETE FROM `student_profiles`;
 DELETE FROM `teacher_profiles`;
 DELETE FROM `classes`;
-DELETE FROM `subjects`;
+-- `courses` is NOT cleared: since the 2A cutover it holds the REAL BAJC catalog,
+-- seeded by `python -m app.db.seed_bajc`. Clearing it here (FK checks are off
+-- during this sweep) would silently destroy 114 courses and every programme
+-- curriculum hanging off them. The demo classes reference it by code.
 DELETE FROM `grading_scale_bands`;
 DELETE FROM `grading_scales`;
 DELETE FROM `semesters`;
@@ -108,19 +111,9 @@ INSERT INTO `grading_scale_bands` (`id`, `grading_scale_id`, `letter`, `min_scor
 ('0e2d66fa-6a01-59d2-9cf2-1b04221fde0d', '3ddbc957-27b0-58e5-accb-aa06903616d5', 'D', 60.00, 69.99, 1, 4),
 ('3b035ca3-c47a-5e79-b97f-a327a0eab420', '3ddbc957-27b0-58e5-accb-aa06903616d5', 'F', 0.00, 59.99, 0, 5);
 
--- subjects (11 rows)
-INSERT INTO `subjects` (`id`, `name`, `code`) VALUES
-('1236024a-ae17-5504-a3be-07925907df70', 'Mathematics', 'MATH'),
-('e4f9847c-beb2-56fc-b093-b5f174c7b35e', 'English', 'ENG'),
-('24adeac1-55e0-5dd3-834f-b2e96d40f678', 'Biology', 'BIO'),
-('8302e5d3-45f9-5e48-8a93-53e45a251fa3', 'Chemistry', 'CHEM'),
-('d7df4752-92a5-5421-b468-d1be136eea51', 'Physics', 'PHYS'),
-('7a29e81d-cb86-5c9c-9c5f-6fa0bb6bebb0', 'History', 'HIST'),
-('fab61dff-1ee6-59d8-9efe-8b061fac0d4e', 'Geography', 'GEO'),
-('223e8f20-542a-574d-8419-61cefa8bf031', 'Spanish', 'SPAN'),
-('3657abce-f050-561e-849d-540daff7c972', 'Physical Education', 'PE'),
-('e1f6fa4f-f2a8-5381-8071-ffad5131d7c5', 'Information Technology', 'IT'),
-('550d7856-a8a3-5cc1-8b31-92c1f1b2ae92', 'Principles of Business', 'POB');
+-- courses: none. The catalog is reference data owned by `app/db/seed_bajc.py`.
+-- Run that first; this file references its rows by code.
+
 
 -- classes (16 rows)
 INSERT INTO `classes` (`id`, `academic_year_id`, `name`, `grade_level`, `section`, `capacity`, `is_archived`, `homeroom_label`) VALUES
@@ -157,52 +150,52 @@ INSERT INTO `teacher_profiles` (`id`, `user_id`, `staff_number`, `full_name`, `e
 ('4d6305c3-2507-58f8-91bf-ff291c149861', NULL, 'T-1012', 'Trevor Neal', 'trevor.neal@belmopancomp.edu.bz', '+501-6515698', 'inactive', '[\"Geography\", \"Physical Education\"]', 'male', 'Teacher', 'B.Ed. Geography', 'Teacher with 19 years of classroom experience teaching Geography. Committed to student-centred learning and measurable outcomes.', '17 Forest Drive, Belmopan, Cayo', '[{\"area\": \"Geography\", \"level\": 88}, {\"area\": \"Physical Education\", \"level\": 82}]', NULL);
 
 -- student_profiles (45 rows)
-INSERT INTO `student_profiles` (`id`, `user_id`, `student_number`, `full_name`, `date_of_birth`, `gender`, `enrollment_date`, `status`, `guardian_name`, `guardian_phone`, `guardian_email`, `address`, `phone`) VALUES
-('affaf6f4-580e-55ca-af0b-2475aa315234', '7159eeb6-f02d-5379-86d6-82fe757f5f20', 'S-25001', 'Ana Perez', '2013-03-01', 'female', '2025-09-01', 'active', 'Amara Perez', '+501-6509221', 'perez.guardian@example.bz', '49 Bougainvillea Street, Belmopan', '+501-6388478'),
-('9d4b53fc-2942-52d4-ab87-17b8c36d8c3c', '4d257b0f-37b8-54d0-97c9-3395d4f36635', 'S-25002', 'Luis Gongora', '2013-09-16', 'male', '2025-09-01', 'active', 'Luis Gongora', '+501-6953198', 'gongora.guardian@example.bz', '61 Mahogany Street, Belmopan', '+501-6263399'),
-('2f50c428-4633-5fe4-986e-3620e38cd54d', '0fe7ed88-cf84-55a2-878d-2d1ba950619e', 'S-25003', 'Keisha Nunez', '2012-11-16', 'female', '2025-09-01', 'active', 'Elvin Nunez', '+501-6128285', 'nunez.guardian@example.bz', '17 Mahogany Street, Belmopan', '+501-6288574'),
-('4915acc4-c42e-5310-8298-6f666d7ea976', '931f2f9c-2d42-560e-b64a-03561ed80c6d', 'S-25004', 'Jamal Cacho', '2012-02-06', 'male', '2025-09-01', 'active', 'Trevaughn Cacho', '+501-6821997', 'cacho.guardian@example.bz', '73 Mahogany Street, Belmopan', '+501-6567213'),
-('9b953e8a-5b59-5299-86bc-de593710bedf', 'f356983d-d599-55b3-917d-0ac2eaa4a4aa', 'S-25005', 'Sofia Garcia', '2011-05-11', 'female', '2025-09-01', 'active', 'Ana Garcia', '+501-6434462', 'garcia.guardian@example.bz', '22 Bougainvillea Street, Belmopan', '+501-6804739'),
-('5407af71-be93-561b-9a1c-ca006673be8d', 'e485d3ff-0e08-5ebc-b2f4-62a1a9b3031a', 'S-25006', 'Marco Vasquez', '2011-10-13', 'male', '2025-09-01', 'active', 'Alysha Vasquez', '+501-6436406', 'vasquez.guardian@example.bz', '95 Bougainvillea Street, Belmopan', '+501-6924714'),
-('deb2097b-87a2-5898-bc11-815410db76ba', NULL, 'S-25007', 'Tanya Gongora', '2010-06-20', 'female', '2025-09-01', 'active', 'Kaylee Gongora', '+501-6608435', 'gongora.guardian@example.bz', '35 Hibiscus Street, Belmopan', '+501-6182573'),
-('4eddcb4c-4c64-5367-9f91-a0b75f17b0e0', NULL, 'S-25008', 'Elvin Ake', '2010-05-06', 'male', '2025-09-01', 'inactive', 'Amara Ake', '+501-6274143', 'ake.guardian@example.bz', '37 Hibiscus Street, Belmopan', '+501-6391222'),
-('46d8b416-08ae-54aa-a364-727320d3eaa2', NULL, 'S-25009', 'Rina Williams', '2013-02-24', 'female', '2025-09-01', 'active', 'Rueben Williams', '+501-6967094', 'williams.guardian@example.bz', '56 Hibiscus Street, Belmopan', '+501-6594963'),
-('d6267841-bad9-527c-9d42-c6d180ea175f', NULL, 'S-25010', 'Kester Requena', '2013-08-08', 'male', '2025-09-01', 'active', 'Tanya Requena', '+501-6750745', 'requena.guardian@example.bz', '58 Hibiscus Street, Belmopan', '+501-6670396'),
-('81b0892d-ff5d-561e-bbe9-8f0a2a9386d0', NULL, 'S-25011', 'Denise Perez', '2012-04-28', 'female', '2025-09-01', 'active', 'Trevaughn Perez', '+501-6482689', 'perez.guardian@example.bz', '92 Mahogany Street, Belmopan', '+501-6654422'),
-('43904fe8-4207-5262-9510-85329859bb1c', NULL, 'S-25012', 'Andre Rivera', '2012-02-10', 'male', '2025-09-01', 'active', 'Jamal Rivera', '+501-6660415', 'rivera.guardian@example.bz', '28 Cedar Street, Belmopan', '+501-6544045'),
-('e7706950-6a37-51e8-b817-92f3a9d3d8ef', NULL, 'S-25013', 'Shanice Lopez', '2011-12-01', 'female', '2025-09-01', 'active', 'Kaylee Lopez', '+501-6549949', 'lopez.guardian@example.bz', '77 Mahogany Street, Belmopan', '+501-6931787'),
-('068c7cba-91c7-540a-88ad-6e706876cc6b', NULL, 'S-25014', 'Oscar Tzul', '2011-12-27', 'male', '2025-09-01', 'active', 'Cindy Tzul', '+501-6610062', 'tzul.guardian@example.bz', '28 Hibiscus Street, Belmopan', '+501-6469014'),
-('f3f77ab6-db39-59cd-8bfb-99716cc2a69b', NULL, 'S-25015', 'Mila Requena', '2010-03-26', 'female', '2025-09-01', 'active', 'Cindy Requena', '+501-6941935', 'requena.guardian@example.bz', '65 Cedar Street, Belmopan', '+501-6629484'),
-('6b421fd0-71a0-5c22-8bb2-40507ec2db2c', NULL, 'S-25016', 'Trevaughn Rivera', '2010-11-04', 'male', '2025-09-01', 'active', 'Whitney Rivera', '+501-6939812', 'rivera.guardian@example.bz', '79 Mahogany Street, Belmopan', '+501-6588623'),
-('7be8105c-5968-5429-9b1e-51b86aa84bb5', NULL, 'S-25017', 'Paola Vasquez', '2013-11-10', 'female', '2025-09-01', 'active', 'Elvin Vasquez', '+501-6657979', 'vasquez.guardian@example.bz', '70 Mahogany Street, Belmopan', '+501-6125838'),
-('96f72fca-2d66-5bc4-bc88-bbb57275407e', NULL, 'S-25018', 'Dwayne Lopez', '2013-03-02', 'male', '2025-09-01', 'active', 'Isaias Lopez', '+501-6587763', 'lopez.guardian@example.bz', '17 Mahogany Street, Belmopan', '+501-6334102'),
-('c6545504-f327-5dc2-923c-6f1a0e7ebf14', NULL, 'S-25019', 'Nayeli Cacho', '2012-06-26', 'female', '2025-09-01', 'active', 'Kester Cacho', '+501-6429837', 'cacho.guardian@example.bz', '14 Mahogany Street, Belmopan', '+501-6582631'),
-('ea82855b-a79f-55eb-8210-4ce9ffd29014', NULL, 'S-25020', 'Colin Cattouse', '2012-10-01', 'male', '2025-09-01', 'active', 'Nayeli Cattouse', '+501-6385965', 'cattouse.guardian@example.bz', '32 Bougainvillea Street, Belmopan', '+501-6200369'),
-('ca495c1b-63d3-528e-8eab-addec6cd012f', NULL, 'S-25021', 'Britney Gongora', '2011-11-22', 'female', '2025-09-01', 'withdrawn', 'Yuritzi Gongora', '+501-6239520', 'gongora.guardian@example.bz', '18 Cedar Street, Belmopan', '+501-6261281'),
-('fb66e67f-705c-5836-9615-0ddbe9000fa1', NULL, 'S-25022', 'Hector Williams', '2011-10-12', 'male', '2025-09-01', 'active', 'Tanya Williams', '+501-6127142', 'williams.guardian@example.bz', '96 Hibiscus Street, Belmopan', '+501-6294854'),
-('7cc03735-469d-5cfa-b6b3-18ef0e9c36ee', NULL, 'S-25023', 'Jaylen Tzul', '2010-07-07', 'female', '2025-09-01', 'active', 'Garrett Tzul', '+501-6682248', 'tzul.guardian@example.bz', '22 Mahogany Street, Belmopan', '+501-6974462'),
-('8f137bc5-27c3-5043-a957-85337ef58289', NULL, 'S-25024', 'Marisol Ical', '2010-10-15', 'male', '2025-09-01', 'active', 'Alysha Ical', '+501-6241324', 'ical.guardian@example.bz', '62 Cedar Street, Belmopan', '+501-6216666'),
-('71126747-fd49-5101-b4d1-7f5c9cc195da', NULL, 'S-25025', 'Rueben Requena', '2013-05-17', 'female', '2025-09-01', 'active', 'Alysha Requena', '+501-6838163', 'requena.guardian@example.bz', '8 Bougainvillea Street, Belmopan', '+501-6508387'),
-('091e52c1-c2bc-5a29-8655-c882fe310b9e', NULL, 'S-25026', 'Alysha Palacio', '2013-07-06', 'male', '2025-09-01', 'active', 'Paola Palacio', '+501-6897506', 'palacio.guardian@example.bz', '17 Cedar Street, Belmopan', '+501-6926557'),
-('c63435ce-8e9a-5535-b04a-466e2892c4e2', NULL, 'S-25027', 'Damian Ake', '2012-01-11', 'female', '2025-09-01', 'active', 'Leah Ake', '+501-6685308', 'ake.guardian@example.bz', '52 Mahogany Street, Belmopan', '+501-6238133'),
-('59fa2ed6-63c2-56b2-9f0f-8cc2855753a6', NULL, 'S-25028', 'Cindy Martinez', '2012-06-14', 'male', '2025-09-01', 'active', 'Estela Martinez', '+501-6330771', 'martinez.guardian@example.bz', '85 Mahogany Street, Belmopan', '+501-6473024'),
-('44f4854d-a3f1-5ffa-a98f-12b04b63d6c2', NULL, 'S-25029', 'Kevaughn Ake', '2011-02-10', 'female', '2025-09-01', 'active', 'Deja Ake', '+501-6808718', 'ake.guardian@example.bz', '31 Mahogany Street, Belmopan', '+501-6873666'),
-('a3b384b5-83b5-529d-b900-660632a82d66', NULL, 'S-25030', 'Leah Tzul', '2011-11-10', 'male', '2025-09-01', 'active', 'Jamal Tzul', '+501-6872433', 'tzul.guardian@example.bz', '23 Hibiscus Street, Belmopan', '+501-6972146'),
-('8cab97aa-b45a-5163-aa18-4c17a1155d36', NULL, 'S-25031', 'Ramon Williams', '2010-08-14', 'female', '2025-09-01', 'active', 'Rina Williams', '+501-6850350', 'williams.guardian@example.bz', '41 Cedar Street, Belmopan', '+501-6196394'),
-('472f1589-13cc-5758-b013-3d3b905d79d9', NULL, 'S-25032', 'Whitney Martinez', '2010-11-04', 'male', '2025-09-01', 'active', 'Trevaughn Martinez', '+501-6337240', 'martinez.guardian@example.bz', '18 Cedar Street, Belmopan', '+501-6441027'),
-('d8fc45e1-5a66-5097-8282-40fbfce87f4e', NULL, 'S-25033', 'Isaias Nunez', '2013-10-16', 'female', '2025-09-01', 'active', 'Luis Nunez', '+501-6528075', 'nunez.guardian@example.bz', '51 Mahogany Street, Belmopan', '+501-6800464'),
-('bcac7318-2cd0-58bd-8f29-f982be793f24', NULL, 'S-25034', 'Deja Ical', '2013-05-17', 'male', '2025-09-01', 'transferred', 'Jamal Ical', '+501-6705071', 'ical.guardian@example.bz', '57 Hibiscus Street, Belmopan', '+501-6192345'),
-('b59016eb-1a1d-5e8d-bc59-0cc909c2e5d7', NULL, 'S-25035', 'Fernando Garcia', '2012-03-15', 'female', '2025-09-01', 'active', 'Shanice Garcia', '+501-6422564', 'garcia.guardian@example.bz', '34 Bougainvillea Street, Belmopan', '+501-6314217'),
-('ccc5ca66-f864-5f13-b9da-55b756924220', NULL, 'S-25036', 'Kaylee Perez', '2012-07-10', 'male', '2025-09-01', 'active', 'Isaias Perez', '+501-6109534', 'perez.guardian@example.bz', '31 Bougainvillea Street, Belmopan', '+501-6556825'),
-('d1bb3332-285c-55d1-a4a4-c7a96151eea0', NULL, 'S-25037', 'Osmond Coye', '2011-10-16', 'female', '2025-09-01', 'active', 'Estela Coye', '+501-6886825', 'coye.guardian@example.bz', '58 Cedar Street, Belmopan', '+501-6456213'),
-('6136f4dd-4574-58c3-9a15-46446e2b8e3d', NULL, 'S-25038', 'Yuritzi Lopez', '2011-11-09', 'male', '2025-09-01', 'active', 'Dwayne Lopez', '+501-6349549', 'lopez.guardian@example.bz', '48 Hibiscus Street, Belmopan', '+501-6569572'),
-('7ecb553c-17c3-53c0-91cb-27a83a27b3bb', NULL, 'S-25039', 'Bryce Garcia', '2010-06-16', 'female', '2025-09-01', 'active', 'Marisol Garcia', '+501-6622087', 'garcia.guardian@example.bz', '44 Mahogany Street, Belmopan', '+501-6284697'),
-('4132bc55-96a2-5ed7-b4fc-ed8061e5e086', NULL, 'S-25040', 'Amara Williams', '2010-11-22', 'male', '2025-09-01', 'active', 'Dwayne Williams', '+501-6693211', 'williams.guardian@example.bz', '39 Hibiscus Street, Belmopan', '+501-6124731'),
-('834d1eff-0e01-52d9-a8b2-d68ff4e1f8b5', NULL, 'S-25041', 'Delroy Lopez', '2013-05-19', 'female', '2025-09-01', 'active', 'Sofia Lopez', '+501-6953888', 'lopez.guardian@example.bz', '96 Hibiscus Street, Belmopan', '+501-6224153'),
-('fa9981c6-5cc8-51a3-bc03-b51537542d1b', NULL, 'S-25042', 'Selena Gongora', '2013-05-17', 'male', '2025-09-01', 'graduated', 'Rina Gongora', '+501-6696757', 'gongora.guardian@example.bz', '88 Mahogany Street, Belmopan', '+501-6195313'),
-('f2d1d908-32f3-5b74-ad6c-fe106c48310e', NULL, 'S-25043', 'Tyrique Coye', '2012-03-09', 'female', '2025-09-01', 'active', 'Deja Coye', '+501-6402319', 'coye.guardian@example.bz', '82 Cedar Street, Belmopan', '+501-6826625'),
-('2e200661-faab-562a-b8ea-908d7b3a12dc', NULL, 'S-25044', 'Estela Williams', '2012-09-16', 'male', '2025-09-01', 'active', 'Ramon Williams', '+501-6209524', 'williams.guardian@example.bz', '92 Cedar Street, Belmopan', '+501-6347172'),
-('dfecae6b-f603-5f8e-8659-11e170d813fc', NULL, 'S-25045', 'Garrett Requena', '2011-08-08', 'female', '2025-09-01', 'active', 'Kaylee Requena', '+501-6578447', 'requena.guardian@example.bz', '36 Hibiscus Street, Belmopan', '+501-6415441');
+INSERT INTO `student_profiles` (`id`, `user_id`, `student_number`, `firstname`, `middlename`, `lastname`, `date_of_birth`, `gender`, `enrollment_date`, `status`, `guardian_name`, `guardian_phone`, `guardian_email`, `address`, `phone`) VALUES
+('affaf6f4-580e-55ca-af0b-2475aa315234', '7159eeb6-f02d-5379-86d6-82fe757f5f20', 'S-25001', 'Ana', NULL, 'Perez', '2013-03-01', 'female', '2025-09-01', 'active', 'Amara Perez', '+501-6509221', 'perez.guardian@example.bz', '49 Bougainvillea Street, Belmopan', '+501-6388478'),
+('9d4b53fc-2942-52d4-ab87-17b8c36d8c3c', '4d257b0f-37b8-54d0-97c9-3395d4f36635', 'S-25002', 'Luis', NULL, 'Gongora', '2013-09-16', 'male', '2025-09-01', 'active', 'Luis Gongora', '+501-6953198', 'gongora.guardian@example.bz', '61 Mahogany Street, Belmopan', '+501-6263399'),
+('2f50c428-4633-5fe4-986e-3620e38cd54d', '0fe7ed88-cf84-55a2-878d-2d1ba950619e', 'S-25003', 'Keisha', NULL, 'Nunez', '2012-11-16', 'female', '2025-09-01', 'active', 'Elvin Nunez', '+501-6128285', 'nunez.guardian@example.bz', '17 Mahogany Street, Belmopan', '+501-6288574'),
+('4915acc4-c42e-5310-8298-6f666d7ea976', '931f2f9c-2d42-560e-b64a-03561ed80c6d', 'S-25004', 'Jamal', NULL, 'Cacho', '2012-02-06', 'male', '2025-09-01', 'active', 'Trevaughn Cacho', '+501-6821997', 'cacho.guardian@example.bz', '73 Mahogany Street, Belmopan', '+501-6567213'),
+('9b953e8a-5b59-5299-86bc-de593710bedf', 'f356983d-d599-55b3-917d-0ac2eaa4a4aa', 'S-25005', 'Sofia', NULL, 'Garcia', '2011-05-11', 'female', '2025-09-01', 'active', 'Ana Garcia', '+501-6434462', 'garcia.guardian@example.bz', '22 Bougainvillea Street, Belmopan', '+501-6804739'),
+('5407af71-be93-561b-9a1c-ca006673be8d', 'e485d3ff-0e08-5ebc-b2f4-62a1a9b3031a', 'S-25006', 'Marco', NULL, 'Vasquez', '2011-10-13', 'male', '2025-09-01', 'active', 'Alysha Vasquez', '+501-6436406', 'vasquez.guardian@example.bz', '95 Bougainvillea Street, Belmopan', '+501-6924714'),
+('deb2097b-87a2-5898-bc11-815410db76ba', NULL, 'S-25007', 'Tanya', NULL, 'Gongora', '2010-06-20', 'female', '2025-09-01', 'active', 'Kaylee Gongora', '+501-6608435', 'gongora.guardian@example.bz', '35 Hibiscus Street, Belmopan', '+501-6182573'),
+('4eddcb4c-4c64-5367-9f91-a0b75f17b0e0', NULL, 'S-25008', 'Elvin', NULL, 'Ake', '2010-05-06', 'male', '2025-09-01', 'inactive', 'Amara Ake', '+501-6274143', 'ake.guardian@example.bz', '37 Hibiscus Street, Belmopan', '+501-6391222'),
+('46d8b416-08ae-54aa-a364-727320d3eaa2', NULL, 'S-25009', 'Rina', NULL, 'Williams', '2013-02-24', 'female', '2025-09-01', 'active', 'Rueben Williams', '+501-6967094', 'williams.guardian@example.bz', '56 Hibiscus Street, Belmopan', '+501-6594963'),
+('d6267841-bad9-527c-9d42-c6d180ea175f', NULL, 'S-25010', 'Kester', NULL, 'Requena', '2013-08-08', 'male', '2025-09-01', 'active', 'Tanya Requena', '+501-6750745', 'requena.guardian@example.bz', '58 Hibiscus Street, Belmopan', '+501-6670396'),
+('81b0892d-ff5d-561e-bbe9-8f0a2a9386d0', NULL, 'S-25011', 'Denise', NULL, 'Perez', '2012-04-28', 'female', '2025-09-01', 'active', 'Trevaughn Perez', '+501-6482689', 'perez.guardian@example.bz', '92 Mahogany Street, Belmopan', '+501-6654422'),
+('43904fe8-4207-5262-9510-85329859bb1c', NULL, 'S-25012', 'Andre', NULL, 'Rivera', '2012-02-10', 'male', '2025-09-01', 'active', 'Jamal Rivera', '+501-6660415', 'rivera.guardian@example.bz', '28 Cedar Street, Belmopan', '+501-6544045'),
+('e7706950-6a37-51e8-b817-92f3a9d3d8ef', NULL, 'S-25013', 'Shanice', NULL, 'Lopez', '2011-12-01', 'female', '2025-09-01', 'active', 'Kaylee Lopez', '+501-6549949', 'lopez.guardian@example.bz', '77 Mahogany Street, Belmopan', '+501-6931787'),
+('068c7cba-91c7-540a-88ad-6e706876cc6b', NULL, 'S-25014', 'Oscar', NULL, 'Tzul', '2011-12-27', 'male', '2025-09-01', 'active', 'Cindy Tzul', '+501-6610062', 'tzul.guardian@example.bz', '28 Hibiscus Street, Belmopan', '+501-6469014'),
+('f3f77ab6-db39-59cd-8bfb-99716cc2a69b', NULL, 'S-25015', 'Mila', NULL, 'Requena', '2010-03-26', 'female', '2025-09-01', 'active', 'Cindy Requena', '+501-6941935', 'requena.guardian@example.bz', '65 Cedar Street, Belmopan', '+501-6629484'),
+('6b421fd0-71a0-5c22-8bb2-40507ec2db2c', NULL, 'S-25016', 'Trevaughn', NULL, 'Rivera', '2010-11-04', 'male', '2025-09-01', 'active', 'Whitney Rivera', '+501-6939812', 'rivera.guardian@example.bz', '79 Mahogany Street, Belmopan', '+501-6588623'),
+('7be8105c-5968-5429-9b1e-51b86aa84bb5', NULL, 'S-25017', 'Paola', NULL, 'Vasquez', '2013-11-10', 'female', '2025-09-01', 'active', 'Elvin Vasquez', '+501-6657979', 'vasquez.guardian@example.bz', '70 Mahogany Street, Belmopan', '+501-6125838'),
+('96f72fca-2d66-5bc4-bc88-bbb57275407e', NULL, 'S-25018', 'Dwayne', NULL, 'Lopez', '2013-03-02', 'male', '2025-09-01', 'active', 'Isaias Lopez', '+501-6587763', 'lopez.guardian@example.bz', '17 Mahogany Street, Belmopan', '+501-6334102'),
+('c6545504-f327-5dc2-923c-6f1a0e7ebf14', NULL, 'S-25019', 'Nayeli', NULL, 'Cacho', '2012-06-26', 'female', '2025-09-01', 'active', 'Kester Cacho', '+501-6429837', 'cacho.guardian@example.bz', '14 Mahogany Street, Belmopan', '+501-6582631'),
+('ea82855b-a79f-55eb-8210-4ce9ffd29014', NULL, 'S-25020', 'Colin', NULL, 'Cattouse', '2012-10-01', 'male', '2025-09-01', 'active', 'Nayeli Cattouse', '+501-6385965', 'cattouse.guardian@example.bz', '32 Bougainvillea Street, Belmopan', '+501-6200369'),
+('ca495c1b-63d3-528e-8eab-addec6cd012f', NULL, 'S-25021', 'Britney', NULL, 'Gongora', '2011-11-22', 'female', '2025-09-01', 'withdrawn', 'Yuritzi Gongora', '+501-6239520', 'gongora.guardian@example.bz', '18 Cedar Street, Belmopan', '+501-6261281'),
+('fb66e67f-705c-5836-9615-0ddbe9000fa1', NULL, 'S-25022', 'Hector', NULL, 'Williams', '2011-10-12', 'male', '2025-09-01', 'active', 'Tanya Williams', '+501-6127142', 'williams.guardian@example.bz', '96 Hibiscus Street, Belmopan', '+501-6294854'),
+('7cc03735-469d-5cfa-b6b3-18ef0e9c36ee', NULL, 'S-25023', 'Jaylen', NULL, 'Tzul', '2010-07-07', 'female', '2025-09-01', 'active', 'Garrett Tzul', '+501-6682248', 'tzul.guardian@example.bz', '22 Mahogany Street, Belmopan', '+501-6974462'),
+('8f137bc5-27c3-5043-a957-85337ef58289', NULL, 'S-25024', 'Marisol', NULL, 'Ical', '2010-10-15', 'male', '2025-09-01', 'active', 'Alysha Ical', '+501-6241324', 'ical.guardian@example.bz', '62 Cedar Street, Belmopan', '+501-6216666'),
+('71126747-fd49-5101-b4d1-7f5c9cc195da', NULL, 'S-25025', 'Rueben', NULL, 'Requena', '2013-05-17', 'female', '2025-09-01', 'active', 'Alysha Requena', '+501-6838163', 'requena.guardian@example.bz', '8 Bougainvillea Street, Belmopan', '+501-6508387'),
+('091e52c1-c2bc-5a29-8655-c882fe310b9e', NULL, 'S-25026', 'Alysha', NULL, 'Palacio', '2013-07-06', 'male', '2025-09-01', 'active', 'Paola Palacio', '+501-6897506', 'palacio.guardian@example.bz', '17 Cedar Street, Belmopan', '+501-6926557'),
+('c63435ce-8e9a-5535-b04a-466e2892c4e2', NULL, 'S-25027', 'Damian', NULL, 'Ake', '2012-01-11', 'female', '2025-09-01', 'active', 'Leah Ake', '+501-6685308', 'ake.guardian@example.bz', '52 Mahogany Street, Belmopan', '+501-6238133'),
+('59fa2ed6-63c2-56b2-9f0f-8cc2855753a6', NULL, 'S-25028', 'Cindy', NULL, 'Martinez', '2012-06-14', 'male', '2025-09-01', 'active', 'Estela Martinez', '+501-6330771', 'martinez.guardian@example.bz', '85 Mahogany Street, Belmopan', '+501-6473024'),
+('44f4854d-a3f1-5ffa-a98f-12b04b63d6c2', NULL, 'S-25029', 'Kevaughn', NULL, 'Ake', '2011-02-10', 'female', '2025-09-01', 'active', 'Deja Ake', '+501-6808718', 'ake.guardian@example.bz', '31 Mahogany Street, Belmopan', '+501-6873666'),
+('a3b384b5-83b5-529d-b900-660632a82d66', NULL, 'S-25030', 'Leah', NULL, 'Tzul', '2011-11-10', 'male', '2025-09-01', 'active', 'Jamal Tzul', '+501-6872433', 'tzul.guardian@example.bz', '23 Hibiscus Street, Belmopan', '+501-6972146'),
+('8cab97aa-b45a-5163-aa18-4c17a1155d36', NULL, 'S-25031', 'Ramon', NULL, 'Williams', '2010-08-14', 'female', '2025-09-01', 'active', 'Rina Williams', '+501-6850350', 'williams.guardian@example.bz', '41 Cedar Street, Belmopan', '+501-6196394'),
+('472f1589-13cc-5758-b013-3d3b905d79d9', NULL, 'S-25032', 'Whitney', NULL, 'Martinez', '2010-11-04', 'male', '2025-09-01', 'active', 'Trevaughn Martinez', '+501-6337240', 'martinez.guardian@example.bz', '18 Cedar Street, Belmopan', '+501-6441027'),
+('d8fc45e1-5a66-5097-8282-40fbfce87f4e', NULL, 'S-25033', 'Isaias', NULL, 'Nunez', '2013-10-16', 'female', '2025-09-01', 'active', 'Luis Nunez', '+501-6528075', 'nunez.guardian@example.bz', '51 Mahogany Street, Belmopan', '+501-6800464'),
+('bcac7318-2cd0-58bd-8f29-f982be793f24', NULL, 'S-25034', 'Deja', NULL, 'Ical', '2013-05-17', 'male', '2025-09-01', 'transferred', 'Jamal Ical', '+501-6705071', 'ical.guardian@example.bz', '57 Hibiscus Street, Belmopan', '+501-6192345'),
+('b59016eb-1a1d-5e8d-bc59-0cc909c2e5d7', NULL, 'S-25035', 'Fernando', NULL, 'Garcia', '2012-03-15', 'female', '2025-09-01', 'active', 'Shanice Garcia', '+501-6422564', 'garcia.guardian@example.bz', '34 Bougainvillea Street, Belmopan', '+501-6314217'),
+('ccc5ca66-f864-5f13-b9da-55b756924220', NULL, 'S-25036', 'Kaylee', NULL, 'Perez', '2012-07-10', 'male', '2025-09-01', 'active', 'Isaias Perez', '+501-6109534', 'perez.guardian@example.bz', '31 Bougainvillea Street, Belmopan', '+501-6556825'),
+('d1bb3332-285c-55d1-a4a4-c7a96151eea0', NULL, 'S-25037', 'Osmond', NULL, 'Coye', '2011-10-16', 'female', '2025-09-01', 'active', 'Estela Coye', '+501-6886825', 'coye.guardian@example.bz', '58 Cedar Street, Belmopan', '+501-6456213'),
+('6136f4dd-4574-58c3-9a15-46446e2b8e3d', NULL, 'S-25038', 'Yuritzi', NULL, 'Lopez', '2011-11-09', 'male', '2025-09-01', 'active', 'Dwayne Lopez', '+501-6349549', 'lopez.guardian@example.bz', '48 Hibiscus Street, Belmopan', '+501-6569572'),
+('7ecb553c-17c3-53c0-91cb-27a83a27b3bb', NULL, 'S-25039', 'Bryce', NULL, 'Garcia', '2010-06-16', 'female', '2025-09-01', 'active', 'Marisol Garcia', '+501-6622087', 'garcia.guardian@example.bz', '44 Mahogany Street, Belmopan', '+501-6284697'),
+('4132bc55-96a2-5ed7-b4fc-ed8061e5e086', NULL, 'S-25040', 'Amara', NULL, 'Williams', '2010-11-22', 'male', '2025-09-01', 'active', 'Dwayne Williams', '+501-6693211', 'williams.guardian@example.bz', '39 Hibiscus Street, Belmopan', '+501-6124731'),
+('834d1eff-0e01-52d9-a8b2-d68ff4e1f8b5', NULL, 'S-25041', 'Delroy', NULL, 'Lopez', '2013-05-19', 'female', '2025-09-01', 'active', 'Sofia Lopez', '+501-6953888', 'lopez.guardian@example.bz', '96 Hibiscus Street, Belmopan', '+501-6224153'),
+('fa9981c6-5cc8-51a3-bc03-b51537542d1b', NULL, 'S-25042', 'Selena', NULL, 'Gongora', '2013-05-17', 'male', '2025-09-01', 'graduated', 'Rina Gongora', '+501-6696757', 'gongora.guardian@example.bz', '88 Mahogany Street, Belmopan', '+501-6195313'),
+('f2d1d908-32f3-5b74-ad6c-fe106c48310e', NULL, 'S-25043', 'Tyrique', NULL, 'Coye', '2012-03-09', 'female', '2025-09-01', 'active', 'Deja Coye', '+501-6402319', 'coye.guardian@example.bz', '82 Cedar Street, Belmopan', '+501-6826625'),
+('2e200661-faab-562a-b8ea-908d7b3a12dc', NULL, 'S-25044', 'Estela', NULL, 'Williams', '2012-09-16', 'male', '2025-09-01', 'active', 'Ramon Williams', '+501-6209524', 'williams.guardian@example.bz', '92 Cedar Street, Belmopan', '+501-6347172'),
+('dfecae6b-f603-5f8e-8659-11e170d813fc', NULL, 'S-25045', 'Garrett', NULL, 'Requena', '2011-08-08', 'female', '2025-09-01', 'active', 'Kaylee Requena', '+501-6578447', 'requena.guardian@example.bz', '36 Hibiscus Street, Belmopan', '+501-6415441');
 
 -- class_subjects (108 rows)
 INSERT INTO `class_subjects` (`id`, `class_id`, `subject_id`, `is_active`) VALUES

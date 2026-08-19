@@ -27,6 +27,7 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
+import { strings } from '@i18n/strings';
 import { useCreateTeacher, useTeachersList } from './hooks/useTeachers';
 import { TeacherFormDialog, type TeacherFormValues } from './components/TeacherFormDialog';
 import type { TeacherListItem, TeachersListParams } from './types';
@@ -170,7 +171,7 @@ export function TeachersListPage() {
   return (
     <>
       <PageHeader
-        title="Teachers"
+        title={strings.terms.lecturers}
         subtitle="Teaching staff, their subject specializations, and class assignments."
         primaryAction={
           canManage ? (

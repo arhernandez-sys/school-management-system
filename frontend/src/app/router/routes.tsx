@@ -51,6 +51,7 @@ import type { ComponentType, ReactElement } from 'react';
  */
 const DashboardPage = lazy(() => import('@features/dashboard'));
 const StudentsPage = lazy(() => import('@features/students'));
+const AdmissionsPage = lazy(() => import('@features/admissions'));
 const TeachersPage = lazy(() => import('@features/teachers'));
 const ClassesPage = lazy(() => import('@features/classes'));
 const MyTimetablePage = lazy(() => import('@features/timetable/MyTimetablePage'));
@@ -133,6 +134,12 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to={ROUTES.dashboard} replace /> },
       { path: ROUTES.dashboard, element: lazyGuarded('dashboard', DashboardPage) },
       { path: `${ROUTES.students}/*`, element: lazyGuarded('students', StudentsPage) },
+      // D30 §D11 — Registrar + Dean. `lazyGuarded` keeps a Lecturer from even fetching
+      // the chunk, which is the point of gating before the lazy reference.
+      {
+        path: `${ROUTES.applications}/*`,
+        element: lazyGuarded('applications', AdmissionsPage),
+      },
       { path: `${ROUTES.teachers}/*`, element: lazyGuarded('teachers', TeachersPage) },
       { path: `${ROUTES.classes}/*`, element: lazyGuarded('classes', ClassesPage) },
       { path: ROUTES.timetable, element: lazyGuarded('timetable', MyTimetablePage) },

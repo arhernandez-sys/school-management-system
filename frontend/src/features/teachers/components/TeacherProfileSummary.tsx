@@ -19,6 +19,7 @@ import {
   StatusBadge,
 } from '@shared/components';
 import type { StatCardColor } from '@shared/components';
+import { strings } from '@i18n/strings';
 import type { TeacherDetail } from '../types';
 
 function capitalize(value: string): string {
@@ -80,8 +81,8 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
   ];
 
   const stats: Array<{ label: string; value: number; color: StatCardColor; icon: ReactNode }> = [
-    { label: 'Classes', value: classCount, color: 'primary', icon: <ClassOutlinedIcon fontSize="small" /> },
-    { label: 'Subjects', value: subjectCount, color: 'secondary', icon: <MenuBookOutlinedIcon fontSize="small" /> },
+    { label: 'Offerings', value: classCount, color: 'primary', icon: <ClassOutlinedIcon fontSize="small" /> },
+    { label: 'Courses', value: subjectCount, color: 'secondary', icon: <MenuBookOutlinedIcon fontSize="small" /> },
     ...(typeof teacher.student_count === 'number'
       ? [
           {
@@ -118,7 +119,7 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
               {teacher.full_name}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {teacher.designation ?? 'Teacher'}
+              {teacher.designation ?? strings.terms.lecturer}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'center' }}>

@@ -65,7 +65,9 @@ export function StudentsListPage() {
   const [status, setStatus] = useState<StudentStatus | ''>('');
   const [classId, setClassId] = useState('');
   const [yearGroup, setYearGroup] = useState('');
-  const [sortField, setSortField] = useState('full_name');
+  // D30 §D10: the register is ordered by SURNAME then given name. `last_name` is the
+  // API's spelling of that composite ordering — it is not a single-column sort.
+  const [sortField, setSortField] = useState('last_name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
   const [pageSize, setPageSize] = useState(25);
@@ -129,7 +131,9 @@ export function StudentsListPage() {
 
   const columns: DataTableColumn<StudentListItem>[] = [
     {
-      field: 'full_name',
+      // Sorting this column asks for `last_name`, which the API expands to
+      // (last_name, first_name) — the display string is never the sort key (D30 §D10).
+      field: 'last_name',
       headerName: 'Name',
       sortable: true,
       primary: true,
@@ -161,7 +165,7 @@ export function StudentsListPage() {
     },
     {
       field: 'class_count',
-      headerName: 'Classes',
+      headerName: 'Courses',
       align: 'right',
       hideOnMobile: true,
       render: (s) => <Typography variant="body2">{s.class_count}</Typography>,
@@ -259,7 +263,7 @@ export function StudentsListPage() {
             <TextField
               select
               size="small"
-              label="Class"
+              label="Course"
               value={classId}
               onChange={(e) => {
                 setClassId(e.target.value);

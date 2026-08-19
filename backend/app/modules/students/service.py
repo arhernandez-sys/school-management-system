@@ -40,7 +40,10 @@ from app.modules.classes.models import Class, ClassEnrollment, ClassSubject
 from app.modules.grades import service as grades_service
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
+from app.modules.students.numbering import allocate_student_number
+from app.modules.programs.models import Program
 from app.modules.students.schemas import (
+    ProgramRef,
     StudentAssessmentGroup,
     StudentAssessmentLine,
     StudentAssessmentsResponse,
@@ -56,12 +59,22 @@ from app.modules.students.schemas import (
 from app.modules.users.models import User
 
 # Allowed sort fields for the students list (whitelist — never interpolated, §6).
-_STUDENT_SORT_FIELDS = {
-    "full_name": StudentProfile.full_name,
-    "student_number": StudentProfile.student_number,
-    "status": StudentProfile.status,
-    "year_group": StudentProfile.year_group,
-    "created_at": StudentProfile.created_at,
+#
+# Each key maps to a TUPLE of columns, because sorting by name is (surname, given
+# name) and not a single column (D30 §D10, brief §11). `full_name` and `name` are
+# accepted spellings of that same ordering: a caller asking for "the name order" gets
+# the register order, never an alphabetical-by-first-name list. The old behaviour —
+# ordering on the combined display string — is not reachable any more, and the column
+# it read no longer exists (`007_student_names.sql`).
+_STUDENT_SORT_FIELDS: dict[str, tuple] = {
+    "name": (StudentProfile.last_name, StudentProfile.first_name),
+    "full_name": (StudentProfile.last_name, StudentProfile.first_name),
+    "last_name": (StudentProfile.last_name, StudentProfile.first_name),
+    "first_name": (StudentProfile.first_name, StudentProfile.last_name),
+    "student_number": (StudentProfile.student_number,),
+    "status": (StudentProfile.status,),
+    "year_group": (StudentProfile.year_group,),
+    "created_at": (StudentProfile.created_at,),
 }
 
 # Lifecycle transitions (FR-STU-04). A terminal state (graduated/withdrawn/
@@ -297,6 +310,15 @@ def _detail(
         detail.current_classes = _current_classes_map(
             db, [student.id], semester_id=semester_id
         ).get(student.id, [])
+    # The programme is a REF, not the raw uuid: every screen that shows a student shows
+    # the code, and making each one fetch `/programs/{id}` to render one chip would be a
+    # request per row (D30 §D12).
+    if student.program_id is not None:
+        program = db.get(Program, student.program_id)
+        if program is not None:
+            detail.program = ProgramRef(
+                id=program.id, code=program.code, name=program.name
+            )
     detail.audit = _audit_stamp(db, student)
     return detail
 
@@ -331,7 +353,7 @@ def list_students(
     year_group: str | None,
     academic_year_id: uuid.UUID | None = None,
 ):
-    """GET /students (P/S/Teacher). Page[StudentListItem]; default sort full_name.
+    """GET /students (P/S/Teacher). Page[StudentListItem]; default sort by surname.
 
     Teacher scope (FR-STU-08): restricted to students with an active enrollment in
     a class the teacher owns ANY class_subject of — enforced as a read filter, so
@@ -367,8 +389,14 @@ def list_students(
 
     if search:
         like = f"%{search.strip()}%"
+        # `full_name` is the hybrid (D30 §D10) and compiles to CONCAT_WS, so typing a
+        # name in full still matches. The individual parts are matched too, because
+        # the register is surname-first and a Registrar searching "Perez Ana" would
+        # otherwise get nothing.
         stmt = stmt.where(
             StudentProfile.full_name.ilike(like)
+            | StudentProfile.first_name.ilike(like)
+            | StudentProfile.last_name.ilike(like)
             | StudentProfile.student_number.ilike(like)
         )
 
@@ -419,15 +447,17 @@ def list_students(
 
         stmt = stmt.where(enr.exists())
 
-    sort = (params.sort or "full_name").strip()
+    sort = (params.sort or "name").strip()
     desc = sort.startswith("-")
     key = sort[1:] if desc else sort
-    col = _STUDENT_SORT_FIELDS.get(key)
-    if col is None:
+    cols = _STUDENT_SORT_FIELDS.get(key)
+    if cols is None:
         raise ValidationError(
             f"Unknown sort field '{key}'.", code="invalid_sort_field"
         )
-    stmt = stmt.order_by(col.desc() if desc else col.asc(), StudentProfile.id.asc())
+    stmt = stmt.order_by(
+        *[c.desc() if desc else c.asc() for c in cols], StudentProfile.id.asc()
+    )
 
     page = paginate(db, stmt, params, serialize=StudentListItem.model_validate)
 
@@ -564,8 +594,13 @@ def create_student(
     load is one call. All-or-nothing — if any class is missing or archived the whole
     create rolls back, rather than leaving a student half-enrolled.
 
-    Errors: 409 duplicate_student_number, 409 section_archived, 422 (e.g. DOB in
-    the future — handled at the schema/validation layer below), 404 section.
+    D30: `student_number` is optional. Omitted, the server issues the next
+    `YYYYMM###` for the school-local month (§D9) — generation is server-side only, so
+    a client cannot pick its own place in the sequence.
+
+    Errors: 409 duplicate_student_number, 409 student_number_exhausted, 409
+    section_archived, 422 (e.g. DOB in the future — handled at the schema/validation
+    layer below), 404 section.
     """
     if payload.date_of_birth > _now().date():
         raise ValidationError(
@@ -573,11 +608,19 @@ def create_student(
             fields={"date_of_birth": ["Cannot be in the future."]},
         )
 
-    _assert_number_unique(db, payload.student_number)
+    if payload.student_number is None:
+        # Allocated inside THIS transaction, before the insert below, so a failed
+        # registration rolls the sequence back with it and no number is burnt.
+        student_number = allocate_student_number(db)
+    else:
+        student_number = payload.student_number.strip()
+        _assert_number_unique(db, student_number)
 
     student = StudentProfile(
-        student_number=payload.student_number.strip(),
-        full_name=payload.full_name.strip(),
+        student_number=student_number,
+        first_name=payload.first_name.strip(),
+        middle_name=(payload.middle_name or "").strip() or None,
+        last_name=payload.last_name.strip(),
         date_of_birth=payload.date_of_birth,
         gender=payload.gender,
         year_group=payload.year_group,
@@ -644,6 +687,22 @@ def _enroll_into_section(
     if semester_id is None:
         raise Conflict("No active semester is configured.", code="no_active_semester")
 
+    # D30 §D4 — the same prerequisite gate the Classes module applies. It has to be
+    # here too: registering a student with `class_ids` enrols them without ever
+    # touching `POST /classes/{id}/enrollments`, so gating only there would leave the
+    # rule enforceable from one door and not the other.
+    #
+    # Imported inside the function — `prerequisites.service` reads grades, which reads
+    # students, and a module-level import would close the cycle.
+    from app.modules.classes import service as classes_service
+    from app.modules.prerequisites import service as prereq_service
+
+    course_id = classes_service.course_id_for_section(db, section.id)
+    if course_id is not None:
+        prereq_service.assert_eligible(
+            db, student=student, course_id=course_id, semester_id=semester_id
+        )
+
     db.add(
         ClassEnrollment(
             class_id=section.id,
@@ -682,8 +741,14 @@ def update_student(
             )
         student.date_of_birth = payload.date_of_birth
 
-    if payload.full_name is not None:
-        student.full_name = payload.full_name.strip()
+    if payload.first_name is not None:
+        student.first_name = payload.first_name.strip()
+    if payload.middle_name is not None:
+        # "" clears it — a middle name a Registrar entered by mistake has to be
+        # removable, and NULL is the right stored value, not an empty string.
+        student.middle_name = payload.middle_name.strip() or None
+    if payload.last_name is not None:
+        student.last_name = payload.last_name.strip()
     if payload.gender is not None:
         student.gender = payload.gender
     if payload.year_group is not None:

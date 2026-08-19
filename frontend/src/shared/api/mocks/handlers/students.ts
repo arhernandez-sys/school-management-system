@@ -3,7 +3,12 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_IDS,
+  DEMO_TODAY,
   computeTermGrade,
+  getActiveGradingScale,
+  getActiveSemester,
+  gpaFor,
+  gradePointFor,
   getSection,
   getStudent,
   getSubject,
@@ -88,12 +93,49 @@ function scopedSectionsFor(student: DemoStudent, yearId?: string | null) {
   return yearId ? sectionsForStudentInYear(student.id, yearId) : currentSectionsFor(student.id);
 }
 
+/**
+ * The display name, assembled exactly as `StudentProfile.full_name` does on the
+ * server (D30 §D10) — parts joined by a single space, blanks skipped. Demo mode has
+ * to agree with the backend here or the Students list would certify a name format
+ * the real API never produces.
+ */
+function displayName(
+  first: string | null,
+  middle: string | null,
+  last: string,
+): string {
+  return [first, middle, last].filter(Boolean).join(' ');
+}
+
+/**
+ * `YYYYMM###` for demo mode (D30 §D9).
+ *
+ * Deliberately NOT a faithful copy of the server's sequence table — there is no
+ * concurrency to protect against in a single browser tab. It scans the numbers
+ * already issued this month and takes the next one, which is enough for the demo to
+ * show the right SHAPE and the right increment while staying obviously local.
+ */
+function allocateStudentNumber(): string {
+  const now = new Date();
+  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const used = D.students
+    .map((s) => s.student_number)
+    .filter((n) => n.startsWith(ym) && n.length === 9)
+    .map((n) => Number(n.slice(6)))
+    .filter((n) => Number.isFinite(n));
+  const next = (used.length ? Math.max(...used) : 0) + 1;
+  return `${ym}${String(next).padStart(3, '0')}`;
+}
+
 /** StudentListItem (GET /students). */
 function studentListItem(s: DemoStudent) {
   return {
     id: s.id,
     student_number: s.student_number,
     full_name: s.full_name,
+    first_name: s.first_name,
+    middle_name: s.middle_name,
+    last_name: s.last_name,
     status: s.status,
     // D29: the row shows the student's own level + how many classes they take. Their class
     // NAMES are a variable-length list that belongs on the detail page, not a table cell.
@@ -112,6 +154,9 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     id: s.id,
     student_number: s.student_number,
     full_name: s.full_name,
+    first_name: s.first_name,
+    middle_name: s.middle_name,
+    last_name: s.last_name,
     date_of_birth: s.date_of_birth,
     gender: s.gender,
     year_group: s.year_group,
@@ -216,8 +261,12 @@ function hasAcademicHistory(studentId: string): boolean {
 
 // ── create/patch payload types ───────────────────────────────────────────────────
 interface StudentWriteBody {
+  /** D30 §D9 — optional on create; the server issues the next YYYYMM###. */
   student_number?: string;
-  full_name?: string;
+  /** D30 §D10 — the name is written in parts; `full_name` is computed, never sent. */
+  first_name?: string;
+  middle_name?: string | null;
+  last_name?: string;
   date_of_birth?: string;
   gender?: DemoStudent['gender'];
   enrollment_date?: string;
@@ -365,15 +414,17 @@ export const studentsHandlers = [
       return errorResponse(403, 'forbidden', 'You cannot create students.');
     }
     const body = (await request.json()) as StudentWriteBody;
-    if (!body.student_number || !body.full_name || !body.date_of_birth || !body.enrollment_date) {
+    // D30 §D9: `student_number` is NOT required — omitted, one is issued. The name
+    // parts are, and `full_name` is not accepted as a write field at all.
+    if (!body.first_name || !body.last_name || !body.date_of_birth || !body.enrollment_date) {
       return errorResponse(422, 'validation_error', 'Missing required fields.', {
-        ...(body.student_number ? {} : { student_number: ['Required.'] }),
-        ...(body.full_name ? {} : { full_name: ['Required.'] }),
+        ...(body.first_name ? {} : { first_name: ['Required.'] }),
+        ...(body.last_name ? {} : { last_name: ['Required.'] }),
         ...(body.date_of_birth ? {} : { date_of_birth: ['Required.'] }),
         ...(body.enrollment_date ? {} : { enrollment_date: ['Required.'] }),
       });
     }
-    if (isDuplicateNumber(body.student_number)) {
+    if (body.student_number && isDuplicateNumber(body.student_number)) {
       return errorResponse(409, 'duplicate_student_number', 'This student number is already in use.', {
         student_number: ['Already in use by a live student.'],
       });
@@ -388,8 +439,11 @@ export const studentsHandlers = [
     const created: DemoStudent = {
       id: `stu-new-${D.students.length + 1}`,
       user_id: null,
-      student_number: body.student_number,
-      full_name: body.full_name,
+      student_number: body.student_number || allocateStudentNumber(),
+      first_name: body.first_name,
+      middle_name: body.middle_name ?? null,
+      last_name: body.last_name,
+      full_name: displayName(body.first_name, body.middle_name ?? null, body.last_name),
       date_of_birth: body.date_of_birth,
       gender: body.gender ?? 'female',
       enrollment_date: body.enrollment_date,
@@ -400,6 +454,8 @@ export const studentsHandlers = [
       address: body.address ?? '',
       phone: body.phone ?? '',
       year_group: body.year_group ?? null,
+      // Phase 4 (§D12) is what assigns a programme; a student created here has none.
+      program_id: null,
     };
     D.students.push(created);
     for (const classId of body.class_ids ?? []) enrollStudent(created, classId);
@@ -421,7 +477,11 @@ export const studentsHandlers = [
       });
     }
     if (body.student_number !== undefined) student.student_number = body.student_number;
-    if (body.full_name !== undefined) student.full_name = body.full_name;
+    if (body.first_name !== undefined) student.first_name = body.first_name;
+    if (body.middle_name !== undefined) student.middle_name = body.middle_name || null;
+    if (body.last_name !== undefined) student.last_name = body.last_name;
+    // `full_name` is derived, so it is recomputed after any name edit — never set.
+    student.full_name = displayName(student.first_name, student.middle_name, student.last_name);
     if (body.date_of_birth !== undefined) student.date_of_birth = body.date_of_birth;
     if (body.gender !== undefined) student.gender = body.gender;
     if (body.enrollment_date !== undefined) student.enrollment_date = body.enrollment_date;
@@ -477,5 +537,256 @@ export const studentsHandlers = [
     D.students = D.students.filter((s) => s.id !== student.id);
     D.enrollments = D.enrollments.filter((e) => e.student_id !== student.id);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ── GET /students/{id}/academic-history — DERIVED (D30 §D12, brief §27) ─────────
+  // Recomputed on every call from enrolments, results, approved transfers and the
+  // programme curriculum. Nothing is cached as truth, exactly as the server does it.
+  http.get(`${API_BASE_URL}/students/:studentId/academic-history`, ({ params, cookies }) => {
+    const role = sessionRole(cookies);
+    if (role !== 'principal' && role !== 'secretary') {
+      return errorResponse(403, 'forbidden', 'You cannot view academic history.');
+    }
+    const student = getStudent(String(params.studentId));
+    if (!student) return errorResponse(404, 'not_found', 'Student not found.');
+
+    const program = D.programs.find((p) => p.id === student.program_id) ?? null;
+    // The pass mark is per PROGRAMME (§D5) — Primary Education at C, the rest at C+ — so
+    // the SAME letter can be a pass on one programme and a fail on another.
+    const minGradePoint = Number(program?.min_passing_grade_point ?? '2.50');
+
+    const plan = program
+      ? D.program_courses.filter((pc) => pc.program_id === program.id)
+      : [];
+    const planByCourse = new Map(plan.map((pc) => [pc.course_id, pc]));
+
+    // Approved credit transfers reach the student through their APPLICATION, because
+    // policy anchors a transfer there: it can only be requested at admission.
+    const application = D.applications.find((a) => a.student_id === student.id);
+    const transferred = new Set(
+      application
+        ? D.credit_transfer_requests
+            .filter((t) => t.application_id === application.id && t.status === 'approved')
+            .map((t) => t.target_course_id)
+        : [],
+    );
+
+    // Every course the student has ever sat, keyed by COURSE — the question is about the
+    // course, and the same one may have been taken in two terms.
+    const enrolled = new Map<string, string>();
+    for (const enr of D.enrollments.filter((e) => e.student_id === student.id)) {
+      for (const cs of D.class_subjects.filter((c) => c.section_id === enr.section_id)) {
+        enrolled.set(cs.subject_id, enr.semester_id);
+      }
+    }
+
+    const scale = getActiveGradingScale();
+    const courseIds = new Set<string>([
+      ...planByCourse.keys(),
+      ...transferred,
+      ...enrolled.keys(),
+    ]);
+
+    const counts = { completed: 0, failed: 0, in_progress: 0, transferred: 0, remaining: 0 };
+    let creditsEarned = 0;
+    const gpaEntries: { credits: number | null; letter: string | null }[] = [];
+    const courses: Record<string, unknown>[] = [];
+
+    for (const courseId of courseIds) {
+      const course = getSubject(courseId);
+      if (!course) continue;
+      const pc = planByCourse.get(courseId) ?? null;
+      const credits = course.credits ?? 0;
+
+      // The student's result in this course, from whichever offering they sat.
+      let letter: string | null = null;
+      let numeric: number | null = null;
+      for (const cs of D.class_subjects.filter((c) => c.subject_id === courseId)) {
+        const term = computeTermGrade(student.id, cs.id);
+        if (term.numeric != null && (numeric == null || term.numeric > numeric)) {
+          numeric = term.numeric;
+          letter = term.letter;
+        }
+      }
+      const gradePoint = gradePointFor(letter);
+
+      let status: keyof typeof counts;
+      if (transferred.has(courseId)) {
+        status = 'transferred';
+        creditsEarned += credits;
+      } else if (numeric != null) {
+        // Judged against the PROGRAMME's pass mark. Where the scale carries no grade
+        // points the band's own `is_passing` decides, the same lenient fallback the
+        // server uses for a pre-Phase-3 scale.
+        const band = scale?.bands.find((b) => b.letter === letter);
+        const passed =
+          gradePoint != null ? gradePoint >= minGradePoint : Boolean(band?.is_passing);
+        status = passed ? 'completed' : 'failed';
+        if (passed) creditsEarned += credits;
+        gpaEntries.push({ credits, letter });
+      } else if (enrolled.has(courseId)) {
+        status = 'in_progress';
+        // Credits count toward the GPA denominator; no quality points yet (decision #4).
+        gpaEntries.push({ credits, letter: null });
+      } else {
+        status = 'remaining';
+      }
+      counts[status] += 1;
+
+      courses.push({
+        course_id: course.id,
+        code: course.code,
+        name: course.name,
+        credits: course.credits,
+        term_label: pc?.term_label ?? null,
+        term_order: pc?.term_order ?? null,
+        is_required: pc ? pc.is_required : false,
+        in_curriculum: pc !== null,
+        status,
+        numeric,
+        letter,
+        grade_point: gradePoint,
+        // Demo mode has no frozen snapshots — everything is computed live.
+        is_frozen: false,
+        semester_id: enrolled.get(courseId) ?? null,
+      });
+    }
+
+    // Plan order first, then code, so the screen reads down the programme sequence.
+    courses.sort((a, b) => {
+      const ao = a.term_order as number | null;
+      const bo = b.term_order as number | null;
+      if (ao == null && bo == null) return String(a.code).localeCompare(String(b.code));
+      if (ao == null) return 1;
+      if (bo == null) return -1;
+      return ao - bo || String(a.code).localeCompare(String(b.code));
+    });
+
+    const requiredCredits = plan
+      .filter((pc) => pc.is_required)
+      .reduce((sum, pc) => sum + (getSubject(pc.course_id)?.credits ?? 0), 0);
+    const earnedRequired = courses
+      .filter(
+        (row) =>
+          row.is_required === true &&
+          (row.status === 'completed' || row.status === 'transferred'),
+      )
+      .reduce((sum, row) => sum + ((row.credits as number | null) ?? 0), 0);
+    const gpa = gpaFor(gpaEntries);
+
+    return HttpResponse.json({
+      student_id: student.id,
+      full_name: student.full_name,
+      student_number: student.student_number,
+      program: program ? { id: program.id, code: program.code, name: program.name } : null,
+      year_of_study: student.year_group === 'Second' ? 'Second' : student.year_group === 'First' ? 'First' : null,
+      enrollment_load: null,
+      program_total_credits: program?.total_credits ?? null,
+      curriculum_required_credits: requiredCredits,
+      credits_earned: creditsEarned,
+      // Against the REQUIRED plan only: electives the student chose not to take are not
+      // outstanding requirements.
+      credits_remaining: Math.max(requiredCredits - earnedRequired, 0),
+      gpa: gpa.gpa,
+      gpa_total_credits: gpa.total_credits,
+      counts,
+      courses,
+      program_history: D.student_program_history
+        .filter((h) => h.student_id === student.id)
+        .sort((a, b) => a.started_at.localeCompare(b.started_at))
+        .map((h) => {
+          const p = D.programs.find((pr) => pr.id === h.program_id);
+          return {
+            id: h.id,
+            program: { id: h.program_id, code: p?.code ?? '', name: p?.name ?? '' },
+            started_at: h.started_at,
+            ended_at: h.ended_at,
+            reason: h.reason,
+            is_current: h.ended_at === null,
+          };
+        }),
+      active_semester_id: getActiveSemester()?.id ?? null,
+    });
+  }),
+
+  // ── PUT /students/{id}/program — DEAN ONLY (D30 §D12, §D14) ────────────────────
+  http.put(`${API_BASE_URL}/students/:studentId/program`, async ({ params, request, cookies }) => {
+    // The Registrar owns the student record and admits students, but MOVING one between
+    // programmes re-derives their degree plan and rules on what carries over.
+    if (sessionRole(cookies) !== 'principal') {
+      return errorResponse(403, 'forbidden', 'Only the Dean may change a student\'s programme.');
+    }
+    const student = getStudent(String(params.studentId));
+    if (!student) return errorResponse(404, 'not_found', 'Student not found.');
+    const body = (await request.json()) as {
+      program_id?: string;
+      effective_from?: string | null;
+      reason?: string | null;
+      year_of_study?: string | null;
+      enrollment_load?: string | null;
+    };
+    const program = D.programs.find((p) => p.id === body.program_id);
+    if (!program) return errorResponse(404, 'program_not_found', 'Programme not found.');
+    if (student.program_id === program.id) {
+      return errorResponse(
+        409,
+        'program_unchanged',
+        `This student is already registered on ${program.code}.`,
+      );
+    }
+
+    const effective = body.effective_from || DEMO_TODAY;
+    const open = D.student_program_history.find(
+      (h) => h.student_id === student.id && h.ended_at === null,
+    );
+    if (open) {
+      if (effective < open.started_at) {
+        return errorResponse(
+          422,
+          'validation_error',
+          `The change cannot take effect before the current programme started (${open.started_at}).`,
+          { effective_from: ['Earlier than the current registration.'] },
+        );
+      }
+      // Closed the day BEFORE the new one opens, so the periods are contiguous with
+      // neither an overlap nor a gap — and never two open rows, which the real database
+      // refuses outright via a unique index over a generated `open_flag`.
+      const dayBefore = new Date(`${effective}T00:00:00`);
+      dayBefore.setDate(dayBefore.getDate() - 1);
+      const closed = dayBefore.toISOString().slice(0, 10);
+      open.ended_at = closed < open.started_at ? open.started_at : closed;
+      open.reason = open.reason ?? body.reason ?? null;
+    }
+    D.student_program_history.push({
+      id: `sph-demo-${D.student_program_history.length + 1}`,
+      student_id: student.id,
+      program_id: program.id,
+      started_at: effective,
+      ended_at: null,
+      reason: body.reason ?? null,
+    });
+    student.program_id = program.id;
+    if (body.year_of_study) student.year_group = body.year_of_study;
+
+    return HttpResponse.json({
+      student_id: student.id,
+      program: { id: program.id, code: program.code, name: program.name },
+      year_of_study: body.year_of_study ?? null,
+      enrollment_load: body.enrollment_load ?? null,
+      history: D.student_program_history
+        .filter((h) => h.student_id === student.id)
+        .sort((a, b) => a.started_at.localeCompare(b.started_at))
+        .map((h) => {
+          const p = D.programs.find((pr) => pr.id === h.program_id);
+          return {
+            id: h.id,
+            program: { id: h.program_id, code: p?.code ?? '', name: p?.name ?? '' },
+            started_at: h.started_at,
+            ended_at: h.ended_at,
+            reason: h.reason,
+            is_current: h.ended_at === null,
+          };
+        }),
+    });
   }),
 ];

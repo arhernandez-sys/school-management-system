@@ -3,6 +3,9 @@ import { MenuItem, Stack, TextField, FormControlLabel, Switch } from '@mui/mater
 import { FormDialog, PasswordField } from '@shared/components';
 import { Role } from '@shared/api/generated/model';
 import type { UserListItem } from '@shared/api/generated/model';
+// D30: role options (and their Dean/Registrar/Lecturer labels) come from the one
+// shared source; this file used to carry its own copy.
+import { ROLE_OPTIONS } from '@shared/auth/roleLabels';
 
 export interface UserFormValues {
   email: string;
@@ -25,13 +28,6 @@ export interface UserFormDialogProps {
   onSubmit: (values: UserFormValues) => void;
   onClose: () => void;
 }
-
-const ROLE_OPTIONS: { value: Role; label: string }[] = [
-  { value: Role.principal, label: 'Principal' },
-  { value: Role.secretary, label: 'Secretary' },
-  { value: Role.teacher, label: 'Teacher' },
-  { value: Role.student, label: 'Student' },
-];
 
 /**
  * Create / edit a user account (api-spec §11). On create, the admin may optionally

@@ -1,11 +1,19 @@
-"""Subjects catalog service (api-spec §5 Module 5b, M2, FR-CLS-01a).
+"""Course-catalog service (api-spec §5 Module 5b, M2, FR-CLS-01a; D30 §D2).
 
 Owns DB access + transactions for the 4 catalog endpoints. The router is thin.
-The `Subject` model lives in `app/modules/classes/models.py`.
+The `Subject` model lives in `app/modules/classes/models.py` and maps the `courses`
+table — see its docstring for why the class and the route kept the old spelling.
 
-Uniqueness is enforced at the DB by partial-unique indexes over live rows
-(`uq_subjects_name`, `uq_subjects_code` WHERE deleted_at IS NULL). We pre-check
-for the documented 409 codes; the indexes are the backstop against a race.
+Uniqueness is enforced at the DB by unique indexes over live rows
+(`uq_courses_name`, `uq_courses_code`, both on generated `active_*` columns that go
+NULL when `deleted_at` is set). We pre-check for the documented 409 codes; the
+indexes are the backstop against a race.
+
+D30 changed two things that matter to callers:
+  * `code` is REQUIRED — `courses.code` is NOT NULL, so the old code-less create
+    would now be a database error rather than a validation one.
+  * `credits` and `component` are writable, and `credits` is what finally makes the
+    graded chain reach a credit value (plan §B3).
 """
 
 from __future__ import annotations
@@ -16,7 +24,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import Conflict, NotFound
+from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.modules.classes.models import ClassSubject, Subject
 from app.modules.settings.models import AuditLog
@@ -31,6 +39,8 @@ from app.modules.users.models import User
 _SUBJECT_SORT_FIELDS = {
     "name": Subject.name,
     "code": Subject.code,
+    "credits": Subject.credits,
+    "component": Subject.component,
     "is_active": Subject.is_active,
     "created_at": Subject.created_at,
 }
@@ -121,8 +131,6 @@ def list_subjects(
     key = sort[1:] if desc else sort
     col = _SUBJECT_SORT_FIELDS.get(key)
     if col is None:
-        from app.core.errors import ValidationError
-
         raise ValidationError(
             f"Unknown sort field '{key}'.", code="invalid_sort_field"
         )
@@ -134,16 +142,32 @@ def list_subjects(
 def create_subject(
     db: Session, *, actor: User, payload: SubjectCreateRequest
 ) -> SubjectDetail:
-    """POST /subjects (P/S). 409 duplicate_subject_name / duplicate_subject_code."""
+    """POST /subjects (Dean only, D30 §D14). 409 duplicate_subject_name /
+    duplicate_subject_code."""
     _assert_name_unique(db, payload.name)
-    code = payload.code.strip() if payload.code else None
-    if code:
-        _assert_code_unique(db, code)
+    code = payload.code.strip()
+    _assert_code_unique(db, code)
 
-    subject = Subject(name=payload.name.strip(), code=code, is_active=True)
+    subject = Subject(
+        name=payload.name.strip(),
+        code=code,
+        credits=payload.credits,
+        component=payload.component,
+        description=payload.description,
+        prerequisites_text=payload.prerequisites_text,
+        is_active=True,
+        created_by=actor.id,
+        updated_by=actor.id,
+    )
     db.add(subject)
     db.flush()
-    _audit(db, actor=actor, action="subject.create", entity_id=subject.id)
+    _audit(
+        db,
+        actor=actor,
+        action="subject.create",
+        entity_id=subject.id,
+        summary={"code": code, "credits": payload.credits},
+    )
     db.commit()
     return SubjectDetail.model_validate(subject)
 
@@ -151,8 +175,15 @@ def create_subject(
 def update_subject(
     db: Session, *, actor: User, subject_id: uuid.UUID, payload: SubjectUpdateRequest
 ) -> SubjectDetail:
-    """PATCH /subjects/{id} (P/S). Edits name/code/is_active. Renaming is safe for
-    history (transcript lines use the frozen subject_id, schema §10.6)."""
+    """PATCH /subjects/{id} (Dean only, D30 §D14). Partial update.
+
+    Renaming is safe for history: transcript lines use the frozen `subject_id`
+    (schema §10.6), which since `006` resolves against `courses`.
+
+    An omitted field means "leave alone" — the module-wide PATCH convention. There is
+    deliberately no way to CLEAR `code` here: `courses.code` is NOT NULL, so a null
+    would be a database error rather than an edit.
+    """
     subject = _subject_or_404(db, subject_id)
 
     if payload.name is not None and payload.name.strip().lower() != subject.name.lower():
@@ -160,14 +191,29 @@ def update_subject(
         subject.name = payload.name.strip()
 
     if payload.code is not None:
-        new_code = payload.code.strip() or None
-        if new_code and (subject.code or "").lower() != new_code.lower():
+        new_code = payload.code.strip()
+        if not new_code:
+            raise ValidationError(
+                "A course code is required.",
+                fields={"code": ["Required."]},
+            )
+        if subject.code.lower() != new_code.lower():
             _assert_code_unique(db, new_code, exclude_id=subject.id)
         subject.code = new_code
+
+    if payload.credits is not None:
+        subject.credits = payload.credits
+    if payload.component is not None:
+        subject.component = payload.component
+    if payload.description is not None:
+        subject.description = payload.description
+    if payload.prerequisites_text is not None:
+        subject.prerequisites_text = payload.prerequisites_text
 
     if payload.is_active is not None:
         subject.is_active = payload.is_active
 
+    subject.updated_by = actor.id
     _audit(db, actor=actor, action="subject.update", entity_id=subject.id)
     db.commit()
     return SubjectDetail.model_validate(subject)

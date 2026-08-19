@@ -5,6 +5,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import ArchiveIcon from '@mui/icons-material/Archive';
 import UnarchiveIcon from '@mui/icons-material/Unarchive';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import {
   DataTable,
   FilterBar,
@@ -25,6 +26,7 @@ import {
   useDeleteSubject,
 } from './hooks/useSubjects';
 import { SubjectFormDialog, type SubjectFormValues } from './components/SubjectFormDialog';
+import { PrerequisitesDialog } from './components/PrerequisitesDialog';
 
 /**
  * Subjects catalog (api-spec §5b, ui-design-system Settings). Principal/Secretary
@@ -38,7 +40,10 @@ import { SubjectFormDialog, type SubjectFormValues } from './components/SubjectF
  */
 export function SubjectsPage() {
   const { user } = useAuth();
-  const canManage = user ? canWrite(user.role, 'settings') : false;
+  // D30: the course catalog is Dean-only to write (brief §6). The Registrar still
+  // reaches this tab — `courses: 'view-all'` — but read-only, so the server's new 403
+  // is never something they can trigger from the UI.
+  const canManage = user ? canWrite(user.role, 'courses') : false;
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
@@ -73,6 +78,10 @@ export function SubjectsPage() {
   const [deleteTarget, setDeleteTarget] = useState<SubjectListItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // D30 §D4 — what this course requires. Reachable for the Registrar too (read-only):
+  // knowing why an enrolment was refused is administration, not academic authority.
+  const [prereqTarget, setPrereqTarget] = useState<SubjectListItem | null>(null);
+
   const openCreate = () => {
     setEditingSubject(null);
     setFormError(null);
@@ -90,7 +99,13 @@ export function SubjectsPage() {
   const handleFormSubmit = (values: SubjectFormValues) => {
     setFormError(null);
     setFormFieldErrors({});
-    const body = { name: values.name, code: values.code || null };
+    const body = {
+      name: values.name,
+      // D30: `courses.code` is NOT NULL, so the code is always sent, never nulled.
+      code: values.code,
+      credits: values.credits,
+      component: values.component,
+    };
     const onError = (err: unknown) => {
       setFormError(apiErrorMessage(err));
       const fields = fieldErrorsFrom(err);
@@ -125,7 +140,7 @@ export function SubjectsPage() {
   const columns: DataTableColumn<SubjectListItem>[] = [
     {
       field: 'name',
-      headerName: 'Subject',
+      headerName: 'Course',
       sortable: true,
       primary: true,
       render: (s) => (
@@ -137,8 +152,22 @@ export function SubjectsPage() {
     {
       field: 'code',
       headerName: 'Code',
+      sortable: true,
+      render: (s) => <Typography variant="body2">{s.code}</Typography>,
+    },
+    {
+      // D30 §D2 — the reason the catalog moved to `courses` at all: without a credit
+      // value reachable from a graded row, GPA and credits-earned are impossible.
+      field: 'credits',
+      headerName: 'Credits',
+      sortable: true,
+      render: (s) => <Typography variant="body2">{s.credits}</Typography>,
+    },
+    {
+      field: 'component',
+      headerName: 'Component',
       render: (s) =>
-        s.code ?? (
+        s.component ?? (
           <Typography variant="body2" color="text.disabled">
             —
           </Typography>
@@ -156,9 +185,22 @@ export function SubjectsPage() {
     },
   ];
 
+  const prerequisitesAction = (s: SubjectListItem) => (
+    <Tooltip title="Prerequisites">
+      <IconButton
+        size="small"
+        aria-label={`Prerequisites for ${s.name}`}
+        onClick={() => setPrereqTarget(s)}
+      >
+        <AccountTreeIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
+
   const rowActions = canManage
     ? (s: SubjectListItem) => (
         <>
+          {prerequisitesAction(s)}
           <Tooltip title="Edit">
             <IconButton size="small" aria-label={`Edit ${s.name}`} onClick={() => openEdit(s)}>
               <EditIcon fontSize="small" />
@@ -200,17 +242,17 @@ export function SubjectsPage() {
           </Tooltip>
         </>
       )
-    : undefined;
+    : prerequisitesAction;
 
   return (
     <>
       <PageHeader
-        title="Subjects"
-        subtitle="Manage the catalog of subjects taught across the school."
+        title="Course Catalog"
+        subtitle="Manage the catalog of courses the college offers."
         primaryAction={
           canManage ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-              Add subject
+              Add course
             </Button>
           ) : undefined
         }
@@ -222,7 +264,7 @@ export function SubjectsPage() {
           setSearch(v);
           setPage(0);
         }}
-        searchPlaceholder="Search subjects…"
+        searchPlaceholder="Search courses…"
         trailing={
           <FormControlLabel
             control={
@@ -240,7 +282,7 @@ export function SubjectsPage() {
       />
 
       <DataTable<SubjectListItem>
-        caption="Subjects catalog"
+        caption="Course catalog"
         columns={columns}
         rows={query.data?.items ?? []}
         getRowId={(s) => s.id}
@@ -257,12 +299,12 @@ export function SubjectsPage() {
         }}
         sortField="name"
         sortDirection="asc"
-        emptyTitle={debouncedSearch ? 'No subjects match your search' : 'No subjects yet'}
+        emptyTitle={debouncedSearch ? 'No courses match your search' : 'No courses yet'}
         emptyDescription={
-          canManage && !debouncedSearch ? 'Add your first subject to get started.' : undefined
+          canManage && !debouncedSearch ? 'Add your first course to get started.' : undefined
         }
         emptyAction={
-          canManage && !debouncedSearch ? { label: 'Add subject', onClick: openCreate } : undefined
+          canManage && !debouncedSearch ? { label: 'Add course', onClick: openCreate } : undefined
         }
         rowActions={rowActions}
       />
@@ -277,13 +319,20 @@ export function SubjectsPage() {
         onClose={() => setFormOpen(false)}
       />
 
+      <PrerequisitesDialog
+        open={Boolean(prereqTarget)}
+        course={prereqTarget}
+        canManage={canManage}
+        onClose={() => setPrereqTarget(null)}
+      />
+
       <ConfirmDialog
         open={Boolean(deleteTarget)}
-        title="Delete subject?"
+        title="Delete course?"
         destructive
         description={
           deleteTarget
-            ? `Permanently delete "${deleteTarget.name}"? This can only be done if the subject is not used by any class. If it is in use, retire it instead.`
+            ? `Permanently delete "${deleteTarget.name}"? This can only be done if the course is not offered by any class. If it is in use, retire it instead.`
             : undefined
         }
         confirmLabel="Delete"

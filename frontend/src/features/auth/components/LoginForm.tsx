@@ -20,6 +20,7 @@ import { useAuth } from '../hooks/useAuth';
 import { ApiError } from '@shared/api/client';
 import { ROUTES } from '@shared/constants/routes';
 import { strings } from '@i18n/strings';
+import { ROLE_OPTIONS } from '@shared/auth/roleLabels';
 
 interface LocationState {
   from?: { pathname?: string };
@@ -33,12 +34,12 @@ interface LocationState {
  * guessing the magic username. No effect in real-backend mode (the panel is hidden).
  */
 const DEMO_MODE = import.meta.env.VITE_ENABLE_MOCKS === 'true';
-const DEMO_ROLES = [
-  { id: 'principal', label: 'Principal' },
-  { id: 'secretary', label: 'Secretary' },
-  { id: 'teacher', label: 'Teacher' },
-  { id: 'student', label: 'Student' },
-] as const;
+/**
+ * `id` is the literal text typed into the identifier box — the MSW handler keys the
+ * signed-in role off it, so it MUST stay the wire value. Only the button label is the
+ * tertiary term (D30), and it comes from the one shared role-label source.
+ */
+const DEMO_ROLES = ROLE_OPTIONS.map((opt) => ({ id: opt.value, label: opt.label }));
 
 /**
  * Login form (ui-design-system §7.1). Centered card, labeled inputs, generic

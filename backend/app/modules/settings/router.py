@@ -1,4 +1,4 @@
-"""Settings router (api-spec §5 Module 11) — the 18 settings endpoints.
+"""Settings router (api-spec §5 Module 11) — the settings endpoints.
 
 Thin transport layer: parse the request, delegate ALL business + DB logic to
 `service.py`, then shape the HTTP response. No DB access or transactions here.
@@ -13,6 +13,8 @@ Endpoints (all mount under `/api/v1` via app/main.py):
     GET    /settings/academic-years                authenticated  -> AcademicYearList
     GET    /settings/semesters                     authenticated  -> SemesterList
     POST   /settings/academic-years                principal      -> AcademicYearDetail (201)
+    POST   /settings/semesters                     Dean (P)       -> SemesterDetail (201)   [D30]
+    PATCH  /settings/semesters/{id}                 Dean (P)       -> SemesterDetail         [D30]
     PATCH  /settings/semesters/{id}/activate        principal      -> SemesterDetail
     POST   /settings/academic-years/{id}/archive    principal      -> ArchiveYearResponse (202)
   Grading scale:
@@ -60,6 +62,8 @@ from app.modules.settings.schemas import (
     SchoolUpdateRequest,
     SemesterDetail,
     SemesterList,
+    SemesterUpdateRequest,
+    StandaloneSemesterCreateRequest,
     UserCreateRequest,
     UserCreateResponse,
     UserListItem,
@@ -201,6 +205,51 @@ def create_academic_year(
     """Principal. Creates EXACTLY 2 semesters (D10), seeds grading scale + default
     bands (D11). 409 active_year_exists when an active year already exists."""
     return service.create_academic_year(db, actor=actor, payload=payload)
+
+
+@router.post(
+    "/semesters",
+    response_model=SemesterDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add one term to an existing year (Dean only; D30 §D3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def create_semester(
+    payload: StandaloneSemesterCreateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> SemesterDetail:
+    """Dean only (§D14). NEW IN D30 — before this the calendar came only from
+    `POST /settings/academic-years`, which hard-created exactly two terms, so BAJC's
+    Summer and Spring blocks had no route at all.
+
+    The term is created INACTIVE; activating is the separate `/activate` call, so
+    adding a future block never moves the school's current term as a side effect.
+    409 `year_archived` / `duplicate_semester_sequence`.
+    """
+    return service.create_semester(db, actor=actor, payload=payload)
+
+
+@router.patch(
+    "/semesters/{semester_id}",
+    response_model=SemesterDetail,
+    summary="Correct a term's name, kind, order or dates (Dean only; D30 §D3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def update_semester(
+    semester_id: uuid.UUID,
+    payload: SemesterUpdateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> SemesterDetail:
+    """Dean only (§D14). There is deliberately NO delete endpoint: a term is the anchor
+    for every enrolment, assessment, attendance record and frozen snapshot in it, and
+    the FKs are RESTRICT. Correcting a term is the supported operation; removing one is
+    a data-migration decision, not a settings toggle.
+    """
+    return service.update_semester(
+        db, actor=actor, semester_id=semester_id, payload=payload
+    )
 
 
 @router.patch(

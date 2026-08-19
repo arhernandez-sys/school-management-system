@@ -9,6 +9,8 @@ export const ROUTES = {
   changePassword: '/login/change-password',
   dashboard: '/dashboard',
   students: '/students',
+  /** Admissions — the application record and its decision (D30 §D11). */
+  applications: '/applications',
   teachers: '/teachers',
   classes: '/classes',
   /** Student / teacher Mon–Fri week (D29 subject-class schedule). */
@@ -17,6 +19,8 @@ export const ROUTES = {
   grades: '/grades',
   /** Per-assessment class grading page: /grades/assessment/:assessmentId. */
   gradeAssessment: '/grades/assessment',
+  /** Grade-revision queue (D30 §D7) — the Dean decides, the Lecturer tracks their own. */
+  gradeRevisions: '/grades/revisions',
   attendance: '/attendance',
   announcements: '/announcements',
   calendar: '/calendar',

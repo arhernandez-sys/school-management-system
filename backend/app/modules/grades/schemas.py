@@ -20,13 +20,18 @@ Write models set `extra="forbid"` (§1.4); wire is snake_case (§1.2).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
-from app.common.enums import AssessmentStatus, AssessmentType, GradeStatus
+from app.common.enums import (
+    AssessmentStatus,
+    AssessmentType,
+    GradeRevisionStatus,
+    GradeStatus,
+)
 
 
 # ── Letter handling ────────────────────────────────────────────────────────────
@@ -156,6 +161,16 @@ class Gradebook(BaseModel):
     rows: list[GradebookRow] = Field(default_factory=list)
     drop_lowest_applied: bool = False
     can_edit: bool = False
+    #: D30 §D6. True once the term's `grade_submission_deadline` has passed, so the UI
+    #: can explain itself and disable the save bar instead of letting a Lecturer type
+    #: forty marks into a form the server will 409.
+    #:
+    #: Deliberately SEPARATE from `can_edit`, which keeps its meaning of "this caller's
+    #: role and ownership permit writing here". Folding the two together would make a
+    #: closed window indistinguishable from a Registrar's read-only view, and the
+    #: Lecturer needs to be told which one they are looking at.
+    grade_window_closed: bool = False
+    grade_submission_deadline: datetime | None = None
     viewer_role: str
 
 
@@ -223,3 +238,84 @@ class MyGradeSubject(BaseModel):
 class MyGrades(BaseModel):
     student: StudentRef
     by_subject: list[MyGradeSubject] = Field(default_factory=list)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Grade revision / second opportunity (D30 §D7, brief §20)
+# ──────────────────────────────────────────────────────────────────────────────
+class GradeRevisionCreateRequest(BaseModel):
+    """POST /assessments/{id}/grade-revisions — the LECTURER asks (brief §20).
+
+    Assessment-first and student-identified, exactly as the brief describes the flow: the
+    Lecturer identifies the student and the assessment, states a reason, and proposes the
+    new result. Addressed this way rather than by `assessment_grade_id` because that id is
+    an internal join key the Lecturer never sees — they are looking at a gradebook row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    student_id: UUID
+    #: Required. A revision with no stated reason gives the Dean nothing to rule on, and
+    #: brief §20 asks for a description explicitly.
+    reason: str = Field(min_length=1)
+    #: The mark the Lecturer is asking for. Validated against the assessment's `max_score`
+    #: by the service — the schema cannot know it.
+    proposed_score: float = Field(ge=0)
+
+
+class GradeRevisionDecisionRequest(BaseModel):
+    """POST /grade-revisions/{id}/decision — **DEAN ONLY** (§D14).
+
+    `pending` is not accepted: a decision endpoint that could un-decide would leave no
+    record of the reversal, which is the opposite of what this table exists for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    status: GradeRevisionStatus = Field(description="approved or denied")
+    #: Optional either way, and appended rather than overwritten.
+    decision_note: str | None = None
+
+
+class GradeRevisionRead(BaseModel):
+    """One request, with everything §D8 says a notification must identify.
+
+    Deliberately FAT: the Dean's queue has to be workable without a fetch per row, and
+    §D8 lists student, course, assessment, lecturer, request date, reason and status as
+    what the notification carries. All of it is here.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    assessment_grade_id: UUID
+    status: GradeRevisionStatus
+    reason: str
+    original_score: float | None = None
+    proposed_score: float
+    decision_note: str | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+
+    student: StudentRef | None = None
+    assessment_id: UUID | None = None
+    assessment_title: str = ""
+    #: The assessment's own ceiling, so a queue row can show "82 → 91 of 100" without a
+    #: second call.
+    max_score: float | None = None
+    class_subject_id: UUID | None = None
+    subject_name: str = ""
+    subject_code: str | None = None
+    section_name: str = ""
+    #: Who asked. `requested_by_user_id` is kept alongside so the caller can tell whether a
+    #: row is their own without matching on a display name.
+    requested_by_user_id: UUID
+    requested_by_name: str = ""
+    decided_by_user_id: UUID | None = None
+    decided_by_name: str | None = None
+    #: True when the caller may still withdraw this request — their own, still pending.
+    can_withdraw: bool = False
+
+
+class GradeRevisionList(BaseModel):
+    items: list[GradeRevisionRead] = Field(default_factory=list)
+    #: Awaiting the CALLER's decision. Non-zero only for the Dean, which is what makes it
+    #: safe to drive a notification badge from (§D8).
+    pending_for_me: int = 0

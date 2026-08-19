@@ -52,7 +52,7 @@ export function ClassSubjectPicker({
         value={value}
         onChange={handleChange}
         displayEmpty
-        input={<OutlinedInput notched label="Class subject" />}
+        input={<OutlinedInput notched label="Course offering" />}
       >
         <MenuItem value="">
           <em>Select a class subject…</em>

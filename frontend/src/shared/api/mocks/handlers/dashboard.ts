@@ -21,6 +21,7 @@ import {
   getTeacher,
   gradeDistribution,
   rosterFor,
+  gpaFor,
   letterFor,
   schoolAttendanceRate,
   sectionsOwnedByTeacher,
@@ -333,6 +334,19 @@ function studentPayload(user: DemoUser) {
       : null;
   const term_letter = term_average != null ? letterFor(term_average) : null;
 
+  // Credit-weighted term GPA (D30 §D5), from the same selectors the report card uses so
+  // the dashboard tile and the printed document cannot disagree. Every offering the
+  // student sits contributes its credits; one with no released grade contributes 0
+  // quality points (decision #4).
+  const termGpa = student
+    ? gpaFor(
+        classSubjects.map((cs) => ({
+          credits: getSubject(cs.subject_id)?.credits ?? null,
+          letter: computeTermGrade(student.id, cs.id).letter,
+        })),
+      )
+    : { gpa: null, total_credits: 0 };
+
   // Recent RELEASED grades only (unreleased is never sent — architecture §3.2/§8.5).
   const recent_grades = student
     ? classSubjects
@@ -390,6 +404,8 @@ function studentPayload(user: DemoUser) {
     stats: {
       term_average,
       term_letter,
+      gpa: termGpa.gpa,
+      total_credits: termGpa.total_credits,
       attendance_rate,
       upcoming_count: upcoming_assessments.length,
     },

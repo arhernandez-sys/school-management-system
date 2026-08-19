@@ -269,11 +269,43 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
   if (params.year_group) rows = rows.filter((s) => s.year_group === params.year_group);
   if (params.search) {
     const q = params.search;
-    rows = rows.filter((s) => textIncludes(s.full_name, q) || textIncludes(s.student_number, q));
+    // Matches the backend (students/service.py): the display string AND the parts,
+    // so "Perez Ana" — surname first, how a register is read — finds the student.
+    rows = rows.filter(
+      (s) =>
+        textIncludes(s.full_name, q) ||
+        textIncludes(s.first_name, q) ||
+        textIncludes(s.last_name, q) ||
+        textIncludes(s.student_number, q),
+    );
   }
+
+  // D30 §D10 — the register is ordered by SURNAME then given name, which `paginate`
+  // cannot express (it sorts on one field). Any name-ish sort key is resolved here
+  // and `paginate` is then asked for no sort at all; anything else falls through to
+  // its single-column path unchanged.
+  const sort = params.sort ?? 'last_name';
+  const desc = sort.startsWith('-');
+  const key = desc ? sort.slice(1) : sort;
+  if (['last_name', 'first_name', 'name', 'full_name'].includes(key)) {
+    const primary = key === 'first_name' ? 'first_name' : 'last_name';
+    const secondary = key === 'first_name' ? 'last_name' : 'first_name';
+    rows = [...rows].sort((a, b) => {
+      const cmp =
+        (a[primary] ?? '').localeCompare(b[primary] ?? '') ||
+        (a[secondary] ?? '').localeCompare(b[secondary] ?? '') ||
+        a.id.localeCompare(b.id);
+      return desc ? -cmp : cmp;
+    });
+    return paginate(rows as unknown as Array<Record<string, unknown>>, {
+      ...params,
+      sort: undefined,
+    }) as unknown as DemoPage<DemoStudent>;
+  }
+
   return paginate(rows as unknown as Array<Record<string, unknown>>, {
     ...params,
-    sort: params.sort ?? 'full_name',
+    sort,
   }) as unknown as DemoPage<DemoStudent>;
 }
 
@@ -477,12 +509,141 @@ export function computeTermGrade(
   return { numeric, letter: letterFor(numeric), weight_base_used: weightBase };
 }
 
-/** Derive the letter grade for a 0..100 numeric against the active bands (D11). */
+/**
+ * Derive the letter grade for a 0..100 numeric against the active bands (D11).
+ *
+ * **HALF-OPEN on `min_score`** — the highest band whose floor the value clears, with
+ * `max_score` never consulted. This mirrors `calc.letter_for` (OQ-DB2), and D30 made it
+ * mandatory rather than merely tidy: the BAJC scale's ceilings are the integers the
+ * college prints (A- is 90-94), so the old `min <= v && v <= max` test left every
+ * fractional value between bands — a 94.5, an 89.7 — matching NO band and rendering
+ * blank where a letter belongs.
+ */
 export function letterFor(numeric: number): string {
   const scale = getActiveGradingScale();
   if (!scale) return '';
-  const band = scale.bands.find((b) => numeric >= b.min_score && numeric <= b.max_score);
-  return band?.letter ?? '';
+  const clamped = Math.min(Math.max(numeric, 0), 100);
+  const ordered = [...scale.bands].sort((a, b) => b.min_score - a.min_score);
+  const band = ordered.find((b) => clamped >= b.min_score);
+  // Below every floor is only reachable if the lowest band starts above 0.
+  return (band ?? ordered[ordered.length - 1])?.letter ?? '';
+}
+
+/** The 4.00-scale value of a letter, or null if the scale cannot price it (D30 §D5). */
+export function gradePointFor(letter: string | null): number | null {
+  if (!letter) return null;
+  const scale = getActiveGradingScale();
+  const wanted = letter.trim().toLowerCase();
+  const band = scale?.bands.find((b) => b.letter.trim().toLowerCase() === wanted);
+  return band?.grade_point ?? null;
+}
+
+/**
+ * Credit-weighted GPA, mirroring `calc.compute_gpa` (D30 §D5, decision #4).
+ *
+ * The denominator is ALL enrolled credits: an entry with no letter contributes 0 quality
+ * points and keeps its credits. Restricting it to graded courses is the divergence that
+ * would make demo mode print 3.50 where the real backend prints 2.10 — and this project
+ * has already paid twice for demo mode certifying a screen the server answered
+ * differently.
+ *
+ * `null` when no credits participated; the documents render that as an em dash rather
+ * than a 0.00 that would read as total failure.
+ */
+export function gpaFor(
+  entries: { credits: number | null; letter: string | null }[],
+): { gpa: number | null; total_credits: number } {
+  let credits = 0;
+  let quality = 0;
+  for (const entry of entries) {
+    const weight = entry.credits ?? 0;
+    if (weight <= 0) continue;
+    credits += weight;
+    quality += (gradePointFor(entry.letter) ?? 0) * weight;
+  }
+  if (credits <= 0) return { gpa: null, total_credits: 0 };
+  return { gpa: Math.round((quality / credits) * 100) / 100, total_credits: credits };
+}
+
+// ── Prerequisites (D30 §D4) ─────────────────────────────────────────────────────
+/**
+ * Every course this student has PASSED, outside `excludeSemesterId`.
+ *
+ * Mirrors `grades/service.completed_course_results` closely enough for the gate to
+ * agree with the server: a result counts only if the student sat the course in some
+ * OTHER term and passed it. Excluding the target term is what stops a course from
+ * satisfying its own prerequisite — enrolling into MATH1 and MATH2 together must not
+ * wave MATH2 through.
+ *
+ * Simpler than the server in one way, deliberately: demo mode has no frozen snapshots
+ * and one grading scale, so there is nothing to reconcile across years.
+ */
+export function passedCourseIds(studentId: string, excludeSemesterId: string): Set<string> {
+  const scale = getActiveGradingScale();
+  const passed = new Set<string>();
+  for (const enr of D.enrollments) {
+    if (enr.student_id !== studentId) continue;
+    if (enr.semester_id === excludeSemesterId) continue;
+    for (const cs of D.class_subjects.filter((c) => c.section_id === enr.section_id)) {
+      const { numeric, letter } = computeTermGrade(studentId, cs.id);
+      if (numeric === null || !letter) continue;
+      const band = scale?.bands.find((b) => b.letter === letter);
+      if (band?.is_passing) passed.add(cs.subject_id);
+    }
+  }
+  return passed;
+}
+
+/**
+ * The unmet requirements standing between this student and this course. `[]` = clear.
+ *
+ * `all_program_courses` expands to every REQUIRED course in the programme (electives
+ * a student legitimately did not choose are not missing requirements), and applies
+ * only to students on that programme.
+ *
+ * Demo students carry no programme (that is Phase 4), so a programme-scoped rule
+ * never fires here — which is correct, not a gap: the server behaves the same way.
+ */
+export function unmetPrerequisites(
+  studentId: string,
+  courseId: string,
+  semesterId: string,
+): Array<{ code: string; reason: string }> {
+  const rules = D.course_prerequisites.filter((p) => p.course_id === courseId);
+  if (rules.length === 0) return [];
+
+  const student = D.students.find((s) => s.id === studentId);
+  const studentProgramId = (student as { program_id?: string | null } | undefined)?.program_id ?? null;
+  const applicable = rules.filter((r) => r.program_id === null || r.program_id === studentProgramId);
+  if (applicable.length === 0) return [];
+
+  const passed = passedCourseIds(studentId, semesterId);
+  const issues: Array<{ code: string; reason: string }> = [];
+
+  const record = (requiredId: string) => {
+    if (passed.has(requiredId)) return;
+    const course = D.subjects.find((c) => c.id === requiredId);
+    issues.push({
+      code: course?.code ?? '?',
+      reason: 'not passed',
+    });
+  };
+
+  for (const rule of applicable) {
+    if (rule.requirement_type === 'all_program_courses') {
+      D.program_courses
+        .filter(
+          (pc) =>
+            pc.program_id === rule.program_id &&
+            pc.course_id !== courseId &&
+            pc.is_required,
+        )
+        .forEach((pc) => record(pc.course_id));
+    } else if (rule.prerequisite_course_id) {
+      record(rule.prerequisite_course_id);
+    }
+  }
+  return issues;
 }
 
 // ── Attendance ──────────────────────────────────────────────────────────────────

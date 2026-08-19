@@ -4,7 +4,8 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@shared/api/client';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
@@ -34,6 +35,9 @@ import { useResetUserPasswordApiV1AuthUsersUserIdResetPasswordPost } from '@shar
 import type {
   ListUsersApiV1SettingsUsersGetParams,
   GetGradingScaleApiV1SettingsGradingScaleGetParams,
+  SemesterDetail,
+  SemesterUpdateRequest,
+  StandaloneSemesterCreateRequest,
 } from '@shared/api/generated/model';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
@@ -96,6 +100,40 @@ export function useArchiveAcademicYear() {
   const invalidate = useInvalidateAcademicStructure();
   return useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost({
     mutation: { onSuccess: invalidate },
+  });
+}
+
+/**
+ * D30 §D3 — add / correct ONE calendar term.
+ *
+ * Hand-written rather than generated: `POST /settings/semesters` and
+ * `PATCH /settings/semesters/{id}` are new in D30 and are not in the served
+ * `openapi.json`, and `npm run generate:api` is forbidden (it covers 4 of 14 modules,
+ * so regenerating would delete far more than it restored). Same arrangement as the
+ * Students and Programmes features.
+ */
+export function useCreateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useMutation({
+    mutationFn: async (body: StandaloneSemesterCreateRequest) => {
+      const res = await api.post<SemesterDetail>('/settings/semesters', body);
+      return res.data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useMutation({
+    mutationFn: async (vars: { semesterId: string; body: SemesterUpdateRequest }) => {
+      const res = await api.patch<SemesterDetail>(
+        `/settings/semesters/${vars.semesterId}`,
+        vars.body,
+      );
+      return res.data;
+    },
+    onSuccess: invalidate,
   });
 }
 

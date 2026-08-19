@@ -184,7 +184,7 @@ export function AnnouncementFormDialog({
             <InputLabel id="announcement-class-label">Class</InputLabel>
             <Select
               labelId="announcement-class-label"
-              label="Class"
+              label="Course offering"
               value={values.class_id ?? ''}
               onChange={(e) => setValues((v) => ({ ...v, class_id: e.target.value || null }))}
               disabled={classesQuery.isLoading}

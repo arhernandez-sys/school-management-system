@@ -1,0 +1,162 @@
+import { useEffect, useState } from 'react';
+import { MenuItem, Stack, TextField } from '@mui/material';
+import { FormDialog } from '@shared/components';
+import type { ProgramListItem, ProgramWritePayload } from '../types';
+
+export interface ProgramFormDialogProps {
+  open: boolean;
+  /** Edit mode when provided (create otherwise). */
+  program?: ProgramListItem | null;
+  submitting: boolean;
+  error?: string | null;
+  fieldErrors?: Record<string, string[]>;
+  onSubmit: (values: ProgramWritePayload) => void;
+  onClose: () => void;
+}
+
+/** The awards BAJC confers (plan §A1). Free text underneath, so a new award does not
+ *  need a code change — these are just the ones that exist today. */
+const AWARDS = [
+  'Associate of Social Science',
+  'Associate of Science',
+  'Associate of Arts',
+];
+
+/**
+ * Create / edit a PROGRAMME (D30 §D3). Dean-only — the screen never opens this for a
+ * Registrar (`canWrite(role, 'programs')`), and the server re-checks.
+ *
+ * The pass-mark field is the one that repays explanation: **it is per programme**
+ * (§D5). Primary Education passes at C (2.00) and every other BAJC programme at
+ * C+ (2.50). It cannot live on the grading scale, whose pass mark is one number per
+ * ACADEMIC YEAR — a year-level number cannot say two different things about two
+ * programmes running inside it at once.
+ */
+export function ProgramFormDialog({
+  open,
+  program,
+  submitting,
+  error,
+  fieldErrors,
+  onSubmit,
+  onClose,
+}: ProgramFormDialogProps) {
+  const editing = Boolean(program);
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
+  const [award, setAward] = useState('');
+  const [totalCredits, setTotalCredits] = useState('');
+  const [passMark, setPassMark] = useState('2.50');
+
+  useEffect(() => {
+    if (open) {
+      setCode(program?.code ?? '');
+      setName(program?.name ?? '');
+      setAward(program?.award ?? '');
+      setTotalCredits(program?.total_credits != null ? String(program.total_credits) : '');
+      setPassMark(program?.min_passing_grade_point ?? '2.50');
+    }
+  }, [open, program]);
+
+  const creditsNumber = totalCredits.trim() === '' ? null : Number(totalCredits);
+  const creditsValid =
+    creditsNumber === null || (Number.isInteger(creditsNumber) && creditsNumber > 0);
+  const passNumber = Number(passMark);
+  const passValid = Number.isFinite(passNumber) && passNumber >= 0 && passNumber <= 4;
+
+  return (
+    <FormDialog
+      open={open}
+      title={editing ? 'Edit programme' : 'Add programme'}
+      submitLabel={editing ? 'Save changes' : 'Create programme'}
+      submitting={submitting}
+      submitDisabled={
+        code.trim().length === 0 || name.trim().length === 0 || !creditsValid || !passValid
+      }
+      error={error}
+      onClose={onClose}
+      onSubmit={() =>
+        onSubmit({
+          code: code.trim(),
+          name: name.trim(),
+          award: award.trim() || null,
+          total_credits: creditsNumber,
+          min_passing_grade_point: passNumber.toFixed(2),
+        })
+      }
+    >
+      <Stack spacing={2} sx={{ mt: 1 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <TextField
+            label="Code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            required
+            fullWidth
+            autoFocus
+            inputProps={{ maxLength: 10, 'aria-required': true }}
+            error={Boolean(fieldErrors?.code)}
+            helperText={fieldErrors?.code?.join(' ') ?? 'e.g. BMAD — printed on the report card.'}
+          />
+          <TextField
+            label="Programme name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            fullWidth
+            inputProps={{ maxLength: 250, 'aria-required': true }}
+            error={Boolean(fieldErrors?.name)}
+            helperText={fieldErrors?.name?.join(' ')}
+          />
+        </Stack>
+        <TextField
+          select
+          label="Award"
+          value={award}
+          onChange={(e) => setAward(e.target.value)}
+          fullWidth
+          helperText="Optional."
+        >
+          <MenuItem value="">
+            <em>Not set</em>
+          </MenuItem>
+          {AWARDS.map((a) => (
+            <MenuItem key={a} value={a}>
+              {a}
+            </MenuItem>
+          ))}
+        </TextField>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <TextField
+            label="Total credits"
+            type="number"
+            value={totalCredits}
+            onChange={(e) => setTotalCredits(e.target.value)}
+            fullWidth
+            inputProps={{ min: 1, max: 999 }}
+            error={Boolean(fieldErrors?.total_credits) || !creditsValid}
+            helperText={
+              fieldErrors?.total_credits?.join(' ') ??
+              'As printed on the course sequence (BAJC: 86–102).'
+            }
+          />
+          <TextField
+            label="Pass mark (grade point)"
+            type="number"
+            value={passMark}
+            onChange={(e) => setPassMark(e.target.value)}
+            fullWidth
+            inputProps={{ min: 0, max: 4, step: 0.25 }}
+            error={Boolean(fieldErrors?.min_passing_grade_point) || !passValid}
+            helperText={
+              fieldErrors?.min_passing_grade_point?.join(' ') ??
+              '2.50 = C+ for most programmes; Primary Education is 2.00 = C.'
+            }
+          />
+        </Stack>
+      </Stack>
+    </FormDialog>
+  );
+}
+
+export default ProgramFormDialog;

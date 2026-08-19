@@ -3,6 +3,7 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { GradeAssessmentsScreen } from './GradeAssessmentsScreen';
 import { AssessmentGradingScreen } from './AssessmentGradingScreen';
 import { MyGradesScreen } from './MyGradesScreen';
+import { GradeRevisionsScreen } from './GradeRevisionsScreen';
 
 /**
  * Grades module (Phase 7) — a nested-routed container mounted at `/grades/*`
@@ -23,6 +24,13 @@ export function GradesPage() {
       <Route index element={isStudent ? <MyGradesScreen /> : <GradeAssessmentsScreen />} />
       {/* Per-assessment class grading page (teacher/P·S). */}
       <Route path="assessment/:assessmentId" element={<AssessmentGradingScreen />} />
+      {/* D30 §D7/§D8 — the revision queue. Mounted UNDER /grades rather than as its own
+          nav module: a revision is a grade decision, and the Dean and the Lecturer both
+          arrive at it from the gradebook. A student never sees it. */}
+      <Route
+        path="revisions"
+        element={isStudent ? <Navigate to=".." replace /> : <GradeRevisionsScreen />}
+      />
       {/* Explicit sub-paths keep deep links stable if a viewer role changes. */}
       <Route path="me" element={<MyGradesScreen />} />
       <Route path="*" element={<Navigate to="." replace />} />

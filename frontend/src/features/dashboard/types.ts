@@ -187,6 +187,13 @@ export interface StudentDashboard extends DashboardBase {
   stats: {
     term_average: number | null;
     term_letter: string | null;
+    /**
+     * Credit-weighted term GPA (D30 §D5). The RELEASED view, like `term_average`: an
+     * unreleased course contributes 0 quality points and keeps its credits, so the
+     * figure can never be used to back out a mark not yet shown.
+     */
+    gpa: number | null;
+    total_credits: number;
     attendance_rate: number;
     upcoming_count: number;
   };

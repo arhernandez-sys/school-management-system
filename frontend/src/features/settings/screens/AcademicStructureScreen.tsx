@@ -7,6 +7,8 @@ import {
   CardActions,
   CardContent,
   Divider,
+  IconButton,
+  MenuItem,
   Stack,
   Table,
   TableBody,
@@ -14,11 +16,14 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
   useMediaQuery,
   useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditIcon from '@mui/icons-material/Edit';
 import {
   PageHeader,
   LoadingState,
@@ -34,17 +39,80 @@ import {
   useCreateAcademicYear,
   useActivateSemester,
   useArchiveAcademicYear,
+  useCreateSemester,
+  useUpdateSemester,
 } from '../hooks/useSettings';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
-import type { AcademicYearDetail } from '@shared/api/generated/model';
+import { TermFormDialog, type TermFormValues } from '../components/TermFormDialog';
+import type {
+  AcademicYearDetail,
+  SemesterDetail,
+  TermType,
+} from '@shared/api/generated/model';
+
+/** One term row in the create-year dialog. Local shape — the API takes these as
+ *  `semesters[]` on the year. */
+interface DraftTerm {
+  key: string;
+  name: string;
+  term_type: TermType;
+  sequence: number;
+  start_date: string;
+  end_date: string;
+}
+
+const TERM_KINDS: { value: TermType; label: string }[] = [
+  { value: 'semester', label: 'Semester' },
+  { value: 'summer', label: 'Summer block' },
+  { value: 'spring', label: 'Spring block' },
+];
 
 /**
- * Academic structure (api-spec §11, D10). Lists academic years with their two
- * semesters. Principal/Secretary can:
- *  - Create a year with EXACTLY two semesters (D10) — 409 active_year_exists surfaced.
- *  - Activate a semester — conflicts surfaced.
+ * A stored UTC deadline, rendered in the reader's own timezone (D30 §D6). Shown to the
+ * minute: "grades due on the 15th" is not the same instruction as "grades due 17:00 on
+ * the 15th", and the second is the one that is actually enforced.
+ */
+function formatDeadline(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function blankTerm(sequence: number, name: string): DraftTerm {
+  return {
+    key: `t-${sequence}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    term_type: 'semester',
+    sequence,
+    start_date: '',
+    end_date: '',
+  };
+}
+
+/**
+ * Academic structure (api-spec §11; **D30 §D3 — N calendar terms per year**).
+ *
+ * Lists academic years with their terms. Principal/Secretary can:
+ *  - Create a year with ONE OR MORE terms — 409 active_year_exists surfaced.
+ *  - Add a term to an existing year, or correct one (Dean only).
+ *  - Activate a term — conflicts surfaced.
  *  - Archive a year (confirm dialog warns it freezes the year) — 202 accepted;
  *    409 year_already_archived surfaced.
+ *
+ * WHAT CHANGED IN D30 AND WHY. This screen used to hard-code exactly two semesters,
+ * because the schema did: `semesters.sequence` carried `CHECK (sequence IN (1,2))`
+ * and there was no endpoint to add a third. BAJC's programmes run Summer and Spring
+ * blocks alongside the numbered semesters — Primary Education has eight positions in
+ * its plan — so both the cap and the fixed two-semester form had to go.
+ *
+ * These are CALENDAR terms. A course's position in a programme's plan is a different
+ * fact and lives under Settings → Programmes (§D3).
  */
 export function AcademicStructureScreen() {
   const { user } = useAuth();
@@ -58,20 +126,28 @@ export function AcademicStructureScreen() {
   const createMut = useCreateAcademicYear();
   const activateMut = useActivateSemester();
   const archiveMut = useArchiveAcademicYear();
+  const createTermMut = useCreateSemester();
+  const updateTermMut = useUpdateSemester();
 
   // ── create-year dialog ──────────────────────────────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
   const [yearName, setYearName] = useState('');
   const [yearStart, setYearStart] = useState('');
   const [yearEnd, setYearEnd] = useState('');
-  const [s1Name, setS1Name] = useState('Semester 1');
-  const [s1Start, setS1Start] = useState('');
-  const [s1End, setS1End] = useState('');
-  const [s2Name, setS2Name] = useState('Semester 2');
-  const [s2Start, setS2Start] = useState('');
-  const [s2End, setS2End] = useState('');
+  // D30: a LIST, not two fixed slots. Seeded with the two-semester shape because that
+  // is still the common case; a Summer or Spring block is now one click away.
+  const [terms, setTerms] = useState<DraftTerm[]>([
+    blankTerm(1, 'Semester 1'),
+    blankTerm(2, 'Semester 2'),
+  ]);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createFieldErrors, setCreateFieldErrors] = useState<Record<string, string[]>>({});
+
+  // ── add / edit ONE term (D30 §D3) ───────────────────────────────────────────
+  const [termDialogYear, setTermDialogYear] = useState<AcademicYearDetail | null>(null);
+  const [termDialogTerm, setTermDialogTerm] = useState<SemesterDetail | null>(null);
+  const [termError, setTermError] = useState<string | null>(null);
+  const [termFieldErrors, setTermFieldErrors] = useState<Record<string, string[]>>({});
 
   // ── archive confirm / activate error ─────────────────────────────────────────
   const [archiveTarget, setArchiveTarget] = useState<AcademicYearDetail | null>(null);
@@ -87,12 +163,7 @@ export function AcademicStructureScreen() {
     setYearName('');
     setYearStart('');
     setYearEnd('');
-    setS1Name('Semester 1');
-    setS1Start('');
-    setS1End('');
-    setS2Name('Semester 2');
-    setS2Start('');
-    setS2End('');
+    setTerms([blankTerm(1, 'Semester 1'), blankTerm(2, 'Semester 2')]);
     setCreateError(null);
     setCreateFieldErrors({});
   };
@@ -102,16 +173,34 @@ export function AcademicStructureScreen() {
     setCreateOpen(true);
   };
 
+  const patchTerm = (key: string, patch: Partial<DraftTerm>) =>
+    setTerms((prev) => prev.map((t) => (t.key === key ? { ...t, ...patch } : t)));
+
+  const addTermRow = () =>
+    setTerms((prev) => [
+      ...prev,
+      blankTerm(
+        prev.length ? Math.max(...prev.map((t) => t.sequence)) + 1 : 1,
+        `Semester ${prev.length + 1}`,
+      ),
+    ]);
+
+  // A year needs at least one term, so the last row cannot be removed.
+  const removeTermRow = (key: string) =>
+    setTerms((prev) => (prev.length > 1 ? prev.filter((t) => t.key !== key) : prev));
+
+  const sequences = terms.map((t) => t.sequence);
+  const duplicateSequence = sequences.length !== new Set(sequences).size;
+
   const createValid = Boolean(
     yearName.trim() &&
       yearStart &&
       yearEnd &&
-      s1Name.trim() &&
-      s1Start &&
-      s1End &&
-      s2Name.trim() &&
-      s2Start &&
-      s2End,
+      terms.length > 0 &&
+      !duplicateSequence &&
+      terms.every(
+        (t) => t.name.trim() && t.start_date && t.end_date && t.end_date > t.start_date,
+      ),
   );
 
   const handleCreate = () => {
@@ -123,10 +212,13 @@ export function AcademicStructureScreen() {
           name: yearName.trim(),
           start_date: yearStart,
           end_date: yearEnd,
-          semesters: [
-            { name: s1Name.trim(), sequence: 1, start_date: s1Start, end_date: s1End },
-            { name: s2Name.trim(), sequence: 2, start_date: s2Start, end_date: s2End },
-          ],
+          semesters: terms.map((t) => ({
+            name: t.name.trim(),
+            term_type: t.term_type,
+            sequence: t.sequence,
+            start_date: t.start_date,
+            end_date: t.end_date,
+          })),
         },
       },
       {
@@ -138,6 +230,47 @@ export function AcademicStructureScreen() {
         },
       },
     );
+  };
+
+  // ── one term ────────────────────────────────────────────────────────────────
+  const openAddTerm = (year: AcademicYearDetail) => {
+    setTermDialogTerm(null);
+    setTermError(null);
+    setTermFieldErrors({});
+    setTermDialogYear(year);
+  };
+
+  const openEditTerm = (year: AcademicYearDetail, term: SemesterDetail) => {
+    setTermDialogTerm(term);
+    setTermError(null);
+    setTermFieldErrors({});
+    setTermDialogYear(year);
+  };
+
+  const closeTermDialog = () => {
+    setTermDialogYear(null);
+    setTermDialogTerm(null);
+  };
+
+  const handleTermSubmit = (values: TermFormValues) => {
+    setTermError(null);
+    setTermFieldErrors({});
+    const onError = (err: unknown) => {
+      setTermError(apiErrorMessage(err));
+      const fields = fieldErrorsFrom(err);
+      if (fields) setTermFieldErrors(fields);
+    };
+    if (termDialogTerm) {
+      updateTermMut.mutate(
+        { semesterId: termDialogTerm.id, body: values },
+        { onSuccess: closeTermDialog, onError },
+      );
+    } else if (termDialogYear) {
+      createTermMut.mutate(
+        { ...values, academic_year_id: termDialogYear.id },
+        { onSuccess: closeTermDialog, onError },
+      );
+    }
   };
 
   const handleActivate = (semesterId: string) => {
@@ -164,7 +297,7 @@ export function AcademicStructureScreen() {
     <>
       <PageHeader
         title="Academic structure"
-        subtitle="Academic years and their semesters. A year always has exactly two semesters."
+        subtitle="Academic years and the calendar terms in them. A year can hold as many terms as the college runs — semesters, Summer and Spring blocks."
         primaryAction={
           canManage ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -206,16 +339,25 @@ export function AcademicStructureScreen() {
                       />
                     </Stack>
                     {canManage && !isArchived && (
-                      <Button
-                        color="warning"
-                        size="small"
-                        onClick={() => {
-                          setArchiveError(null);
-                          setArchiveTarget(year);
-                        }}
-                      >
-                        Archive year
-                      </Button>
+                      <Stack direction="row" spacing={1}>
+                        <Button
+                          size="small"
+                          startIcon={<AddIcon />}
+                          onClick={() => openAddTerm(year)}
+                        >
+                          Add term
+                        </Button>
+                        <Button
+                          color="warning"
+                          size="small"
+                          onClick={() => {
+                            setArchiveError(null);
+                            setArchiveTarget(year);
+                          }}
+                        >
+                          Archive year
+                        </Button>
+                      </Stack>
                     )}
                   </Stack>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
@@ -251,6 +393,21 @@ export function AcademicStructureScreen() {
                                 }}
                               >
                                 <Typography variant="caption" color="text.secondary">
+                                  Kind
+                                </Typography>
+                                <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
+                                  {sem.term_type}
+                                </Typography>
+                              </Box>
+                              <Box
+                                sx={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  gap: 2,
+                                  flexWrap: 'wrap',
+                                }}
+                              >
+                                <Typography variant="caption" color="text.secondary">
                                   Dates
                                 </Typography>
                                 <Typography variant="body2">
@@ -276,25 +433,31 @@ export function AcademicStructureScreen() {
                               </Box>
                             </Stack>
                           </CardContent>
-                          {canManage && !isArchived && !sem.is_active && (
+                          {canManage && !isArchived && (
                             <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
-                              <Button
-                                size="small"
-                                onClick={() => handleActivate(sem.id)}
-                                disabled={activateMut.isPending}
-                              >
-                                Activate
+                              <Button size="small" onClick={() => openEditTerm(year, sem)}>
+                                Edit
                               </Button>
+                              {!sem.is_active && (
+                                <Button
+                                  size="small"
+                                  onClick={() => handleActivate(sem.id)}
+                                  disabled={activateMut.isPending}
+                                >
+                                  Activate
+                                </Button>
+                              )}
                             </CardActions>
                           )}
                         </Card>
                       ))}
                     </Stack>
                   ) : (
-                    <Table size="small" aria-label={`Semesters for ${year.name}`}>
+                    <Table size="small" aria-label={`Terms for ${year.name}`}>
                       <TableHead>
                         <TableRow>
-                          <TableCell>Semester</TableCell>
+                          <TableCell>Term</TableCell>
+                          <TableCell>Kind</TableCell>
                           <TableCell>Dates</TableCell>
                           <TableCell>Status</TableCell>
                           {canManage && !isArchived && <TableCell align="right" />}
@@ -304,8 +467,23 @@ export function AcademicStructureScreen() {
                         {year.semesters.map((sem) => (
                           <TableRow key={sem.id}>
                             <TableCell>{sem.name}</TableCell>
+                            <TableCell sx={{ textTransform: 'capitalize' }}>
+                              {sem.term_type}
+                            </TableCell>
                             <TableCell>
                               {sem.start_date} → {sem.end_date}
+                              {/* D30 §D6 — a closed grade window is the reason a Lecturer
+                                  cannot save, so it belongs on the term row rather than
+                                  only inside the edit dialog. */}
+                              {sem.grade_submission_deadline && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: 'block' }}
+                                >
+                                  Grades due {formatDeadline(sem.grade_submission_deadline)}
+                                </Typography>
+                              )}
                             </TableCell>
                             <TableCell>
                               {sem.is_active ? (
@@ -325,6 +503,15 @@ export function AcademicStructureScreen() {
                                     Activate
                                   </Button>
                                 )}
+                                <Tooltip title="Edit term">
+                                  <IconButton
+                                    size="small"
+                                    aria-label={`Edit ${sem.name}`}
+                                    onClick={() => openEditTerm(year, sem)}
+                                  >
+                                    <EditIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
                               </TableCell>
                             )}
                           </TableRow>
@@ -387,65 +574,126 @@ export function AcademicStructureScreen() {
             />
           </Stack>
 
-          <Divider>Semester 1</Divider>
-          <TextField
-            label="Semester 1 name"
-            value={s1Name}
-            onChange={(e) => setS1Name(e.target.value)}
-            required
-            fullWidth
-          />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField
-              label="Start"
-              type="date"
-              value={s1Start}
-              onChange={(e) => setS1Start(e.target.value)}
-              required
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="End"
-              type="date"
-              value={s1End}
-              onChange={(e) => setS1End(e.target.value)}
-              required
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-            />
-          </Stack>
-
-          <Divider>Semester 2</Divider>
-          <TextField
-            label="Semester 2 name"
-            value={s2Name}
-            onChange={(e) => setS2Name(e.target.value)}
-            required
-            fullWidth
-          />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField
-              label="Start"
-              type="date"
-              value={s2Start}
-              onChange={(e) => setS2Start(e.target.value)}
-              required
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="End"
-              type="date"
-              value={s2End}
-              onChange={(e) => setS2End(e.target.value)}
-              required
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-            />
-          </Stack>
+          {/* D30 §D3 — terms are a LIST. This used to be two fixed blocks of fields,
+              which is why BAJC's Summer and Spring blocks could not be entered. */}
+          <Divider>Terms</Divider>
+          {duplicateSequence && (
+            <Alert severity="warning">
+              Two terms share an order number. Each term needs its own position within the
+              year.
+            </Alert>
+          )}
+          {terms.map((term, index) => (
+            <Box
+              key={term.key}
+              sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2 }}
+            >
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                sx={{ mb: 1 }}
+              >
+                <Typography variant="subtitle2">Term {index + 1}</Typography>
+                {terms.length > 1 && (
+                  <Tooltip title="Remove this term">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      aria-label={`Remove term ${index + 1}`}
+                      onClick={() => removeTermRow(term.key)}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Stack>
+              <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    label="Name"
+                    value={term.name}
+                    onChange={(e) => patchTerm(term.key, { name: e.target.value })}
+                    required
+                    fullWidth
+                    placeholder="e.g. Summer 1"
+                  />
+                  <TextField
+                    select
+                    label="Kind"
+                    value={term.term_type}
+                    onChange={(e) =>
+                      patchTerm(term.key, { term_type: e.target.value as TermType })
+                    }
+                    fullWidth
+                  >
+                    {TERM_KINDS.map((k) => (
+                      <MenuItem key={k.value} value={k.value}>
+                        {k.label}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Order"
+                    type="number"
+                    value={term.sequence}
+                    onChange={(e) =>
+                      patchTerm(term.key, { sequence: Number(e.target.value) })
+                    }
+                    required
+                    sx={{ minWidth: 110 }}
+                    inputProps={{ min: 1, max: 99 }}
+                  />
+                </Stack>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    label="Start"
+                    type="date"
+                    value={term.start_date}
+                    onChange={(e) => patchTerm(term.key, { start_date: e.target.value })}
+                    required
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                  />
+                  <TextField
+                    label="End"
+                    type="date"
+                    value={term.end_date}
+                    onChange={(e) => patchTerm(term.key, { end_date: e.target.value })}
+                    required
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                    error={Boolean(
+                      term.start_date && term.end_date && term.end_date <= term.start_date,
+                    )}
+                    helperText={
+                      term.start_date && term.end_date && term.end_date <= term.start_date
+                        ? 'Must be after the start date.'
+                        : undefined
+                    }
+                  />
+                </Stack>
+              </Stack>
+            </Box>
+          ))}
+          <Button startIcon={<AddIcon />} onClick={addTermRow} sx={{ alignSelf: 'flex-start' }}>
+            Add another term
+          </Button>
         </Stack>
       </FormDialog>
+
+      {/* Add / correct ONE term (D30 §D3) */}
+      <TermFormDialog
+        open={Boolean(termDialogYear)}
+        term={termDialogTerm}
+        yearName={termDialogYear?.name ?? ''}
+        usedSequences={(termDialogYear?.semesters ?? []).map((t) => t.sequence)}
+        submitting={createTermMut.isPending || updateTermMut.isPending}
+        error={termError}
+        fieldErrors={termFieldErrors}
+        onSubmit={handleTermSubmit}
+        onClose={closeTermDialog}
+      />
 
       {/* Archive confirm */}
       <ConfirmDialog

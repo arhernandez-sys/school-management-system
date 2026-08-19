@@ -2,10 +2,12 @@ import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
+  DEMO_TODAY_ISO,
   assessmentsForClassSubject,
   classSubjectsForYear,
   classSubjectsOwnedByTeacher,
   computeTermGrade,
+  getActiveSemester,
   getActiveYear,
   getClassSubject,
   getSection,
@@ -143,6 +145,23 @@ function gradebookResponse(classSubjectId: string) {
   };
 }
 
+/**
+ * The active term's grade-submission window (D30 §D6), mirroring
+ * `grades/service._grade_window_closed`.
+ *
+ * A null deadline never closes — the state of every demo term as shipped, and the safe
+ * default. Demo mode has to carry this rule too: the last two times a rule lived in only
+ * one of the two implementations, demo mode certified a screen the real backend refused.
+ */
+function gradeWindow(): { closed: boolean; deadline: string | null } {
+  const deadline = getActiveSemester()?.grade_submission_deadline ?? null;
+  if (!deadline) return { closed: false, deadline: null };
+  const at = new Date(deadline).getTime();
+  // DEMO_TODAY, not the real clock: the dataset is deterministic by design, and reading
+  // `Date.now()` here would make the window flip depending on when the demo is opened.
+  return { closed: !Number.isNaN(at) && new Date(DEMO_TODAY_ISO).getTime() > at, deadline };
+}
+
 // ── grade-entry validation + upsert (PUT /assessments/{id}/grades) ───────────────
 interface GradeEntryBody {
   student_id: string;
@@ -199,7 +218,16 @@ export const gradesHandlers = [
     const body = gradebookResponse(classSubjectId);
     // Expose whether THIS caller may write (drives read-only P/S view).
     const canEdit = role === 'teacher' && teacherId != null && cs.teacher_ids.includes(teacherId);
-    return HttpResponse.json({ ...body, can_edit: canEdit, viewer_role: role });
+    // Reported for EVERY viewer, not just writers: a Registrar asked why the lecturer
+    // cannot enter grades needs to see the same closed window (D30 §D6).
+    const window = gradeWindow();
+    return HttpResponse.json({
+      ...body,
+      can_edit: canEdit,
+      grade_window_closed: window.closed,
+      grade_submission_deadline: window.deadline,
+      viewer_role: role,
+    });
   }),
 
   // ── Grade entry / update — the ONLY grade-write path ───────────────────────────
@@ -218,6 +246,22 @@ export const gradesHandlers = [
     const writerTeacherId = currentTeacherId(writerRole);
     if (writerRole === 'teacher' && writerTeacherId != null && !cs.teacher_ids.includes(writerTeacherId)) {
       return errorResponse(403, 'forbidden', 'You are not assigned to this class.');
+    }
+
+    // The grade-submission deadline (D30 §D6). Checked BEFORE any validation or mutation,
+    // exactly where the server checks it, so a refused batch leaves the gradebook
+    // untouched. The Dean is exempt — and, as on the server, that arm is unreachable in
+    // practice because a Dean fails the ownership guard above anyway; the intended
+    // post-deadline path is Phase 5's grade-revision workflow.
+    if (writerRole !== 'principal') {
+      const window = gradeWindow();
+      if (window.closed) {
+        return errorResponse(
+          409,
+          'grade_window_closed',
+          'The grade submission deadline for this term has passed.',
+        );
+      }
     }
 
     const payload = (await request.json()) as { entries?: GradeEntryBody[] };

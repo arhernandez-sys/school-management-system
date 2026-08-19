@@ -98,7 +98,7 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
         <StatCard
-          label="Subjects needing a teacher"
+          label="Courses needing a lecturer"
           value={stats.unstaffed_subjects}
           icon={<WarningAmberIcon />}
           color={stats.unstaffed_subjects > 0 ? 'warning' : 'success'}

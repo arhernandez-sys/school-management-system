@@ -23,11 +23,24 @@ export interface StudentClassRef {
   section: string | null;
 }
 
+/**
+ * The stored name parts (D30 §D10, brief §11).
+ *
+ * `full_name` is COMPUTED server-side from these — the column was dropped in
+ * `007_student_names.sql` — so it stays on every read shape but is never a write
+ * field. `first_name` is nullable only for legacy single-token names.
+ */
+export interface StudentNameParts {
+  full_name: string;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string;
+}
+
 /** Row in GET /students. */
-export interface StudentListItem {
+export interface StudentListItem extends StudentNameParts {
   id: string;
   student_number: string;
-  full_name: string;
   status: StudentStatus;
   /** The student's own level, e.g. "Lower 6" (D29 — replaced the homeroom's grade). */
   year_group: string | null;
@@ -37,10 +50,9 @@ export interface StudentListItem {
 }
 
 /** GET /students/{id}, /me, POST, PATCH, POST /status. */
-export interface StudentDetail {
+export interface StudentDetail extends StudentNameParts {
   id: string;
   student_number: string;
-  full_name: string;
   date_of_birth: string;
   gender: 'male' | 'female';
   year_group: string | null;
@@ -109,8 +121,15 @@ export interface NudgeReleaseResult {
 
 /** Create/update payload (StudentCreate; all optional on PATCH). */
 export interface StudentWritePayload {
-  student_number: string;
-  full_name: string;
+  /**
+   * OPTIONAL on create (D30 §D9): omit it and the server issues the next
+   * `YYYYMM###`. Generation is server-side only — the SPA never composes one.
+   */
+  student_number?: string;
+  /** D30 §D10 — the name is written in parts. `full_name` is read-only. */
+  first_name: string;
+  middle_name?: string | null;
+  last_name: string;
   date_of_birth: string;
   gender?: 'male' | 'female';
   year_group?: string | null;
@@ -156,3 +175,105 @@ export interface StudentsListParams {
 }
 
 export type StudentsPage = Page<StudentListItem>;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Programme registration + derived academic history (D30 §D12, brief §12/§27)
+// ──────────────────────────────────────────────────────────────────────────────
+export interface StudentProgramRefLite {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export type AcademicHistoryCourseStatus =
+  | 'completed'
+  | 'failed'
+  | 'in_progress'
+  | 'transferred'
+  | 'remaining';
+
+export interface ProgramChangePayload {
+  program_id: string;
+  /** Defaults to today server-side. The outgoing programme closes the day before. */
+  effective_from?: string | null;
+  reason?: string | null;
+  year_of_study?: 'First' | 'Second' | null;
+  enrollment_load?: 'Part Time' | 'Full Time' | 'Transient' | null;
+}
+
+export interface ProgramHistoryEntry {
+  id: string;
+  program: StudentProgramRefLite;
+  started_at: string;
+  /** null = CURRENT. At most one open row per student, enforced by the database. */
+  ended_at: string | null;
+  reason: string | null;
+  is_current: boolean;
+}
+
+export interface StudentProgramRef {
+  student_id: string;
+  program: StudentProgramRefLite | null;
+  year_of_study: 'First' | 'Second' | null;
+  enrollment_load: 'Part Time' | 'Full Time' | 'Transient' | null;
+  history: ProgramHistoryEntry[];
+}
+
+export interface AcademicHistoryCourse {
+  course_id: string;
+  code: string;
+  name: string;
+  credits: number | null;
+  /** Curriculum POSITION in the plan ("Semester 1"), never a dated term (§D3). */
+  term_label: string | null;
+  term_order: number | null;
+  is_required: boolean;
+  /**
+   * False for a course the student took that the CURRENT programme does not list. After a
+   * programme change that is the honest reading of work which no longer counts toward the
+   * award — the grade is untouched, it simply stops being a requirement.
+   */
+  in_curriculum: boolean;
+  status: AcademicHistoryCourseStatus;
+  numeric: number | null;
+  letter: string | null;
+  grade_point: number | null;
+  is_frozen: boolean;
+  semester_id: string | null;
+}
+
+export interface AcademicHistoryCounts {
+  completed: number;
+  failed: number;
+  in_progress: number;
+  transferred: number;
+  remaining: number;
+}
+
+/**
+ * GET /students/{id}/academic-history — **entirely derived** (§D12).
+ *
+ * Recomputed on every read from enrolments, frozen snapshots, approved credit transfers and
+ * the programme curriculum. Nothing is cached as truth, so a corrected grade shows at once.
+ */
+export interface AcademicHistory {
+  student_id: string;
+  full_name: string;
+  student_number: string;
+  program: StudentProgramRefLite | null;
+  year_of_study: 'First' | 'Second' | null;
+  enrollment_load: 'Part Time' | 'Full Time' | 'Transient' | null;
+  /** As PRINTED on the programme sequence (86–102 for the BAJC awards). */
+  program_total_credits: number | null;
+  /** Summed from the curriculum's required rows. Compared against the printed total. */
+  curriculum_required_credits: number;
+  credits_earned: number;
+  credits_remaining: number;
+  /** Cumulative, from the single `calc.compute_gpa`. Transferred credit is excluded. */
+  gpa: number | null;
+  gpa_total_credits: number;
+  counts: AcademicHistoryCounts;
+  courses: AcademicHistoryCourse[];
+  program_history: ProgramHistoryEntry[];
+  active_semester_id: string | null;
+}

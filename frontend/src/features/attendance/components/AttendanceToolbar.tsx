@@ -77,7 +77,7 @@ export function AttendanceToolbar({
       <TextField
         select
         size="small"
-        label="Class"
+        label="Course offering"
         value={sectionId ?? ''}
         onChange={(e) => onSectionChange(e.target.value)}
         disabled={disabled || sections.length === 0}

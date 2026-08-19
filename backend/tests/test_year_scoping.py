@@ -48,6 +48,7 @@ from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -106,7 +107,7 @@ class _TwoYears:
         self.student = StudentProfile(
             user_id=self.student_user.id,
             student_number=f"YS-{tag}",
-            full_name=f"YS Student {tag}",
+            **split_name(f"YS Student {tag}"),
             date_of_birth=date(2011, 5, 4),
             enrollment_date=date(2024, 9, 1),
             status="active",
@@ -143,7 +144,7 @@ class _TwoYears:
         # past-year narrowing on `GET /students` has something to exclude.
         self.cur_only_student = StudentProfile(
             student_number=f"YSC-{tag}",
-            full_name=f"YS CurOnly {tag}",
+            **split_name(f"YS CurOnly {tag}"),
             date_of_birth=date(2011, 7, 8),
             enrollment_date=date(2025, 9, 1),
             status="active",

@@ -29,6 +29,7 @@ from app.modules.classes.models import (
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -107,7 +108,7 @@ class _Graph:
 
     def enrolled_student(self):
         s = StudentProfile(
-            student_number=f"S-{uuid.uuid4().hex[:8]}", full_name=f"Stu {uuid.uuid4().hex[:4]}",
+            student_number=f"S-{uuid.uuid4().hex[:8]}", **split_name(f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="active",
         )
         self._db.add(s)

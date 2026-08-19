@@ -169,6 +169,67 @@ class TestPerGradeTreatment:
         assert result.numeric == D("90.00")
         assert result.weight_base_used == D("1")
 
+    # ── An APPROVED GRADE REVISION (D30 §D7, Phase 5) ─────────────────────────
+    def test_a_makeup_on_a_GRADED_row_is_an_approved_revision_and_wins(self):
+        """The whole mechanism §D7 asks for.
+
+        A makeup can only reach a GRADED row through a revision the Dean approved —
+        `upsert_grades` refuses one outright (422 `makeup_not_allowed`). So its presence
+        IS the approval, and the revised mark is what counts.
+        """
+        result = compute_term_grade(
+            [_grade(score="60", makeup_score="90")], bands=SHIPPED_BANDS
+        )
+        assert (result.numeric, result.letter) == (D("90.00"), "A")
+
+    def test_the_original_score_still_decides_when_there_is_no_revision(self):
+        """The other side of the same arm — nothing changed for an ordinary grade."""
+        result = compute_term_grade([_grade(score="60")], bands=SHIPPED_BANDS)
+        assert result.numeric == D("60.00")
+
+    def test_a_revision_may_lower_a_grade(self):
+        """Not only an appeal upward. A transcription error corrected downward is the
+        same workflow, and the engine must not quietly keep the higher of the two."""
+        result = compute_term_grade(
+            [_grade(score="95", makeup_score="55")], bands=SHIPPED_BANDS
+        )
+        assert result.numeric == D("55.00")
+
+    def test_a_revision_applies_even_when_the_policy_disables_makeups(self):
+        """**`allow_makeup` is deliberately NOT consulted on the graded arm.**
+
+        That policy governs second SITTINGS for an absence. A Dean's approved revision is
+        an authority decision, and a category that happens to disable makeups must not
+        silently discard it — which is exactly what would happen if this arm reused the
+        absent arm's condition.
+        """
+        result = compute_term_grade(
+            [_grade(score="60", makeup_score="90", policy=STRICT)], bands=SHIPPED_BANDS
+        )
+        assert result.numeric == D("90.00")
+
+    def test_a_revision_to_zero_is_honoured(self):
+        """`0` is a real revised mark, not "no revision". A truthiness test here would
+        drop it and leave the original standing."""
+        result = compute_term_grade(
+            [_grade(score="80", makeup_score="0")], bands=SHIPPED_BANDS
+        )
+        assert result.numeric == D("0.00")
+        assert result.letter == "F"
+
+    def test_a_revision_is_weighted_like_any_other_result(self):
+        """It replaces the mark, not the weighting — the revised row still competes on
+        its own assessment weight."""
+        result = compute_term_grade(
+            [
+                _grade(score="50", makeup_score="100", weight="3"),
+                _grade(score="50", weight="1"),
+            ],
+            bands=SHIPPED_BANDS,
+        )
+        # (100 x 3 + 50 x 1) / 4 = 87.50
+        assert result.numeric == D("87.50")
+
     def test_absent_with_makeup_substitutes_the_makeup_score(self):
         result = compute_term_grade(
             [_grade(status=GradeStatus.ABSENT, makeup_score="70", policy=LENIENT)],

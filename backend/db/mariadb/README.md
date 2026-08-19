@@ -19,6 +19,21 @@ FastAPI/SQLAlchemy ORM models and the finished React frontend expect.
   a MariaDB UNIQUE), reusing the pattern already in `sims.sql`
   (`active_flag` / `is_active_number` / `unique_code` / `active_username`).
 
+## Running a file
+
+`apply_sql.py` applies one of these files from a terminal, reading `DATABASE_URL` from
+`backend/.env` so there is no second copy of the credentials. Run it from `backend\`.
+
+```powershell
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --check                      # tables + row counts
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --backup pre.sql             # SHOW CREATE TABLE snapshot
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py db\mariadb\005_tertiary.sql  # apply
+```
+
+It runs statements one at a time and prints each result, so a failure names the exact
+statement rather than aborting the file with no context. HeidiSQL still works if you
+prefer it. This exists because Alembic is non-functional against MariaDB here.
+
 ## Run order
 
 Apply in numeric order; each is re-runnable. `010_seed_demo.sql` / `seed_demo.py` load
@@ -30,6 +45,9 @@ demo data and are not part of the schema chain.
 | `002_column_defaults.sql` | `CURRENT_TIMESTAMP` defaults on three non-mixin timestamp columns (without them, every login fails with ERROR 1364). |
 | `003_subjects_is_active.sql` | Makes `subjects.is_active` a real column — 001 modelled it as generated, which MariaDB refuses to let the service write (ERROR 1906). |
 | `004_subject_class_model.sql` | **D29 sixth-form subject-class model:** new `class_meetings` table + `student_profiles.year_group`. See that file's header for why the reframe needed so little DDL. |
+| `005_tertiary.sql` | **D30 tertiary / junior-college model (BAJC).** Merges the stakeholder's `sims_bk.sql` tertiary work on top of 001–004. Adds the `courses` catalog (closing the grade→credit chain that made GPA impossible), `programs`, `program_courses`, `course_prerequisites`, grade points / quality points, N calendar terms + the grade-submission deadline, the application & credit-transfer tables, programme history, grade-revision requests, and `YYYYMM###` student-ID sequences. Legacy tertiary tables are **quarantined by rename** to `*_legacy_pre_d30`, never dropped. Full rationale in that file's header and in `docs/tertiary-refactor-plan.md`. |
+| `006_courses_cutover.sql` | **D30 Phase 2A — swaps the catalog from `subjects` to `courses`.** Applied 2026-08-16, in the same step as the code change that points `Subject.__tablename__` at `courses`. ⚠️ It must never be applied against an older checkout of the app: `005` copied the EXISTING rows into `courses`, but until the ORM writes there too, a newly-created course has nothing for the FK to resolve against and every attach fails with 1452 (this cost 73 test failures once). `subjects` is kept and commented as retired, not dropped. |
+| `007_student_names.sql` | **D30 Phase 1 — retires `student_profiles.full_name`.** Tightens `lastname` to NOT NULL (`firstname` stays nullable for the legacy single-token names `005` §9 parked there) and drops `full_name`, which becomes a `hybrid_property` on `StudentProfile`. Same apply-with-the-code rule as `006`. |
 
 ## Mixin column reference (from `db/base.py`)
 

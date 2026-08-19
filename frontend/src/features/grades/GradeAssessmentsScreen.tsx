@@ -161,7 +161,7 @@ export function GradeAssessmentsScreen() {
             <TextField
               select
               size="small"
-              label="Teacher"
+              label="Lecturer"
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
               disabled={teachers.length === 0}

@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
 import { DEMO_DATASET, DEMO_IDS, getActiveSemester, getActiveYear } from '@shared/api/mocks/demo/dataset';
 import type { DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoSemester } from '@shared/api/mocks/demo/types';
 import { boolParam, errorResponse, listParamsFrom } from './_helpers';
 import { paginate } from '@shared/api/mocks/demo/dataset';
 
@@ -54,6 +55,24 @@ function schoolProfileRead() {
   };
 }
 
+/**
+ * D30 §D3/§D6 — the term shape carries `term_type` and the grade-submission deadline,
+ * which is now WRITABLE by the Dean. Factored out because three handlers emit it.
+ */
+function semesterDetail(s: DemoSemester) {
+  return {
+    id: s.id,
+    academic_year_id: s.academic_year_id,
+    name: s.name,
+    term_type: s.term_type,
+    sequence: s.sequence,
+    start_date: s.start_date,
+    end_date: s.end_date,
+    grade_submission_deadline: s.grade_submission_deadline,
+    is_active: s.is_active,
+  };
+}
+
 function academicYearDetail(yearId: string) {
   const y = D.academic_years.find((a) => a.id === yearId)!;
   return {
@@ -65,14 +84,8 @@ function academicYearDetail(yearId: string) {
     archived_at: y.archived_at,
     semesters: D.semesters
       .filter((s) => s.academic_year_id === y.id)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        sequence: s.sequence,
-        start_date: s.start_date,
-        end_date: s.end_date,
-        is_active: s.is_active,
-      })),
+      .sort((a, b) => a.sequence - b.sequence)
+      .map(semesterDetail),
   };
 }
 
@@ -147,16 +160,7 @@ export const settingsHandlers = [
     const yearId = url.searchParams.get('academic_year_id');
     let rows = D.semesters;
     if (yearId) rows = rows.filter((s) => s.academic_year_id === yearId);
-    return HttpResponse.json({
-      items: rows.map((s) => ({
-        id: s.id,
-        name: s.name,
-        sequence: s.sequence,
-        start_date: s.start_date,
-        end_date: s.end_date,
-        is_active: s.is_active,
-      })),
-    });
+    return HttpResponse.json({ items: rows.map(semesterDetail) });
   }),
   http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params, cookies }) => {
     const denied = assertPrincipal(cookies);
@@ -166,15 +170,185 @@ export const settingsHandlers = [
     D.semesters.forEach((s) => {
       s.is_active = s.id === target.id;
     });
-    return HttpResponse.json({
-      id: target.id,
-      name: target.name,
-      sequence: target.sequence,
-      start_date: target.start_date,
-      end_date: target.end_date,
-      is_active: true,
-    });
+    return HttpResponse.json(semesterDetail(target));
   }),
+  // ── Create an academic year + its terms ──────────────────────────────────────
+  //
+  // This handler did not exist before D30, so demo mode 404'd on the "New academic
+  // year" button while the real backend answered 201 — the mirror image of the defect
+  // the file header describes. Added here because the N-term create dialog is the
+  // headline of §D3 and has to be demonstrable without a backend.
+  http.post(`${API_BASE_URL}/settings/academic-years`, async ({ request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as {
+      name: string;
+      start_date: string;
+      end_date: string;
+      semesters: Omit<DemoSemester, 'id' | 'academic_year_id' | 'grade_submission_deadline' | 'is_active'>[];
+    };
+    if (body.end_date <= body.start_date) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    if (!body.semesters?.length) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        semesters: ['At least one term is required.'],
+      });
+    }
+    const sequences = body.semesters.map((t) => t.sequence);
+    if (new Set(sequences).size !== sequences.length) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        semesters: ['Sequence numbers must be distinct.'],
+      });
+    }
+    if (D.academic_years.some((y) => y.status === 'active')) {
+      return errorResponse(
+        409,
+        'active_year_exists',
+        'An active academic year already exists; archive it first.',
+      );
+    }
+
+    const yearId = `ay-new-${D.academic_years.length + 1}`;
+    D.academic_years.push({
+      id: yearId,
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      status: 'active',
+      archived_at: null,
+    });
+
+    // The LOWEST sequence starts active — with N terms, "sequence === 1" is no longer
+    // a safe stand-in for "the first one" (a year whose terms start at 2 would have
+    // been created with no active term at all).
+    const first = Math.min(...sequences);
+    D.semesters.forEach((s) => {
+      s.is_active = false;
+    });
+    body.semesters
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .forEach((t, i) => {
+        D.semesters.push({
+          id: `${yearId}-t${i + 1}`,
+          academic_year_id: yearId,
+          name: t.name,
+          term_type: t.term_type ?? 'semester',
+          sequence: t.sequence,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          grade_submission_deadline: null,
+          is_active: t.sequence === first,
+        });
+      });
+
+    // Seed the year's grading scale from the existing one, as the service does.
+    const template = D.grading_scales[0];
+    if (template) {
+      D.grading_scales.push({
+        academic_year_id: yearId,
+        pass_mark: template.pass_mark,
+        is_frozen: false,
+        bands: template.bands.map((b) => ({ ...b })),
+      });
+    }
+
+    return HttpResponse.json(academicYearDetail(yearId), { status: 201 });
+  }),
+
+  // ── D30 §D3 — add / correct ONE calendar term (Dean only) ─────────────────────
+  // New endpoints: before D30 the whole calendar came from creating a year, which made
+  // exactly two semesters, so BAJC's Summer and Spring blocks had no route at all.
+  http.post(`${API_BASE_URL}/settings/semesters`, async ({ request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as Omit<DemoSemester, 'id' | 'is_active'>;
+    const year = D.academic_years.find((y) => y.id === body.academic_year_id);
+    if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
+    if (year.status === 'archived') {
+      return errorResponse(409, 'year_archived', 'Cannot change the terms of an archived year.');
+    }
+    if (body.end_date <= body.start_date) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    if (
+      D.semesters.some(
+        (s) => s.academic_year_id === year.id && s.sequence === body.sequence,
+      )
+    ) {
+      return errorResponse(
+        409,
+        'duplicate_semester_sequence',
+        `Another term in this year already uses sequence ${body.sequence}.`,
+      );
+    }
+    const created: DemoSemester = {
+      id: `sem-new-${D.semesters.length + 1}`,
+      academic_year_id: year.id,
+      name: body.name,
+      term_type: body.term_type ?? 'semester',
+      sequence: body.sequence,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      // Optional at creation; absent means the term never closes (D30 §D6).
+      grade_submission_deadline: body.grade_submission_deadline ?? null,
+      // Created INACTIVE: adding a future block must not move the current term.
+      is_active: false,
+    };
+    D.semesters.push(created);
+    return HttpResponse.json(semesterDetail(created), { status: 201 });
+  }),
+
+  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId`, async ({ params, request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const term = D.semesters.find((s) => s.id === params.semesterId);
+    if (!term) return errorResponse(404, 'not_found', 'Semester not found.');
+    const body = (await request.json()) as Partial<DemoSemester>;
+    // Validated against the MERGED dates, so moving only `start_date` past the stored
+    // `end_date` is caught — same rule as the server.
+    const start = body.start_date ?? term.start_date;
+    const end = body.end_date ?? term.end_date;
+    if (end <= start) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    if (
+      body.sequence !== undefined &&
+      body.sequence !== term.sequence &&
+      D.semesters.some(
+        (s) =>
+          s.id !== term.id &&
+          s.academic_year_id === term.academic_year_id &&
+          s.sequence === body.sequence,
+      )
+    ) {
+      return errorResponse(
+        409,
+        'duplicate_semester_sequence',
+        `Another term in this year already uses sequence ${body.sequence}.`,
+      );
+    }
+    if (body.name !== undefined) term.name = body.name;
+    if (body.term_type !== undefined) term.term_type = body.term_type;
+    if (body.sequence !== undefined) term.sequence = body.sequence;
+    // PRESENCE, not None-ness — mirroring the server's `model_fields_set` check. An
+    // explicit `null` REOPENS a closed grade window; omitting the key leaves it alone,
+    // so renaming a term cannot silently reopen it (D30 §D6).
+    if ('grade_submission_deadline' in body) {
+      term.grade_submission_deadline = body.grade_submission_deadline ?? null;
+    }
+    term.start_date = start;
+    term.end_date = end;
+    return HttpResponse.json(semesterDetail(term));
+  }),
+
   http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params, cookies }) => {
     const denied = assertPrincipal(cookies);
     if (denied) return denied;
@@ -207,6 +381,14 @@ export const settingsHandlers = [
         letter: String(b.letter ?? ''),
         min_score: Number(b.min_score ?? 0),
         max_score: Number(b.max_score ?? 0),
+        // Round-tripped, and absent/blank stays NULL rather than becoming 0 (D30 §D5).
+        // `Number(undefined)` is NaN and `Number(null)` is 0, so neither coercion is
+        // safe here — the backend stores NULL for "this scale cannot price this letter",
+        // and 0.00 is an F.
+        grade_point:
+          b.grade_point === null || b.grade_point === undefined || b.grade_point === ''
+            ? null
+            : Number(b.grade_point),
         is_passing: Boolean(b.is_passing ?? false),
         sort_order: Number(b.sort_order ?? 0),
       }));

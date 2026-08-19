@@ -75,7 +75,25 @@ class AnnouncementDetail(BaseModel):
 
 
 class UnreadCountResponse(BaseModel):
+    """The bell badge (§D8).
+
+    `unread_count` is what the badge shows and is the SUM of the two components below, so
+    an existing client that only reads this field keeps working and simply starts counting
+    revisions too. The breakdown is returned alongside because the popover groups by
+    source, and because "why does it say 3?" should be answerable without a second call.
+
+    **There is no notifications table**, and there deliberately never was one (§D8). A
+    notification here is a filtered read of something that already exists: an announcement
+    the caller has not read, or a grade revision awaiting their decision.
+    """
+
     unread_count: int = 0
+    #: Announcements visible and targeted at the caller that they have not read.
+    unread_announcements: int = 0
+    #: Grade revisions awaiting THE CALLER'S decision — non-zero only for the Dean, because
+    #: nobody else can rule on one. A Lecturer still sees their own requests and their
+    #: outcomes in the queue; the badge just does not nag them about work they cannot do.
+    pending_grade_revisions: int = 0
 
 
 class TargetClassesResponse(BaseModel):

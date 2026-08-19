@@ -34,6 +34,7 @@ from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -161,7 +162,7 @@ class _Graph:
     def student(self, *, enroll=True, name=None, with_login=False):
         s = StudentProfile(
             student_number=f"S-{uuid.uuid4().hex[:8]}",
-            full_name=name or f"Stu {uuid.uuid4().hex[:4]}",
+            **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=date(2025, 9, 1),
             status="active",

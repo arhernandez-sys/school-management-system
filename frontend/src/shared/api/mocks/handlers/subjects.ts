@@ -18,7 +18,33 @@ import { boolParam, errorResponse, listParamsFrom } from './_helpers';
 const D = DEMO_DATASET;
 
 function toListItem(s: DemoSubject) {
-  return { id: s.id, name: s.name, code: s.code, is_active: s.is_active };
+  return {
+    id: s.id,
+    name: s.name,
+    code: s.code,
+    // D30 §D2 — `credits` is what closes the grade→credit chain (plan §B3), so it is
+    // part of the list shape on the real API and has to be here too.
+    credits: s.credits,
+    component: s.component,
+    is_active: s.is_active,
+  };
+}
+
+/**
+ * D30 — the course catalog is Dean-only to WRITE (brief §6); reads stay open.
+ *
+ * This gate exists because of a real defect the team already paid for once: in D29,
+ * `GET /settings/academic-years` was principal-only on the server while the MSW handler
+ * had no role gate at all, so demo mode certified a screen as working that returned 403
+ * for every teacher against the real backend. Mirroring the server here is what stops
+ * that class of mismatch from hiding again.
+ */
+function assertDean(cookies: Record<string, string>) {
+  const role = cookies['sis_mock_session'] ?? 'principal';
+  if (role !== 'principal') {
+    return errorResponse(403, 'forbidden', 'Only the Dean can change the course catalog.');
+  }
+  return null;
 }
 
 export const subjectsHandlers = [
@@ -31,28 +57,58 @@ export const subjectsHandlers = [
     return HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),
 
-  http.post(`${API_BASE_URL}/subjects`, async ({ request }) => {
-    const body = (await request.json()) as { name: string; code?: string };
+  http.post(`${API_BASE_URL}/subjects`, async ({ request, cookies }) => {
+    const denied = assertDean(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as {
+      name: string;
+      code?: string;
+      credits?: number;
+      component?: DemoSubject['component'];
+    };
+    // D30: `code` is REQUIRED — `courses.code` is NOT NULL. Mirrored here so demo mode
+    // cannot certify a code-less create the real backend answers with a 422.
+    if (!body.name || !body.code) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        ...(body.name ? {} : { name: ['Field required'] }),
+        ...(body.code ? {} : { code: ['Field required'] }),
+      });
+    }
+    if (body.credits !== undefined && (!Number.isInteger(body.credits) || body.credits < 1)) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        credits: ['Must be a whole number greater than 0.'],
+      });
+    }
     if (D.subjects.some((s) => s.name.toLowerCase() === body.name.toLowerCase())) {
       return errorResponse(409, 'duplicate_subject_name', 'A subject with this name already exists.');
     }
-    if (body.code && D.subjects.some((s) => s.code.toLowerCase() === body.code!.toLowerCase())) {
+    if (D.subjects.some((s) => s.code.toLowerCase() === body.code!.toLowerCase())) {
       return errorResponse(409, 'duplicate_subject_code', 'A subject with this code already exists.');
     }
     const created: DemoSubject = {
       id: `subj-new-${D.subjects.length + 1}`,
       name: body.name,
-      code: body.code ?? '',
+      code: body.code,
+      credits: body.credits ?? 3,
+      component: body.component ?? null,
       is_active: true,
     };
     D.subjects.push(created);
     return HttpResponse.json(toListItem(created), { status: 201 });
   }),
 
-  http.patch(`${API_BASE_URL}/subjects/:subjectId`, async ({ params, request }) => {
+  http.patch(`${API_BASE_URL}/subjects/:subjectId`, async ({ params, request, cookies }) => {
+    const denied = assertDean(cookies);
+    if (denied) return denied;
     const subject = D.subjects.find((s) => s.id === params.subjectId);
     if (!subject) return errorResponse(404, 'not_found', 'Subject not found.');
-    const body = (await request.json()) as { name?: string; code?: string; is_active?: boolean };
+    const body = (await request.json()) as {
+      name?: string;
+      code?: string;
+      credits?: number;
+      component?: DemoSubject['component'];
+      is_active?: boolean;
+    };
     if (body.name && D.subjects.some((s) => s.id !== subject.id && s.name.toLowerCase() === body.name!.toLowerCase())) {
       return errorResponse(409, 'duplicate_subject_name', 'A subject with this name already exists.');
     }
@@ -60,12 +116,17 @@ export const subjectsHandlers = [
       return errorResponse(409, 'duplicate_subject_code', 'A subject with this code already exists.');
     }
     if (body.name !== undefined) subject.name = body.name;
-    if (body.code !== undefined) subject.code = body.code ?? '';
+    // The code cannot be cleared — the column is NOT NULL (D30).
+    if (body.code) subject.code = body.code;
+    if (body.credits !== undefined) subject.credits = body.credits;
+    if (body.component !== undefined) subject.component = body.component;
     if (body.is_active !== undefined) subject.is_active = body.is_active;
     return HttpResponse.json(toListItem(subject));
   }),
 
-  http.delete(`${API_BASE_URL}/subjects/:subjectId`, ({ params }) => {
+  http.delete(`${API_BASE_URL}/subjects/:subjectId`, ({ params, cookies }) => {
+    const denied = assertDean(cookies);
+    if (denied) return denied;
     const subject = D.subjects.find((s) => s.id === params.subjectId);
     if (!subject) return errorResponse(404, 'not_found', 'Subject not found.');
     const inUse = D.class_subjects.some((cs) => cs.subject_id === subject.id);

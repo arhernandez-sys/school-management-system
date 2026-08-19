@@ -51,6 +51,7 @@ from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -98,7 +99,7 @@ def _make_student(
     s = StudentProfile(
         user_id=user_id,
         student_number=student_number or f"S{uuid.uuid4().hex[:10]}",
-        full_name=full_name,
+        **split_name(full_name),
         date_of_birth=date_of_birth or date(2010, 1, 1),
         enrollment_date=enrollment_date or date(2025, 9, 1),
         status=status,
@@ -123,7 +124,11 @@ def _make_section(db_session, *, name=None, grade_level="Form 1", is_archived=Fa
 
 
 def _make_subject(db_session, *, name=None) -> Subject:  # noqa: ANN001
-    subj = Subject(name=name or f"Subject {uuid.uuid4().hex[:8]}")
+    # D30: `courses.code` is NOT NULL, so every course fixture carries one.
+    subj = Subject(
+        name=name or f"Subject {uuid.uuid4().hex[:8]}",
+        code=uuid.uuid4().hex[:8].upper(),
+    )
     db_session.add(subj)
     db_session.flush()
     return subj
@@ -499,7 +504,8 @@ class TestCreateStudent:
     def _payload(self, **over) -> dict:
         base = {
             "student_number": f"NEW{uuid.uuid4().hex[:8]}",
-            "full_name": "Fresh Student",
+            "first_name": "Fresh",
+            "last_name": "Student",
             "date_of_birth": "2011-05-05",
             "enrollment_date": "2025-09-01",
         }
@@ -696,7 +702,23 @@ class TestCreateStudent:
 # PATCH /students/{id} — profile edit (status NOT editable here)
 # ════════════════════════════════════════════════════════════════════════════
 class TestUpdateStudent:
-    def test_patch_full_name_200(self, client, make_user, auth_headers, db_session) -> None:
+    def test_patch_name_parts_200(self, client, make_user, auth_headers, db_session) -> None:
+        """D30 §D10: the name is edited part by part and `full_name` is the
+        computed read-back, not a field the client sets."""
+        student = _make_student(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _student_path(student.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"first_name": "Renamed", "last_name": "Student"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["full_name"] == "Renamed Student"
+        assert resp.json()["last_name"] == "Student"
+
+    def test_patch_full_name_rejected_422(self, client, make_user, auth_headers, db_session) -> None:
+        """`full_name` is computed, so `extra="forbid"` must reject it as a write
+        field — otherwise a client would silently think a rename had taken."""
         student = _make_student(db_session)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.patch(
@@ -704,8 +726,7 @@ class TestUpdateStudent:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
             json={"full_name": "Renamed Student"},
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["full_name"] == "Renamed Student"
+        assert resp.status_code == 422, resp.text
 
     def test_patch_status_field_rejected_422(self, client, make_user, auth_headers, db_session) -> None:
         """`status` is intentionally ABSENT from StudentUpdateRequest (extra=forbid)
@@ -758,7 +779,7 @@ class TestUpdateStudent:
         resp = client.patch(
             _student_path(uuid.uuid4()),
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"full_name": "Ghost"},
+            json={"first_name": "Ghost"},
         )
         assert resp.status_code == 404
         _assert_envelope(resp.json(), code="not_found")
@@ -769,7 +790,7 @@ class TestUpdateStudent:
         resp = client.patch(
             _student_path(student.id),
             headers=auth_headers(user_id=teacher.id, role=Role.TEACHER),
-            json={"full_name": "Hacked"},
+            json={"first_name": "Hacked"},
         )
         assert resp.status_code == 403
 

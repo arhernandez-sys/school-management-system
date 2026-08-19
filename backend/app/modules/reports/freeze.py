@@ -52,10 +52,14 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
     # Imported here rather than at module scope: `reports.service` imports
     # `settings.service`, and `settings.service` calls this function, so a top-level
     # import either way round would be circular.
-    from app.modules.reports.service import _build_report_card, _subject_results
+    from app.modules.grades import calc
+    from app.modules.reports.service import _bands, _build_report_card, _subject_results
 
     frozen_at = utcnow()
     written = 0
+    # The year's bands, resolved once: the frozen grade point has to come from the scale
+    # in force NOW, not from whatever a later edit leaves behind (D30 §D5, schema §10.4).
+    bands, _pass_mark = _bands(db, year.id)
 
     semesters = list(
         db.scalars(
@@ -160,6 +164,19 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
                         row.frozen_at = frozen_at
                     row.weight_base_used = None
                     row.effective_policy = _policy_snapshot(db, r.cs_id, year)
+                    # ── Frozen GPA inputs (D30 §D5) ───────────────────────────────
+                    # A GPA is only reproducible from the grade point AND the credit
+                    # weight it used, so both are captured alongside the letter. A
+                    # scale with no grade point (an older year's) freezes NULL rather
+                    # than a guessed 0.00, which would read as an F nobody earned.
+                    grade_point = calc.grade_point_for(r.letter, bands)
+                    row.grade_point = grade_point
+                    row.credits = r.credits
+                    row.quality_points = (
+                        None
+                        if grade_point is None or r.credits is None
+                        else calc.quality_points(grade_point, r.credits)
+                    )
                     written += 1
 
                 # The report card is the staff/canonical view: release state is a

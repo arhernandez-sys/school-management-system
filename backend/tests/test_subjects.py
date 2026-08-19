@@ -40,11 +40,18 @@ def _assert_envelope(body: dict, *, code: str) -> dict:
     return err
 
 
-def _make_subject(db_session, *, name=None, code=None, is_active=True) -> Subject:
-    """Insert a Subject directly in the rolled-back session (for read/guard setup)."""
+def _make_subject(
+    db_session, *, name=None, code=None, credits=3, component=None, is_active=True
+) -> Subject:
+    """Insert a course directly in the rolled-back session (for read/guard setup).
+
+    D30: `code` is NOT NULL on `courses`, so it is defaulted here rather than left
+    None — a code-less course is no longer representable, which is the point."""
     s = Subject(
         name=name or f"Subject {uuid.uuid4().hex[:8]}",
-        code=code,
+        code=code or uuid.uuid4().hex[:8].upper(),
+        credits=credits,
+        component=component,
         is_active=is_active,
     )
     db_session.add(s)
@@ -70,7 +77,11 @@ class TestListSubjects:
         assert {"items", "total", "page", "page_size", "total_pages"} <= set(body.keys())
         if body["items"]:
             item = body["items"][0]
-            assert {"id", "name", "code", "is_active"} == set(item.keys())
+            # D30 §D2: `credits` is the field that finally lets a stored grade reach a
+            # credit value (plan §B3), so it is part of the list shape, not just detail.
+            assert {"id", "name", "code", "credits", "component", "is_active"} == set(
+                item.keys()
+            )
 
     def test_list_unauthenticated_401(self, client) -> None:
         resp = client.get(SUBJECTS)
@@ -170,14 +181,24 @@ class TestCreateSubject:
         )
         assert n_audit == 1
 
-    def test_create_by_secretary_201(self, client, make_user, auth_headers) -> None:
+    def test_create_by_secretary_403(self, client, make_user, auth_headers) -> None:
+        """D30: the course catalog is DEAN-ONLY to write (brief §6) — "Do not allow the
+        Registrar or Lecturer to create courses."
+
+        This test previously asserted 201: the Registrar (secretary) could create a
+        subject when `subjects` was a high-school subject list. Under the tertiary model
+        a catalog row is an academic course with credits, a component and prerequisites,
+        which is the Dean's authority. Scheduling an OFFERING of a course (`/classes`)
+        is still Registrar work and is unaffected.
+        """
         secretary = make_user(role=Role.SECRETARY)
         resp = client.post(
             SUBJECTS,
             headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
-            json={"name": f"Biology {uuid.uuid4().hex[:6]}"},
+            json={"name": f"Biology {uuid.uuid4().hex[:6]}", "code": f"BIOL{uuid.uuid4().hex[:4]}"},
         )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code == 403, resp.text
+        _assert_envelope(resp.json(), code="forbidden")
 
     def test_create_duplicate_name_409(
         self, client, make_user, auth_headers, db_session
@@ -187,7 +208,7 @@ class TestCreateSubject:
         resp = client.post(
             SUBJECTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"name": existing.name},
+            json={"name": existing.name, "code": f"HIST{uuid.uuid4().hex[:4]}"},
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="duplicate_subject_name")
@@ -201,7 +222,7 @@ class TestCreateSubject:
         resp = client.post(
             SUBJECTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"name": existing.name.upper()},
+            json={"name": existing.name.upper(), "code": f"PHYS{uuid.uuid4().hex[:4]}"},
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="duplicate_subject_name")
@@ -248,6 +269,130 @@ class TestCreateSubject:
             json={"name": f"Music {uuid.uuid4().hex[:6]}"},
         )
         assert resp.status_code == 403
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# D30 §D2 — the catalog cutover from `subjects` to `courses`
+# ════════════════════════════════════════════════════════════════════════════
+class TestCourseCatalogCutover:
+    """The behaviour `006_courses_cutover.sql` and the ORM change bought.
+
+    These are separated from the CRUD tests above because they are about the SWAP
+    itself, and one of them is a direct regression on the way it was first got wrong.
+    """
+
+    def test_code_is_required(self, client, make_user, auth_headers) -> None:
+        """`courses.code` is NOT NULL where `subjects.code` was nullable.
+
+        Without the schema change the request would reach the database and come back
+        as a 500; the point of making it required in the request model is that the
+        caller gets a 422 naming the field instead.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"name": f"Codeless {uuid.uuid4().hex[:6]}"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "code" in resp.json()["error"]["fields"]
+
+    def test_credits_and_component_round_trip(
+        self, client, make_user, auth_headers
+    ) -> None:
+        """Credits are the whole reason the catalog moved (plan §B3)."""
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={
+                "name": f"Internship {uuid.uuid4().hex[:6]}",
+                "code": f"EDUC{uuid.uuid4().hex[:4]}",
+                "credits": 9,
+                "component": "CEC",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["credits"] == 9
+        assert body["component"] == "CEC"
+
+    def test_credits_default_to_three(self, client, make_user, auth_headers) -> None:
+        """The same default `005_tertiary.sql` gave the carried-over rows."""
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"name": f"Default {uuid.uuid4().hex[:6]}", "code": f"D{uuid.uuid4().hex[:5]}"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["credits"] == 3
+
+    def test_zero_credits_rejected(self, client, make_user, auth_headers) -> None:
+        """`ck_courses_credits` is `credits > 0`; the schema says 422, not 500."""
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={
+                "name": f"Zero {uuid.uuid4().hex[:6]}",
+                "code": f"Z{uuid.uuid4().hex[:5]}",
+                "credits": 0,
+            },
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_a_newly_created_course_can_be_attached_to_a_class(
+        self, client, make_user, auth_headers, db_session, make_class_subject
+    ) -> None:
+        """THE REGRESSION. This is the exact path that broke 73 tests once.
+
+        An earlier version of `005` re-pointed `class_subjects.subject_id` at
+        `courses` on its own. Copying the EXISTING rows across was only half the job:
+        every write path still created a catalog row in `subjects`, so a course
+        created through the API had nothing for the FK to resolve against and
+        attaching it failed with MariaDB 1452. The fix was to move the FK swap into
+        `006` and apply it WITH the ORM change — this test is what proves the two
+        halves are in step, and it would fail loudly if the model were ever pointed
+        back at `subjects`.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"name": f"Fresh {uuid.uuid4().hex[:6]}", "code": f"F{uuid.uuid4().hex[:5]}"},
+        )
+        assert resp.status_code == 201, resp.text
+        course_id = uuid.UUID(resp.json()["id"])
+
+        # The FK resolves → no 1452.
+        offering = make_class_subject(course_id)
+        assert offering.subject_id == course_id
+
+    def test_the_catalog_row_lives_in_courses_not_subjects(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Belt and braces on the cutover: the row the API created is in `courses`,
+        and the retired `subjects` table did not gain one."""
+        from sqlalchemy import text
+
+        principal = make_user(role=Role.PRINCIPAL)
+        code = f"X{uuid.uuid4().hex[:5]}"
+        resp = client.post(
+            SUBJECTS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"name": f"Placed {uuid.uuid4().hex[:6]}", "code": code},
+        )
+        assert resp.status_code == 201, resp.text
+
+        in_courses = db_session.scalar(
+            text("SELECT COUNT(*) FROM courses WHERE code = :c"), {"c": code}
+        )
+        in_subjects = db_session.scalar(
+            text("SELECT COUNT(*) FROM subjects WHERE code = :c"), {"c": code}
+        )
+        assert in_courses == 1
+        assert in_subjects == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -314,6 +459,18 @@ class TestUpdateSubject:
         )
         assert resp.status_code == 403
 
+    def test_patch_secretary_403(self, client, make_user, auth_headers, db_session) -> None:
+        """D30: catalog edits are Dean-only — the Registrar may read, not rename."""
+        s = _make_subject(db_session, name=f"RegistrarNoTouch {uuid.uuid4().hex[:6]}")
+        secretary = make_user(role=Role.SECRETARY)
+        resp = client.patch(
+            _subject_path(s.id),
+            headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
+            json={"name": "Renamed by the Registrar"},
+        )
+        assert resp.status_code == 403, resp.text
+        _assert_envelope(resp.json(), code="forbidden")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # DELETE /subjects/{id}
@@ -375,3 +532,14 @@ class TestDeleteSubject:
             headers=auth_headers(user_id=student.id, role=Role.STUDENT),
         )
         assert resp.status_code == 403
+
+    def test_delete_secretary_403(self, client, make_user, auth_headers, db_session) -> None:
+        """D30: removing a course from the catalog is Dean-only."""
+        s = _make_subject(db_session, name=f"NoDelete3 {uuid.uuid4().hex[:6]}")
+        secretary = make_user(role=Role.SECRETARY)
+        resp = client.delete(
+            _subject_path(s.id),
+            headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
+        )
+        assert resp.status_code == 403, resp.text
+        _assert_envelope(resp.json(), code="forbidden")

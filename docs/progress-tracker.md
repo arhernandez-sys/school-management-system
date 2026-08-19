@@ -2,6 +2,62 @@
 
 > **This is the most important document.** It is the single source of truth for project state. Updated at the end of every phase. Every agent reads this first.
 
+_Last updated: 2026-08-18 — **D30: TERTIARY (BAJC) REFACTOR — ALL FIVE PHASES COMPLETE.** Phase 5 landed the **grade-revision workflow** (Lecturer requests, Dean decides, the original score never overwritten, approval writing through a closed grade window) and **extended the notification bell** with pending revisions while fixing its permanently-empty popover; gate walked **42/42 against the live database**. Backend suite **1394 green**. **Phases 3, 4 and 5 needed no migration** (`005` had already created every column and table). **The closing report is `docs/tertiary-refactor-plan.md` §I** — read it first; the remaining work is that plan's §G (13 items to confirm with BAJC) and §F (pre-existing repo issues, incl. a go-live password blocker). Previously (2026-08-17): Phase 4 complete, gate 62/62._
+
+_**D30 background.** The institution is a junior college, not a sixth form: it runs 8 named Associate-degree programmes with fixed course sequences, credits, prerequisites, a 4.00 grading scale and credit-weighted GPA. **Tracking document: `docs/tertiary-refactor-plan.md` — read it first for anything tertiary-related; it carries the phase checklists and the resume point.** Branch `tertiary-refactor`._
+
+> **🎓 D30 — HIGH-SCHOOL SIMS → TERTIARY STUDENT MANAGEMENT INFORMATION SYSTEM. 🟢 COMPLETE — ALL FIVE PHASES (2026-08-18). BUILDS ON D29.**
+> Stakeholder supplied the real institutional material for **Belize Adventist Junior College**: a MariaDB dump with new tertiary tables, the 8-programme course sequence PDF (26/27), the semester report template, and both pages of the paper application form. D29's subject-class pivot turns out to be most of the way there — a `classes` row is already one subject class and a student already holds many concurrent enrolments — so **Class → Course is largely rename + attach credits/curriculum, not a remodel.**
+>
+> - **⚠️ THE SUPPLIED DUMP IS NOT THE SCHEMA THE APP RUNS ON.** `sims_bk.sql` is the pre-`001` base plus new tertiary work: it lacks the mixin columns on ~25 tables, `login_attempts.attempted_at`'s default (ERROR 1364 — **every login fails**), `audit_log.id` AUTO_INCREMENT, the `subjects.is_active` fix (ERROR 1906), the `classes.name`/`subjects.name` renames, the widened `refresh_sessions.token_hash`, and `class_meetings` entirely. Resolved with the stakeholder as a **merge**: keep `001–004`, adopt the tertiary additions on top via a new `005_tertiary.sql`. Detail in `tertiary-refactor-plan.md` §B1.
+> - **🔴 THE STRUCTURAL BLOCKER: no stored grade can reach a credit value.** The graded chain is `assessment_grades → assessments → class_subjects → subjects`, and `subjects` has no credits; `courses` has credits but is referenced by nothing and references nothing. That single fact is why credit-weighted GPA, quality points, credits-earned and credits-remaining are all impossible today. `database-schema.md:1035` had already predicted this exact additive fix.
+> - **Grade audit answered** (brief §19): grades live in three places — `assessment_grades.score` (raw, not a percentage), `assessment_grades.makeup_score` (a real second-attempt slot), and `term_grade_snapshots.numeric_grade`/`letter_grade`. Missing: grade points, quality points, per-programme pass marks, retakes, and any revision request/approval history.
+> - **Decisions taken with the stakeholder:** full additive schema set authorised; **`courses` becomes the catalog** and `subjects` is retired into it (preserving UUIDs so nothing is orphaned — the recommendation had been the reverse, and the trade-off is recorded); **display-label-only rename** (Principal→Dean, Secretary→Registrar, Teacher→Lecturer, Class→Course) with wire values and table names preserved per the brief; **GPA counts all enrolled credits** with ungraded contributing 0 quality points, matching the supplied report's 2.1; the application form creates an **applicant record** that acceptance converts into a student; phased delivery with approval gates.
+> - **Term structure does not fit the schema.** `semesters.sequence` is `CHECK IN (1,2)`, but BAJC programmes run `Summer 1 · Semester 1–4` and Primary Education adds `Spring 1`, `Spring 2` and `Semester 5`. A programme's block is a **curriculum position**, not a calendar term — both concepts get modelled separately.
+> - **Superseded:** `A-SIXTH-FORM` → **`A-JUNIOR-COLLEGE`**. Not yet reflected in `requirements.md`; scheduled with Phase 1.
+>
+> **✅ SHIPPED SO FAR (2026-08-16) — suite 1057 green, typecheck/lint/build clean.**
+> - **Phase 0** — audit, decisions, `005_tertiary.sql` authored and client-approved.
+> - **Phase 1** — terminology sweep (Dean / Registrar / Lecturer / Course), five duplicated role-label
+>   maps collapsed into one, the course catalog made Dean-only to write, **the student name split
+>   (`007_student_names.sql` drops `full_name`; it survives as a computed hybrid so the wire contract
+>   never moved)**, surname-first ordering everywhere, and **server-side `YYYYMM###` student IDs** with
+>   a real lock-contention test.
+> - **Phase 2A** — **the structural blocker above is closed.** `006_courses_cutover.sql` re-pointed
+>   `class_subjects.subject_id` and `term_grade_snapshots.subject_id` at `courses` in the same step as
+>   the ORM change, so a stored grade can now reach a credit value and GPA becomes possible in Phase 3.
+>   0 orphans across 116 `class_subjects` and 290 `term_grade_snapshots` rows.
+> - **Phase 2B** — the eight-programme structure the course-sequence PDF needs finally has somewhere to
+>   live. New `programs` module (Dean-only writes, §D14) with a `program_courses` curriculum:
+>   programme → term block → course, ordered by an explicit `term_order` because "Spring 1" sorts
+>   before "Summer 1" and Primary Education's plan puts it between Semester 2 and Semester 3.
+>   **Credit totals per block and per programme are now computable at all** — the first payout of the
+>   2A catalog cutover, since `subjects` had no credits column to sum. And the calendar takes N terms:
+>   the schema cap went in `005`, but the APPLICATION was still enforcing exactly two, so BAJC's
+>   Summer and Spring blocks had no route until now.
+> - **Phase 2C** — prerequisites became a real relation and a real gate. `courses.prerequisites` was a
+>   `varchar(50)` of free text with no FK: it could hold `AGRI2118 <- AGRI1108, AGRI1109` but not
+>   `EDUC2305 <- EDUC1210, 2226, 2228, 2330, 2334, 2336`, and could not express
+>   `EDUC3201 <- ALL COURSES` at all. Enrolment now refuses a student who has not **passed** the
+>   prerequisite — judged against their PROGRAMME's pass mark, not a school-wide one — with a 409
+>   naming the missing courses and the grade actually earned. Sitting a course alongside the one it
+>   gates does not count. Enforced at BOTH enrolment doors.
+> - **Phase 2D** — the institution's real catalog is in the database: **114 courses, 8 programmes,
+>   243 curriculum rows, 63 prerequisites** and the Internship's `ALL COURSES` gate, transcribed from
+>   the 2026/27 course-sequence PDF and **verified by arithmetic** — every term block and every
+>   programme reconciles against its printed credit total, which is what caught the `AGR12110` typo.
+>   Five source corrections applied and flagged, including **`THEO1110` naming two different
+>   courses** (seeded under a provisional code BAJC must replace). Three new findings raised in §G,
+>   the notable one being that **`component` is a per-programme fact stored per course** — 9 courses
+>   disagree across programmes, and the fix is additive but is a design change, so it was raised
+>   rather than taken. The demo dataset is rebuilt on the same generated source, closing §G item 6.
+> - **⚠️ A hazard from 2A was closed:** the demo seed had been updated to `DELETE FROM courses` when
+>   the catalog moved, which with FK checks off would have silently destroyed the whole BAJC catalog
+>   on the next demo re-seed. The demo seed now references the catalog and never clears it.
+> - **Next:** Phase 3 — seed the BAJC 8-band grade-point scale, `quality_points` / `compute_gpa`,
+>   GPA through the transcript / report card / dashboards, and the grade-submission deadline.
+>   `grade_point_for` and `meets_grade_point` already landed in 2C.
+
 _Last updated: 2026-08-06 — **D29: SIXTH-FORM SUBJECT-CLASS MODEL SHIPPED (backend + frontend + demo).** The school is a sixth form, not a secondary school: a "class" is now one SUBJECT CLASS ("Math-1") that a student enrols in individually, so a student holds many concurrent enrolments and gets a Mon–Fri timetable. Backend suite **1037 green**; frontend typechecks, lints to its pre-existing 2-warning baseline, and builds. Next: manual UAT of the new model, then Step 5 (security review + doc reconciliation)._
 
 > **🎓 D29 — CLASS = SUBJECT CLASS, NOT HOMEROOM. ✅ DONE (2026-08-06). SUPERSEDES D23.**

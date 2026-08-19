@@ -1,7 +1,8 @@
 """Academic-structure / hub models (database-schema.md §3.C, **D29 subject-class
 model** — supersedes the D23 homeroom model).
 
-`subjects` (catalog), `classes` (a SUBJECT CLASS, e.g. "Math-1"), `class_subjects`
+`courses` (the catalog — mapped by `Subject`, see its docstring for why the class
+kept that name), `classes` (a COURSE OFFERING, e.g. "Math-1"), `class_subjects`
 (the gradebook/ownership unit — exactly ONE per class under D29), `class_teachers`
 (teacher ownership relation), `class_enrollments` (per-subject-class roster — a
 student holds MANY active rows, one per subject class they take), `class_meetings`
@@ -33,32 +34,68 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.common.enums import CourseComponent, EnrollmentStatus
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import GUID
+from app.db.types import GUID, enum_col
 
 
-class Subject(Base, TimestampMixin, SoftDeleteMixin):
-    __tablename__ = "subjects"
+class Subject(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
+    """THE COURSE CATALOG — one row per BAJC course (D30 §D2, decision #2).
+
+    ⚠️ The table is `courses`; the CLASS is still called `Subject` and the foreign-key
+    columns are still called `subject_id`. That is deliberate, and it is the same
+    reasoning recorded in `006_courses_cutover.sql`: decision #3 preserves technical
+    identifiers and renames only DISPLAY labels. Renaming the class would churn 14
+    modules and a large share of the suite; renaming `class_subjects.subject_id` would
+    additionally force a rebuild of the STORED generated column `cs_active_subject`
+    and its unique index. The UI has said "Course" since Phase 1.
+
+    WHY THE TABLE MOVED. Until D30 the graded chain ended at `subjects`, which has no
+    credits, so NO STORED GRADE COULD REACH A CREDIT VALUE — and credit-weighted GPA,
+    quality points and credits-earned were all impossible (plan §B3). `courses` has
+    credits. `005_tertiary.sql` copied every `subjects` row into `courses` PRESERVING
+    ITS UUID, so re-pointing the two FKs orphaned nothing; `006` moved them.
+
+    `code` is NOT NULL here, where `subjects.code` was nullable — a BAJC course is
+    identified by its code on every programme sequence and on the report card, and
+    `courses.code` is NOT NULL in the schema. The service enforces it (see
+    `subjects/schemas.py`).
+    """
+
+    __tablename__ = "courses"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     name: Mapped[str] = mapped_column(Text(), nullable=False)
-    code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    code: Mapped[str] = mapped_column(Text(), nullable=False)
+    #: BAJC uses 1, 2, 3, 4, 6 and 9. Defaulted to 3 by the schema (the overwhelmingly
+    #: common value) so the rows carried over from `subjects` had something valid.
+    credits: Mapped[int] = mapped_column(
+        SmallInteger(), nullable=False, server_default=text("3")
+    )
+    component: Mapped[CourseComponent | None] = mapped_column(
+        enum_col(CourseComponent), nullable=True
+    )
+    description: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    #: The raw prerequisite string from the course-sequence PDF. DOCUMENTATION ONLY —
+    #: validation reads the `course_prerequisites` relation (D30 §D4, Phase 2C),
+    #: because this text cannot express `EDUC3201 ← ALL COURSES` or be queried.
+    prerequisites_text: Mapped[str | None] = mapped_column(Text(), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("true")
     )
 
     __table_args__ = (
         Index(
-            "uq_subjects_name",
+            "uq_courses_name",
             "name",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
-            "uq_subjects_code",
+            "uq_courses_code",
             "code",
             unique=True,
-            postgresql_where=text("deleted_at IS NULL AND code IS NOT NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
@@ -123,9 +160,12 @@ class ClassSubject(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
         ForeignKey("classes.id", ondelete="RESTRICT", name="fk_class_subjects_class"),
         nullable=False,
     )
+    #: FK -> `courses` since `006_courses_cutover.sql`. The COLUMN keeps the name
+    #: `subject_id` — see `Subject`'s docstring; renaming it would force a rebuild of
+    #: the STORED generated column `cs_active_subject` and its unique index.
     subject_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
-        ForeignKey("subjects.id", ondelete="RESTRICT", name="fk_class_subjects_subject"),
+        ForeignKey("courses.id", ondelete="RESTRICT", name="fk_class_subjects_course"),
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(
@@ -220,6 +260,16 @@ class ClassEnrollment(Base, TimestampMixin, AuditMixin):
         GUID(),
         ForeignKey("semesters.id", ondelete="RESTRICT", name="fk_enroll_semester"),
         nullable=False,
+    )
+    #: How the student is sitting this offering (D30 §D2 step 4). This arrived as
+    #: `courses.coursestatus` in `sims_bk.sql` — an enrolment fact sitting on the
+    #: CATALOG, where marking one student as auditing would have marked everyone.
+    #: `005_tertiary.sql` §8 moved it here and added `enrolled`, the normal case the
+    #: original enum omitted entirely.
+    enrollment_status: Mapped[EnrollmentStatus] = mapped_column(
+        enum_col(EnrollmentStatus),
+        nullable=False,
+        server_default=text("'enrolled'"),
     )
     enrolled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

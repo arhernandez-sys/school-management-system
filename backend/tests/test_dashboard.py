@@ -41,6 +41,7 @@ from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -136,7 +137,7 @@ class _Graph:
                     enrollment_date=None):
         s = StudentProfile(
             student_number=f"S-{uuid.uuid4().hex[:8]}",
-            full_name=name or f"Stu {uuid.uuid4().hex[:4]}",
+            **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=enrollment_date or date(2025, 9, 15),
             status="active",
@@ -637,7 +638,9 @@ class TestStudentVariant:
     def test_stats_keys(self, client, graph) -> None:
         stats = client.get(DB, headers=graph.U).json()["stats"]
         assert set(stats.keys()) == {
-            "term_average", "term_letter", "attendance_rate", "upcoming_count"
+            "term_average", "term_letter", "attendance_rate", "upcoming_count",
+            # D30 Phase 3 — the credit-weighted GPA beside the percentage average.
+            "gpa", "total_credits",
         }
 
     def test_my_classes_shape(self, client, graph) -> None:

@@ -29,6 +29,7 @@ import { useSubjectsList } from '@features/settings/hooks/useSubjects';
 import { useClassesList, useCreateClass } from './hooks/useClasses';
 import { ClassFormDialog } from './components/ClassFormDialog';
 import { roomsOf, summarizeMeetings } from './meetingFormat';
+import { strings } from '@i18n/strings';
 import type { ClassCreateBody, ClassListItem } from './types';
 
 /**
@@ -108,7 +109,7 @@ export function ClassesListPage() {
   const columns: DataTableColumn<ClassListItem>[] = [
     {
       field: 'name',
-      headerName: 'Class',
+      headerName: 'Offering',
       sortable: true,
       primary: true,
       render: (c) => (
@@ -124,7 +125,7 @@ export function ClassesListPage() {
     },
     {
       field: 'subject',
-      headerName: 'Subject',
+      headerName: strings.terms.course,
       render: (c) =>
         c.subject ? (
           <Stack spacing={0.25}>
@@ -143,7 +144,7 @@ export function ClassesListPage() {
     },
     {
       field: 'teachers',
-      headerName: 'Teacher',
+      headerName: strings.terms.lecturer,
       render: (c) =>
         c.teachers.length > 0 ? (
           <Typography variant="body2">{c.teachers.map((t) => t.full_name).join(', ')}</Typography>
@@ -259,7 +260,7 @@ export function ClassesListPage() {
               <TextField
                 select
                 size="small"
-                label="Subject"
+                label={strings.terms.course}
                 value={subjectId}
                 onChange={(e) => {
                   setSubjectId(e.target.value);

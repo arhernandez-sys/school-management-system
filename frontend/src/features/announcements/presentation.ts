@@ -5,13 +5,18 @@
  * label always carries the meaning; color is never the only signal).
  */
 import type { Role } from '@shared/types/enums';
+import { strings } from '@i18n/strings';
 import type { AnnouncementAudience } from './types';
 
+/**
+ * D30: the KEYS are wire values and must not change (`teachers`, `class`); only the
+ * labels are the tertiary terms.
+ */
 export const AUDIENCE_LABEL: Record<AnnouncementAudience, string> = {
   all: 'Everyone',
-  teachers: 'Teachers',
-  students: 'Students',
-  class: 'Class',
+  teachers: strings.terms.lecturers,
+  students: strings.terms.students,
+  class: strings.terms.course,
 };
 
 /**
@@ -43,15 +48,16 @@ export const RECEIVABLE_AUDIENCES: Record<Role, AnnouncementAudience[]> = {
 const AUDIENCE_FILTER_LABEL: Partial<Record<AnnouncementAudience, string>> = {
   all: 'School-wide',
   students: 'All students',
-  teachers: 'All teachers',
-  class: 'My class',
+  teachers: 'All lecturers',
+  class: 'My course',
 };
 
 /** Filter-menu label for `audience`, from the point of view of the reader. */
 export function audienceFilterLabel(audience: AnnouncementAudience, role: Role): string {
   if (role === 'principal' || role === 'secretary') return AUDIENCE_LABEL[audience];
-  // A student sits in exactly one section; a teacher owns several.
-  if (audience === 'class') return role === 'teacher' ? 'My classes' : 'My class';
+  // A lecturer owns several course offerings; a student is enrolled in several too, but
+  // an announcement targets one, so the singular still reads correctly for them.
+  if (audience === 'class') return role === 'teacher' ? 'My courses' : 'My course';
   return AUDIENCE_FILTER_LABEL[audience] ?? AUDIENCE_LABEL[audience];
 }
 

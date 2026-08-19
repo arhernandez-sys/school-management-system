@@ -191,6 +191,16 @@ class TeacherDashboard(_Base):
 class StudentStats(BaseModel):
     term_average: float | None = None
     term_letter: str | None = None
+    #: Credit-weighted term GPA on the 4.00 scale (D30 §D5), computed by the single
+    #: `calc.compute_gpa`. It sits BESIDE `term_average` rather than replacing it: the
+    #: average is a 0-100 percentage and answers "how am I scoring?", the GPA is what
+    #: the college and the report card actually report.
+    #:
+    #: Like `term_average` this is the RELEASED view — an unreleased course contributes
+    #: 0 quality points and keeps its credits, so the figure can never be used to back
+    #: out a mark the student is not meant to see yet.
+    gpa: float | None = None
+    total_credits: int = 0
     attendance_rate: float = 0.0
     upcoming_count: int = 0
 

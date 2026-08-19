@@ -18,6 +18,7 @@ import { ROUTES } from '@shared/constants/routes';
 import { useSelectedYear } from '@app/providers/YearContext';
 import { useClassesList } from './hooks/useClasses';
 import { roomsOf, summarizeMeetings } from './meetingFormat';
+import { strings } from '@i18n/strings';
 import type { ClassListItem } from './types';
 
 /**
@@ -65,7 +66,7 @@ export function StudentClassesPage() {
   const columns: DataTableColumn<ClassListItem>[] = [
     {
       field: 'subject',
-      headerName: 'Subject',
+      headerName: strings.terms.course,
       primary: true,
       render: (c) => (
         <Stack spacing={0.25}>
@@ -83,7 +84,7 @@ export function StudentClassesPage() {
     },
     {
       field: 'teachers',
-      headerName: 'Teacher',
+      headerName: strings.terms.lecturer,
       render: (c) =>
         c.teachers.length > 0 ? (
           // Product decision (2026-07): students have no access to teacher profiles, so
@@ -137,7 +138,7 @@ export function StudentClassesPage() {
   return (
     <Box>
       <PageHeader
-        title="My Classes"
+        title={strings.nav.myClasses}
         subtitle={
           isPast
             ? `The subject classes you took in ${selectedPeriod?.yearName}.`

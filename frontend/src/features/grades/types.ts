@@ -103,6 +103,14 @@ export interface Gradebook {
   drop_lowest_applied: boolean;
   /** Whether the current viewer may write (teacher owns it). */
   can_edit: boolean;
+  /**
+   * True once the term's `grade_submission_deadline` has passed (D30 §D6). Kept
+   * SEPARATE from `can_edit`, which still means "your role and ownership permit
+   * writing here" — a shut deadline and a Registrar's read-only view are different
+   * situations and the Lecturer needs to know which one they are looking at.
+   */
+  grade_window_closed: boolean;
+  grade_submission_deadline: string | null;
   viewer_role: string;
 }
 

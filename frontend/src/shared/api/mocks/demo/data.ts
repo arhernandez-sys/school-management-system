@@ -33,6 +33,9 @@
  */
 import type {
   DemoAcademicYear,
+  DemoApplication,
+  DemoApplicationDocument,
+  DemoApplicationEducation,
   DemoAnnouncement,
   DemoAssessment,
   DemoAssessmentCategory,
@@ -40,6 +43,8 @@ import type {
   DemoAssessmentPolicy,
   DemoAttendanceRecord,
   DemoClassMeeting,
+  DemoCreditTransferRequest,
+  DemoGradeRevisionRequest,
   DemoClassSubject,
   DemoEvent,
   DemoDataset,
@@ -47,13 +52,24 @@ import type {
   DemoGradingScale,
   DemoSchoolProfile,
   DemoSection,
+  DemoProgram,
+  DemoCoursePrerequisite,
+  DemoProgramCourse,
   DemoSemester,
   DemoStudent,
+  DemoStudentProgramHistory,
   DemoSubject,
   DemoTeacher,
   DemoUser,
 } from './types';
 import type { AttendanceStatus, GradeStatus } from '@shared/types/enums';
+import {
+  BAJC_ALL_COURSE_GATES,
+  BAJC_COURSES,
+  BAJC_CURRICULUM,
+  BAJC_PREREQUISITES,
+  BAJC_PROGRAMS,
+} from './bajcCatalog';
 
 /**
  * The demo "now". All relative/recent data (attendance window, announcement dates,
@@ -133,61 +149,80 @@ const semesters: DemoSemester[] = [
     id: 'sem-2024-1',
     academic_year_id: YEAR_ARCHIVED,
     name: 'Semester 1',
+    term_type: 'semester',
     sequence: 1,
     start_date: '2024-09-02',
     end_date: '2025-01-17',
+    grade_submission_deadline: null,
     is_active: false,
   },
   {
     id: 'sem-2024-2',
     academic_year_id: YEAR_ARCHIVED,
     name: 'Semester 2',
+    term_type: 'semester',
     sequence: 2,
     start_date: '2025-01-20',
     end_date: '2025-06-27',
+    grade_submission_deadline: null,
     is_active: false,
   },
   {
     id: SEM_ACTIVE,
     academic_year_id: YEAR_ACTIVE,
     name: 'Semester 1',
+    term_type: 'semester',
     sequence: 1,
     start_date: '2025-09-01',
     end_date: '2026-01-16',
+    // D30 §D6 — a deadline in the FUTURE relative to DEMO_TODAY (2025-10-15). Deliberate:
+    // it makes the feature visible (Settings shows "Grades due", the term editor shows the
+    // field) WITHOUT locking the marquee gradebook, which a past deadline would turn
+    // read-only for the whole demo. To see the closed state, move this date behind
+    // DEMO_TODAY from Settings → Academic structure and reopen the gradebook — the banner
+    // appears and the save bar disables, exactly as the backend behaves.
+    grade_submission_deadline: '2026-01-23T23:59:00Z',
     is_active: true,
   },
   {
     id: 'sem-2025-2',
     academic_year_id: YEAR_ACTIVE,
     name: 'Semester 2',
+    term_type: 'semester',
     sequence: 2,
     start_date: '2026-01-19',
     end_date: '2026-06-26',
+    grade_submission_deadline: '2026-07-03T23:59:00Z',
     is_active: false,
   },
 ];
 
-// ── Subjects (~11) ──────────────────────────────────────────────────────────────
-const subjectSeed: ReadonlyArray<[string, string]> = [
-  ['Mathematics', 'MATH'],
-  ['English', 'ENG'],
-  ['Biology', 'BIO'],
-  ['Chemistry', 'CHEM'],
-  ['Physics', 'PHYS'],
-  ['History', 'HIST'],
-  ['Geography', 'GEO'],
-  ['Spanish', 'SPAN'],
-  ['Physical Education', 'PE'],
-  ['Information Technology', 'IT'],
-  ['Principles of Business', 'POB'],
-];
-const subjects: DemoSubject[] = subjectSeed.map(([name, code]) => ({
+// ── The BAJC course catalog (D30 Phase 2D) ──────────────────────────────────────
+//
+// All 114 courses from the 2026/27 sequences, generated into `bajcCatalog.ts` from the
+// same parsed PDF as the backend's `app/db/bajc_catalog.py`. This replaces the eleven
+// invented high-school subjects (Mathematics, English, Geography, …) that stood in
+// until now, and closes plan §G item 6.
+//
+// Generating both sides from one source is the point: demo mode and the real backend
+// cannot disagree about what the college offers, and this project has already paid
+// twice for a demo that certified something the server answered differently.
+const subjects: DemoSubject[] = BAJC_COURSES.map(([code, name, credits, component]) => ({
   id: `subj-${code.toLowerCase()}`,
   name,
   code,
+  credits,
+  component,
   is_active: true,
 }));
 const subjectId = (code: string): string => `subj-${code.toLowerCase()}`;
+/** Display name for a catalog code — throws loudly if a seed names a course that
+ *  is not in the 26/27 sequences, which is a data error, not a soft failure. */
+const courseName = (code: string): string => {
+  const found = BAJC_COURSES.find(([c]) => c === code);
+  if (!found) throw new Error(`demo dataset: no BAJC course with code ${code}`);
+  return found[1];
+};
 
 // ── Subject classes (D29) ───────────────────────────────────────────────────────
 //
@@ -212,32 +247,41 @@ interface ClassSeed {
   meetings: ReadonlyArray<[1 | 2 | 3 | 4 | 5, string, string]>;
 }
 
+// D30 Phase 2D: every class now teaches a REAL BAJC course. The shape is unchanged —
+// two parallel offerings of one course at the same level are still what makes Freddy
+// and John's timetables differ — but `code` is a catalog code the college actually
+// uses, so credits and components on screen are the real ones.
+//
+// MATH1210 (Pre-Calculus) is here on purpose: it genuinely requires MATH1110
+// (Intermediate Algebra) in the 26/27 sequences, so the prerequisite gate fires in
+// demo mode on a real rule rather than an invented one.
 const classSeed: readonly ClassSeed[] = [
-  // ── Lower 6 ──
-  { name: 'Math-1', code: 'MATH', yearGroup: YEAR_LOWER6, room: 'Room A', capacity: 20,
+  // ── Year 1 ──
+  { name: 'Algebra-1', code: 'MATH1110', yearGroup: YEAR_LOWER6, room: 'Room A', capacity: 20,
     meetings: [[1, '08:00', '09:30'], [3, '08:00', '09:30']] },
-  // Math-2 is Math-1's parallel: same subject, same level, different teacher/room/time.
-  { name: 'Math-2', code: 'MATH', yearGroup: YEAR_LOWER6, teacherCodes: ['PHYS'], room: 'Room C', capacity: 20,
+  // Algebra-2 is Algebra-1's parallel: same course, same level, different teacher/room/time.
+  { name: 'Algebra-2', code: 'MATH1110', yearGroup: YEAR_LOWER6, teacherCodes: ['MATH1210'], room: 'Room C', capacity: 20,
     meetings: [[1, '10:00', '11:30'], [3, '10:00', '11:30']] },
-  { name: 'Biology-10', code: 'BIO', yearGroup: YEAR_LOWER6, room: 'Lab 1', capacity: 24,
+  { name: 'Biology-10', code: 'BIOL1102', yearGroup: YEAR_LOWER6, room: 'Lab 1', capacity: 24,
     meetings: [[2, '09:00', '10:30'], [4, '09:00', '10:30']] },
-  // Wednesday sits at 13:00, NOT 11:00: Math-2 runs Wed 10:00–11:30, and every student on
-  // a Math-2 load also takes English, so an 11:00 English would put 15 of them in two rooms
+  // Wednesday sits at 13:00, NOT 11:00: Algebra-2 runs Wed 10:00–11:30, and every student
+  // on that load also takes English, so an 11:00 English would put 15 of them in two rooms
   // at once. The seeded week must be one a real student could actually walk.
-  { name: 'English-5', code: 'ENG', yearGroup: YEAR_LOWER6, room: 'Room D', capacity: 26,
+  { name: 'English-5', code: 'ENGL1102', yearGroup: YEAR_LOWER6, room: 'Room D', capacity: 26,
     meetings: [[3, '13:00', '14:00'], [5, '11:00', '12:00']] },
-  { name: 'Chemistry-3', code: 'CHEM', yearGroup: YEAR_LOWER6, room: 'Lab 2', capacity: 18,
+  { name: 'Chemistry-3', code: 'CHEM1100', yearGroup: YEAR_LOWER6, room: 'Lab 2', capacity: 18,
     meetings: [[2, '11:00', '12:30']] },
-  { name: 'IT-2', code: 'IT', yearGroup: YEAR_LOWER6, room: 'Computer Lab', capacity: 22,
+  { name: 'Computers-2', code: 'ITEC1104', yearGroup: YEAR_LOWER6, room: 'Computer Lab', capacity: 22,
     meetings: [[5, '08:00', '09:30']] },
-  // ── Upper 6 ──
-  { name: 'Math-3', code: 'MATH', yearGroup: YEAR_UPPER6, room: 'Room A', capacity: 18,
+  // ── Year 2 ──
+  { name: 'Algebra-3', code: 'MATH1110', yearGroup: YEAR_UPPER6, room: 'Room A', capacity: 18,
     meetings: [[2, '08:00', '09:30'], [4, '11:00', '12:30']] },
-  { name: 'Physics-1', code: 'PHYS', yearGroup: YEAR_UPPER6, room: 'Lab 2', capacity: 16,
+  // Gated on Algebra: enrolling a student who has not passed MATH1110 is a 409 naming it.
+  { name: 'PreCalculus-1', code: 'MATH1210', yearGroup: YEAR_UPPER6, room: 'Room F', capacity: 16,
     meetings: [[1, '13:00', '14:30']] },
-  { name: 'Business-1', code: 'POB', yearGroup: YEAR_UPPER6, room: 'Room B', capacity: 20,
+  { name: 'Management-1', code: 'MGMT1106', yearGroup: YEAR_UPPER6, room: 'Room B', capacity: 20,
     meetings: [[4, '13:00', '14:30']] },
-  { name: 'Spanish-2', code: 'SPAN', yearGroup: YEAR_UPPER6, room: 'Room E', capacity: 20,
+  { name: 'Spanish-2', code: 'SPAN2112', yearGroup: YEAR_UPPER6, room: 'Room E', capacity: 20,
     meetings: [[5, '13:00', '14:00']] },
 ];
 
@@ -263,25 +307,30 @@ const sectionByName = (name: string): DemoSection => {
 type TeacherLike = 'active' | 'inactive';
 type TeacherGender = 'male' | 'female';
 const teacherSeed: ReadonlyArray<[string, string[], TeacherLike, TeacherGender]> = [
-  ['Maria Reyes', ['MATH', 'PHYS'], 'active', 'female'],
-  ['Carlos Mendez', ['ENG', 'HIST'], 'active', 'male'],
-  ['Alicia Cano', ['BIO', 'CHEM'], 'active', 'female'],
-  ['Devon Flowers', ['PHYS', 'MATH'], 'active', 'male'],
-  ['Sonia Choc', ['SPAN', 'ENG'], 'active', 'female'],
-  ['Rodwell Bailey', ['GEO', 'HIST'], 'active', 'male'],
-  ['Yolanda Cruz', ['CHEM', 'BIO'], 'active', 'female'],
-  ['Egbert Grinage', ['PE'], 'active', 'male'],
-  ['Nadia Rhaburn', ['IT'], 'active', 'female'],
-  ['Marlon Pou', ['POB', 'MATH'], 'active', 'male'],
-  ['Kayla Waight', ['ENG', 'IT'], 'active', 'female'],
-  ['Trevor Neal', ['GEO', 'PE'], 'inactive', 'male'],
+  ['Maria Reyes', ['MATH1110', 'MATH1210'], 'active', 'female'],
+  ['Carlos Mendez', ['ENGL1102', 'HIST2102'], 'active', 'male'],
+  ['Alicia Cano', ['BIOL1102', 'CHEM1100'], 'active', 'female'],
+  ['Devon Flowers', ['MATH1210', 'MATH1110'], 'active', 'male'],
+  ['Sonia Choc', ['SPAN2112', 'ENGL1102'], 'active', 'female'],
+  ['Rodwell Bailey', ['SOCI1212', 'HIST2102'], 'active', 'male'],
+  ['Yolanda Cruz', ['CHEM1100', 'BIOL1102'], 'active', 'female'],
+  ['Egbert Grinage', ['THEO2201'], 'active', 'male'],
+  ['Nadia Rhaburn', ['ITEC1104'], 'active', 'female'],
+  ['Marlon Pou', ['MGMT1106', 'MATH1110'], 'active', 'male'],
+  ['Kayla Waight', ['ENGL1102', 'ITEC1104'], 'active', 'female'],
+  ['Trevor Neal', ['SOCI1212', 'THEO2201'], 'inactive', 'male'],
 ];
 // Deterministic academic profile extras, rotated so the directory shows a believable mix.
-const TEACHER_DESIGNATIONS = ['Head of Department', 'Senior Teacher', 'Senior Teacher', 'Teacher'] as const;
+const TEACHER_DESIGNATIONS = [
+  'Head of Department',
+  'Senior Lecturer',
+  'Senior Lecturer',
+  'Lecturer',
+] as const;
 const TEACHER_DEGREES: Record<(typeof TEACHER_DESIGNATIONS)[number], string> = {
   'Head of Department': 'M.Ed.',
-  'Senior Teacher': 'M.Sc.',
-  Teacher: 'B.Ed.',
+  'Senior Lecturer': 'M.Sc.',
+  Lecturer: 'B.Ed.',
 };
 const BELIZE_STREETS = [
   'Constitution Drive',
@@ -292,7 +341,9 @@ const BELIZE_STREETS = [
   'Ring Road',
 ] as const;
 const teachers: DemoTeacher[] = teacherSeed.map(([full_name, specs, status, gender], i) => {
-  const specNames = specs.map((c) => subjectSeed.find(([, code]) => code === c)![0]);
+  // Specialisations are stored as course NAMES (that is what the directory shows),
+  // resolved from the real catalog rather than an invented subject list.
+  const specNames = specs.map((c) => courseName(c));
   const designation = TEACHER_DESIGNATIONS[i % TEACHER_DESIGNATIONS.length]!;
   const rng = makeRng(900 + i);
   const years = randInt(rng, 5, 22);
@@ -318,7 +369,7 @@ const teachers: DemoTeacher[] = teacherSeed.map(([full_name, specs, status, gend
   };
 });
 const teacherByCode = (code: string): DemoTeacher => {
-  const name = subjectSeed.find(([, c]) => c === code)![0];
+  const name = courseName(code);
   return teachers.find((t) => t.status === 'active' && t.subject_specializations.includes(name))!;
 };
 
@@ -332,7 +383,7 @@ const class_subjects: DemoClassSubject[] = classSeed.map((c, i) => {
   const lead = teacherByCode(leadCode);
   const extra = (c.teacherCodes ?? []).slice(1).map((code) => teacherByCode(code).id);
   // One co-taught class (Math-1) so the "many teachers per class" path (D16) is exercised.
-  const coTeacher = c.name === 'Math-1' ? teachers.find((t) => t.id === 'teach-4') : undefined;
+  const coTeacher = c.name === 'Algebra-1' ? teachers.find((t) => t.id === 'teach-4') : undefined;
   const teacher_ids = [
     lead.id,
     ...extra,
@@ -386,15 +437,15 @@ const LAST_NAMES = [
  * two students' timetables genuinely different.
  */
 const LOWER6_LOADS: ReadonlyArray<readonly string[]> = [
-  ['Math-1', 'Biology-10', 'English-5', 'Chemistry-3'],
-  ['Math-2', 'Biology-10', 'English-5', 'IT-2'],
-  ['Math-1', 'Biology-10', 'English-5', 'IT-2'],
-  ['Math-2', 'Chemistry-3', 'English-5', 'IT-2'],
+  ['Algebra-1', 'Biology-10', 'English-5', 'Chemistry-3'],
+  ['Algebra-2', 'Biology-10', 'English-5', 'Computers-2'],
+  ['Algebra-1', 'Biology-10', 'English-5', 'Computers-2'],
+  ['Algebra-2', 'Chemistry-3', 'English-5', 'Computers-2'],
 ];
 const UPPER6_LOADS: ReadonlyArray<readonly string[]> = [
-  ['Math-3', 'Physics-1', 'Spanish-2'],
-  ['Business-1', 'Spanish-2', 'Math-3'],
-  ['Math-3', 'Physics-1', 'Business-1'],
+  ['Algebra-3', 'PreCalculus-1', 'Spanish-2'],
+  ['Management-1', 'Spanish-2', 'Algebra-3'],
+  ['Algebra-3', 'PreCalculus-1', 'Management-1'],
 ];
 
 /**
@@ -406,12 +457,12 @@ const SCENARIO: Record<string, { name: string; yearGroup: string; classes: reado
   'stu-1': {
     name: 'Freddy Lopez',
     yearGroup: YEAR_LOWER6,
-    classes: ['Math-1', 'Biology-10', 'English-5', 'Chemistry-3'],
+    classes: ['Algebra-1', 'Biology-10', 'English-5', 'Chemistry-3'],
   },
   'stu-2': {
     name: 'John Garcia',
     yearGroup: YEAR_LOWER6,
-    classes: ['Math-2', 'Biology-10', 'English-5', 'IT-2'],
+    classes: ['Algebra-2', 'Biology-10', 'English-5', 'Computers-2'],
   },
 };
 
@@ -441,7 +492,13 @@ for (let i = 0; i < 45; i += 1) {
     else if (i === 33) status = 'transferred';
     else if (i === 41) status = 'graduated';
   }
-  const full_name = scenario?.name ?? `${first} ${last}`;
+  // D30 §D10: the parts are primary; `full_name` is derived from them, never the
+  // other way round. Scenario students carry a fixed display name, so it is split
+  // the same way the migration split the legacy column.
+  const [firstName, ...restName] = (scenario?.name ?? `${first} ${last}`).split(' ');
+  const lastName = restName.length ? restName[restName.length - 1]! : firstName!;
+  const middleName = restName.slice(0, -1).join(' ') || null;
+  const full_name = [firstName, middleName, lastName].filter(Boolean).join(' ');
 
   // Graduated / withdrawn students hold no active enrollment.
   const load =
@@ -457,12 +514,20 @@ for (let i = 0; i < 45; i += 1) {
     id,
     user_id: i < 6 ? `user-stu-${i + 1}` : null, // first few have logins (demo student login)
     student_number: `S-${String(25001 + i)}`,
+    first_name: firstName!,
+    middle_name: middleName,
+    last_name: lastName,
     full_name,
     date_of_birth: dob,
     gender: i % 2 === 0 ? 'female' : 'male',
     enrollment_date: '2025-09-01',
     status,
     year_group: yearGroup,
+    // D30 §D12 — every demo student is registered on a real BAJC programme, rotated
+    // deterministically. Primary Education is deliberately in the rotation: it is the
+    // one programme that passes at C (2.00) rather than C+ (2.50), so the
+    // per-programme pass mark is exercised rather than merely stored.
+    program_id: `prog-${BAJC_PROGRAMS[i % BAJC_PROGRAMS.length]![0].toLowerCase()}`,
     guardian_name: `${pick(rngStu, FIRST_NAMES)} ${last}`,
     guardian_phone: `+501-6${randInt(rngStu, 100000, 999999)}`,
     guardian_email: `${last.toLowerCase()}.guardian@example.bz`,
@@ -496,7 +561,7 @@ if (switchStudent) {
   enrollments.push({
     id: `enr-${enrollCounter}`,
     student_id: switchStudent.id,
-    section_id: sectionByName('Math-1').id,
+    section_id: sectionByName('Algebra-1').id,
     semester_id: SEM_ACTIVE,
     enrolled_at: '2025-09-01T08:00:00Z',
     unenrolled_at: '2025-09-25T08:00:00Z',
@@ -860,21 +925,44 @@ const events: DemoEvent[] = [
   },
 ];
 
-// ── Grading scale + bands (per active year; .99 ceilings tolerated, OQ-DB2) ─────
+// ── Grading scale + bands ───────────────────────────────────────────────────────
+// The BAJC 8-band scale with grade points, mirroring
+// `backend/app/modules/settings/grading_defaults.py` (D30 §D5). Ceilings are the
+// integers BAJC prints, not the old `.99` dressing — safe because `letterFor` is
+// half-open on `min_score`.
+//
+// **D and F are both non-passing.** D is priced 1.00, below every programme's
+// `min_passing_grade_point` (2.00 for Primary Education, 2.50 elsewhere), so marking it
+// passing would have made the letter semantics and the programme rule disagree. The
+// pass mark is 70 — C's floor — for the same reason.
 const activeBands: DemoGradingScale['bands'] = [
-  { letter: 'A', min_score: 90, max_score: 100, is_passing: true, sort_order: 1 },
-  { letter: 'B', min_score: 80, max_score: 89.99, is_passing: true, sort_order: 2 },
-  { letter: 'C', min_score: 70, max_score: 79.99, is_passing: true, sort_order: 3 },
-  { letter: 'D', min_score: 60, max_score: 69.99, is_passing: true, sort_order: 4 },
-  { letter: 'F', min_score: 0, max_score: 59.99, is_passing: false, sort_order: 5 },
+  { letter: 'A', min_score: 95, max_score: 100, grade_point: 4.0, is_passing: true, sort_order: 1 },
+  { letter: 'A-', min_score: 90, max_score: 94, grade_point: 3.75, is_passing: true, sort_order: 2 },
+  { letter: 'B+', min_score: 85, max_score: 89, grade_point: 3.5, is_passing: true, sort_order: 3 },
+  { letter: 'B', min_score: 80, max_score: 84, grade_point: 3.0, is_passing: true, sort_order: 4 },
+  { letter: 'C+', min_score: 75, max_score: 79, grade_point: 2.5, is_passing: true, sort_order: 5 },
+  { letter: 'C', min_score: 70, max_score: 74, grade_point: 2.0, is_passing: true, sort_order: 6 },
+  { letter: 'D', min_score: 65, max_score: 69, grade_point: 1.0, is_passing: false, sort_order: 7 },
+  { letter: 'F', min_score: 0, max_score: 64, grade_point: 0.0, is_passing: false, sort_order: 8 },
+];
+// The ARCHIVED year deliberately keeps the pre-D30 5-band scale with NULL grade points.
+// That is not laziness: a frozen scale keeps the rules that were in force then (schema
+// §10.4), and it is the state that exercises `meets_grade_point`'s lenient fallback in
+// demo mode exactly as the real database does.
+const archivedBands: DemoGradingScale['bands'] = [
+  { letter: 'A', min_score: 90, max_score: 100, grade_point: null, is_passing: true, sort_order: 1 },
+  { letter: 'B', min_score: 80, max_score: 89.99, grade_point: null, is_passing: true, sort_order: 2 },
+  { letter: 'C', min_score: 70, max_score: 79.99, grade_point: null, is_passing: true, sort_order: 3 },
+  { letter: 'D', min_score: 60, max_score: 69.99, grade_point: null, is_passing: true, sort_order: 4 },
+  { letter: 'F', min_score: 0, max_score: 59.99, grade_point: null, is_passing: false, sort_order: 5 },
 ];
 const grading_scales: DemoGradingScale[] = [
-  { academic_year_id: YEAR_ACTIVE, pass_mark: 60, is_frozen: false, bands: activeBands },
+  { academic_year_id: YEAR_ACTIVE, pass_mark: 70, is_frozen: false, bands: activeBands },
   {
     academic_year_id: YEAR_ARCHIVED,
     pass_mark: 60,
     is_frozen: true,
-    bands: activeBands.map((b) => ({ ...b })),
+    bands: archivedBands,
   },
 ];
 
@@ -1131,11 +1219,413 @@ for (const sec of histSections) {
 }
 
 // ── Assemble + freeze ───────────────────────────────────────────────────────────
+
+// ── Programmes, curriculum and prerequisites (D30 §D3/§D4) ──────────────────────
+//
+// The real eight BAJC Associate-degree programmes with their full 26/27 sequences —
+// 243 curriculum rows and 63 prerequisites — from the generated `bajcCatalog.ts`.
+// Nothing here is invented; see the backend twin for the source corrections.
+const programs: DemoProgram[] = BAJC_PROGRAMS.map(
+  ([code, name, award, totalCredits, minGp]) => ({
+    id: `prog-${code.toLowerCase()}`,
+    code,
+    name,
+    award,
+    total_credits: totalCredits,
+    min_passing_grade_point: minGp,
+    is_active: true,
+  }),
+);
+const programId = (code: string): string => `prog-${code.toLowerCase()}`;
+
+const program_courses: DemoProgramCourse[] = BAJC_CURRICULUM.flatMap(
+  ([progCode, termLabel, termOrder, codes]) =>
+    codes.map((code, i) => ({
+      id: `pc-${progCode.toLowerCase()}-${termOrder}-${i}`,
+      program_id: programId(progCode),
+      course_id: subjectId(code),
+      term_label: termLabel,
+      term_order: termOrder,
+      // Every course printed on a sequence counts toward the award; the PDF marks no
+      // electives (see the backend catalog's note on the unexplained `*` footnotes).
+      is_required: true,
+    })),
+);
+
+// The real prerequisite relation. `MATH1210 <- MATH1110` is the one the demo actually
+// exercises, because PreCalculus-1 and Algebra-1/2/3 are both offered above.
+const course_prerequisites: DemoCoursePrerequisite[] = [
+  ...BAJC_PREREQUISITES.map(([courseCode, requiredCode], i) => ({
+    id: `prereq-${i + 1}`,
+    course_id: subjectId(courseCode),
+    prerequisite_course_id: subjectId(requiredCode),
+    program_id: null,
+    requirement_type: 'course' as const,
+  })),
+  // `EDUC3201` (Internship) <- literally "ALL COURSES" on the Primary Education
+  // sequence. A list of course ids could never say that.
+  ...BAJC_ALL_COURSE_GATES.map(([courseCode, progCode], i) => ({
+    id: `prereq-all-${i + 1}`,
+    course_id: subjectId(courseCode),
+    prerequisite_course_id: null,
+    program_id: programId(progCode),
+    requirement_type: 'all_program_courses' as const,
+  })),
+];
+
+
+// ── Admissions (D30 §D11) ───────────────────────────────────────────────────────
+//
+// Four applications, chosen so every state the screens have to render is reachable in
+// demo mode without touching anything:
+//
+//   * a DRAFT, half-transcribed — what the wizard resumes into;
+//   * a SUBMITTED one that is complete and ACCEPTABLE — the happy path for the Accept
+//     button, including the temporary-password result;
+//   * a SUBMITTED one BLOCKED by a pending credit transfer, so the Dean's decision and
+//     the "acceptance is blocked" banner are both demonstrable on real data;
+//   * an ACCEPTED one already linked to a demo student, so the list's "Student ID" link
+//     and the read-only decided view are populated.
+//
+// A DENIED one is not seeded: denial is one click from the submitted rows and seeding it
+// would just occupy a list slot.
+const applicationsSeed: DemoApplication[] = [
+  {
+    id: 'app-draft-1',
+    status: 'draft',
+    school_year: '2026-2027',
+    first_name: 'Marisol',
+    middle_name: null,
+    last_name: 'Canto',
+    date_of_birth: '2007-11-14',
+    ssno: null,
+    gender: 'female',
+    civil_status: null,
+    religion: null,
+    phone: '+501-6220145',
+    email: 'marisol.canto@example.bz',
+    has_health_condition: false,
+    health_condition_note: null,
+    street: '18 Santa Rita Road',
+    city_town_village: 'Corozal Town',
+    district: 'Corozal',
+    mother_name: 'Delmy Canto',
+    father_name: null,
+    nok_name: 'Delmy Canto',
+    nok_relationship: 'Mother',
+    nok_phone: '+501-6220146',
+    atlib_exam: false,
+    num_csec: null,
+    finance_name: null,
+    finance_phone: null,
+    finance_email: null,
+    recommendation_received: false,
+    // Sections C–G are still blank. That is the point of a draft.
+    program_id: null,
+    year_of_study: null,
+    enrollment_load: null,
+    applicant_signed_at: null,
+    guardian_signed_at: null,
+    date_accepted: null,
+    academic_year_id: null,
+    enrolment_status: null,
+    student_code: null,
+    comments: null,
+    decided_by_user_id: null,
+    decided_at: null,
+    student_id: null,
+    created_at: '2025-10-02T14:05:00Z',
+    updated_at: '2025-10-02T14:22:00Z',
+  },
+  {
+    id: 'app-ready-1',
+    status: 'submitted',
+    school_year: '2026-2027',
+    first_name: 'Presley',
+    middle_name: 'A',
+    last_name: 'Rancharan',
+    date_of_birth: '2006-05-02',
+    ssno: '412885031',
+    gender: 'male',
+    civil_status: 'Single',
+    religion: 'Adventist',
+    phone: '+501-6311902',
+    email: 'presley.rancharan@example.bz',
+    has_health_condition: false,
+    health_condition_note: null,
+    street: '4 Calcutta Village Road',
+    city_town_village: 'Calcutta',
+    district: 'Corozal',
+    mother_name: 'Indira Rancharan',
+    father_name: 'Errol Rancharan',
+    nok_name: 'Indira Rancharan',
+    nok_relationship: 'Mother',
+    nok_phone: '+501-6311903',
+    atlib_exam: true,
+    num_csec: 7,
+    finance_name: 'Errol Rancharan',
+    finance_phone: '+501-6311904',
+    finance_email: 'errol.rancharan@example.bz',
+    recommendation_received: true,
+    program_id: 'prog-bmad',
+    year_of_study: 'First',
+    enrollment_load: 'Full Time',
+    applicant_signed_at: '2025-09-28',
+    guardian_signed_at: null, // an adult — the under-18 rule does not apply
+    date_accepted: null,
+    academic_year_id: null,
+    enrolment_status: null,
+    student_code: null,
+    comments: null,
+    decided_by_user_id: null,
+    decided_at: null,
+    student_id: null,
+    created_at: '2025-09-28T09:10:00Z',
+    updated_at: '2025-09-29T11:40:00Z',
+  },
+  {
+    id: 'app-transfer-1',
+    status: 'under_review',
+    school_year: '2026-2027',
+    first_name: 'Kenrick',
+    middle_name: null,
+    last_name: 'Bevans',
+    date_of_birth: '2003-02-19',
+    ssno: '399120884',
+    gender: 'male',
+    civil_status: 'Single',
+    religion: null,
+    phone: '+501-6704411',
+    email: 'kenrick.bevans@example.bz',
+    has_health_condition: false,
+    health_condition_note: null,
+    street: '92 Orange Walk Street',
+    city_town_village: 'Orange Walk Town',
+    district: 'Orange Walk',
+    mother_name: 'Sonia Bevans',
+    father_name: null,
+    nok_name: 'Sonia Bevans',
+    nok_relationship: 'Mother',
+    nok_phone: '+501-6704412',
+    atlib_exam: false,
+    num_csec: 5,
+    finance_name: 'Self',
+    finance_phone: '+501-6704411',
+    finance_email: null,
+    recommendation_received: true,
+    program_id: 'prog-itec',
+    year_of_study: 'Second',
+    enrollment_load: 'Part Time',
+    applicant_signed_at: '2025-09-20',
+    guardian_signed_at: null,
+    date_accepted: null,
+    academic_year_id: null,
+    enrolment_status: null,
+    student_code: null,
+    comments: 'Transferring from the University of Belize. CTA and transcript received.',
+    decided_by_user_id: null,
+    decided_at: null,
+    student_id: null,
+    created_at: '2025-09-20T08:00:00Z',
+    updated_at: '2025-10-01T15:30:00Z',
+  },
+  {
+    id: 'app-accepted-1',
+    status: 'accepted',
+    school_year: '2025-2026',
+    first_name: students[0]!.first_name ?? students[0]!.last_name,
+    middle_name: students[0]!.middle_name,
+    last_name: students[0]!.last_name,
+    date_of_birth: students[0]!.date_of_birth,
+    ssno: null,
+    gender: students[0]!.gender,
+    civil_status: null,
+    religion: null,
+    phone: students[0]!.phone,
+    email: `${students[0]!.last_name.toLowerCase()}.applicant@example.bz`,
+    has_health_condition: false,
+    health_condition_note: null,
+    street: null,
+    city_town_village: null,
+    district: 'Corozal',
+    mother_name: null,
+    father_name: null,
+    nok_name: students[0]!.guardian_name,
+    nok_relationship: 'Guardian',
+    nok_phone: students[0]!.guardian_phone,
+    atlib_exam: true,
+    num_csec: 8,
+    finance_name: students[0]!.guardian_name,
+    finance_phone: students[0]!.guardian_phone,
+    finance_email: null,
+    recommendation_received: true,
+    program_id: students[0]!.program_id,
+    year_of_study: 'First',
+    enrollment_load: 'Full Time',
+    applicant_signed_at: '2025-08-10',
+    guardian_signed_at: null,
+    date_accepted: '2025-08-18',
+    academic_year_id: YEAR_ACTIVE,
+    enrolment_status: 'Full Time',
+    student_code: students[0]!.student_number,
+    comments: 'Accepted for the 2025-2026 intake.',
+    decided_by_user_id: principalUserId,
+    decided_at: '2025-08-18T16:00:00Z',
+    student_id: students[0]!.id,
+    created_at: '2025-08-05T10:00:00Z',
+    updated_at: '2025-08-18T16:00:00Z',
+  },
+];
+
+const application_education: DemoApplicationEducation[] = [
+  {
+    id: 'appedu-1',
+    application_id: 'app-draft-1',
+    institution: 'Corozal Community College',
+    education_level: 'High School',
+    graduated: true,
+    graduation_date: '2025-06-27',
+    sort_order: 1,
+  },
+  {
+    id: 'appedu-2',
+    application_id: 'app-ready-1',
+    institution: 'Corozal Community College',
+    education_level: 'High School',
+    graduated: true,
+    graduation_date: '2024-06-28',
+    sort_order: 1,
+  },
+  {
+    id: 'appedu-3',
+    application_id: 'app-transfer-1',
+    institution: 'Escuela Secundaria Técnica México',
+    education_level: 'High School',
+    graduated: true,
+    graduation_date: '2021-07-02',
+    sort_order: 1,
+  },
+  {
+    // The TERTIARY row is what makes the credit transfer approvable at all: policy allows
+    // transfer only from a recognised tertiary institution, and the server checks Section B
+    // for one before it lets the Dean approve.
+    id: 'appedu-4',
+    application_id: 'app-transfer-1',
+    institution: 'University of Belize',
+    education_level: 'Tertiary',
+    graduated: false,
+    graduation_date: null,
+    sort_order: 2,
+  },
+];
+
+const application_documents: DemoApplicationDocument[] = [
+  { id: 'appdoc-1', application_id: 'app-draft-1', document_type: 'passport_photo', file_name: null, content_type: null, size_bytes: null, received: true },
+  { id: 'appdoc-2', application_id: 'app-ready-1', document_type: 'passport_photo', file_name: null, content_type: null, size_bytes: null, received: true },
+  { id: 'appdoc-3', application_id: 'app-ready-1', document_type: 'hs_diploma', file_name: null, content_type: null, size_bytes: null, received: true },
+  { id: 'appdoc-4', application_id: 'app-ready-1', document_type: 'recommendation_form', file_name: null, content_type: null, size_bytes: null, received: true },
+  { id: 'appdoc-5', application_id: 'app-ready-1', document_type: 'social_security_card', file_name: null, content_type: null, size_bytes: null, received: false },
+  { id: 'appdoc-6', application_id: 'app-transfer-1', document_type: 'passport_photo', file_name: null, content_type: null, size_bytes: null, received: true },
+  { id: 'appdoc-7', application_id: 'app-transfer-1', document_type: 'cta', file_name: 'cta-bevans.pdf', content_type: 'application/pdf', size_bytes: 184320, received: true },
+  { id: 'appdoc-8', application_id: 'app-transfer-1', document_type: 'transcript', file_name: 'ub-transcript.pdf', content_type: 'application/pdf', size_bytes: 262144, received: true },
+  { id: 'appdoc-9', application_id: 'app-transfer-1', document_type: 'course_outline', file_name: 'ub-outlines.pdf', content_type: 'application/pdf', size_bytes: 331776, received: true },
+];
+
+// One PENDING request, so the Dean's approve/deny controls and the "acceptance is blocked
+// while a transfer is undecided" rule are both demonstrable. Equivalency is deliberately
+// left UNASSESSED: filing states a claim, and assessing it is the Dean's job — so the
+// Approve button starts disabled with the ≥75% rule in its tooltip.
+const credit_transfer_requests: DemoCreditTransferRequest[] = [
+  {
+    id: 'cta-1',
+    application_id: 'app-transfer-1',
+    external_institution: 'University of Belize',
+    external_course_code: 'CMPS1011',
+    external_course_name: 'Introduction to Programming',
+    external_credits: 3,
+    external_grade: 'B+',
+    target_course_id: subjectId('ITEC1104'),
+    content_equivalency_pct: null,
+    cta_document_id: 'appdoc-7',
+    transcript_document_id: 'appdoc-8',
+    outline_document_id: 'appdoc-9',
+    status: 'pending',
+    decided_by_user_id: null,
+    decided_at: null,
+    note: null,
+    created_at: '2025-10-01T15:30:00Z',
+  },
+];
+
+// Every student's programme history opens on the day they enrolled — the same thing
+// acceptance does, so the academic-history panel is populated for all of them rather than
+// only for the one with a seeded application (§D12).
+const student_program_history: DemoStudentProgramHistory[] = students
+  .filter((student) => student.program_id !== null)
+  .map((student, index) => ({
+    id: `sph-${index + 1}`,
+    student_id: student.id,
+    program_id: student.program_id!,
+    started_at: student.enrollment_date,
+    ended_at: null,
+    reason: 'Admitted',
+  }));
+
+
+// ── Grade revision (D30 §D7) ────────────────────────────────────────────────────
+//
+// ONE pending request, so both halves of the workflow are demonstrable without touching
+// anything: the Dean's queue has a row to rule on and the bell badge has something to
+// count, while the Lecturer sees their own request with its status.
+//
+// Filed against the first GRADED, RELEASED result belonging to the demo Lecturer's own
+// offerings — anything else would be refused by the same rules the real backend applies
+// (the grade must exist and be `graded`, and the Lecturer must own the offering), so
+// picking it by search rather than by hand keeps the seed honest as the dataset changes.
+const revisableGrade = (() => {
+  const teacherId = teachers.find((t) => t.user_id === 'user-teach-1')?.id ?? teachers[0]?.id;
+  const owned = new Set(
+    class_subjects.filter((cs) => cs.teacher_ids.includes(teacherId!)).map((cs) => cs.id),
+  );
+  const ownedAssessments = new Set(
+    assessments.filter((a) => owned.has(a.class_subject_id) && a.status === 'graded').map((a) => a.id),
+  );
+  return assessment_grades.find(
+    (g) => ownedAssessments.has(g.assessment_id) && g.status === 'graded' && g.score != null,
+  );
+})();
+
+const grade_revision_requests: DemoGradeRevisionRequest[] = revisableGrade
+  ? [
+      {
+        id: 'rev-seed-1',
+        assessment_grade_id: revisableGrade.id,
+        requested_by_user_id: 'user-teach-1',
+        reason:
+          'The second essay question was marked out of 10 but is worth 20. Re-marked, the student gains 8.',
+        original_score: revisableGrade.score,
+        // Capped at the assessment's ceiling, so the seed can never be an invalid request.
+        proposed_score: Math.min(
+          (revisableGrade.score ?? 0) + 8,
+          assessments.find((a) => a.id === revisableGrade.assessment_id)?.max_score ?? 100,
+        ),
+        status: 'pending',
+        decided_by_user_id: null,
+        decided_at: null,
+        decision_note: null,
+        created_at: '2025-10-14T10:30:00Z',
+      },
+    ]
+  : [];
+
 export const DEMO_DATASET: DemoDataset = {
   school_profile,
   academic_years,
   semesters,
   subjects,
+  programs,
+  program_courses,
+  course_prerequisites,
   sections,
   teachers,
   students,
@@ -1151,6 +1641,12 @@ export const DEMO_DATASET: DemoDataset = {
   grading_scales,
   assessment_policy,
   users,
+  applications: applicationsSeed,
+  application_education,
+  application_documents,
+  credit_transfer_requests,
+  student_program_history,
+  grade_revision_requests,
 };
 
 // Convenience exported id constants module agents may reference in tests/handlers.

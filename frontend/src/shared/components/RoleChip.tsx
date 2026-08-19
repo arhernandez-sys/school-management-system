@@ -1,6 +1,7 @@
 import { Chip } from '@mui/material';
 import type { ChipProps } from '@mui/material';
 import type { Role } from '@shared/api/generated/model';
+import { ROLE_LABEL } from '@shared/auth/roleLabels';
 
 /**
  * RoleChip — consistent role display (design-system §5 #11).
@@ -8,14 +9,9 @@ import type { Role } from '@shared/api/generated/model';
  * Promoted from the Phase-6 stub for the Users-admin screen (Settings 7.2). Maps the
  * generated `Role` enum to a human label + a stable color so a user's role reads the
  * same in the directory, detail, and create/edit surfaces.
+ *
+ * D30: the label map moved to `@shared/auth/roleLabels` — it was one of four copies.
  */
-const ROLE_LABEL: Record<Role, string> = {
-  principal: 'Principal',
-  secretary: 'Secretary',
-  teacher: 'Teacher',
-  student: 'Student',
-};
-
 const ROLE_COLOR: Record<Role, ChipProps['color']> = {
   principal: 'primary',
   secretary: 'secondary',

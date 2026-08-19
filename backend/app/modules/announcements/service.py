@@ -390,13 +390,36 @@ def list_announcements(
 
 
 def unread_count(db: Session, *, actor: User) -> UnreadCountResponse:
-    """The bell badge: visible-and-targeted minus already-read."""
-    stmt = (
-        select(func.count())
-        .select_from(Announcement)
-        .where(_visible_clause(db, actor), _unread_filter(actor))
+    """The bell badge: unread announcements PLUS revisions awaiting the caller (§D8).
+
+    **Extended rather than duplicated.** §D8 rules out a generic notifications table: the
+    Dean's revision queue IS `GET /grade-revisions?status=pending`, and this count reaches
+    it through `grades.revisions.pending_for_actor` rather than reimplementing the rule.
+    `unread_count` stays the SUM, so a client reading only that field keeps working.
+
+    The revision component is what awaits the CALLER'S decision, so it is non-zero only for
+    the Dean. A badge that counted a Lecturer's own pending requests would be nagging them
+    about something only the Dean can act on.
+
+    Imported inside the function: `grades.revisions` imports `core.rbac`, and a top-level
+    import here would widen this module's import graph for one integer.
+    """
+    from app.modules.grades import revisions as grade_revisions
+
+    announcements = (
+        db.scalar(
+            select(func.count())
+            .select_from(Announcement)
+            .where(_visible_clause(db, actor), _unread_filter(actor))
+        )
+        or 0
     )
-    return UnreadCountResponse(unread_count=db.scalar(stmt) or 0)
+    revisions = grade_revisions.pending_for_actor(db, actor=actor)
+    return UnreadCountResponse(
+        unread_count=announcements + revisions,
+        unread_announcements=announcements,
+        pending_grade_revisions=revisions,
+    )
 
 
 def target_classes(db: Session, *, actor: User) -> TargetClassesResponse:

@@ -110,7 +110,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
     return (
       <EmptyState
         variant="page"
-        title="Teacher not found"
+        title="Lecturer not found"
         description="This teacher may have been removed or you may not have access."
         action={
           mode === 'manage'
@@ -147,7 +147,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
       actions={actions}
       summary={<TeacherProfileSummary teacher={detail} />}
     >
-      {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Teacher detail sections" />}
+      {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Lecturer detail sections" />}
     </ProfileLayout>
   );
 }

@@ -98,7 +98,7 @@ export function MyTimetablePage() {
                 }}
               >
                 <StatCard
-                  label="Classes this week"
+                  label="Courses this week"
                   value={totalEntries}
                   icon={<MenuBookIcon />}
                   color="primary"

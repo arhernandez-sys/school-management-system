@@ -47,7 +47,14 @@ from app.modules.classes.router import router as classes_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.events.router import router as events_router
 from app.modules.grades.router import assessment_grades_router
+from app.modules.grades.router import revisions_router as grade_revisions_router
 from app.modules.grades.router import router as grades_router
+from app.modules.admissions.router import (
+    credit_transfers_router,
+    router as applications_router,
+)
+from app.modules.prerequisites.router import router as prerequisites_router
+from app.modules.programs.router import router as programs_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
 from app.modules.students.router import router as students_router
@@ -66,13 +73,18 @@ MODULE_ROUTERS: list[APIRouter] = [
     auth_router,  # 7.1 — serves /api/v1/auth/* (api-spec §2)
     settings_router,  # 7.2 — serves /api/v1/settings/* (api-spec §5 Module 11)
     subjects_router,  # 7.2 — serves /api/v1/subjects/* (api-spec §5 Module 5b)
+    programs_router,  # D30 2B — serves /api/v1/programs/* (studies + curriculum, §D3)
+    prerequisites_router,  # D30 2C — /api/v1/subjects/{id}/prerequisites (§D4)
     students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
+    applications_router,  # D30 4 — /api/v1/applications/* (admissions, §D11)
+    credit_transfers_router,  # D30 4 — /api/v1/credit-transfers/* (Dean decides, brief §13)
     teachers_router,  # 7.3 — serves /api/v1/teachers/* (api-spec §5 Module 4)
     classes_router,  # 7.4 — serves /api/v1/classes/* (api-spec §5 Module 5)
     assessments_router,  # 7.5 — serves /api/v1/assessments/* (api-spec §6)
     assessment_categories_router,  # 7.5 — /api/v1/classes/{id}/subjects/{cs}/categories
     grades_router,  # 7.6 — serves /api/v1/grades/* (api-spec §7)
     assessment_grades_router,  # 7.6 — PUT /api/v1/assessments/{id}/grades (the grade write)
+    grade_revisions_router,  # D30 5 — /api/v1/grade-revisions/* (the Dean's queue, §D7)
     attendance_router,  # 7.7 — serves /api/v1/attendance/* (api-spec §8)
     announcements_router,  # 7.8 — serves /api/v1/announcements/* (api-spec §9)
     dashboard_router,  # 7.9a — serves GET /api/v1/dashboard (api-spec §5 Module 2)
@@ -147,7 +159,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings.validate_runtime()
 
     app = FastAPI(
-        title="School Management System API",
+        # D30: BAJC is a junior college, so the product is a STUDENT Management
+        # Information System. Display name only — every path, tag and schema name is
+        # unchanged, so the generated TS client is unaffected.
+        title="Student Management Information System API",
         version="1.0.0",
         # Serve docs + schema UNDER the version prefix so the generated TS client
         # (orval, 7.0e) and the browser read `/api/v1/openapi.json` (api-spec §1.1).

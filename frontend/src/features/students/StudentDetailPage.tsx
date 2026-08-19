@@ -51,6 +51,7 @@ import { RemindTeacherButton } from './components/RemindTeacherButton';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
+import { AcademicHistoryPanel } from './components/AcademicHistoryPanel';
 import {
   STUDENT_STATUS_LABEL as STATUS_LABEL,
   STUDENT_STATUS_OPTIONS as STATUS_OPTIONS,
@@ -112,6 +113,16 @@ export function StudentDetailPage() {
         label: 'Grades & Assessments',
         icon: <GradingOutlinedIcon fontSize="small" />,
         render: () => <GradesTab studentId={studentId} yearId={yearId} />,
+      },
+      {
+        // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
+        // cumulative GPA, and which courses count toward the current award. Derived on
+        // every read, and NOT year-scoped: an award spans years by definition, so the
+        // global year switcher deliberately does not narrow it.
+        value: 'academic',
+        label: 'Academic history',
+        icon: <SchoolOutlinedIcon fontSize="small" />,
+        render: () => <AcademicHistoryPanel studentId={studentId} />,
       },
     ];
   }, [detail, studentId, yearId, yearName]);

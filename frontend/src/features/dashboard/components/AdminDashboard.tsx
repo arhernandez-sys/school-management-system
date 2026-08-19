@@ -125,7 +125,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
       {/* Lists row */}
       <Grid item xs={12} md={6} lg={4}>
         <PeopleListCard
-          title="Teachers"
+          title="Lecturers"
           people={teachers}
           viewAllTo={ROUTES.teachers}
           emptyText="Teaching staff will appear here."

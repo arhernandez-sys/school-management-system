@@ -9,6 +9,7 @@ import {
   Paper,
   Slide,
   Stack,
+  Tooltip,
   Table,
   TableBody,
   TableCell,
@@ -18,6 +19,7 @@ import {
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import {
   EmptyState,
   ErrorState,
@@ -27,9 +29,28 @@ import {
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
+import { useAuth } from '@features/auth/hooks/useAuth';
 import { GradeCell, type GradeCellValue } from './components/GradeCell';
+import { RequestRevisionDialog } from './components/RequestRevisionDialog';
 import { useGradebook, useSaveGrades, useSetRelease } from './hooks/useGrades';
 import type { GradeEntry } from './types';
+
+/**
+ * A stored UTC deadline in the reader's own timezone, to the minute — "grades due on the
+ * 15th" and "grades due 17:00 on the 15th" are different instructions, and the second is
+ * what is enforced.
+ */
+function formatDeadline(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 /**
  * Per-assessment class grading page (`/grades/assessment/:assessmentId`).
@@ -43,6 +64,10 @@ import type { GradeEntry } from './types';
 export function AssessmentGradingScreen() {
   const navigate = useNavigate();
   const { assessmentId = '' } = useParams();
+  const { user } = useAuth();
+  // Only the Lecturer who teaches the offering may request one (§D7); the server
+  // enforces ownership and 403s anybody else, so this is UX, not the boundary.
+  const isLecturer = user?.role === 'teacher';
   const [searchParams] = useSearchParams();
   const classSubjectId = searchParams.get('class_subject_id');
 
@@ -52,6 +77,12 @@ export function AssessmentGradingScreen() {
 
   const [draft, setDraft] = useState<Map<string, GradeCellValue>>(new Map());
   const [saveError, setSaveError] = useState<string | null>(null);
+  // D30 §D7 — the student whose grade a revision is being requested for.
+  const [revisionFor, setRevisionFor] = useState<{
+    id: string;
+    full_name: string;
+    currentScore: number | null;
+  } | null>(null);
 
   // Reset the draft whenever the target assessment changes.
   useEffect(() => {
@@ -64,7 +95,13 @@ export function AssessmentGradingScreen() {
     () => gradebook?.assessments.find((a) => a.id === assessmentId) ?? null,
     [gradebook, assessmentId],
   );
-  const canEdit = (gradebook?.can_edit ?? false) && (assessment?.is_editable ?? false);
+  // D30 §D6 — the term's grade window. Kept separate from `can_edit` on the wire (a shut
+  // deadline and a read-only role are different situations) but folded together HERE,
+  // because from the cell's point of view both mean "you cannot type in me".
+  const windowClosed = gradebook?.grade_window_closed ?? false;
+  const deadline = gradebook?.grade_submission_deadline ?? null;
+  const canEdit =
+    (gradebook?.can_edit ?? false) && (assessment?.is_editable ?? false) && !windowClosed;
 
   const handleChange = useCallback((studentId: string, next: GradeCellValue) => {
     setDraft((prev) => {
@@ -168,8 +205,27 @@ export function AssessmentGradingScreen() {
               label={assessment.is_released ? 'Released' : 'Not released'}
               kind={assessment.is_released ? 'success' : 'neutral'}
             />
-            {!canEdit && <StatusBadge label="Read-only" kind="neutral" />}
+            {windowClosed && <StatusBadge label="Grading closed" kind="warning" />}
+            {!canEdit && !windowClosed && <StatusBadge label="Read-only" kind="neutral" />}
+            <Box sx={{ flexGrow: 1 }} />
+            {isLecturer && (
+              <Button size="small" onClick={() => navigate(ROUTES.gradeRevisions)}>
+                My revision requests
+              </Button>
+            )}
           </Stack>
+
+          {/* Explain the disabled form BEFORE the Lecturer types forty marks into it.
+              Without this the save bar simply refuses and the only feedback is a 409. */}
+          {windowClosed && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <strong>Grade submission has closed for this term.</strong>{' '}
+              {deadline
+                ? `The deadline was ${formatDeadline(deadline)}.`
+                : 'The deadline has passed.'}{' '}
+              Ask the Dean to reopen the window or to review a grade revision.
+            </Alert>
+          )}
 
           {gradebook.rows.length === 0 ? (
             <EmptyState
@@ -185,6 +241,7 @@ export function AssessmentGradingScreen() {
                     <TableCell>Student</TableCell>
                     <TableCell>Student #</TableCell>
                     <TableCell align="right">{`Grade (out of ${assessment.max_score})`}</TableCell>
+                    {isLecturer && <TableCell align="right">Revision</TableCell>}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -224,6 +281,40 @@ export function AssessmentGradingScreen() {
                             />
                           </Box>
                         </TableCell>
+                        {isLecturer && (
+                          <TableCell align="right">
+                            {/* Requesting writes no grade, so it stays available when the
+                                grade window has CLOSED and the save bar does not — which is
+                                the whole point of the workflow (§D7). It needs a recorded
+                                mark to revise, so an ungraded row has nothing to appeal. */}
+                            <Tooltip
+                              title={
+                                cell?.status === 'graded' && cell.score != null
+                                  ? 'Ask the Dean to change this mark. The original is kept.'
+                                  : 'Only a recorded grade can be revised.'
+                              }
+                            >
+                              <span>
+                                <Button
+                                  size="small"
+                                  startIcon={<EditNoteIcon />}
+                                  disabled={
+                                    cell?.status !== 'graded' || cell.score == null
+                                  }
+                                  onClick={() =>
+                                    setRevisionFor({
+                                      id: row.student.id,
+                                      full_name: row.student.full_name,
+                                      currentScore: cell?.score ?? null,
+                                    })
+                                  }
+                                >
+                                  Request
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}
@@ -232,6 +323,19 @@ export function AssessmentGradingScreen() {
             </TableContainer>
           )}
         </>
+      )}
+
+      {assessment && (
+        <RequestRevisionDialog
+          open={revisionFor !== null}
+          assessmentId={assessmentId}
+          assessmentTitle={assessment.title}
+          maxScore={assessment.max_score}
+          student={revisionFor}
+          currentScore={revisionFor?.currentScore ?? null}
+          windowClosed={windowClosed}
+          onClose={() => setRevisionFor(null)}
+        />
       )}
 
       {/* Sticky save bar — appears only when there are unsaved edits. */}
@@ -279,7 +383,10 @@ export function AssessmentGradingScreen() {
             <Button
               variant="contained"
               onClick={() => void saveAll()}
-              disabled={saveMut.isPending}
+              // Also disabled on a closed window: the cells are already locked, but a
+              // draft entered before the deadline lapsed could otherwise still be
+              // submitted into a guaranteed 409.
+              disabled={saveMut.isPending || windowClosed}
               startIcon={saveMut.isPending ? <CircularProgress size={16} color="inherit" /> : undefined}
             >
               {saveMut.isPending ? 'Saving…' : 'Save changes'}

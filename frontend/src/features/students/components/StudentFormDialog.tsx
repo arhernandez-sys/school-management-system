@@ -19,10 +19,13 @@ export interface StudentFormDialogProps {
 /**
  * Create / edit a student (api-spec §5.3).
  *
- * Create requires student number, full name, date of birth and enrollment date. **D29**:
- * `year_group` (the student's own level) is a field here, and MANY subject classes can be
- * picked to enrol into on create — it used to be a single "Section" select, which cannot
- * express a sixth-former's subject load.
+ * Create requires the name, date of birth and enrollment date. **D30**: the name is
+ * entered in parts (surname / given / middle) because that is how it is stored and
+ * sorted (§D10), and the STUDENT ID IS OPTIONAL — left blank, the server issues the
+ * next `YYYYMM###` for the month (§D9). It is only typed in to import a student who
+ * already carries an ID. **D29**: `year_group` (the student's own level) is a field
+ * here, and MANY subject classes can be picked to enrol into on create — it used to be
+ * a single "Section" select, which cannot express a tertiary student's subject load.
  *
  * On edit, class enrollment is NOT changed here: the API rejects it on PATCH, because with
  * many enrolments "set them from here" is ambiguous about removals. Enrollment moves live
@@ -45,7 +48,9 @@ export function StudentFormDialog({
   const classOptions = useMemo(() => classesQuery.data ?? [], [classesQuery.data]);
 
   const [studentNumber, setStudentNumber] = useState('');
-  const [fullName, setFullName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [middleName, setMiddleName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [gender, setGender] = useState<'male' | 'female'>('female');
   // New enrollments default to the actual school-local today, not the demo dataset's
@@ -62,7 +67,9 @@ export function StudentFormDialog({
   useEffect(() => {
     if (open) {
       setStudentNumber(student?.student_number ?? '');
-      setFullName(student?.full_name ?? '');
+      setFirstName(student?.first_name ?? '');
+      setMiddleName(student?.middle_name ?? '');
+      setLastName(student?.last_name ?? '');
       setDateOfBirth(student?.date_of_birth ?? '');
       setGender(student?.gender ?? 'female');
       setEnrollmentDate(student?.enrollment_date ?? schoolToday());
@@ -76,10 +83,13 @@ export function StudentFormDialog({
     }
   }, [open, student]);
 
+  // D30: the student number is NOT required to create — omitting it is how the
+  // server is asked to issue the next YYYYMM### (§D9). Only the name and the two
+  // dates gate the button.
+  const namesMissing = firstName.trim().length === 0 || lastName.trim().length === 0;
   const submitDisabled = editing
-    ? fullName.trim().length === 0
-    : studentNumber.trim().length === 0 ||
-      fullName.trim().length === 0 ||
+    ? namesMissing
+    : namesMissing ||
       dateOfBirth.trim().length === 0 ||
       enrollmentDate.trim().length === 0;
 
@@ -94,8 +104,12 @@ export function StudentFormDialog({
       onClose={onClose}
       onSubmit={() =>
         onSubmit({
-          student_number: studentNumber.trim(),
-          full_name: fullName.trim(),
+          // Omitted entirely when blank on create, so the server allocates (§D9).
+          // On edit the field is disabled, so this is always the unchanged value.
+          student_number: studentNumber.trim() || undefined,
+          first_name: firstName.trim(),
+          middle_name: middleName.trim() || null,
+          last_name: lastName.trim(),
           date_of_birth: dateOfBirth.trim(),
           gender,
           enrollment_date: enrollmentDate.trim(),
@@ -112,28 +126,50 @@ export function StudentFormDialog({
     >
       <Stack spacing={2} sx={{ mt: 1 }}>
         <TextField
-          label="Student number"
+          label="Student ID"
           value={studentNumber}
           onChange={(e) => setStudentNumber(e.target.value)}
-          required
           fullWidth
           disabled={editing}
-          autoFocus={!editing}
           error={Boolean(fieldErrors?.student_number)}
           helperText={
             fieldErrors?.student_number?.join(' ') ??
-            (editing ? 'Student number cannot be changed here.' : undefined)
+            (editing
+              ? 'The student ID cannot be changed here.'
+              : 'Leave blank and one is issued automatically (YYYYMM###). Fill it in only to import a student who already has an ID.')
           }
         />
-        <TextField
-          label="Full name"
-          value={fullName}
-          onChange={(e) => setFullName(e.target.value)}
-          required
-          fullWidth
-          error={Boolean(fieldErrors?.full_name)}
-          helperText={fieldErrors?.full_name?.join(' ')}
-        />
+        {/* D30 §D10 — names are stored and sorted in parts, so they are entered in
+            parts. Surname first: it is the field the register is ordered on. */}
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <TextField
+            label="Last name"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            required
+            fullWidth
+            autoFocus={!editing}
+            error={Boolean(fieldErrors?.last_name)}
+            helperText={fieldErrors?.last_name?.join(' ')}
+          />
+          <TextField
+            label="First name"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            required
+            fullWidth
+            error={Boolean(fieldErrors?.first_name)}
+            helperText={fieldErrors?.first_name?.join(' ')}
+          />
+          <TextField
+            label="Middle name"
+            value={middleName}
+            onChange={(e) => setMiddleName(e.target.value)}
+            fullWidth
+            error={Boolean(fieldErrors?.middle_name)}
+            helperText={fieldErrors?.middle_name?.join(' ') ?? 'Optional.'}
+          />
+        </Stack>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
             label="Date of birth"
@@ -193,7 +229,7 @@ export function StudentFormDialog({
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Subject classes (optional)"
+                label="Course offerings (optional)"
                 placeholder={classIds.length === 0 ? 'Enrol now, or later under Classes' : undefined}
                 error={Boolean(fieldErrors?.class_ids)}
                 helperText={

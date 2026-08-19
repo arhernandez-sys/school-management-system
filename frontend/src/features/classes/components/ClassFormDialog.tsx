@@ -110,7 +110,7 @@ export function ClassFormDialog({
       <Stack spacing={2} sx={{ mt: 1 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
-            label="Class name"
+            label="Offering name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -122,7 +122,7 @@ export function ClassFormDialog({
           />
           <TextField
             select
-            label="Subject"
+            label="Course"
             value={subjectId}
             onChange={(e) => setSubjectId(e.target.value)}
             required
@@ -204,7 +204,7 @@ export function ClassFormDialog({
           renderInput={(params) => (
             <TextField
               {...params}
-              label="Teacher(s)"
+              label="Lecturer(s)"
               placeholder={teacherIds.length === 0 ? 'Optional — can be assigned later' : undefined}
               error={Boolean(fieldErrors?.teacher_ids)}
               helperText={

@@ -92,7 +92,7 @@ TABLES: "dict[str, tuple[list[str], list[dict]]]" = {}
 ORDER = [
     "users", "user_preferences", "school_profile", "assessment_policies",
     "academic_years", "semesters", "grading_scales", "grading_scale_bands",
-    "subjects", "classes", "teacher_profiles", "student_profiles",
+    "classes", "teacher_profiles", "student_profiles",
     "class_subjects", "class_teachers", "class_enrollments",
     "assessment_categories", "assessments", "assessment_grades",
     "attendance_records", "announcements", "announcement_reads", "events",
@@ -113,17 +113,47 @@ PW_HASH = hash_password(DEMO_PASSWORD)
 YEAR_ARCHIVED, YEAR_ACTIVE = "ay-2024", "ay-2025"
 SEM_ACTIVE, SEM_2024_1 = "sem-2025-1", "sem-2024-1"
 
+# The eleven REAL BAJC courses this demo school teaches, by catalog code (D30 Phase
+# 2D). They are not created here — see the `courses` note below.
+#
+# MATH1210 (Pre-Calculus) is in the set on purpose: it genuinely requires MATH1110
+# (Intermediate Algebra) in the 26/27 sequences, so the prerequisite gate fires on a
+# real rule.
 SUBJECT_SEED = [
-    ("Mathematics", "MATH"), ("English", "ENG"), ("Biology", "BIO"),
-    ("Chemistry", "CHEM"), ("Physics", "PHYS"), ("History", "HIST"),
-    ("Geography", "GEO"), ("Spanish", "SPAN"), ("Physical Education", "PE"),
-    ("Information Technology", "IT"), ("Principles of Business", "POB"),
+    ("Intermediate Algebra", "MATH1110"),
+    ("Pre-Calculus", "MATH1210"),
+    ("College English 1", "ENGL1102"),
+    ("Foundations of Biology", "BIOL1102"),
+    ("Fundamentals of Chemistry", "CHEM1100"),
+    ("Belizean History", "HIST2102"),
+    ("Introduction to Sociology", "SOCI1212"),
+    ("Intermediate Spanish", "SPAN2112"),
+    ("Health Principles", "THEO2201"),
+    ("Introduction to Computers", "ITEC1104"),
+    ("Business Management", "MGMT1106"),
 ]
 SUBJ_NAME = {code: name for name, code in SUBJECT_SEED}
 
+#: code -> the id `seed_bajc` gave it. Filled from the live DB at import time, because
+#: the catalog uses server-generated uuids rather than this file's deterministic uuid5.
+_COURSE_IDS: "dict[str, str]" = {}
+
+
+def _load_course_ids() -> None:
+    from sqlalchemy import text as _text
+
+    with engine.connect() as conn:
+        for code, cid in conn.execute(
+            _text("SELECT code, CAST(id AS char) FROM courses WHERE deleted_at IS NULL")
+        ):
+            _COURSE_IDS[str(code).upper()] = str(cid)
+
+
+_load_course_ids()
+
 
 def subj_id(code: str) -> str:
-    return uid(f"subj-{code.lower()}")
+    return course_id_by_code(code)
 
 
 SECTION_SEED = [
@@ -135,18 +165,18 @@ SECTION_SEED = [
 ]
 
 TEACHER_SEED = [
-    ("Maria Reyes", ["MATH", "PHYS"], "active", "female"),
-    ("Carlos Mendez", ["ENG", "HIST"], "active", "male"),
-    ("Alicia Cano", ["BIO", "CHEM"], "active", "female"),
-    ("Devon Flowers", ["PHYS", "MATH"], "active", "male"),
-    ("Sonia Choc", ["SPAN", "ENG"], "active", "female"),
-    ("Rodwell Bailey", ["GEO", "HIST"], "active", "male"),
-    ("Yolanda Cruz", ["CHEM", "BIO"], "active", "female"),
-    ("Egbert Grinage", ["PE"], "active", "male"),
-    ("Nadia Rhaburn", ["IT"], "active", "female"),
-    ("Marlon Pou", ["POB", "MATH"], "active", "male"),
-    ("Kayla Waight", ["ENG", "IT"], "active", "female"),
-    ("Trevor Neal", ["GEO", "PE"], "inactive", "male"),
+    ("Maria Reyes", ["MATH1110", "MATH1210"], "active", "female"),
+    ("Carlos Mendez", ["ENGL1102", "HIST2102"], "active", "male"),
+    ("Alicia Cano", ["BIOL1102", "CHEM1100"], "active", "female"),
+    ("Devon Flowers", ["MATH1210", "MATH1110"], "active", "male"),
+    ("Sonia Choc", ["SPAN2112", "ENGL1102"], "active", "female"),
+    ("Rodwell Bailey", ["SOCI1212", "HIST2102"], "active", "male"),
+    ("Yolanda Cruz", ["CHEM1100", "BIOL1102"], "active", "female"),
+    ("Egbert Grinage", ["THEO2201"], "active", "male"),
+    ("Nadia Rhaburn", ["ITEC1104"], "active", "female"),
+    ("Marlon Pou", ["MGMT1106", "MATH1110"], "active", "male"),
+    ("Kayla Waight", ["ENGL1102", "ITEC1104"], "active", "female"),
+    ("Trevor Neal", ["SOCI1212", "THEO2201"], "inactive", "male"),
 ]
 DESIGNATIONS = ["Head of Department", "Senior Teacher", "Senior Teacher", "Teacher"]
 DEGREES = {"Head of Department": "M.Ed.", "Senior Teacher": "M.Sc.", "Teacher": "B.Ed."}
@@ -207,9 +237,30 @@ for yr, frozen in [(YEAR_ACTIVE, False), (YEAR_ARCHIVED, True)]:
             letter=letter, min_score=Decimal(lo), max_score=Decimal(hi),
             is_passing=passing, sort_order=order)
 
-# ── subjects ────────────────────────────────────────────────────────────────────────
-for name, code in SUBJECT_SEED:
-    add("subjects", id=subj_id(code), name=name, code=code)
+# ── courses: REFERENCED, never created here (D30 Phase 2D) ─────────────────────────
+#
+# The catalog is REFERENCE DATA and belongs to `app/db/seed_bajc.py`, which loads the
+# real 114 BAJC courses from the 26/27 sequences. This file used to create eleven
+# invented subjects of its own, and after the 2A cutover pointed the catalog at
+# `courses` that became actively dangerous: `ORDER` drives a `DELETE FROM` sweep with
+# FK checks off, so re-seeding the demo would have silently destroyed the real catalog
+# and every programme curriculum hanging off it.
+#
+# `courses` is therefore OUT of `ORDER` (nothing here clears it) and the demo classes
+# resolve their course ids by CODE from what `seed_bajc` already loaded.
+def course_id_by_code(code: str) -> str:
+    """The seeded BAJC course id for `code`, or fail loudly.
+
+    A demo seed that silently invents a missing course is how the two datasets drift
+    apart, so this refuses instead — run `python -m app.db.seed_bajc` first.
+    """
+    row = _COURSE_IDS.get(code.upper())
+    if row is None:
+        raise SystemExit(
+            f"Course {code!r} is not in the catalog. Run the BAJC catalog seed first:\n"
+            f"    python -m app.db.seed_bajc"
+        )
+    return row
 
 # ── users (principal + secretary + teacher/student logins) ─────────────────────────
 def add_user(key, email, username, full_name, role, is_active):
@@ -287,10 +338,16 @@ for i, (name, grade, section, cap) in enumerate(SECTION_SEED):
         is_archived=True, homeroom_label=f"{name} Homeroom")
 
 # ── class_subjects + class_teachers ────────────────────────────────────────────────
-CORE = ["MATH", "ENG", "BIO", "HIST", "SPAN", "PE", "IT"]
-FORM3 = ["MATH", "ENG", "BIO", "CHEM", "GEO", "SPAN", "IT"]
-FORM4_SCI = ["MATH", "ENG", "BIO", "CHEM", "PHYS", "IT"]
-FORM4_BUS = ["MATH", "ENG", "POB", "GEO", "IT", "SPAN"]
+# Course loads, by real BAJC catalog code (D30 Phase 2D).
+#
+# NOTE: this file's homeroom shape (Form 1A-4B) is PRE-D29 and is a known, separate
+# gap — see plan §F. Phase 2D swapped the invented subjects for real courses so it can
+# no longer contradict the catalog; reshaping it into D29 subject classes is not part
+# of D30. `npm run demo` / the MSW dataset is the D29+D30-shaped demo.
+CORE = ["MATH1110", "ENGL1102", "BIOL1102", "HIST2102", "SPAN2112", "THEO2201", "ITEC1104"]
+FORM3 = ["MATH1110", "ENGL1102", "BIOL1102", "CHEM1100", "SOCI1212", "SPAN2112", "ITEC1104"]
+FORM4_SCI = ["MATH1110", "ENGL1102", "BIOL1102", "CHEM1100", "MATH1210", "ITEC1104"]
+FORM4_BUS = ["MATH1110", "ENGL1102", "MGMT1106", "SOCI1212", "ITEC1104", "SPAN2112"]
 
 
 def subjects_for(name: str, grade: str) -> list[str]:
@@ -317,7 +374,7 @@ for idx, sec in enumerate(active_sections):
             is_active=True)
         # teachers: lead + MATH co-teacher (teach-4) on the first 12 offerings
         team = [lead]
-        if code == "MATH" and cs_counter <= 12 and lead != 3:
+        if code == "MATH1110" and cs_counter <= 12 and lead != 3:
             team.append(3)
         for t in team:
             add("class_teachers", id=uid(f"ct-{cs}-{t}"), class_subject_id=uid(cs),
@@ -337,7 +394,7 @@ for idx, sec in enumerate(hist_sections):
         add("class_subjects", id=uid(cs), class_id=uid(sec), subject_id=subj_id(code),
             is_active=False)
         team = [lead]
-        if code == "GEO" and first_hist_geo is None:
+        if code == "SOCI1212" and first_hist_geo is None:
             first_hist_geo = cs
             if 11 != lead:
                 team.append(11)
@@ -382,8 +439,9 @@ for i in range(45):
     if i == 33:  # transferred -> Form 2A (sec-3)
         final_section = active_sections[2]
     student_section[i] = final_section
+    # D30 §D10: names are stored split; `full_name` was dropped in 007.
     add("student_profiles", id=sid, user_id=user_id, student_number=student_number,
-        full_name=f"{first} {last}", date_of_birth=dob,
+        firstname=first, middlename=None, lastname=last, date_of_birth=dob,
         gender=("female" if i % 2 == 0 else "male"), enrollment_date=date(2025, 9, 1),
         status=status, guardian_name=f"{rng_stu.choice(FIRST_NAMES)} {last}",
         guardian_phone=f"+501-6{rng_stu.randint(100000, 999999)}",
@@ -532,7 +590,7 @@ for aid, (cs, mx) in hist_asmt_meta.items():
             status=gstatus, score=score, makeup_score=None, is_released=True)
 
 # ── attendance (recorded_by = MATH teacher's user) ─────────────────────────────────
-math_user = teacher_user[teacher_for("MATH")]
+math_user = teacher_user[teacher_for("MATH1110")]
 
 
 def weekday_window(anchor: date) -> list[date]:

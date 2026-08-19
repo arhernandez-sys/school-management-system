@@ -94,7 +94,7 @@ export function ClassDetailPage() {
     return (
       <EmptyState
         variant="page"
-        title="Class not found"
+        title="Course offering not found"
         description="This class may have been removed or you may not have access to it."
         action={{ label: 'Back to classes', onClick: () => navigate(ROUTES.classes) }}
       />
@@ -154,7 +154,7 @@ export function ClassDetailPage() {
         {detail.is_archived && <StatusBadge label="Archived" kind="neutral" />}
       </Stack>
 
-      {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Class detail sections" />}
+      {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Course offering sections" />}
 
       {canManage && detail.class_subject_id && detail.subject && (
         // The dialog's contract is unchanged from when the retired Subjects tab owned it —
@@ -211,7 +211,7 @@ function OverviewTab({ classId }: { classId: string }) {
         helperText={capacity > 0 ? `Capacity ${capacity}` : 'No capacity limit'}
       />
       <StatCard
-        label="Teachers"
+        label="Lecturers"
         value={detail?.teachers.length ?? 0}
         loading={detailQuery.isLoading}
         icon={<PersonOutlineIcon />}

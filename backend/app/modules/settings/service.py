@@ -40,6 +40,10 @@ from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
 from app.modules.auth.service import build_current_user
 from app.modules.classes.models import Class
+from app.modules.settings.grading_defaults import (
+    BAJC_GRADING_BANDS,
+    DEFAULT_PASS_MARK,
+)
 from app.modules.settings.models import (
     AcademicYear,
     AssessmentPolicy,
@@ -61,6 +65,8 @@ from app.modules.settings.schemas import (
     SchoolProfileRead,
     SchoolUpdateRequest,
     SemesterDetail,
+    SemesterUpdateRequest,
+    StandaloneSemesterCreateRequest,
     UserCreateRequest,
     UserListItem,
     UserUpdateRequest,
@@ -87,6 +93,22 @@ _LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2 MiB cap (413 file_too_large)
 
 def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _to_utc(value: datetime | None) -> datetime | None:
+    """Normalise an inbound datetime to aware-UTC before it is stored (D30 §D6).
+
+    The grade-submission deadline is the first datetime a CLIENT supplies, and a Dean
+    in Belize will naturally send `...T17:00:00-06:00`. The column is a MariaDB
+    `DATETIME`, so SQLAlchemy drops the offset on the way in -- storing 17:00 as though
+    it were UTC and moving the real cutoff six hours earlier. Convert first; a naive
+    value is taken as UTC, matching `core.timeutil.ensure_aware` on the way back out.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _audit(
@@ -285,25 +307,21 @@ def list_semesters(
     return [SemesterDetail.model_validate(s) for s in rows]
 
 
-# Default grading bands seeded for a new year (D11; mirrors app/db/seed.py).
-_DEFAULT_BANDS: tuple[tuple[str, str, str, bool, int], ...] = (
-    ("A", "90.00", "100.00", True, 1),
-    ("B", "80.00", "89.99", True, 2),
-    ("C", "70.00", "79.99", True, 3),
-    ("D", "60.00", "69.99", True, 4),
-    ("F", "0.00", "59.99", False, 5),
-)
-
-
 def create_academic_year(
     db: Session, *, actor: User, payload: AcademicYearCreateRequest
 ) -> AcademicYearDetail:
     """POST /settings/academic-years (principal).
 
-    Creates the year as ACTIVE + EXACTLY two semesters (D10) + seeds the year's
-    grading_scale and default bands (D11). The first semester (sequence=1) is set
-    active, clearing any prior active semester (one-active invariant). Creating a
-    second active year violates `uq_academic_years_one_active` → 409.
+    Creates the year as ACTIVE + its terms + seeds the year's grading_scale and
+    default bands (D11). The LOWEST-sequence term is set active, clearing any prior
+    active semester (one-active invariant). Creating a second active year violates
+    `uq_academic_years_one_active` → 409.
+
+    D30 (§D3): **one or more** terms, no longer exactly two. The old rule demanded
+    sequences of precisely `[1, 2]`, which is why BAJC's Summer and Spring blocks had
+    nowhere to go. Sequences must still be DISTINCT — `uq_semesters_year_seq` is
+    unchanged — and further terms can be added later through
+    `POST /settings/semesters`.
     """
     if payload.end_date <= payload.start_date:
         raise ValidationError(
@@ -311,12 +329,18 @@ def create_academic_year(
             fields={"end_date": ["Must be after start_date."]},
         )
 
-    sequences = sorted(s.sequence for s in payload.semesters)
-    if sequences != [1, 2]:
+    sequences = [s.sequence for s in payload.semesters]
+    if len(set(sequences)) != len(sequences):
         raise ValidationError(
-            "Provide exactly two semesters with sequence 1 and 2 (D10).",
-            fields={"semesters": ["Sequences must be exactly [1, 2]."]},
+            "Each term needs its own sequence number within the year.",
+            fields={"semesters": ["Sequence numbers must be distinct."]},
         )
+    for spec in payload.semesters:
+        if spec.end_date <= spec.start_date:
+            raise ValidationError(
+                f"Term '{spec.name}' must end after it starts.",
+                fields={"semesters": [f"'{spec.name}': end_date must be after start_date."]},
+            )
 
     # Pre-check the one-active invariant for a friendly 409 (the partial-unique
     # index is the real backstop, but pre-checking gives the documented code).
@@ -350,21 +374,26 @@ def create_academic_year(
         .values(is_active=False)
     )
 
+    # The LOWEST sequence starts active — with N terms "sequence == 1" was no longer a
+    # safe stand-in for "the first one", and a year whose terms started at 2 would
+    # otherwise have been created with no active term at all.
+    first_sequence = min(sequences)
     for spec in sorted(payload.semesters, key=lambda s: s.sequence):
         db.add(
             Semester(
                 academic_year_id=year.id,
                 name=spec.name,
+                term_type=spec.term_type,
                 sequence=spec.sequence,
                 start_date=spec.start_date,
                 end_date=spec.end_date,
-                is_active=(spec.sequence == 1),
+                is_active=(spec.sequence == first_sequence),
             )
         )
 
     scale = GradingScale(
         academic_year_id=year.id,
-        pass_mark=Decimal("60.00"),
+        pass_mark=Decimal(DEFAULT_PASS_MARK),
         created_by=actor.id,
         updated_by=actor.id,
     )
@@ -377,10 +406,11 @@ def create_academic_year(
                 letter=letter,
                 min_score=Decimal(lo),
                 max_score=Decimal(hi),
+                grade_point=Decimal(gp),
                 is_passing=passing,
                 sort_order=order,
             )
-            for (letter, lo, hi, passing, order) in _DEFAULT_BANDS
+            for (letter, lo, hi, gp, passing, order) in BAJC_GRADING_BANDS
         ]
     )
 
@@ -394,6 +424,157 @@ def create_academic_year(
     )
     db.commit()
     return _year_detail(db, year)
+
+
+def _semester_or_404(db: Session, semester_id: uuid.UUID) -> Semester:
+    semester = db.get(Semester, semester_id)
+    if semester is None:
+        raise NotFound("Semester not found.", code="not_found")
+    return semester
+
+
+def _assert_year_writable(db: Session, year_id: uuid.UUID) -> AcademicYear:
+    year = db.get(AcademicYear, year_id)
+    if year is None:
+        raise NotFound("Academic year not found.", code="not_found")
+    if year.status == AcademicYearStatus.ARCHIVED:
+        raise Conflict(
+            "Cannot change the terms of an archived year.", code="year_archived"
+        )
+    return year
+
+
+def _assert_sequence_free(
+    db: Session,
+    *,
+    academic_year_id: uuid.UUID,
+    sequence: int,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Pre-check `uq_semesters_year_seq` for the documented 409.
+
+    The unique index is the real backstop; this only turns a driver-level integrity
+    error into a named code the UI can act on.
+    """
+    stmt = select(Semester.id).where(
+        Semester.academic_year_id == academic_year_id,
+        Semester.sequence == sequence,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Semester.id != exclude_id)
+    if db.scalar(stmt) is not None:
+        raise Conflict(
+            f"Another term in this year already uses sequence {sequence}.",
+            code="duplicate_semester_sequence",
+        )
+
+
+def create_semester(
+    db: Session, *, actor: User, payload: StandaloneSemesterCreateRequest
+) -> SemesterDetail:
+    """POST /settings/semesters (Dean only; D30 §D3, §D14).
+
+    NEW IN D30. There was deliberately no such endpoint before: the school's whole
+    calendar came from `POST /settings/academic-years`, which hard-created exactly two
+    terms, so adding BAJC's Summer or Spring block had no route at all.
+
+    The new term is created INACTIVE. Activating is a separate, deliberate action
+    (`PATCH /settings/semesters/{id}/activate`) because it moves the school-wide
+    current term and would otherwise happen as a side effect of adding a future block.
+
+    NOT VALIDATED, on purpose: that the term's dates fall inside the academic year's
+    range. BAJC's Summer block legitimately sits outside it — the sample report card
+    prints `Summer, July 2026 - August 2026` for the 2026-2027 year, which begins in
+    August. Rejecting that would reject the institution's own calendar.
+    """
+    _assert_year_writable(db, payload.academic_year_id)
+
+    if payload.end_date <= payload.start_date:
+        raise ValidationError(
+            "end_date must be after start_date.",
+            fields={"end_date": ["Must be after start_date."]},
+        )
+    _assert_sequence_free(
+        db, academic_year_id=payload.academic_year_id, sequence=payload.sequence
+    )
+
+    semester = Semester(
+        academic_year_id=payload.academic_year_id,
+        name=payload.name.strip(),
+        term_type=payload.term_type,
+        sequence=payload.sequence,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        grade_submission_deadline=_to_utc(payload.grade_submission_deadline),
+        is_active=False,
+    )
+    db.add(semester)
+    db.flush()
+    _audit(
+        db,
+        actor=actor,
+        action="semester.create",
+        entity_type="semester",
+        entity_id=semester.id,
+        summary={"name": semester.name, "term_type": semester.term_type.value},
+    )
+    db.commit()
+    return SemesterDetail.model_validate(semester)
+
+
+def update_semester(
+    db: Session, *, actor: User, semester_id: uuid.UUID, payload: SemesterUpdateRequest
+) -> SemesterDetail:
+    """PATCH /settings/semesters/{id} (Dean only; D30 §D3, §D14).
+
+    Corrects a term's name, kind, order or dates. A term created with the wrong dates
+    was otherwise unfixable, since there is no delete path (see the router).
+
+    `academic_year_id` and `is_active` are not editable here — see
+    `SemesterUpdateRequest` for why. The date range is validated against the MERGED
+    values, not just the supplied ones, so moving only `start_date` past the existing
+    `end_date` is caught here rather than by `ck_semesters_dates` at the driver.
+    """
+    semester = _semester_or_404(db, semester_id)
+    _assert_year_writable(db, semester.academic_year_id)
+
+    start = payload.start_date or semester.start_date
+    end = payload.end_date or semester.end_date
+    if end <= start:
+        raise ValidationError(
+            "end_date must be after start_date.",
+            fields={"end_date": ["Must be after start_date."]},
+        )
+
+    if payload.sequence is not None and payload.sequence != semester.sequence:
+        _assert_sequence_free(
+            db,
+            academic_year_id=semester.academic_year_id,
+            sequence=payload.sequence,
+            exclude_id=semester.id,
+        )
+        semester.sequence = payload.sequence
+
+    if payload.name is not None:
+        semester.name = payload.name.strip()
+    if payload.term_type is not None:
+        semester.term_type = payload.term_type
+    # PRESENCE, not None-ness: `null` reopens a closed grade window, omitted leaves it
+    # alone. See `SemesterUpdateRequest` for why this field alone is treated that way.
+    if "grade_submission_deadline" in payload.model_fields_set:
+        semester.grade_submission_deadline = _to_utc(payload.grade_submission_deadline)
+    semester.start_date = start
+    semester.end_date = end
+
+    _audit(
+        db,
+        actor=actor,
+        action="semester.update",
+        entity_type="semester",
+        entity_id=semester.id,
+    )
+    db.commit()
+    return SemesterDetail.model_validate(semester)
 
 
 def activate_semester(
@@ -679,6 +860,9 @@ def update_grading_scale(
                 letter=b.letter,
                 min_score=Decimal(str(b.min_score)),
                 max_score=Decimal(str(b.max_score)),
+                # Omitted → NULL, which `calc.grade_point_for` reads as "this scale
+                # cannot answer" rather than as zero (D30 §D5).
+                grade_point=None if b.grade_point is None else Decimal(str(b.grade_point)),
                 is_passing=b.is_passing,
                 sort_order=b.sort_order,
             )

@@ -11,6 +11,7 @@
 import type { ReactNode } from 'react';
 import DashboardIcon from '@mui/icons-material/DashboardOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutline';
+import HowToRegIcon from '@mui/icons-material/HowToReg';
 import SchoolIcon from '@mui/icons-material/SchoolOutlined';
 import ClassIcon from '@mui/icons-material/ClassOutlined';
 import ScheduleIcon from '@mui/icons-material/ScheduleOutlined';
@@ -63,6 +64,14 @@ function buildSections(role: Role): NavSection[] {
       heading: isStudent ? navGroups.mySchool : navGroups.people,
       items: [
         { module: 'students', label: nav.students, path: ROUTES.students, icon: <PeopleIcon /> },
+        {
+          // Directly above Students, because that is the order the work happens in: an
+          // applicant becomes a student, and acceptance is the step between (D30 §D11).
+          module: 'applications',
+          label: nav.admissions,
+          path: ROUTES.applications,
+          icon: <HowToRegIcon />,
+        },
         { module: 'teachers', label: nav.teachers, path: ROUTES.teachers, icon: <SchoolIcon /> },
       ],
     },

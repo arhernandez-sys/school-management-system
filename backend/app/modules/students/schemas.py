@@ -16,8 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.common.enums import (
     AcademicYearStatus,
     AssessmentType,
+    District,
+    EnrollmentLoad,
     GradeStatus,
     StudentStatus,
+    YearOfStudy,
 )
 from app.common.schemas import AuditStamp, ClassRef, SubjectRef
 
@@ -37,7 +40,13 @@ class StudentListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     student_number: str
+    #: Computed from the parts by `StudentProfile.full_name` (D30 §D10) — the stored
+    #: column was dropped in `007_student_names.sql`. Kept on the wire so the table,
+    #: the picker and the print layouts did not all have to learn to assemble a name.
     full_name: str
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str
     status: StudentStatus
     #: The student's own level, e.g. "Lower 6" (D29). Was read off their homeroom.
     year_group: str | None = None
@@ -56,7 +65,11 @@ class StudentDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     student_number: str
+    #: See `StudentListItem.full_name` — computed, not stored.
     full_name: str
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str
     date_of_birth: date
     gender: str | None = None
     year_group: str | None = None
@@ -67,6 +80,18 @@ class StudentDetail(BaseModel):
     guardian_email: str | None = None
     address: str | None = None
     phone: str | None = None
+    # ── Tertiary registration (D30 §D12, Phase 4) ─────────────────────────────
+    #: The programme the student is CURRENTLY registered on. Written by acceptance
+    #: (§D11) and by the Dean-only programme change (§D12) — never by `PATCH /students`,
+    #: because changing it has to move `student_program_history` with it.
+    program: ProgramRef | None = None
+    year_of_study: YearOfStudy | None = None
+    enrollment_load: EnrollmentLoad | None = None
+    #: The application this student was admitted from, when there is one. Students who
+    #: predate the admissions module — or who were created directly through
+    #: `POST /students` — have none, and that stays supported.
+    application_id: UUID | None = None
+    district: District | None = None
     #: Every subject class the student is actively enrolled in, name-ordered.
     current_classes: list[ClassRef] = Field(default_factory=list)
     audit: AuditStamp | None = None
@@ -169,8 +194,15 @@ class StudentCreateRequest(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    student_number: str = Field(min_length=1, max_length=32)
-    full_name: str = Field(min_length=1, max_length=160)
+    #: OPTIONAL since D30 (§D9, brief §10). Omit it and the server issues the next
+    #: `YYYYMM###` for the current month. Supplying one is still accepted so an
+    #: existing student can be imported under the number they already carry.
+    student_number: str | None = Field(default=None, min_length=1, max_length=32)
+    #: Split names (D30 §D10). Both required — the DB tolerates a missing given name
+    #: only for legacy single-token rows, never for anything created here.
+    first_name: str = Field(min_length=1, max_length=50)
+    middle_name: str | None = Field(default=None, max_length=50)
+    last_name: str = Field(min_length=1, max_length=50)
     date_of_birth: date
     gender: str | None = Field(default=None, max_length=40)
     year_group: str | None = Field(default=None, max_length=50)
@@ -196,7 +228,11 @@ class StudentUpdateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     student_number: str | None = Field(default=None, min_length=1, max_length=32)
-    full_name: str | None = Field(default=None, min_length=1, max_length=160)
+    first_name: str | None = Field(default=None, min_length=1, max_length=50)
+    #: Explicitly nullable — clearing a middle name is a legitimate correction, so an
+    #: empty string is normalised to NULL by the service rather than rejected.
+    middle_name: str | None = Field(default=None, max_length=50)
+    last_name: str | None = Field(default=None, min_length=1, max_length=50)
     date_of_birth: date | None = None
     gender: str | None = Field(default=None, max_length=40)
     year_group: str | None = Field(default=None, max_length=50)
@@ -214,3 +250,145 @@ class StudentStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: StudentStatus
     reason: str | None = Field(default=None, max_length=500)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Programme registration + derived academic history (D30 §D12, brief §12/§27)
+# ──────────────────────────────────────────────────────────────────────────────
+class ProgramRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    code: str = ""
+    name: str = ""
+
+
+class ProgramChangeRequest(BaseModel):
+    """PUT /students/{id}/program — **DEAN ONLY** (§D12, §D14).
+
+    Assigning a programme and moving between programmes are the same operation, because
+    both have to keep `student_program_history` in step with
+    `student_profiles.program_id`. A separate "assign" path would be a second writer of
+    that pair and would eventually forget the history.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    program_id: UUID
+    #: Defaults to today. Overridable because a Dean often records a change days after the
+    #: student actually moved, and the history should say when it happened rather than when
+    #: it was typed. The outgoing programme is closed the day BEFORE this date, so the two
+    #: registrations are contiguous with neither an overlap nor a gap.
+    effective_from: date | None = None
+    #: Why. Free text and optional — the Dean records a reason when there is one, and a
+    #: missing one must not block a correction.
+    reason: str | None = Field(default=None, max_length=255)
+    #: Optional: a programme change is often a year/load change too, and making the Dean
+    #: issue a second PATCH for it would leave a window where the record disagrees.
+    year_of_study: YearOfStudy | None = None
+    enrollment_load: EnrollmentLoad | None = None
+
+
+class ProgramHistoryEntry(BaseModel):
+    """One registration period. `ended_at is None` means CURRENT."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    program: ProgramRef
+    started_at: date
+    ended_at: date | None = None
+    reason: str | None = None
+    is_current: bool = False
+
+
+class StudentProgramRef(BaseModel):
+    """200 body of the programme change — the new state plus the whole history.
+
+    The history comes back with it deliberately: the point of §D12 is that a change does
+    not destroy the past, and returning it is what lets the screen show that immediately
+    rather than after a second fetch.
+    """
+
+    student_id: UUID
+    program: ProgramRef | None = None
+    year_of_study: YearOfStudy | None = None
+    enrollment_load: EnrollmentLoad | None = None
+    history: list[ProgramHistoryEntry] = Field(default_factory=list)
+
+
+class AcademicHistoryCourse(BaseModel):
+    """One course in the student's record, in exactly one bucket.
+
+    `status`:
+      * `transferred`  — granted by an approved credit transfer. Counts toward the award,
+                         EXCLUDED from the GPA (a transfer grants credit, not a grade).
+      * `completed`    — a result clearing the student's PROGRAMME pass mark (§D5).
+      * `failed`       — a result below it. Counted in the GPA; still owed.
+      * `in_progress`  — enrolled, nothing marked yet.
+      * `remaining`    — in the programme curriculum, never taken.
+    """
+
+    course_id: UUID
+    code: str = ""
+    name: str = ""
+    credits: int | None = None
+    #: Curriculum POSITION in the programme plan ("Semester 1", "Spring 2"), not a dated
+    #: term — the §D3 distinction. `None` for a course the plan does not contain.
+    term_label: str | None = None
+    term_order: int | None = None
+    is_required: bool = False
+    #: False for a course the student took that the CURRENT programme does not list. After
+    #: a programme change that is the honest reading of work which no longer counts toward
+    #: the award — the grade is untouched, it simply stops being a requirement.
+    in_curriculum: bool = False
+    status: str
+    numeric: float | None = None
+    letter: str | None = None
+    grade_point: float | None = None
+    #: True when the result came from a frozen `term_grade_snapshots` row (archived year).
+    is_frozen: bool = False
+    semester_id: UUID | None = None
+
+
+class AcademicHistoryCounts(BaseModel):
+    completed: int = 0
+    failed: int = 0
+    in_progress: int = 0
+    transferred: int = 0
+    remaining: int = 0
+
+
+class AcademicHistory(BaseModel):
+    """GET /students/{id}/academic-history — **entirely derived** (§D12, brief §27).
+
+    Nothing here is stored. It is recomputed from `class_enrollments` +
+    `term_grade_snapshots` + approved `credit_transfer_requests` + `program_courses` on
+    every read, so a corrected grade or a re-priced band shows up immediately instead of
+    leaving a cached figure to drift.
+    """
+
+    student_id: UUID
+    full_name: str
+    student_number: str
+    program: ProgramRef | None = None
+    year_of_study: YearOfStudy | None = None
+    enrollment_load: EnrollmentLoad | None = None
+    #: The credit total PRINTED on the programme's sequence (86–102).
+    program_total_credits: int | None = None
+    #: Summed from the curriculum rows marked required. Compared against the printed total
+    #: by the UI, because the two disagreeing is how a data-entry slip gets noticed.
+    curriculum_required_credits: int = 0
+    #: Passed + transferred credits.
+    credits_earned: int = 0
+    #: Required curriculum credits not yet earned. Electives the student chose not to take
+    #: are not outstanding requirements, so this is against the REQUIRED plan only.
+    credits_remaining: int = 0
+    #: Cumulative, from the single `calc.compute_gpa` (§D5, decision #4). Weighted over
+    #: every ENROLLED credit — a course with no result yet keeps its credits and earns no
+    #: quality points. Transferred courses are excluded entirely.
+    gpa: float | None = None
+    gpa_total_credits: int = 0
+    counts: AcademicHistoryCounts
+    #: Plan order first, then code — so the screen reads down the programme sequence and
+    #: anything outside the plan falls to the end.
+    courses: list[AcademicHistoryCourse] = Field(default_factory=list)
+    program_history: list[ProgramHistoryEntry] = Field(default_factory=list)
+    active_semester_id: UUID | None = None

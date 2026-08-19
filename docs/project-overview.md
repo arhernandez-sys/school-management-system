@@ -64,6 +64,7 @@ A modern, web-based **School Management System (Student Information System / SIS
 | `testing-plan.md` | 8 | ⬜ Pending — but the backend suite is live (see tracker) |
 | `security-review.md` | 9 | ⬜ Pending |
 | `progress-tracker.md` | all | ✅ Live |
+| `tertiary-refactor-plan.md` | D30 | 🟡 Live — **authoritative for the BAJC tertiary refactor**; carries the audits, design and phase checklists. Read it first for anything involving programmes, courses, credits, prerequisites, GPA, admissions or the Dean/Registrar/Lecturer roles. |
 
 > **Backend surface is authoritative in `backend/openapi.json`** (regenerated
 > 2026-07-28): 70 path templates / 99 operations. Phase 7 is complete.

@@ -5,6 +5,8 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
 import { SubjectsPage } from './SubjectsPage';
+import { ProgramsScreen } from '@features/programs/ProgramsScreen';
+import { ProgramCurriculumScreen } from '@features/programs/ProgramCurriculumScreen';
 import { SchoolProfileScreen } from './screens/SchoolProfileScreen';
 import { AcademicStructureScreen } from './screens/AcademicStructureScreen';
 import { GradingScaleScreen } from './screens/GradingScaleScreen';
@@ -15,9 +17,10 @@ import { AccountScreen } from './screens/AccountScreen';
 /**
  * Settings module (Phase 7.2) — a tabbed, nested-routed container mounted at
  * `/settings/*`. Sub-navigation is role-aware:
- *  - Principal / Secretary: school, academic structure, subjects, grading scale,
- *    assessment policy, users, account. (Within each screen, principal-only writes are
- *    further gated; the server is authoritative.)
+ *  - Dean / Registrar: school, academic structure, courses, programmes, grading scale,
+ *    assessment policy, users, account. (Within each screen, Dean-only writes are
+ *    further gated; the server is authoritative — the Registrar sees Courses and
+ *    Programmes read-only, per D30 §D14.)
  *  - Teacher / Student: account only (their sole Settings capability, permissions map).
  *
  * Nav visibility is UX-only; every route is still role-guarded upstream and the server
@@ -42,7 +45,10 @@ export function SettingsPage() {
         ? [
             { label: 'School', path: 'school' },
             { label: 'Academic structure', path: 'academic' },
-            { label: 'Subjects', path: 'subjects' },
+            { label: 'Courses', path: 'subjects' },
+            // D30 §D3 — the studies and the course sequence each one requires. Sits
+            // next to Courses because a programme is built OUT of catalog courses.
+            { label: 'Programmes', path: 'programs' },
             { label: 'Grading scale', path: 'grading' },
             { label: 'Assessment policy', path: 'policy' },
             { label: 'Users', path: 'users' },
@@ -83,6 +89,11 @@ export function SettingsPage() {
               <Route path="school" element={<SchoolProfileScreen />} />
               <Route path="academic" element={<AcademicStructureScreen />} />
               <Route path="subjects" element={<SubjectsPage />} />
+              <Route path="programs" element={<ProgramsScreen />} />
+              {/* The curriculum builder is a nested route rather than a dialog: a
+                  programme's plan is a page-sized thing, and a Dean part-way through
+                  entering an 87-credit sequence needs a URL they can come back to. */}
+              <Route path="programs/:programId" element={<ProgramCurriculumScreen />} />
               <Route path="grading" element={<GradingScaleScreen />} />
               <Route path="policy" element={<AssessmentPolicyScreen />} />
               <Route path="users" element={<UsersScreen />} />

@@ -13,6 +13,7 @@ import {
   getStudent,
   getSubject,
   getTeacher,
+  gpaFor,
   letterFor,
   listStudents,
 } from '@shared/api/mocks/demo/dataset';
@@ -100,6 +101,21 @@ function semesterRef(sem: DemoSemester) {
   };
 }
 
+/**
+ * The BAJC report card's `Period` label (D30 §D13) — `"<Term>, <Mon YYYY> - <Mon YYYY>"`,
+ * reproducing the sample's `Summer, July 2026 - August 2026`. Mirrors
+ * `reports/service._period_for` so demo mode and the backend print the same string.
+ */
+function periodFor(sem: DemoSemester): string {
+  const month = (iso: string) => {
+    const d = new Date(`${iso}T00:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  };
+  return `${sem.name}, ${month(sem.start_date)} - ${month(sem.end_date)}`;
+}
+
 /** Lead teacher's display name for an offering, if any. */
 function leadTeacherName(cs: DemoClassSubject): string | null {
   const id = cs.lead_teacher_id ?? cs.teacher_ids[0] ?? null;
@@ -133,6 +149,7 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
       return {
         subject: { id: cs.subject_id, name: subject?.name ?? '', code: subject?.code ?? '' },
         teacher: leadTeacherName(cs),
+        credits: subject?.credits ?? null,
         numeric: pending ? null : term.numeric,
         letter: pending ? null : term.letter,
         status: pending ? ('pending' as const) : ('graded' as const),
@@ -146,6 +163,12 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
     graded.length > 0
       ? Math.round((graded.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / graded.length) * 100) / 100
       : null;
+
+  // Credit-weighted GPA over EVERY enrolled row, ungraded and withheld included
+  // (D30 §D5, decision #4). A withheld (`pending`) row already has `letter: null`, so it
+  // contributes 0 quality points while keeping its credits — the same treatment the
+  // backend gives it, and the reason the figure cannot be used to back out a hidden mark.
+  const gpa = gpaFor(subjects.map((s) => ({ credits: s.credits, letter: s.letter })));
 
   // D29: the student's own attendance across every class they sit, matching the backend
   // (which scopes by student + semester, never by one class).
@@ -166,6 +189,12 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
     year_group: student.year_group,
     semester: semesterRef(semester),
     school: schoolIdentity(),
+    // Null until Phase 4 assigns students to programmes (§D12) — demo students carry no
+    // programme either, so this matches the backend rather than papering over it.
+    program_code: null,
+    period: periodFor(semester),
+    // Meaning unconfirmed with BAJC (plan §G item 3); the sample prints `-`.
+    block: null,
     subjects,
     attendance_summary: {
       pct_present: att.pct_present,
@@ -175,6 +204,8 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
     },
     term_average: termAverage,
     term_average_letter: termAverage != null ? letterFor(termAverage) : null,
+    gpa: gpa.gpa,
+    total_credits: gpa.total_credits,
     is_frozen: false, // demo: live compute-on-read only (no archived snapshots)
   };
 }
@@ -209,25 +240,34 @@ function buildTranscript(student: DemoStudent) {
                       code: subject?.code ?? '',
                     },
                     teacher: leadTeacherName(cs),
+                    credits: subject?.credits ?? null,
                     numeric: term.numeric,
                     letter: term.letter ?? '',
                   };
                 })
-                .filter((row) => row.numeric != null)
                 .sort((a, b) => a.subject.name.localeCompare(b.subject.name))
             : [];
-          const graded = subjects.filter((s) => s.numeric != null);
+          // The GPA is built from ALL enrolled rows and the LISTING is filtered after,
+          // matching the backend: a transcript prints graded lines only, but the GPA
+          // denominator is every enrolled credit (decision #4). Filtering first would
+          // print a graded-only mean.
+          const termGpa = gpaFor(subjects.map((r) => ({ credits: r.credits, letter: r.letter })));
+          const gradedRows = subjects.filter((r) => r.numeric != null);
           const termAverage =
-            graded.length > 0
+            gradedRows.length > 0
               ? Math.round(
-                  (graded.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / graded.length) * 100,
+                  (gradedRows.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / gradedRows.length) *
+                    100,
                 ) / 100
               : null;
           return {
             semester: semesterRef(sem),
             is_current: activeSemester?.id === sem.id && year.status === 'active',
             term_average: termAverage,
-            subjects,
+            gpa: termGpa.gpa,
+            total_credits: termGpa.total_credits,
+            gpaEntries: subjects.map((r) => ({ credits: r.credits, letter: r.letter })),
+            subjects: gradedRows,
           };
         })
         .filter((s) => s.subjects.length > 0 || s.is_current);
@@ -239,11 +279,17 @@ function buildTranscript(student: DemoStudent) {
         termAverages.length > 0
           ? Math.round((termAverages.reduce((a, b) => a + b, 0) / termAverages.length) * 100) / 100
           : null;
+      // Recomputed from the year's own credits, NOT averaged from its terms' GPAs — a
+      // 6-credit summer block must not weigh the same as an 18-credit semester.
+      const yearGpa = gpaFor(semesters.flatMap((sem) => sem.gpaEntries));
 
       return {
         academic_year: { id: year.id, name: year.name, status: year.status },
         year_average: yearAverage,
-        semesters,
+        gpa: yearGpa.gpa,
+        total_credits: yearGpa.total_credits,
+        semesters: semesters.map(({ gpaEntries: _drop, ...rest }) => rest),
+        gpaEntries: semesters.flatMap((sem) => sem.gpaEntries),
       };
     })
     // Drop years with no populated semesters (empty archived year in the demo).
@@ -257,12 +303,16 @@ function buildTranscript(student: DemoStudent) {
       ? Math.round((allTermAverages.reduce((a, b) => a + b, 0) / allTermAverages.length) * 100) / 100
       : null;
 
+  const cumulative = gpaFor(years.flatMap((y) => y.gpaEntries));
+
   return {
     student: studentRef(student),
     school: schoolIdentity(),
     issued_at: DEMO_TODAY_ISO,
-    years,
+    years: years.map(({ gpaEntries: _drop, ...rest }) => rest),
     cumulative_average: cumulativeAverage,
+    cumulative_gpa: cumulative.gpa,
+    total_credits: cumulative.total_credits,
   };
 }
 

@@ -11,6 +11,7 @@ import {
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoAnnouncement, DemoSection, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
+import { pendingRevisionsFor } from './revisions';
 
 /**
  * MSW handlers for the ANNOUNCEMENTS module (api-spec §5 Module 9) — DEMO.
@@ -171,9 +172,20 @@ export const announcementsHandlers = [
   }),
 
   // ── GET /announcements/unread-count — bell badge ──────────────────────────────
+  // D30 §D8 — extended with pending GRADE REVISIONS rather than adding a notifications
+  // table. `unread_count` is the SUM, so a client reading only that field keeps working.
+  // The revision component is what awaits the CALLER'S decision, so it is non-zero only
+  // for the Dean: a badge counting a Lecturer's own pending request would nag them about
+  // work only the Dean can do.
   http.get(`${API_BASE_URL}/announcements/unread-count`, ({ cookies }) => {
     const user = currentUser(cookies);
-    return HttpResponse.json({ unread_count: unreadCountForUser(user.id) });
+    const announcements = unreadCountForUser(user.id);
+    const revisions = pendingRevisionsFor(cookies['sis_mock_session'] ?? 'principal');
+    return HttpResponse.json({
+      unread_count: announcements + revisions,
+      unread_announcements: announcements,
+      pending_grade_revisions: revisions,
+    });
   }),
 
   // ── GET /announcements/target-classes — sections the caller may target ────────

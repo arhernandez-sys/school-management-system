@@ -14,7 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.common.enums import AcademicYearStatus, Role
+from app.common.enums import AcademicYearStatus, Role, TermType
 from app.common.schemas import (
     AcademicYearRef,
     SchoolIdentity,
@@ -60,10 +60,18 @@ class ActiveTerm(BaseModel):
 class SemesterDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    academic_year_id: UUID
     name: str
+    #: D30 §D3 — the KIND of calendar term. BAJC runs Summer and Spring blocks, not
+    #: just two symmetrical semesters.
+    term_type: TermType
     sequence: int
     start_date: date
     end_date: date
+    #: Brief §18 / D30 §D6. Set by the Dean-only `POST`/`PATCH /settings/semesters`;
+    #: enforced in `grades/service.upsert_grades`, the single grade write path, as a
+    #: 409 `grade_window_closed`. `None` means the term never closes.
+    grade_submission_deadline: datetime | None = None
     is_active: bool
 
 
@@ -91,24 +99,74 @@ class SemesterList(BaseModel):
 
 
 class SemesterCreateRequest(BaseModel):
+    """One term, as supplied nested inside `POST /settings/academic-years`.
+
+    D30: `sequence` is no longer capped at 2 — `005` §6 dropped
+    `ck_semesters_sequence`, because BAJC runs Summer and Spring blocks alongside the
+    numbered semesters. It is still 1-based and still unique within the year.
+    """
+
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
-    sequence: int = Field(ge=1, le=2)
+    term_type: TermType = TermType.SEMESTER
+    sequence: int = Field(ge=1, le=99)
     start_date: date
     end_date: date
+
+
+class StandaloneSemesterCreateRequest(SemesterCreateRequest):
+    """POST /settings/semesters (Dean only) — add ONE term to an existing year.
+
+    Before D30 there was deliberately no such endpoint: `POST /settings/academic-years`
+    hard-created exactly two terms and that was the whole of the school's calendar.
+    Adding a Summer or Spring block therefore had no route at all (§D3).
+    """
+
+    academic_year_id: UUID
+    #: Brief §18 / §D6. Optional at creation — a term with no deadline never closes,
+    #: which is the safe default: a wrongly-guessed deadline would lock lecturers out
+    #: of a term nobody has finished teaching.
+    grade_submission_deadline: datetime | None = None
+
+
+class SemesterUpdateRequest(BaseModel):
+    """PATCH /settings/semesters/{id} (Dean only). All fields optional.
+
+    `academic_year_id` is deliberately absent: moving a term between years would
+    silently re-file every enrolment, assessment and snapshot that keys off it.
+    `is_active` is absent too — that goes through `/activate`, which maintains the
+    one-active invariant.
+
+    **`grade_submission_deadline` is the one field where omitted and `null` differ**
+    (§D6). Every other field here treats `None` as "leave alone", but reopening a
+    closed grade window is a real Dean action and it is spelled `null`. The service
+    therefore consults `model_fields_set` for this field rather than checking for
+    `None`, so a PATCH that only renames a term cannot silently reopen it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    term_type: TermType | None = None
+    sequence: int | None = Field(default=None, ge=1, le=99)
+    start_date: date | None = None
+    end_date: date | None = None
+    grade_submission_deadline: datetime | None = None
 
 
 class AcademicYearCreateRequest(BaseModel):
-    """POST /settings/academic-years — service creates EXACTLY 2 semesters (D10).
+    """POST /settings/academic-years — creates the year and its terms.
 
-    The two provided semesters must carry sequence 1 and 2 (schema enforces
-    `sequence IN (1,2)` + the per-year uniqueness on sequence)."""
+    D30: **at least one** term, no longer exactly two (§D3). The old rule required
+    sequences to be precisely `[1, 2]`, which is why a Summer block could not be
+    recorded. Sequences must still be DISTINCT (the per-year unique index), and the
+    lowest one is the term made active.
+    """
 
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
     start_date: date
     end_date: date
-    semesters: list[SemesterCreateRequest] = Field(min_length=2, max_length=2)
+    semesters: list[SemesterCreateRequest] = Field(min_length=1, max_length=12)
 
 
 class ArchiveYearResponse(BaseModel):
@@ -123,12 +181,21 @@ class ArchiveYearResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 class GradingBand(BaseModel):
     """A single contiguous band. Read + write share this shape; on write the
-    service validates contiguity over 0..100 (no gaps/overlaps, schema §5)."""
+    service validates contiguity over 0..100 (no gaps/overlaps, schema §5).
+
+    `grade_point` is the band's value on the 4.00 scale (D30 §D5) and is what makes
+    a credit-weighted GPA possible. It is OPTIONAL because a scale predating Phase 3
+    carries NULLs — notably the frozen scales of archived years, which must keep the
+    bands that were in force then (schema §10.4). It is nonetheless part of the WRITE
+    shape: without it the Dean editing a seeded scale would post the bands back
+    without their points and silently un-seed them.
+    """
 
     model_config = ConfigDict(from_attributes=True)
     letter: str = Field(min_length=1, max_length=8)
     min_score: float = Field(ge=0, le=100)
     max_score: float = Field(ge=0, le=100)
+    grade_point: float | None = Field(default=None, ge=0, le=4)
     is_passing: bool = True
     sort_order: int = Field(ge=0)
 

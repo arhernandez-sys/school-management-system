@@ -58,7 +58,7 @@ from app.modules.classes.models import (
     Subject,
 )
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
@@ -1087,7 +1087,7 @@ def get_roster(
         stmt = stmt.where(ClassEnrollment.semester_id == target_semester)
     if include != "withdrawn":
         stmt = stmt.where(ClassEnrollment.unenrolled_at.is_(None))
-    stmt = stmt.order_by(StudentProfile.full_name.asc())
+    stmt = stmt.order_by(*STUDENT_NAME_ORDER)
 
     rows = db.execute(stmt).all()
     return [_roster_entry(enr, student) for (enr, student) in rows]
@@ -1121,7 +1121,7 @@ def enrollable_students(
             StudentProfile.full_name.ilike(like)
             | StudentProfile.student_number.ilike(like)
         )
-    stmt = stmt.order_by(StudentProfile.full_name.asc()).limit(200)
+    stmt = stmt.order_by(*STUDENT_NAME_ORDER).limit(200)
 
     from app.modules.classes.schemas import EnrollableStudents
 
@@ -1132,6 +1132,45 @@ def enrollable_students(
 # ══════════════════════════════════════════════════════════════════════════════
 # POST /classes/{id}/enrollments
 # ══════════════════════════════════════════════════════════════════════════════
+def course_id_for_section(db: Session, section_id: uuid.UUID) -> uuid.UUID | None:
+    """The CATALOG course a subject class teaches (D29: exactly one live offering).
+
+    Returns None for a class with no live offering — a class created but not yet
+    given its course. That is a real, transient state, and it has no prerequisites
+    to check.
+    """
+    return db.scalar(
+        select(ClassSubject.subject_id).where(
+            ClassSubject.class_id == section_id,
+            ClassSubject.deleted_at.is_(None),
+        )
+    )
+
+
+def _assert_prerequisites_met(
+    db: Session,
+    *,
+    section: Class,
+    students: list[StudentProfile],
+    semester_id: uuid.UUID,
+) -> None:
+    """Refuse the whole enrolment if ANY student is short (D30 §D4).
+
+    Imported inside the function: `prerequisites.service` reads grades, which reads
+    classes, and a module-level import would close the cycle.
+    """
+    course_id = course_id_for_section(db, section.id)
+    if course_id is None:
+        return
+
+    from app.modules.prerequisites import service as prereq_service
+
+    for student in students:
+        prereq_service.assert_eligible(
+            db, student=student, course_id=course_id, semester_id=semester_id
+        )
+
+
 def enroll_students(db: Session, *, actor: User, class_id: uuid.UUID, payload):
     """Enrol students into THIS subject class, leaving their other classes alone.
 
@@ -1173,6 +1212,22 @@ def enroll_students(db: Session, *, actor: User, class_id: uuid.UUID, payload):
         db, section=section, student_ids=list(payload.student_ids), semester_id=semester_id
     )
 
+    # D30 §D4 — the prerequisite gate. Checked for EVERY student BEFORE anything is
+    # written, so a blocked student cannot leave the rest of the batch half-enrolled:
+    # this endpoint takes a list, and a failure part-way through would commit the
+    # students before it and reject the ones after.
+    #
+    # A conflict here is a 409 naming the missing courses and the grade actually
+    # earned — the Registrar has to be able to tell "one course short" from "sat it
+    # and failed". Warn-only was considered and rejected: unlike a timetable clash
+    # (D-Q6), a missing prerequisite is not fixed by the next edit.
+    _assert_prerequisites_met(
+        db,
+        section=section,
+        students=[students[sid] for sid in payload.student_ids],
+        semester_id=semester_id,
+    )
+
     for sid in payload.student_ids:
         # Already active in THIS class for the semester? idempotent — skip create.
         here = db.scalar(
@@ -1211,7 +1266,7 @@ def enroll_students(db: Session, *, actor: User, class_id: uuid.UUID, payload):
             ClassEnrollment.student_id.in_(payload.student_ids),
             ClassEnrollment.unenrolled_at.is_(None),
         )
-        .order_by(StudentProfile.full_name.asc())
+        .order_by(*STUDENT_NAME_ORDER)
     ).all()
     enrolled = [_roster_entry(enr, student) for (enr, student) in rows]
 

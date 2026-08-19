@@ -19,6 +19,8 @@ import type {
   AnnouncementsPageResult,
   TargetClass,
 } from '../types';
+// D30 §D8 — the bell payload now spans two modules, so its type lives with the newer one.
+import type { UnreadCount } from '@features/grades/revisionTypes';
 
 export const announcementKeys = {
   all: ['announcements'] as const,
@@ -65,15 +67,38 @@ export function useAnnouncementDetail(id: string | null) {
   });
 }
 
-/** GET /announcements/unread-count — bell badge source. */
+/**
+ * GET /announcements/unread-count — bell badge source.
+ *
+ * Returns just the total, which is what the badge shows. D30 §D8 extended the endpoint with
+ * pending grade revisions and a breakdown; `unread_count` is the SUM, so this hook needed no
+ * change and every existing caller kept working. Use `useNotificationCounts` when the
+ * breakdown matters.
+ */
 export function useUnreadCount() {
   return useQuery({
     queryKey: announcementKeys.unreadCount(),
     queryFn: async ({ signal }) => {
-      const { data } = await api.get<{ unread_count: number }>('/announcements/unread-count', {
-        signal,
-      });
+      const { data } = await api.get<UnreadCount>('/announcements/unread-count', { signal });
       return data.unread_count;
+    },
+    staleTime: 30 * 1000,
+  });
+}
+
+/**
+ * The same call, unreduced — announcements vs grade revisions (D30 §D8).
+ *
+ * The popover groups by source, so it needs to know which of the two a number came from.
+ * Same query KEY as `useUnreadCount`, so the two share one cache entry and one request
+ * rather than the bell fetching twice.
+ */
+export function useNotificationCounts() {
+  return useQuery({
+    queryKey: announcementKeys.unreadCount(),
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get<UnreadCount>('/announcements/unread-count', { signal });
+      return data;
     },
     staleTime: 30 * 1000,
   });

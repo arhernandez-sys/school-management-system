@@ -47,7 +47,7 @@ from app.modules.attendance.schemas import (
 )
 from app.modules.classes.models import Class, ClassEnrollment, ClassSubject, ClassTeacher
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
@@ -211,7 +211,7 @@ def _active_roster(
             ClassEnrollment.semester_id == semester.id,
             ClassEnrollment.unenrolled_at.is_(None),
         )
-        .order_by(StudentProfile.full_name.asc())
+        .order_by(*STUDENT_NAME_ORDER)
     ).all()
     return [(student, enrollment) for student, enrollment in rows]
 

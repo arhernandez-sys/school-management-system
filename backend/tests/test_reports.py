@@ -24,6 +24,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.core.timeutil import utcnow
@@ -40,6 +41,7 @@ from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -119,7 +121,7 @@ class _Graph:
     def add_student(self, *, name=None, with_login=False, semester=None):
         s = StudentProfile(
             student_number=f"S-{uuid.uuid4().hex[:8]}",
-            full_name=name or f"Stu {uuid.uuid4().hex[:4]}",
+            **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 3, 4),
             enrollment_date=date(2025, 9, 1),
             status="active",
@@ -299,6 +301,8 @@ class TestReportCard:
         assert set(body.keys()) == {
             "student", "year_group", "semester", "school", "subjects",
             "attendance_summary", "term_average", "term_average_letter", "is_frozen",
+            # D30 Phase 3 — the BAJC layout's header labels plus the credit-weighted GPA.
+            "program_code", "period", "block", "gpa", "total_credits",
         }
         # D29: the header names the student's LEVEL, not a homeroom.
         assert body["year_group"] == "Lower 6"
@@ -461,6 +465,205 @@ class TestMyReportCard:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#: The BAJC 8-band scale with its grade points, as `seed_grading_scale` writes it.
+#: `(letter, min, max, grade_point, is_passing)`.
+_BAJC_BANDS = [
+    ("A", "95.00", "100.00", "4.00", True),
+    ("A-", "90.00", "94.00", "3.75", True),
+    ("B+", "85.00", "89.00", "3.50", True),
+    ("B", "80.00", "84.00", "3.00", True),
+    ("C+", "75.00", "79.00", "2.50", True),
+    ("C", "70.00", "74.00", "2.00", True),
+    ("D", "65.00", "69.00", "1.00", False),
+    ("F", "0.00", "64.00", "0.00", False),
+]
+
+
+def _reband_to_bajc(db_session, year_id) -> None:
+    """Replace the year's bands with the priced BAJC set.
+
+    REPLACES rather than adds: `reports/service._bands` resolves ONE scale per year with
+    `db.scalar(...)`, so a second `grading_scales` row would raise MultipleResultsFound
+    instead of giving the test a second scale.
+    """
+    from app.modules.settings.models import GradingScale, GradingScaleBand
+
+    scale = db_session.scalar(
+        select(GradingScale).where(GradingScale.academic_year_id == year_id)
+    )
+    db_session.execute(
+        GradingScaleBand.__table__.delete().where(
+            GradingScaleBand.grading_scale_id == scale.id
+        )
+    )
+    for order, (letter, low, high, gp, passing) in enumerate(_BAJC_BANDS):
+        db_session.add(
+            GradingScaleBand(
+                grading_scale_id=scale.id,
+                letter=letter,
+                min_score=Decimal(low),
+                max_score=Decimal(high),
+                grade_point=Decimal(gp),
+                is_passing=passing,
+                sort_order=order,
+            )
+        )
+    scale.pass_mark = Decimal("70.00")
+    db_session.flush()
+
+
+class TestReportCardGpa:
+    """**The D30 Phase 3 gate, over HTTP.** The BAJC sample report card prints GPA 2.1
+    for five 3-credit courses of which only three are graded; `test_gpa_calc.py` proves
+    the arithmetic, and this proves the wiring that feeds it — credits reaching the row
+    from `courses`, grade points reaching `BandInput` from `grading_scale_bands`, and
+    the ungraded rows staying in the denominator all the way to the response body.
+    """
+
+    def _five_offerings(self, graph, db_session):
+        """Five 3-credit offerings on the student's section (the graph ships two)."""
+        extra = []
+        for n in range(3):
+            subject = Subject(
+                name=f"GPA Course {n} {graph.tag}",
+                code=f"GP{n}{graph.tag[:3].upper()}",
+                credits=3,
+            )
+            db_session.add(subject)
+            db_session.flush()
+            cs = ClassSubject(
+                class_id=graph.section.id, subject_id=subject.id, is_active=True
+            )
+            db_session.add(cs)
+            extra.append(cs)
+        # The two the graph created default to 3 credits (the schema default), but say so.
+        graph.subject.credits = 3
+        graph.subject2.credits = 3
+        db_session.flush()
+        return [graph.cs, graph.cs2, *extra]
+
+    def test_reproduces_the_sample_report_cards_2_1(self, client, graph, db_session) -> None:
+        """B + A- + A- over 15 enrolled credits = 31.50 / 15 = 2.10."""
+        _reband_to_bajc(db_session, graph.year.id)
+        offerings = self._five_offerings(graph, db_session)
+
+        # 82 -> B (3.00); 92, 93 -> A- (3.75). The last two offerings stay ungraded.
+        for cs, score in zip(offerings, ["82", "92", "93"]):
+            a = graph.assessment(cs=cs, max_score="100")
+            graph.grade(a, graph.student, graph.enrollment, score=score)
+
+        body = _card(client, graph, student_id=graph.student.id).json()
+        assert body["total_credits"] == 15
+        assert body["gpa"] == 2.10
+        assert sorted(r["letter"] for r in body["subjects"] if r["letter"]) == [
+            "A-", "A-", "B",
+        ]
+        # The two ungraded courses are PRESENT with a blank letter — they are what makes
+        # the denominator 15, and a report card that hid them could not be checked.
+        assert sum(1 for r in body["subjects"] if r["letter"] is None) == 2
+        assert all(r["credits"] == 3 for r in body["subjects"])
+
+    def test_a_graded_only_denominator_would_have_said_3_50(
+        self, client, graph, db_session
+    ) -> None:
+        """Same three grades with only those three courses enrolled → 3.50.
+
+        Pinned as the contrast: it is the figure the report card must NOT print when
+        ungraded courses exist, and the only difference between the two tests is the
+        credits in the denominator.
+        """
+        _reband_to_bajc(db_session, graph.year.id)
+        subject3 = Subject(
+            name=f"GPA Third {graph.tag}", code=f"G3{graph.tag[:3].upper()}", credits=3
+        )
+        db_session.add(subject3)
+        db_session.flush()
+        cs3 = ClassSubject(
+            class_id=graph.section.id, subject_id=subject3.id, is_active=True
+        )
+        db_session.add(cs3)
+        db_session.flush()
+
+        for cs, score in zip([graph.cs, graph.cs2, cs3], ["82", "92", "93"]):
+            a = graph.assessment(cs=cs, max_score="100")
+            graph.grade(a, graph.student, graph.enrollment, score=score)
+
+        body = _card(client, graph, student_id=graph.student.id).json()
+        assert body["total_credits"] == 9
+        assert body["gpa"] == 3.50
+
+    def test_credits_weight_the_gpa(self, client, graph, db_session) -> None:
+        """A 9-credit A beside a 1-credit F is 3.60, not the 2.00 a course-count mean gives.
+
+        This is the assertion that fails if `_SubjectResult.credits` is ever dropped and
+        the GPA quietly becomes an unweighted average of grade points.
+        """
+        _reband_to_bajc(db_session, graph.year.id)
+        graph.subject.credits = 9
+        graph.subject2.credits = 1
+        db_session.flush()
+
+        a1 = graph.assessment(cs=graph.cs, max_score="100")
+        graph.grade(a1, graph.student, graph.enrollment, score="98")  # A -> 4.00
+        a2 = graph.assessment(cs=graph.cs2, max_score="100")
+        graph.grade(a2, graph.student, graph.enrollment, score="10")  # F -> 0.00
+
+        body = _card(client, graph, student_id=graph.student.id).json()
+        assert body["total_credits"] == 10
+        assert body["gpa"] == 3.60
+
+    def test_no_gpa_without_a_scale_that_prices_letters(
+        self, client, graph, db_session
+    ) -> None:
+        """The graph's default scale has NULL grade points (a pre-Phase-3 scale), so the
+        GPA is 0.00 rather than a guess: the credits participated, nothing could be
+        priced. Asserting this keeps `grade_point_for`'s None from ever being read as an
+        arbitrary number."""
+        a = graph.assessment(cs=graph.cs, max_score="100")
+        graph.grade(a, graph.student, graph.enrollment, score="98")
+        body = _card(client, graph, student_id=graph.student.id).json()
+        assert body["gpa"] == 0.00
+        assert body["total_credits"] > 0
+
+    def test_a_withheld_subject_contributes_credits_but_no_points(
+        self, client, graph, db_session
+    ) -> None:
+        """On the student's OWN card an unreleased subject shows `pending` — and it must
+        not leak its mark through the GPA either. It is scored as ungraded rather than
+        dropped, because dropping it would shrink the denominator and let the student
+        solve for the hidden grade.
+        """
+        _reband_to_bajc(db_session, graph.year.id)
+        graph.subject.credits = 3
+        graph.subject2.credits = 3
+        db_session.flush()
+
+        released = graph.assessment(cs=graph.cs, max_score="100", is_released=True)
+        graph.grade(released, graph.student, graph.enrollment, score="98")  # A -> 4.00
+        hidden = graph.assessment(cs=graph.cs2, max_score="100", is_released=False)
+        graph.grade(hidden, graph.student, graph.enrollment, score="98")
+
+        body = client.get(f"{R}/report-card/me", headers=graph.U).json()
+        statuses = {r["status"] for r in body["subjects"]}
+        assert "pending" in statuses
+        # 4.00 x 3 / 6 credits = 2.00 — the withheld course still pays its credits.
+        assert body["total_credits"] == 6
+        assert body["gpa"] == 2.00
+
+    def test_the_header_carries_period_and_a_blank_programme(
+        self, client, graph
+    ) -> None:
+        """§D13's label block. `program_code` is None until Phase 4 assigns programmes,
+        and `block` is None because its meaning is unconfirmed (plan §G item 3) — both
+        wired rather than omitted, so the printed document gains them without a schema
+        change."""
+        body = _card(client, graph, student_id=graph.student.id).json()
+        assert body["period"] == "Semester 1, September 2025 - January 2026"
+        assert body["program_code"] is None
+        assert body["block"] is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 class TestFrozenReads:
     def test_archived_year_reads_the_snapshot(self, client, graph) -> None:
         a = graph.assessment(cs=graph.cs, max_score="100")
@@ -523,7 +726,10 @@ class TestTranscript:
     def test_top_level_keys(self, client, graph) -> None:
         body = client.get(f"{R}/transcript?student_id={graph.student.id}", headers=graph.P).json()
         assert set(body.keys()) == {
-            "student", "school", "issued_at", "years", "cumulative_average"
+            "student", "school", "issued_at", "years", "cumulative_average",
+            # D30 Phase 3 — the cumulative GPA, recomputed from credits rather than
+            # averaged from the per-year figures.
+            "cumulative_gpa", "total_credits",
         }
 
     def test_unknown_student_404(self, client, graph) -> None:
@@ -533,14 +739,77 @@ class TestTranscript:
     def test_secretary_may_read(self, client, graph) -> None:
         assert client.get(f"{R}/transcript?student_id={graph.student.id}", headers=graph.S).status_code == 200
 
+    def test_an_unmarked_term_does_not_dilute_the_cumulative_gpa(
+        self, client, graph, db_session
+    ) -> None:
+        """**Regression — found by the Phase 3 gate walk, not by this suite.**
+
+        The setup is the shape that broke: the graded term is a PAST one and the CURRENT
+        term has nothing marked. The transcript keeps a current term even with no rows,
+        and `_classes_for` falls back to the student's whole enrolment history for a term
+        they hold no enrolment in — so the unmarked current term handed over the student's
+        full course load at 0 quality points and HALVED the year and cumulative GPA.
+
+        The walk caught it printing 1.05 over 30 credits where the term itself read 2.10
+        over 15. It is not visible from the printed page, which is exactly why it needed a
+        test: a cumulative GPA nobody can check by adding up rows must be right.
+
+        Without the fix this reads 1.00 over 12 credits.
+        """
+        _reband_to_bajc(db_session, graph.year.id)
+        graph.subject.credits = 3
+        graph.subject2.credits = 3
+
+        # Make the SECOND term the current one, so the graded term is a past term. Set
+        # `sem` false BEFORE `sem2` true — the reader resolves the active term with
+        # `db.scalar(...)`, which raises if two rows are active at once.
+        graph.sem.is_active = False
+        db_session.flush()
+        graph.sem2.is_active = True
+        db_session.flush()
+
+        # 98 -> A (4.00) in ONE course of the PAST term. Nothing in the current term.
+        a = graph.assessment(cs=graph.cs, max_score="100")
+        graph.grade(a, graph.student, graph.enrollment, score="98")
+
+        body = client.get(
+            f"{R}/transcript?student_id={graph.student.id}", headers=graph.P
+        ).json()
+        year = next(y for y in body["years"] if y["academic_year"]["id"] == str(graph.year.id))
+        graded_term = next(
+            s for s in year["semesters"] if s["semester"]["id"] == str(graph.sem.id)
+        )
+
+        # Within the graded term decision #4 still applies: BOTH courses' credits count,
+        # the ungraded one earning nothing. 4.00 x 3 / 6 = 2.00.
+        assert graded_term["gpa"] == 2.00
+        assert graded_term["total_credits"] == 6
+
+        # And the year and cumulative figures equal it — the unmarked term contributed
+        # nothing at all rather than another 6 credits of zeros (which would give 1.00).
+        assert year["gpa"] == 2.00
+        assert year["total_credits"] == 6
+        assert body["cumulative_gpa"] == 2.00
+        assert body["total_credits"] == 6
+
+        # Any term kept only because it is current reports no GPA, not 0.00.
+        for sem in year["semesters"]:
+            if sem["semester"]["id"] != str(graph.sem.id):
+                assert sem["gpa"] is None
+                assert sem["total_credits"] == 0
+
     def test_year_and_semester_nesting(self, client, graph) -> None:
         a = graph.assessment(cs=graph.cs, max_score="100")
         graph.grade(a, graph.student, graph.enrollment, score="85")
         body = client.get(f"{R}/transcript?student_id={graph.student.id}", headers=graph.P).json()
         year = next(y for y in body["years"] if y["academic_year"]["id"] == str(graph.year.id))
-        assert set(year.keys()) == {"academic_year", "year_average", "semesters"}
+        assert set(year.keys()) == {
+            "academic_year", "year_average", "semesters", "gpa", "total_credits",
+        }
         sem = next(s for s in year["semesters"] if s["semester"]["id"] == str(graph.sem.id))
-        assert set(sem.keys()) == {"semester", "is_current", "term_average", "subjects"}
+        assert set(sem.keys()) == {
+            "semester", "is_current", "term_average", "subjects", "gpa", "total_credits",
+        }
         assert sem["is_current"] is True
         assert sem["term_average"] == 85.0
 
@@ -642,7 +911,7 @@ class TestTranscript:
 
     def test_student_with_no_enrollments_gets_an_empty_transcript(self, client, graph, db_session) -> None:
         loner = StudentProfile(
-            student_number=f"L-{graph.tag}", full_name="No Classes",
+            student_number=f"L-{graph.tag}", **split_name("No Classes"),
             date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="active",
         )
         db_session.add(loner)
@@ -680,14 +949,23 @@ class TestClassGrades:
         assert rows["Bob Peer"] == 70.0
         assert body["class_average"] == 80.0
 
-    def test_students_sorted_by_name(self, client, graph) -> None:
+    def test_students_sorted_by_surname(self, client, graph) -> None:
+        """D30 §D10 / brief §11: ascending by SURNAME then given name — never by the
+        combined display string.
+
+        The distinction is the whole point of the rule, and these three names are
+        chosen so the two orders disagree: by display string it would be
+        Aaron First / Ana Lopez / Zed Last; by surname it is First / Last / Lopez.
+        """
         graph.add_student(name="Zed Last")
         graph.add_student(name="Aaron First")
-        names = [
-            r["student"]["full_name"]
-            for r in client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P).json()["students"]
-        ]
-        assert names == sorted(names)
+        rows = client.get(
+            f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P
+        ).json()["students"]
+        names = [r["student"]["full_name"] for r in rows]
+
+        assert names == ["Aaron First", "Zed Last", "Ana Lopez"]
+        assert names != sorted(names)  # the old display-string order, explicitly not this
 
     def test_distribution_covers_every_band(self, client, graph) -> None:
         a = graph.assessment(cs=graph.cs, max_score="100")

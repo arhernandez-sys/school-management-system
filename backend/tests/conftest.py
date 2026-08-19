@@ -463,6 +463,37 @@ def auth_headers(make_token) -> "callable":  # noqa: ANN001
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Student name helper (added D30 — the split-name cut-over)
+# ──────────────────────────────────────────────────────────────────────────────
+def split_name(display: str) -> dict[str, str | None]:
+    """Turn a display name into `StudentProfile` name kwargs.
+
+    `student_profiles.full_name` was dropped by `007_student_names.sql` (D30 §D10);
+    the parts are the stored truth and `StudentProfile.full_name` is now a computed
+    hybrid. Test graphs across the suite build students from a single display string
+    ("Ana Lopez", or a random `Stu abcd`) and then assert on ordering or on the
+    rendered name, so they need one place that does the split the same way the
+    migration did: first token → given name, last token → surname, the rest → middle.
+
+    A single-token name goes entirely to the surname, matching `005` §9 and the fact
+    that `lastname` is the NOT NULL half.
+
+    Not a plain fixture: these graphs are constructed inside other fixtures and in
+    class `__init__`s, where requesting a fixture is not possible.
+    """
+    parts = display.split()
+    if not parts:
+        raise ValueError("display name is empty")
+    if len(parts) == 1:
+        return {"first_name": None, "middle_name": None, "last_name": parts[0]}
+    return {
+        "first_name": parts[0],
+        "middle_name": " ".join(parts[1:-1]) or None,
+        "last_name": parts[-1],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # User factory (added 7.1 — Auth module tests)
 # ──────────────────────────────────────────────────────────────────────────────
 # Auth tests must provision their own principals/teachers/students INSIDE the
@@ -633,10 +664,16 @@ def set_assessment_policy(db_session) -> "callable":  # noqa: ANN001
 def make_grading_scale(db_session) -> "callable":  # noqa: ANN001
     """Factory: create a GradingScale + bands for a given academic year.
 
-    Defaults to the bands this system ships (`settings/service.py::_DEFAULT_BANDS`,
-    `.99` ceilings) so letter assertions in the Grades suite exercise the real
-    OQ-DB2 convention. `bands` takes `(letter, min_score, max_score, is_passing)`
-    tuples if a test needs a custom scale.
+    `bands` takes `(letter, min_score, max_score, is_passing)` tuples, optionally with
+    a fifth element for `grade_point` (D30 §D5) — omitted means NULL, which is what
+    `calc.grade_point_for` reads as "this scale cannot price this letter".
+
+    **`_SHIPPED` is a deliberate PRIVATE COPY of the old 5-band A/B/C/D/F scale**, not
+    an import of the shipped default. D30 Phase 3 replaced that default with the BAJC
+    8-band scale, and importing it here would have re-lettered the arithmetic in every
+    letter assertion across the Grades, Reports and Dashboard suites — tests about
+    weighting and release filtering, which have nothing to say about BAJC's boundaries.
+    The shipped default is asserted where it belongs, in `test_settings.py`.
     """
     from decimal import Decimal
 
@@ -654,13 +691,16 @@ def make_grading_scale(db_session) -> "callable":  # noqa: ANN001
         scale = GradingScale(academic_year_id=academic_year_id, pass_mark=Decimal(pass_mark))
         db_session.add(scale)
         db_session.flush()
-        for order, (letter, low, high, passing) in enumerate(bands or _SHIPPED):
+        for order, spec in enumerate(bands or _SHIPPED):
+            letter, low, high, passing = spec[:4]
+            grade_point = spec[4] if len(spec) > 4 else None
             db_session.add(
                 GradingScaleBand(
                     grading_scale_id=scale.id,
                     letter=letter,
                     min_score=Decimal(low),
                     max_score=Decimal(high),
+                    grade_point=None if grade_point is None else Decimal(str(grade_point)),
                     is_passing=passing,
                     sort_order=order,
                 )

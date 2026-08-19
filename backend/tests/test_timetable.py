@@ -39,6 +39,7 @@ from app.modules.classes.models import (
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -143,7 +144,7 @@ class _Graph:
     def _student(self, name) -> tuple[StudentProfile, object]:
         user = self._make_user(role=Role.STUDENT, full_name=name)
         s = StudentProfile(
-            user_id=user.id, student_number=f"S-{uuid.uuid4().hex[:8]}", full_name=name,
+            user_id=user.id, student_number=f"S-{uuid.uuid4().hex[:8]}", **split_name(name),
             date_of_birth=date(2008, 4, 1), enrollment_date=date(2025, 9, 1),
             status=StudentStatus.ACTIVE, year_group="Lower 6",
         )

@@ -38,11 +38,28 @@ import type { GradingBand } from '@shared/api/generated/model';
  * (409 scale_frozen / is_frozen) → the form is read-only. On a successful save, if the
  * response flags `affects_displayed_grades`, we warn that derive-on-read letters change
  * going forward.
+ *
+ * **`grade_point` is editable here (D30 §D5)** and it must be, not merely displayed: the
+ * PUT replaces the whole band set, so a form that showed the points without round-tripping
+ * them would silently wipe the seeded scale on the Dean's first unrelated edit — sending
+ * `calc.meets_grade_point` back to its lenient fallback school-wide. Blank is allowed and
+ * stores NULL, which reads as "unpriced", never as 0.00.
  */
 type EditableBand = GradingBand & { _key: string };
 
 let bandKeySeq = 0;
 const withKey = (band: GradingBand): EditableBand => ({ ...band, _key: `band-${bandKeySeq++}` });
+
+/**
+ * A grade-point edit, mapping an empty field to NULL rather than 0 (D30 §D5).
+ *
+ * `Number('')` is 0, so the obvious `Number(e.target.value)` would turn "I don't know
+ * what this band is worth" into "this band is an F" the moment the Dean cleared the
+ * box — and 0.00 fails every prerequisite in the school.
+ */
+const gradePointPatch = (raw: string): Partial<GradingBand> => ({
+  grade_point: raw.trim() === '' ? null : Number(raw),
+});
 
 export function GradingScaleScreen() {
   const { user } = useAuth();
@@ -79,7 +96,14 @@ export function GradingScaleScreen() {
   const addBand = () =>
     setBands((prev) => [
       ...prev,
-      withKey({ letter: '', min_score: 0, max_score: 0, is_passing: false, sort_order: prev.length }),
+      withKey({
+        letter: '',
+        min_score: 0,
+        max_score: 0,
+        grade_point: null,
+        is_passing: false,
+        sort_order: prev.length,
+      }),
     ]);
 
   const removeBand = (key: string) => setBands((prev) => prev.filter((b) => b._key !== key));
@@ -198,6 +222,18 @@ export function GradingScaleScreen() {
                           fullWidth
                         />
                       </Stack>
+                      <TextField
+                        label="Grade point"
+                        type="number"
+                        value={band.grade_point ?? ''}
+                        onChange={(e) => updateBand(band._key, gradePointPatch(e.target.value))}
+                        size="small"
+                        disabled={readOnly}
+                        placeholder="—"
+                        helperText="On the 4.00 scale. Leave blank if unpriced."
+                        inputProps={{ min: 0, max: 4, step: 0.25 }}
+                        fullWidth
+                      />
                       <FormControlLabel
                         control={
                           <Checkbox
@@ -236,6 +272,7 @@ export function GradingScaleScreen() {
                   <TableCell>Letter</TableCell>
                   <TableCell>Min score</TableCell>
                   <TableCell>Max score</TableCell>
+                  <TableCell>Grade point</TableCell>
                   <TableCell>Passing</TableCell>
                   {!readOnly && <TableCell align="right">Remove</TableCell>}
                 </TableRow>
@@ -277,6 +314,23 @@ export function GradingScaleScreen() {
                         disabled={readOnly}
                         inputProps={{ min: 0, max: 100, 'aria-label': 'Maximum score' }}
                         sx={{ width: 100 }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        value={band.grade_point ?? ''}
+                        onChange={(e) => updateBand(band._key, gradePointPatch(e.target.value))}
+                        size="small"
+                        disabled={readOnly}
+                        placeholder="—"
+                        inputProps={{
+                          min: 0,
+                          max: 4,
+                          step: 0.25,
+                          'aria-label': 'Grade point on the 4.00 scale',
+                        }}
+                        sx={{ width: 110 }}
                       />
                     </TableCell>
                     <TableCell>

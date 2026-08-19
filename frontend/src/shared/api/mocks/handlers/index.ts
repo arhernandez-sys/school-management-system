@@ -13,11 +13,15 @@
 import { authHandlers } from './auth';
 import { settingsHandlers } from './settings';
 import { subjectsHandlers } from './subjects';
+import { programsHandlers } from './programs';
+import { prerequisitesHandlers } from './prerequisites';
 import { studentsHandlers } from './students';
+import { admissionsHandlers } from './admissions';
 import { teachersHandlers } from './teachers';
 import { classesHandlers } from './classes';
 import { assessmentsHandlers } from './assessments';
 import { gradesHandlers } from './grades';
+import { revisionsHandlers } from './revisions';
 import { attendanceHandlers } from './attendance';
 import { announcementsHandlers } from './announcements';
 import { eventsHandlers } from './events';
@@ -29,11 +33,15 @@ export const handlers = [
   ...authHandlers,
   ...settingsHandlers,
   ...subjectsHandlers,
+  ...programsHandlers,
+  ...prerequisitesHandlers,
   ...studentsHandlers,
+  ...admissionsHandlers,
   ...teachersHandlers,
   ...classesHandlers,
   ...assessmentsHandlers,
   ...gradesHandlers,
+  ...revisionsHandlers,
   ...attendanceHandlers,
   ...announcementsHandlers,
   ...eventsHandlers,

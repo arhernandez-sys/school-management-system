@@ -1,0 +1,491 @@
+"""Grade revision / second opportunity (D30 §D7, brief §20).
+
+Kept beside `grades/service.py` rather than inside it: that file is the gradebook surface,
+and this is a separate approval workflow that happens to write one column of it. Same
+reasoning as `students/numbering.py` and `students/academics.py`.
+
+**WHAT WAS ALREADY THERE, AND WHAT WAS MISSING.** The database has carried the
+second-attempt SCORE since before D30 — `assessment_grades.makeup_score` plus the
+`allow_makeup` policy chain. The audit (plan §B2) found the *request* had nowhere to live:
+no reason, no requester, no approval status, no decision, no original-vs-revised history.
+This module is that missing half. Nothing else about grading was remodelled for it.
+
+**THE PERMISSION SPLIT** (§D14):
+
+  Lecturer   REQUESTS a revision, on an offering they own. They may withdraw their own
+             request while it is pending.
+  Dean       DECIDES. Approve writes the revised mark and appends an `audit_log` row;
+             deny records the ruling. Nobody else can decide, and the Dean cannot request —
+             a self-approved revision would leave no independent authority in the trail.
+
+**THE ORIGINAL SCORE IS NEVER OVERWRITTEN.** On approval the revised mark goes to
+`assessment_grades.makeup_score` and `score` keeps what the student first earned. Three
+places record the pair — the grade row, `grade_revision_requests`, and `audit_log` — and any
+two of them reconcile. `calc._contribution_for` makes the makeup win on a graded row, which
+is safe precisely because `upsert_grades` refuses to write one there (see its docstring).
+
+**APPROVAL WRITES THROUGH A CLOSED GRADE WINDOW** (client decision, Phase 5). Phase 3
+shipped `grade_submission_deadline` with the Dean's direct-entry bypass dormant, on the note
+that this workflow would be the real post-deadline path — and it is. The deadline stops
+Lecturers editing freely; a revision is the sanctioned exception and the Dean is the one
+approving it. Blocking approval after the cutoff would kill the workflow exactly when it is
+needed, since revisions surface after marks are in.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.common.enums import GradeRevisionStatus, GradeStatus, Role
+from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
+from app.core.rbac import assert_teacher_owns_class_subject
+from app.modules.assessments.models import Assessment
+from app.modules.classes.models import Class, ClassSubject, Subject
+from app.modules.grades.models import AssessmentGrade, GradeRevisionRequest
+from app.modules.grades.schemas import (
+    GradeRevisionCreateRequest,
+    GradeRevisionDecisionRequest,
+    GradeRevisionList,
+    GradeRevisionRead,
+    StudentRef,
+)
+from app.modules.settings.models import AuditLog
+from app.modules.students.models import StudentProfile
+from app.modules.users.models import User
+
+
+def _now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _audit(
+    db: Session,
+    *,
+    actor: User,
+    action: str,
+    entity_id: uuid.UUID | None = None,
+    summary: dict | None = None,
+) -> None:
+    db.add(
+        AuditLog(
+            actor_user_id=actor.id,
+            action=action,
+            entity_type="grade_revision_request",
+            entity_id=entity_id,
+            summary=summary,
+        )
+    )
+
+
+def _revision_or_404(db: Session, revision_id: uuid.UUID) -> GradeRevisionRequest:
+    row = db.get(GradeRevisionRequest, revision_id)
+    if row is None:
+        raise NotFound("Grade revision request not found.", code="not_found")
+    return row
+
+
+def _f(value) -> float | None:  # noqa: ANN001
+    return None if value is None else float(value)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Serialisation
+# ──────────────────────────────────────────────────────────────────────────────
+def _read(
+    db: Session, row: GradeRevisionRequest, *, actor: User | None = None
+) -> GradeRevisionRead:
+    """Shape one request with everything §D8 says a notification must identify.
+
+    Loaded per row rather than in a join because the queue is small by nature — it is
+    "what the Dean has to rule on today", not a reporting surface — and a hand-rolled
+    six-table join would be harder to read than it is fast.
+    """
+    grade = db.get(AssessmentGrade, row.assessment_grade_id)
+    assessment = db.get(Assessment, grade.assessment_id) if grade else None
+    cs = db.get(ClassSubject, assessment.class_subject_id) if assessment else None
+    subject = db.get(Subject, cs.subject_id) if cs else None
+    section = db.get(Class, cs.class_id) if cs else None
+    student = db.get(StudentProfile, grade.student_id) if grade else None
+    requester = db.get(User, row.requested_by_user_id)
+    decider = db.get(User, row.decided_by_user_id) if row.decided_by_user_id else None
+
+    return GradeRevisionRead(
+        id=row.id,
+        assessment_grade_id=row.assessment_grade_id,
+        status=row.status,
+        reason=row.reason,
+        original_score=_f(row.original_score),
+        proposed_score=_f(row.proposed_score) or 0.0,
+        decision_note=row.decision_note,
+        decided_at=row.decided_at,
+        created_at=row.created_at,
+        student=(
+            StudentRef(
+                id=student.id,
+                full_name=student.full_name,
+                student_number=student.student_number,
+            )
+            if student
+            else None
+        ),
+        assessment_id=assessment.id if assessment else None,
+        assessment_title=assessment.title if assessment else "",
+        max_score=_f(assessment.max_score) if assessment else None,
+        class_subject_id=cs.id if cs else None,
+        subject_name=subject.name if subject else "",
+        subject_code=subject.code if subject else None,
+        section_name=section.name if section else "",
+        requested_by_user_id=row.requested_by_user_id,
+        requested_by_name=requester.full_name if requester else "",
+        decided_by_user_id=row.decided_by_user_id,
+        decided_by_name=decider.full_name if decider else None,
+        # Withdrawable only by the person who asked, and only while nobody has ruled.
+        can_withdraw=(
+            row.status == GradeRevisionStatus.PENDING
+            and actor is not None
+            and actor.id == row.requested_by_user_id
+        ),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Counting — what drives the notification badge (§D8)
+# ──────────────────────────────────────────────────────────────────────────────
+def pending_for_actor(db: Session, *, actor: User) -> int:
+    """How many revisions are awaiting THIS caller's decision.
+
+    **Non-zero only for the Dean**, and that is the whole point. §D8 extends the existing
+    bell count with pending revisions rather than adding a notifications table, so the
+    number behind the badge has to mean "this needs you" — otherwise a Lecturer is nagged
+    about something only the Dean can act on.
+    A Lecturer still sees their own requests and their outcomes in the queue list; the
+    badge just does not count them, because there is nothing for them to do.
+    """
+    if actor.role != Role.PRINCIPAL:
+        return 0
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(GradeRevisionRequest)
+            .where(GradeRevisionRequest.status == GradeRevisionStatus.PENDING)
+        )
+        or 0
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /grade-revisions
+# ──────────────────────────────────────────────────────────────────────────────
+def list_revisions(
+    db: Session,
+    *,
+    actor: User,
+    status: GradeRevisionStatus | None,
+    class_subject_id: uuid.UUID | None,
+) -> GradeRevisionList:
+    """The queue. `?status=pending` IS the Dean's work list (§D8).
+
+    **Scoped by role, in the query rather than after it.** The Dean sees every request; a
+    Lecturer sees only their OWN, because another Lecturer's request concerns a student
+    they may have no relationship with. The Registrar and students see none: a revision is
+    an academic judgement in flight, and §D14 gives the Registrar no grade authority.
+    """
+    if actor.role not in (Role.PRINCIPAL, Role.TEACHER):
+        raise Forbidden(
+            "Grade revisions are visible to the Dean and to the requesting Lecturer.",
+            code="forbidden",
+        )
+
+    stmt = select(GradeRevisionRequest)
+    if actor.role == Role.TEACHER:
+        stmt = stmt.where(GradeRevisionRequest.requested_by_user_id == actor.id)
+    if status is not None:
+        stmt = stmt.where(GradeRevisionRequest.status == status)
+    if class_subject_id is not None:
+        # Reached through the grade row, since a revision hangs off `assessment_grades`.
+        stmt = stmt.where(
+            GradeRevisionRequest.assessment_grade_id.in_(
+                select(AssessmentGrade.id)
+                .join(Assessment, Assessment.id == AssessmentGrade.assessment_id)
+                .where(Assessment.class_subject_id == class_subject_id)
+            )
+        )
+
+    rows = list(
+        db.scalars(
+            # Oldest first: a queue is worked in the order it arrived, and the Dean should
+            # not have to scroll to find the request that has been waiting longest.
+            #
+            # `id` is the TIEBREAKER, and it is not decoration. `created_at` is a MariaDB
+            # `DATETIME` with precision 0 — whole seconds — so two requests filed in the
+            # same second are indistinguishable by it, and ordering on it alone lets rows
+            # shuffle between reads. That is a real problem for a queue somebody pages
+            # through and decides from: the row they meant to click moves. The uuid is not
+            # chronological, so within one second the order is arbitrary — but it is STABLE,
+            # which is the property that matters.
+            stmt.order_by(
+                GradeRevisionRequest.created_at.asc(), GradeRevisionRequest.id.asc()
+            )
+        ).all()
+    )
+    return GradeRevisionList(
+        items=[_read(db, row, actor=actor) for row in rows],
+        pending_for_me=pending_for_actor(db, actor=actor),
+    )
+
+
+def get_revision(
+    db: Session, *, actor: User, revision_id: uuid.UUID
+) -> GradeRevisionRead:
+    """One request. A Lecturer may read only their own — 404, not 403, so the existence of
+    another Lecturer's request is not confirmed (api-spec §3.3)."""
+    row = _revision_or_404(db, revision_id)
+    if actor.role == Role.TEACHER and row.requested_by_user_id != actor.id:
+        raise NotFound("Grade revision request not found.", code="not_found")
+    if actor.role not in (Role.PRINCIPAL, Role.TEACHER):
+        raise Forbidden("Grade revisions are not visible to you.", code="forbidden")
+    return _read(db, row, actor=actor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /assessments/{id}/grade-revisions — the LECTURER asks
+# ──────────────────────────────────────────────────────────────────────────────
+def create_revision(
+    db: Session,
+    *,
+    actor: User,
+    assessment_id: uuid.UUID,
+    payload: GradeRevisionCreateRequest,
+) -> GradeRevisionRead:
+    """The Lecturer identifies student + assessment and proposes a new result (brief §20).
+
+    **Requesting writes no grade**, which is why it is allowed after the submission
+    deadline while `upsert_grades` is not: asking the Dean to look at something is exactly
+    what a Lecturer should still be able to do once the window has shut.
+
+    Guards, in the order they matter:
+
+      * the Lecturer must OWN the offering — `assert_teacher_owns_class_subject`, which
+        denies with 404 rather than 403 so an un-owned offering's existence is not
+        confirmed (api-spec §3.3);
+      * the student must already HAVE a grade row. A revision revises something; if the
+        result was never entered, the Lecturer should enter it, not appeal it;
+      * the result must be `graded`. An absent result already has a first-class second
+        attempt through `makeup_score` + `allow_makeup` — routing it through an approval
+        workflow as well would give one situation two mechanisms;
+      * `proposed_score` must be within the assessment's `max_score`, and must differ from
+        what the student already has. A revision to the same mark is a no-op the Dean
+        would have to rule on for nothing;
+      * only ONE pending request per grade. Enforced here for a clean 409, and by
+        `uq_grade_revision_open` in the database as the backstop.
+    """
+    assessment = db.scalar(
+        select(Assessment).where(
+            Assessment.id == assessment_id, Assessment.deleted_at.is_(None)
+        )
+    )
+    if assessment is None:
+        raise NotFound("Assessment not found.", code="not_found")
+
+    if actor.role == Role.TEACHER:
+        assert_teacher_owns_class_subject(db, actor, assessment.class_subject_id)
+    else:
+        # The Dean decides revisions; letting them file one too would put both halves of
+        # the workflow in one pair of hands and leave the audit trail with no independent
+        # authority in it (§D7).
+        raise Forbidden(
+            "Only the Lecturer who teaches the course may request a grade revision.",
+            code="forbidden",
+        )
+
+    grade = db.scalar(
+        select(AssessmentGrade).where(
+            AssessmentGrade.assessment_id == assessment.id,
+            AssessmentGrade.student_id == payload.student_id,
+        )
+    )
+    if grade is None:
+        raise ValidationError(
+            "This student has no result recorded for that assessment, so there is "
+            "nothing to revise. Enter the grade instead.",
+            code="grade_not_entered",
+            fields={"student_id": ["No grade on record."]},
+        )
+    if grade.status != GradeStatus.GRADED:
+        raise ValidationError(
+            f"This result is {grade.status.value}, not graded. An absent result already "
+            "has a makeup path through the grading policy.",
+            code="grade_not_graded",
+            fields={"student_id": [f"Result is {grade.status.value}."]},
+        )
+
+    max_score = float(assessment.max_score or 0)
+    if payload.proposed_score > max_score:
+        raise ValidationError(
+            f"The proposed score must be between 0 and {max_score:g}.",
+            code="score_exceeds_max",
+            fields={"proposed_score": [f"Maximum is {max_score:g}."]},
+        )
+    current = _f(grade.score)
+    if current is not None and abs(current - payload.proposed_score) < 1e-9:
+        raise ValidationError(
+            "The proposed score is the same as the current one.",
+            code="revision_no_change",
+            fields={"proposed_score": ["Must differ from the current score."]},
+        )
+
+    existing = db.scalar(
+        select(GradeRevisionRequest.id).where(
+            GradeRevisionRequest.assessment_grade_id == grade.id,
+            GradeRevisionRequest.status == GradeRevisionStatus.PENDING,
+        )
+    )
+    if existing is not None:
+        raise Conflict(
+            "There is already a revision request awaiting the Dean's decision for this "
+            "result.",
+            code="revision_already_pending",
+        )
+
+    row = GradeRevisionRequest(
+        assessment_grade_id=grade.id,
+        requested_by_user_id=actor.id,
+        reason=payload.reason.strip(),
+        # Snapshotted at request time on purpose: the point is to record what the student
+        # had WHEN the request was made, not what a later read happens to find.
+        original_score=grade.score,
+        proposed_score=payload.proposed_score,
+        status=GradeRevisionStatus.PENDING,
+    )
+    db.add(row)
+    db.flush()
+    _audit(
+        db,
+        actor=actor,
+        action="grade_revision.request",
+        entity_id=row.id,
+        summary={
+            "assessment_grade_id": str(grade.id),
+            "student_id": str(grade.student_id),
+            "original_score": _f(grade.score),
+            "proposed_score": payload.proposed_score,
+            "reason": row.reason,
+        },
+    )
+    db.commit()
+    return _read(db, row, actor=actor)
+
+
+def withdraw_revision(db: Session, *, actor: User, revision_id: uuid.UUID) -> None:
+    """DELETE /grade-revisions/{id} — the requester withdraws while it is PENDING.
+
+    A HARD delete, and only of an un-ruled request: it carries no decision, so there is no
+    ruling to preserve. A DECIDED request is never removed — that row IS the record of what
+    the Dean decided, which is the reason the table exists.
+    """
+    row = _revision_or_404(db, revision_id)
+    if row.requested_by_user_id != actor.id:
+        raise NotFound("Grade revision request not found.", code="not_found")
+    if row.status != GradeRevisionStatus.PENDING:
+        raise Conflict(
+            f"This request has already been {row.status.value}; the Dean's decision is "
+            "kept.",
+            code="revision_decided",
+        )
+    _audit(
+        db,
+        actor=actor,
+        action="grade_revision.withdraw",
+        entity_id=row.id,
+        summary={"assessment_grade_id": str(row.assessment_grade_id)},
+    )
+    db.delete(row)
+    db.commit()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /grade-revisions/{id}/decision — the DEAN rules
+# ──────────────────────────────────────────────────────────────────────────────
+def decide_revision(
+    db: Session,
+    *,
+    actor: User,
+    revision_id: uuid.UUID,
+    payload: GradeRevisionDecisionRequest,
+) -> GradeRevisionRead:
+    """**DEAN ONLY** (§D14, brief §20).
+
+    **Approve** writes `proposed_score` to `assessment_grades.makeup_score` — leaving
+    `score` holding the original — and appends an `audit_log` row carrying both values.
+    `calc` makes the makeup win on a graded row, so the student's term grade, letter, GPA
+    and report card all move together off the single grade engine; nothing recomputes
+    anything locally (plan §C).
+
+    **Deny** records the ruling and touches no grade.
+
+    **This writes through a closed grade-submission window, by design** (client decision).
+    The deadline exists to stop Lecturers editing freely; a revision is the sanctioned
+    exception and the Dean is the one approving it. `_assert_grade_window_open` is
+    deliberately NOT called here — and this is the path Phase 3's dormant Dean bypass was
+    always pointing at.
+
+    A decided request cannot be re-decided: re-opening a ruling would leave no record of
+    the reversal. A second, fresh request is the supported way to change course, and
+    `uq_grade_revision_open` permits it because the first row is no longer pending.
+    """
+    row = _revision_or_404(db, revision_id)
+    if row.status != GradeRevisionStatus.PENDING:
+        raise Conflict(
+            f"This request has already been {row.status.value}.",
+            code="revision_decided",
+        )
+    if payload.status == GradeRevisionStatus.PENDING:
+        raise ValidationError(
+            "A decision must be approved or denied.",
+            code="validation_error",
+            fields={"status": ["Use approved or denied."]},
+        )
+
+    grade = db.get(AssessmentGrade, row.assessment_grade_id)
+    if grade is None:  # pragma: no cover - CASCADE keeps these in step
+        raise NotFound("The graded result no longer exists.", code="not_found")
+
+    if payload.status == GradeRevisionStatus.APPROVED:
+        # THE ONE WRITE. `score` is untouched; the revised mark lands on `makeup_score`,
+        # which `calc._contribution_for` prefers on a graded row (§D7).
+        grade.makeup_score = row.proposed_score
+        grade.updated_by = actor.id
+
+    row.status = payload.status
+    row.decided_by_user_id = actor.id
+    row.decided_at = _now()
+    if payload.decision_note:
+        row.decision_note = (
+            f"{row.decision_note}\n{payload.decision_note}".strip()
+            if row.decision_note
+            else payload.decision_note
+        )
+
+    _audit(
+        db,
+        actor=actor,
+        action=f"grade_revision.{payload.status.value}",
+        entity_id=row.id,
+        summary={
+            "assessment_grade_id": str(row.assessment_grade_id),
+            "student_id": str(grade.student_id),
+            # BOTH values in the trail, so "what did this student originally get?" is
+            # answerable from the audit alone, years later and without the grade row.
+            "original_score": _f(row.original_score),
+            "revised_score": _f(row.proposed_score),
+            "applied_to": "makeup_score" if payload.status == GradeRevisionStatus.APPROVED else None,
+            "requested_by_user_id": str(row.requested_by_user_id),
+            "decision_note": payload.decision_note,
+        },
+    )
+    db.commit()
+    return _read(db, row, actor=actor)

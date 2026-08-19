@@ -92,7 +92,11 @@ def _assign_active_subject(db_session, teacher) -> ClassTeacher:  # noqa: ANN001
     )
     db_session.add(section)
     db_session.flush()
-    subject = Subject(name=f"Subject {uuid.uuid4().hex[:8]}")
+    # D30: `courses.code` is NOT NULL, so every course fixture carries one.
+    subject = Subject(
+        name=f"Subject {uuid.uuid4().hex[:8]}",
+        code=uuid.uuid4().hex[:8].upper(),
+    )
     db_session.add(subject)
     db_session.flush()
     cs = ClassSubject(class_id=section.id, subject_id=subject.id, is_active=True)

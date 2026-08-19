@@ -18,7 +18,17 @@ import type { Transcript, TranscriptSemester } from '../types';
  * TranscriptDocument — the printable multi-year transcript (design-system §7.10).
  * Year → semester → subject hierarchy inside `PrintLayout`; each academic year is a
  * `CollapsibleSection` (most recent expanded). The active semester is marked "current"
- * (⊙, not yet finalized). A cumulative mean (NOT a GPA) is shown at the foot.
+ * (⊙, not yet finalized).
+ *
+ * **D30 §D5 gave this document a real GPA at every level** — term, year and cumulative
+ * — and it is the FIRST figure at each, because a GPA is what a tertiary transcript is
+ * read for. The percentage means are kept beside it rather than replaced: they are a
+ * different measure (0-100 vs 0-4) that the school already had.
+ *
+ * Each GPA is recomputed from the underlying credits, never averaged from the level
+ * below, so a 6-credit summer block does not weigh the same as an 18-credit semester.
+ * The credits behind each figure are printed next to it so the arithmetic is checkable
+ * from the page.
  */
 export interface TranscriptDocumentProps {
   data: Transcript;
@@ -47,9 +57,16 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
             </Typography>
           )}
         </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {semester.term_average != null ? `Term avg ${semester.term_average.toFixed(1)}` : 'No grades yet'}
-        </Typography>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'baseline' }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {semester.gpa != null
+              ? `GPA ${semester.gpa.toFixed(2)} · ${semester.total_credits} cr`
+              : 'No credits yet'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {semester.term_average != null ? `avg ${semester.term_average.toFixed(1)}` : 'No grades yet'}
+          </Typography>
+        </Stack>
       </Stack>
 
       {semester.subjects.length === 0 ? (
@@ -62,7 +79,10 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 600 }} scope="col">
-                  Subject
+                  Course
+                </TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600 }} scope="col">
+                  Credits
                 </TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }} scope="col">
                   Score
@@ -78,7 +98,11 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
             <TableBody>
               {semester.subjects.map((row) => (
                 <TableRow key={row.subject.id}>
-                  <TableCell>{row.subject.name}</TableCell>
+                  <TableCell>
+                    {row.subject.code ? `${row.subject.code} — ` : ''}
+                    {row.subject.name}
+                  </TableCell>
+                  <TableCell align="right">{row.credits ?? '—'}</TableCell>
                   <TableCell align="right">
                     {row.numeric != null ? row.numeric.toFixed(1) : '—'}
                   </TableCell>
@@ -97,7 +121,8 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
 }
 
 export function TranscriptDocument({ data }: TranscriptDocumentProps) {
-  const { student, school, issued_at, years, cumulative_average } = data;
+  const { student, school, issued_at, years, cumulative_average, cumulative_gpa, total_credits } =
+    data;
 
   return (
     <PrintLayout
@@ -136,9 +161,16 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
               defaultExpanded={index === 0}
               title={year.academic_year.name}
               summary={
-                <Typography variant="body2" color="text.secondary">
-                  {year.year_average != null ? `Year avg ${year.year_average.toFixed(1)}` : ''}
-                </Typography>
+                <Stack direction="row" spacing={1.5} sx={{ alignItems: 'baseline' }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {year.gpa != null
+                      ? `GPA ${year.gpa.toFixed(2)} · ${year.total_credits} cr`
+                      : ''}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {year.year_average != null ? `avg ${year.year_average.toFixed(1)}` : ''}
+                  </Typography>
+                </Stack>
               }
             >
               {year.semesters.map((sem) => (
@@ -150,13 +182,26 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
           <Divider />
 
           <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', justifyContent: 'flex-end' }}>
-            <Typography variant="subtitle1">Cumulative average</Typography>
+            <Typography variant="subtitle1">Cumulative GPA</Typography>
             <Typography variant="h4" component="span">
+              {cumulative_gpa != null ? cumulative_gpa.toFixed(2) : '—'}
+            </Typography>
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right' }}>
+            Credit-weighted over {total_credits} enrolled credits across all years. Ungraded
+            courses count their credits and earn no quality points.
+          </Typography>
+
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', justifyContent: 'flex-end' }}>
+            <Typography variant="body2" color="text.secondary">
+              Cumulative average
+            </Typography>
+            <Typography variant="subtitle1" component="span">
               {cumulative_average != null ? cumulative_average.toFixed(1) : '—'}
             </Typography>
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'right' }}>
-            A plain mean of term averages across all years — not a GPA.
+            A plain mean of term averages — a percentage, not the GPA above.
           </Typography>
         </Stack>
       )}

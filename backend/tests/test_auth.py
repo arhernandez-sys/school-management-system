@@ -36,6 +36,7 @@ from app.core.timeutil import ensure_aware
 from app.modules.auth.models import LoginAttempt, RefreshSession
 from app.modules.settings.models import AuditLog
 from app.modules.users.models import User
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -444,7 +445,7 @@ class TestMe:
         prof = StudentProfile(
             user_id=user.id,
             student_number=f"S-{user.id.hex[:8]}",
-            full_name="Student One",
+            **split_name("Student One"),
             date_of_birth=date(2010, 1, 1),
             enrollment_date=date(2024, 9, 1),
         )

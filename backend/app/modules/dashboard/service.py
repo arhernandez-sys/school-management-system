@@ -81,7 +81,7 @@ from app.modules.settings.models import (
     GradingScaleBand,
     Semester,
 )
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
@@ -172,7 +172,13 @@ def _bands(db: Session, year: AcademicYear | None) -> tuple[list[calc.BandInput]
     ).all()
     return (
         [
-            calc.BandInput(letter=b.letter, min_score=_dec(b.min_score), is_passing=b.is_passing)
+            calc.BandInput(
+                letter=b.letter,
+                min_score=_dec(b.min_score),
+                is_passing=b.is_passing,
+                # D30 §D5 — the student dashboard's GPA needs it; see reports/_bands.
+                grade_point=_dec(b.grade_point),
+            )
             for b in rows
         ],
         _dec(scale.pass_mark),
@@ -464,7 +470,7 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
                 StudentProfile.deleted_at.is_(None),
                 StudentProfile.status == StudentStatus.ACTIVE,
             )
-            .order_by(StudentProfile.full_name.asc())
+            .order_by(*STUDENT_NAME_ORDER)
             .limit(_CARD_LIMIT)
         ).all()
     ]
@@ -951,15 +957,28 @@ def _student_payload(
             bands=bands,
             released_only=True,
         )
-    per_subject = [
-        t.numeric for t in calc.compute_term_grades_bulk(requests).values() if t.numeric is not None
-    ]
+    computed_terms = calc.compute_term_grades_bulk(requests)
+    per_subject = [t.numeric for t in computed_terms.values() if t.numeric is not None]
     term_average = None
     term_letter = None
     if per_subject:
         mean = sum(per_subject) / Decimal(len(per_subject))
         term_average = float(round(mean, 1))
         term_letter = calc.letter_for(mean, bands)
+
+    # Credit-weighted GPA (D30 §D5). Assembled here, computed by the one shared
+    # `calc.compute_gpa` — every offering the student sits contributes its credits, and
+    # one with no released grade contributes 0 quality points (decision #4).
+    credits_by_cs = {cs.id: subject.credits for cs, subject in offerings}
+    term_gpa = calc.compute_gpa(
+        [
+            calc.GpaEntry(
+                credits=_dec(credits_by_cs.get(cs_id)) or Decimal(0),
+                grade_point=calc.grade_point_for(term.letter, bands),
+            )
+            for cs_id, term in computed_terms.items()
+        ]
+    )
 
     recent_graded = [
         a
@@ -1026,6 +1045,8 @@ def _student_payload(
         stats=StudentStats(
             term_average=term_average,
             term_letter=term_letter,
+            gpa=_f(term_gpa.gpa),
+            total_credits=int(term_gpa.total_credits),
             attendance_rate=_summarize(own_statuses).pct_present,
             upcoming_count=len(upcoming_assessments),
         ),

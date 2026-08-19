@@ -55,7 +55,10 @@ export interface StudentPickerPage {
 // ── Report card ──────────────────────────────────────────────────────────────────
 export interface ReportCardSubjectRow {
   subject: SubjectRef;
+  /** Printed as "Instructor" on the BAJC layout (D30 §D13). */
   teacher: string | null;
+  /** The course's credit weight, and the weight behind `ReportCard.gpa` (D30 §D5). */
+  credits: number | null;
   numeric: number | null;
   letter: string | null;
   status: GradeReportStatus;
@@ -77,10 +80,28 @@ export interface ReportCard {
   year_group: string | null;
   semester: SemesterRef;
   school: SchoolIdentity;
+  /**
+   * The programme CODE, e.g. "BMAD" — the BAJC layout's `Program` label (D30 §D13).
+   * Null until a student is assigned a programme (Phase 4 §D12), so the document
+   * prints it blank today rather than inventing a value.
+   */
+  program_code: string | null;
+  /** `"<Term>, <Mon YYYY> - <Mon YYYY>"`, e.g. "Summer, July 2026 - August 2026". */
+  period: string | null;
+  /** The layout's `Block` label. Always null — its meaning is unconfirmed (plan §G item 3). */
+  block: string | null;
   subjects: ReportCardSubjectRow[];
   attendance_summary: AttendanceSummary;
   term_average: number | null;
   term_average_letter: string | null;
+  /**
+   * Credit-weighted GPA on the 4.00 scale (D30 §D5): total quality points over ALL
+   * enrolled credits, with ungraded courses contributing 0 points and their full
+   * credits. Sits BESIDE `term_average`, which is a 0-100 percentage — they answer
+   * different questions. Null when no credits participated.
+   */
+  gpa: number | null;
+  total_credits: number;
   is_frozen: boolean;
 }
 
@@ -88,6 +109,7 @@ export interface ReportCard {
 export interface TranscriptSubjectRow {
   subject: SubjectRef;
   teacher: string | null;
+  credits: number | null;
   numeric: number | null;
   letter: string;
 }
@@ -96,12 +118,22 @@ export interface TranscriptSemester {
   semester: SemesterRef;
   is_current: boolean;
   term_average: number | null;
+  /**
+   * Term GPA. Weighted over every credit enrolled that term, including courses absent
+   * from `subjects` because they never resolved to a grade — the transcript lists
+   * graded lines only, but the denominator is all enrolled credits (D30 decision #4).
+   */
+  gpa: number | null;
+  total_credits: number;
   subjects: TranscriptSubjectRow[];
 }
 
 export interface TranscriptYear {
   academic_year: { id: string; name: string; status: string };
   year_average: number | null;
+  /** Recomputed from the year's own credits, NOT averaged from its terms' GPAs. */
+  gpa: number | null;
+  total_credits: number;
   semesters: TranscriptSemester[];
 }
 
@@ -111,4 +143,7 @@ export interface Transcript {
   issued_at: string;
   years: TranscriptYear[];
   cumulative_average: number | null;
+  /** Again recomputed from the underlying credits, not averaged per-year. */
+  cumulative_gpa: number | null;
+  total_credits: number;
 }

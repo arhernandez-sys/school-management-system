@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.common.enums import AssessmentStatus, AssessmentType, GradeStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.rbac import _teacher_profile_id, assert_teacher_owns_class_subject
-from app.core.timeutil import utcnow
+from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments import release_nudge
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.classes.models import (
@@ -71,7 +71,7 @@ from app.modules.settings.models import (
     GradingScaleBand,
     Semester,
 )
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
@@ -132,6 +132,54 @@ def _assert_year_writable(db: Session, cs: ClassSubject) -> None:
         year = db.get(AcademicYear, section.academic_year_id)
         if year is not None and year.archived_at is not None:
             raise Conflict("The academic year is archived.", code="year_archived")
+
+
+def _grade_window_closed(db: Session, semester_id: uuid.UUID | None) -> tuple[bool, datetime | None]:
+    """`(closed, deadline)` for a term's grade-submission window (D30 §D6, brief §18).
+
+    NULL deadline → never closed. That is the state of every term in the school today
+    and the safe default: an invented cutoff would lock lecturers out of a live term.
+
+    `ensure_aware` is not optional here. The column is a MariaDB `DATETIME`, which
+    pymysql hands back timezone-NAIVE, and comparing that with `utcnow()` raises
+    `TypeError: can't compare offset-naive and offset-aware datetimes` — a 500 on the
+    save path rather than a clean 409.
+    """
+    if semester_id is None:
+        return False, None
+    deadline = ensure_aware(
+        db.scalar(select(Semester.grade_submission_deadline).where(Semester.id == semester_id))
+    )
+    if deadline is None:
+        return False, None
+    return utcnow() > deadline, deadline
+
+
+def _assert_grade_window_open(db: Session, assessment: Assessment, actor: User) -> None:
+    """409 `grade_window_closed` once the term's deadline has passed (D30 §D6).
+
+    Enforced HERE, in `upsert_grades`, because that is the single grade write path
+    (api-spec §7 — there is no `POST /grades`). Putting it in the router would leave
+    the freeze, the seeds and any future writer outside the rule.
+
+    **The Dean is exempt.** Note this arm is currently unreachable: the route is
+    `require_role(Role.TEACHER)` and `assert_teacher_owns_class_subject` would 404 a
+    Dean anyway, so no Dean can enter a grade at all today. It is written because the
+    rule belongs with the check rather than in a comment somewhere, and because the
+    intended post-deadline path is Phase 5's grade-revision workflow (§D7) — the Dean
+    approves a Lecturer's request, they do not type the mark themselves.
+    """
+    if actor.role == Role.PRINCIPAL:
+        return
+    closed, deadline = _grade_window_closed(db, assessment.semester_id)
+    if closed:
+        raise Conflict(
+            "The grade submission deadline for this term has passed.",
+            code="grade_window_closed",
+            # The date is the actionable part: a Lecturer needs to know whether they
+            # are an hour late or a month late before deciding whom to ask.
+            extra={"grade_submission_deadline": deadline.isoformat() if deadline else None},
+        )
 
 
 def _assert_readable(db: Session, actor: User, cs: ClassSubject) -> bool:
@@ -212,7 +260,14 @@ def _bands_for_section(db: Session, section: Class) -> tuple[list[calc.BandInput
         select(GradingScaleBand).where(GradingScaleBand.grading_scale_id == scale.id)
     ).all()
     bands = [
-        calc.BandInput(letter=b.letter, min_score=_dec(b.min_score), is_passing=b.is_passing)
+        calc.BandInput(
+            letter=b.letter,
+            min_score=_dec(b.min_score),
+            is_passing=b.is_passing,
+            # D30 §D5 — NULL on every seeded scale until Phase 3 fills it in.
+            # `calc.meets_grade_point` handles the absence; see its docstring.
+            grade_point=_dec(b.grade_point),
+        )
         for b in rows
     ]
     return bands, _dec(scale.pass_mark)
@@ -590,6 +645,10 @@ def get_gradebook(
             )
         )
 
+    window_closed, window_deadline = _grade_window_closed(
+        db, semester.id if semester is not None else None
+    )
+
     return Gradebook(
         class_subject=_cs_ref(cs, section, subject, _teacher_rows(db, [cs.id]).get(cs.id, [])),
         semester=(
@@ -631,6 +690,10 @@ def get_gradebook(
             any(ci.drop_lowest_count > 0 for ci in category_inputs) or uncategorized_drop > 0
         ),
         can_edit=can_edit,
+        # Reported for EVERY viewer, not just the one who can write: a Registrar asked
+        # "why can't the lecturer enter these?" needs to see the same closed window.
+        grade_window_closed=window_closed,
+        grade_submission_deadline=window_deadline,
         viewer_role=actor.role.value,
     )
 
@@ -651,6 +714,7 @@ def upsert_grades(
     assert_teacher_owns_class_subject(db, actor, assessment.class_subject_id)
     cs = db.get(ClassSubject, assessment.class_subject_id)
     _assert_year_writable(db, cs)
+    _assert_grade_window_open(db, assessment, actor)
 
     entries = payload.entries
     max_score = _dec(assessment.max_score) or Decimal(0)
@@ -1180,6 +1244,141 @@ def student_assessment_groups(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Completed-course results — the input to prerequisite validation (D30 §D4)
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class CourseResult:
+    """What a student ended up with in one COURSE, wherever that came from."""
+
+    course_id: uuid.UUID
+    numeric: Decimal | None
+    letter: str | None
+    #: The bands in force for the year the result was earned in — the caller needs
+    #: them to resolve a grade point, and a later scale edit must not reletter a
+    #: historical result (schema §10.4).
+    bands: list[calc.BandInput]
+    #: True when it came from a frozen `term_grade_snapshots` row rather than a
+    #: live computation. Surfaced so a 409 can say which it is.
+    is_frozen: bool
+
+
+def completed_course_results(
+    db: Session, *, student_id: uuid.UUID, exclude_semester_id: uuid.UUID | None = None
+) -> dict[uuid.UUID, CourseResult]:
+    """Every course this student has a RESULT for, keyed by course id (D30 §D4).
+
+    This lives here, not in the prerequisites module, for the reason the whole
+    module exists: the term grade must come from the single engine in `calc.py`,
+    and nothing recomputes that math locally (plan §C).
+
+    TWO SOURCES, and both are needed:
+
+      * **Frozen** `term_grade_snapshots`, written by the archive freeze. These are
+        the authority for any archived year — a later scale edit must not reletter
+        them.
+      * **Live** computation for years that have not been archived. Without this,
+        a student who finished Semester 1 of the CURRENT year would have no result
+        at all, and every prerequisite in the school would be unsatisfiable until
+        July.
+
+    `exclude_semester_id` drops enrolments in that term. The caller passes the term
+    being enrolled INTO, which is what stops a course from satisfying its own
+    prerequisite: sitting MATH2 alongside MATH1 this term is not having completed
+    MATH1. Frozen snapshots are filtered the same way for the same reason.
+
+    A frozen result wins over a live one for the same course — it is the archived
+    truth. Between two live results (a retake, or the same course sat in two terms)
+    the HIGHER numeric wins, which matches how a transcript reads a repeated course.
+
+    Authorization is the CALLER's job; this trusts `student_id`.
+    """
+    results: dict[uuid.UUID, CourseResult] = {}
+
+    # ── Live: every section the student sits/sat, outside the excluded term ──────
+    enrol_stmt = (
+        select(ClassEnrollment.class_id)
+        .where(ClassEnrollment.student_id == student_id)
+        .distinct()
+    )
+    if exclude_semester_id is not None:
+        enrol_stmt = enrol_stmt.where(ClassEnrollment.semester_id != exclude_semester_id)
+    section_ids = list(db.scalars(enrol_stmt).all())
+
+    if section_ids:
+        sections = list(
+            db.scalars(
+                select(Class).where(
+                    Class.id.in_(section_ids), Class.deleted_at.is_(None)
+                )
+            ).all()
+        )
+        for group in student_assessment_groups(
+            db, student_id=student_id, sections=sections
+        ):
+            if group.term_letter is None:
+                continue  # nothing participated — not a result, not a failure
+            numeric = _dec(group.term_numeric)
+            existing = results.get(group.subject_id)
+            if existing is not None and not existing.is_frozen:
+                if (existing.numeric or Decimal(0)) >= (numeric or Decimal(0)):
+                    continue
+            results[group.subject_id] = CourseResult(
+                course_id=group.subject_id,
+                numeric=numeric,
+                letter=group.term_letter,
+                bands=_bands_for_offering(db, group.class_subject_id),
+                is_frozen=False,
+            )
+
+    # ── Frozen: authoritative, so applied last and unconditionally ──────────────
+    snap_stmt = select(TermGradeSnapshot).where(
+        TermGradeSnapshot.student_id == student_id
+    )
+    if exclude_semester_id is not None:
+        snap_stmt = snap_stmt.where(
+            TermGradeSnapshot.semester_id != exclude_semester_id
+        )
+    for snap in db.scalars(snap_stmt).all():
+        existing = results.get(snap.subject_id)
+        numeric = _dec(snap.numeric_grade)
+        if (
+            existing is not None
+            and existing.is_frozen
+            and (existing.numeric or Decimal(0)) >= (numeric or Decimal(0))
+        ):
+            continue
+        results[snap.subject_id] = CourseResult(
+            course_id=snap.subject_id,
+            numeric=numeric,
+            letter=snap.letter_grade,
+            bands=_bands_for_offering(db, snap.class_subject_id),
+            is_frozen=True,
+        )
+
+    return results
+
+
+def _bands_for_offering(
+    db: Session, class_subject_id: uuid.UUID
+) -> list[calc.BandInput]:
+    """The grading bands in force for the YEAR an offering belongs to.
+
+    Resolved per offering rather than once, for the same reason
+    `student_assessment_groups` does it: results can span years, and applying one
+    year's scale to another year's grade would silently mislabel the letter — and
+    here, silently change whether a prerequisite is satisfied.
+    """
+    section = db.scalar(
+        select(Class)
+        .join(ClassSubject, ClassSubject.class_id == Class.id)
+        .where(ClassSubject.id == class_subject_id)
+    )
+    if section is None:
+        return []
+    return _bands_for_section(db, section)[0]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GET /grades/term
 # ──────────────────────────────────────────────────────────────────────────────
 def list_term_grades(
@@ -1281,7 +1480,7 @@ def list_term_grades(
                         ClassEnrollment.semester_id == semester.id,
                         ClassEnrollment.unenrolled_at.is_(None),
                     )
-                    .order_by(StudentProfile.full_name.asc())
+                    .order_by(*STUDENT_NAME_ORDER)
                 ).all()
             )
 

@@ -66,6 +66,7 @@ from app.modules.reports.schemas import (
     TranscriptSubjectRow,
     TranscriptYear,
 )
+from app.modules.programs.models import Program
 from app.modules.settings.models import (
     AcademicYear,
     AssessmentPolicy,
@@ -75,7 +76,7 @@ from app.modules.settings.models import (
     Semester,
 )
 from app.modules.settings.service import _logo_url_for
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
@@ -215,7 +216,15 @@ def _bands(db: Session, year_id: uuid.UUID | None) -> tuple[list[calc.BandInput]
     ).all()
     return (
         [
-            calc.BandInput(letter=b.letter, min_score=_dec(b.min_score), is_passing=b.is_passing)
+            calc.BandInput(
+                letter=b.letter,
+                min_score=_dec(b.min_score),
+                is_passing=b.is_passing,
+                # D30 §D5 — without this the GPA on every report card and transcript
+                # would be weightless, because `calc.grade_point_for` would answer
+                # None for every letter. NULL on an archived year's frozen scale.
+                grade_point=_dec(b.grade_point),
+            )
             for b in rows
         ],
         _dec(scale.pass_mark),
@@ -245,16 +254,24 @@ def _lead_teacher_names(db: Session, cs_ids: list[uuid.UUID]) -> dict[uuid.UUID,
 # Term-grade assembly (the core shared by report card, transcript, class grades)
 # ──────────────────────────────────────────────────────────────────────────────
 class _SubjectResult:
-    """One computed subject row before it is shaped for a specific document."""
+    """One computed subject row before it is shaped for a specific document.
 
-    __slots__ = ("cs_id", "subject_id", "subject_name", "subject_code", "numeric",
-                 "letter", "fully_released")
+    `credits` (D30 §D5) is the course's credit weight, and it is carried HERE rather
+    than resolved per document because this class is the single supplier of per-subject
+    figures to the report card, the transcript, the class-grades report AND the
+    archival freeze. A GPA computed from credits fetched somewhere else would be a
+    second implementation of the rule.
+    """
 
-    def __init__(self, cs_id, subject_id, subject_name, subject_code, numeric, letter, fully_released):  # noqa: ANN001
+    __slots__ = ("cs_id", "subject_id", "subject_name", "subject_code", "credits",
+                 "numeric", "letter", "fully_released")
+
+    def __init__(self, cs_id, subject_id, subject_name, subject_code, credits, numeric, letter, fully_released):  # noqa: ANN001
         self.cs_id = cs_id
         self.subject_id = subject_id
         self.subject_name = subject_name
         self.subject_code = subject_code
+        self.credits = credits
         self.numeric = numeric
         self.letter = letter
         self.fully_released = fully_released
@@ -314,6 +331,11 @@ def _subject_results(
             results.append(
                 _SubjectResult(
                     cs.id, subject.id, subject.name, subject.code or "",
+                    # Credits come from the SNAPSHOT, falling back to the live course
+                    # only for rows frozen before D30 Phase 3 (which have NULL). A
+                    # later credit edit must not move an issued report card — that is
+                    # the whole point of freezing them (schema §10.4).
+                    snap.credits if snap.credits is not None else subject.credits,
                     _dec(snap.numeric_grade), snap.letter_grade,
                     # A frozen figure is final; release state no longer gates it.
                     True,
@@ -415,13 +437,72 @@ def _subject_results(
     computed = calc.compute_term_grades_bulk(requests)
     results = [
         _SubjectResult(
-            cs.id, subject.id, subject.name, subject.code or "",
+            cs.id, subject.id, subject.name, subject.code or "", subject.credits,
             computed[cs.id].numeric, computed[cs.id].letter, released_flags[cs.id],
         )
         for cs, subject in offerings
     ]
     results.sort(key=lambda r: r.subject_name)
     return results
+
+
+def _gpa_entries(
+    results: list[_SubjectResult],
+    bands: list[calc.BandInput],
+    *,
+    exclude_cs_ids: set[uuid.UUID] | None = None,
+) -> list[calc.GpaEntry]:
+    """Turn computed subject rows into `calc.GpaEntry` rows (D30 §D5).
+
+    The only assembly step; the arithmetic itself is `calc.compute_gpa` and is never
+    reimplemented here (plan §C: never duplicate grade logic into a service).
+
+    **Every enrolled row is included**, graded or not (decision #4). A row with no
+    letter, or one whose letter the scale cannot price, resolves to
+    `grade_point=None` → 0 quality points with its credits still counted. That is
+    exactly what makes the sample report card print 2.1 instead of 3.50.
+
+    `exclude_cs_ids` is for the student-facing card: a subject held back as `pending`
+    must not leak its grade through the GPA, so it is scored as ungraded rather than
+    dropped — dropping it would shrink the denominator and let the student solve for
+    the hidden mark.
+    """
+    excluded = exclude_cs_ids or set()
+    return [
+        calc.GpaEntry(
+            credits=_dec(r.credits) or Decimal(0),
+            grade_point=(
+                None if r.cs_id in excluded else calc.grade_point_for(r.letter, bands)
+            ),
+        )
+        for r in results
+    ]
+
+
+def _period_for(semester: Semester) -> str:
+    """The BAJC report card's `Period` label (D30 §D13).
+
+    `"<Term>, <Mon YYYY> - <Mon YYYY>"`, reproducing the sample's
+    `Summer, July 2026 - August 2026`. Built from the term's own dates rather than the
+    academic year's, because BAJC's Summer block legitimately falls outside its year
+    (see the Phase 2B note on why terms are not date-validated against their year).
+    """
+    start = semester.start_date.strftime("%B %Y")
+    end = semester.end_date.strftime("%B %Y")
+    return f"{semester.name}, {start} - {end}"
+
+
+def _program_code_for(db: Session, student: StudentProfile) -> str | None:
+    """The student's programme CODE, e.g. `BMAD`, or `None` when unassigned.
+
+    Every `student_profiles.program_id` is NULL today — assigning a student to a
+    programme needs `student_program_history` so a change never destroys history, and
+    that is Phase 4 §D12. The lookup is wired now so the label fills itself in the
+    moment Phase 4 lands, rather than the printed document silently omitting a field.
+    """
+    if student.program_id is None:
+        return None
+    return db.scalar(select(Program.code).where(Program.id == student.program_id))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -446,7 +527,7 @@ def list_students(
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
         db.scalars(
-            stmt.order_by(StudentProfile.full_name.asc())
+            stmt.order_by(*STUDENT_NAME_ORDER)
             .limit(params.page_size)
             .offset((params.page - 1) * params.page_size)
         ).all()
@@ -487,6 +568,7 @@ def _build_report_card(
 
     subjects: list[ReportCardSubjectRow] = []
     graded_numerics: list[Decimal] = []
+    gpa = calc.compute_gpa(())
 
     if sections:
         results = _subject_results(
@@ -494,16 +576,20 @@ def _build_report_card(
             year=year, frozen=frozen,
         )
         teachers = _lead_teacher_names(db, [r.cs_id for r in results])
+        withheld: set[uuid.UUID] = set()
         for r in results:
             # AC 5.5 — a student's card shows `pending` for a subject that still has
             # unreleased graded work, rather than printing a partial average.
             pending = release_filter and not r.fully_released
+            if pending:
+                withheld.add(r.cs_id)
             subjects.append(
                 ReportCardSubjectRow(
                     subject=ReportSubjectRef(
                         id=r.subject_id, name=r.subject_name, code=r.subject_code
                     ),
                     teacher=teachers.get(r.cs_id),
+                    credits=r.credits,
                     numeric=None if pending else _f(r.numeric),
                     letter=None if pending else r.letter,
                     status="pending" if pending else "graded",
@@ -511,6 +597,9 @@ def _build_report_card(
             )
             if not pending and r.numeric is not None:
                 graded_numerics.append(r.numeric)
+
+        # Over EVERY enrolled row, ungraded and withheld included (decision #4).
+        gpa = calc.compute_gpa(_gpa_entries(results, bands, exclude_cs_ids=withheld))
 
     term_average = _mean(graded_numerics)
 
@@ -532,6 +621,9 @@ def _build_report_card(
         year_group=student.year_group,
         semester=_semester_ref(db, semester),
         school=_school(db),
+        program_code=_program_code_for(db, student),
+        period=_period_for(semester),
+        # `block` is deliberately left at its None default — plan §G item 3.
         subjects=subjects,
         attendance_summary=ReportAttendanceSummary(
             pct_present=counts.pct_present,
@@ -541,6 +633,8 @@ def _build_report_card(
         ),
         term_average=_f(term_average),
         term_average_letter=calc.letter_for(term_average, bands) if term_average is not None else None,
+        gpa=_f(gpa.gpa),
+        total_credits=int(gpa.total_credits),
         is_frozen=frozen,
     )
 
@@ -628,9 +722,14 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
 
     out_years: list[TranscriptYear] = []
     all_term_averages: list[Decimal] = []
+    # GPA entries accumulate at every level and each level's figure is computed from
+    # its OWN credits (D30 §D5). Averaging the level below would weight a 6-credit
+    # summer block equally with an 18-credit semester.
+    all_gpa_entries: list[calc.GpaEntry] = []
 
     for year in years_rows:
         frozen = year.archived_at is not None
+        bands, _pass_mark = _bands(db, year.id)
         semesters = list(
             db.scalars(
                 select(Semester)
@@ -640,17 +739,24 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
         )
         out_semesters: list[TranscriptSemester] = []
         year_term_averages: list[Decimal] = []
+        year_gpa_entries: list[calc.GpaEntry] = []
 
         for semester in semesters:
             sections = _classes_for(db, student.id, semester.id)
             rows: list[TranscriptSubjectRow] = []
             numerics: list[Decimal] = []
+            term_gpa_entries: list[calc.GpaEntry] = []
             if sections:
                 results = _subject_results(
                     db, student_id=student.id, sections=sections, semester=semester,
                     year=year, frozen=frozen,
                 )
                 teachers = _lead_teacher_names(db, [r.cs_id for r in results])
+                # BEFORE the filter below: the transcript LISTS only graded lines, but
+                # the GPA denominator is every enrolled credit (decision #4). Building
+                # these from `rows` would silently drop the ungraded courses and print
+                # a graded-only mean.
+                term_gpa_entries = _gpa_entries(results, bands)
                 for r in results:
                     # A transcript lists only lines that resolved to a grade.
                     if r.numeric is None:
@@ -661,6 +767,7 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
                                 id=r.subject_id, name=r.subject_name, code=r.subject_code
                             ),
                             teacher=teachers.get(r.cs_id),
+                            credits=r.credits,
                             numeric=_f(r.numeric),
                             letter=r.letter or "",
                         )
@@ -678,11 +785,36 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
             term_average = _mean(numerics)
             if term_average is not None:
                 year_term_averages.append(term_average)
+
+            # A term contributes credits to the year and cumulative GPA only once at
+            # least ONE of its courses has resolved to a grade.
+            #
+            # This is not a softening of decision #4 — within a term that has started
+            # being marked, every enrolled credit still counts and the ungraded ones
+            # still earn nothing. It excludes only the term where NOTHING is marked yet,
+            # and it has to, for two reasons:
+            #
+            #   * The transcript keeps the CURRENT term even with no rows (`is_current`
+            #     below), so an in-progress term would otherwise halve a cumulative GPA
+            #     the moment a student registered for it — before a single mark existed.
+            #   * `_classes_for` falls back to the student's whole enrolment history when
+            #     they have no enrolment in the requested term, so a term they never sat
+            #     can return their courses and hand over phantom credits.
+            #
+            # Unlike the report card, which prints every row it counted, a cumulative GPA
+            # cannot be checked against the page — so an unexplainable denominator there
+            # is a defect rather than a curiosity. The report card keeps 0.00 for a fully
+            # unmarked term, where the breakdown is visible.
+            term_gpa = calc.compute_gpa(term_gpa_entries) if rows else calc.compute_gpa(())
+            if rows:
+                year_gpa_entries.extend(term_gpa_entries)
             out_semesters.append(
                 TranscriptSemester(
                     semester=_semester_ref(db, semester),
                     is_current=is_current,
                     term_average=_f(term_average),
+                    gpa=_f(term_gpa.gpa),
+                    total_credits=int(term_gpa.total_credits),
                     subjects=rows,
                 )
             )
@@ -690,6 +822,8 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
         if not out_semesters:
             continue
         all_term_averages.extend(year_term_averages)
+        all_gpa_entries.extend(year_gpa_entries)
+        year_gpa = calc.compute_gpa(year_gpa_entries)
         out_years.append(
             TranscriptYear(
                 academic_year=ReportAcademicYearRef(
@@ -698,16 +832,21 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
                     status=year.status.value if hasattr(year.status, "value") else year.status,
                 ),
                 year_average=_f(_mean(year_term_averages)),
+                gpa=_f(year_gpa.gpa),
+                total_credits=int(year_gpa.total_credits),
                 semesters=out_semesters,
             )
         )
 
+    cumulative = calc.compute_gpa(all_gpa_entries)
     return Transcript(
         student=_student_ref(db, student),
         school=_school(db),
         issued_at=utcnow(),
         years=out_years,
         cumulative_average=_f(_mean(all_term_averages)),
+        cumulative_gpa=_f(cumulative.gpa),
+        total_credits=int(cumulative.total_credits),
     )
 
 
@@ -749,7 +888,7 @@ def get_class_grades(
                 ClassEnrollment.unenrolled_at.is_(None),
                 StudentProfile.deleted_at.is_(None),
             )
-            .order_by(StudentProfile.full_name.asc())
+            .order_by(*STUDENT_NAME_ORDER)
         ).all()
     )
 

@@ -35,6 +35,7 @@ from app.modules.reports.models import ReportCardSnapshot
 from app.modules.settings.models import AcademicYear, GradingScaleBand, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -97,7 +98,7 @@ class _TinyYear:
         )
 
         self.student = StudentProfile(
-            student_number=f"FS-{tag}", full_name="Freeze Student",
+            student_number=f"FS-{tag}", **split_name("Freeze Student"),
             date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1),
             status="active",
         )
@@ -252,6 +253,98 @@ class TestFreezeWrites:
         resp = client.post(_archive_path(year.id), headers=principal_headers)
         assert resp.status_code == 202
         assert resp.json()["snapshots_written"] == 0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestFreezeGpaInputs:
+    """D30 §D5 — the freeze captures the grade point and the credit weight, not just
+    the letter. A GPA is only reproducible from both, so an issued report card must
+    survive a later credit edit or a re-priced band."""
+
+    def _price_the_bands(self, db_session, year_id) -> None:
+        """Give the year's bands grade points (the fixture's scale ships NULLs)."""
+        from app.modules.settings.models import GradingScale
+
+        scale = db_session.scalar(
+            select(GradingScale).where(GradingScale.academic_year_id == year_id)
+        )
+        points = {"A": "4.00", "B": "3.00", "C": "2.00", "D": "1.00", "F": "0.00"}
+        for band in db_session.scalars(
+            select(GradingScaleBand).where(GradingScaleBand.grading_scale_id == scale.id)
+        ).all():
+            band.grade_point = Decimal(points[band.letter])
+        db_session.flush()
+
+    def test_grade_point_credits_and_quality_points_are_frozen(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        g = tiny(score="90")  # 90 -> A on the fixture's scale
+        self._price_the_bands(db_session, g.year.id)
+        g.subject.credits = 4
+        db_session.flush()
+
+        assert client.post(_archive_path(g.year.id), headers=principal_headers).json()[
+            "snapshots_written"
+        ] == 1
+
+        db_session.expire_all()
+        snap = db_session.scalar(
+            select(TermGradeSnapshot).where(
+                TermGradeSnapshot.student_id == g.student.id,
+                TermGradeSnapshot.semester_id == g.semester.id,
+            )
+        )
+        assert snap.letter_grade == "A"
+        assert float(snap.grade_point) == 4.00
+        assert snap.credits == 4
+        # 4.00 x 4 credits.
+        assert float(snap.quality_points) == 16.00
+
+    def test_an_unpriced_scale_freezes_null_not_zero(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        """A scale with no grade points cannot price the letter, and NULL says so.
+
+        Freezing 0.00 instead would record an F the student never earned, and would then
+        be indistinguishable from a real F forever — the freeze is the last chance to get
+        this right.
+        """
+        g = tiny(score="90")
+        assert client.post(_archive_path(g.year.id), headers=principal_headers).json()[
+            "snapshots_written"
+        ] == 1
+
+        db_session.expire_all()
+        snap = db_session.scalar(
+            select(TermGradeSnapshot).where(
+                TermGradeSnapshot.student_id == g.student.id,
+                TermGradeSnapshot.semester_id == g.semester.id,
+            )
+        )
+        assert snap.grade_point is None
+        assert snap.quality_points is None
+        # Credits are known regardless of whether the letter can be priced.
+        assert snap.credits == 3
+
+    def test_a_later_credit_edit_does_not_move_the_frozen_card(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        """The whole reason credits are frozen. Re-crediting a course from 3 to 9 after
+        archival must leave the issued document reading 3."""
+        g = tiny(score="90")
+        self._price_the_bands(db_session, g.year.id)
+        client.post(_archive_path(g.year.id), headers=principal_headers)
+
+        g.subject.credits = 9
+        db_session.flush()
+        db_session.expire_all()
+
+        body = client.get(
+            _card_path(g.student.id, g.semester.id), headers=principal_headers
+        ).json()
+        assert body["is_frozen"] is True
+        assert body["total_credits"] == 3
+        assert [r["credits"] for r in body["subjects"]] == [3]
 
 
 # ════════════════════════════════════════════════════════════════════════════

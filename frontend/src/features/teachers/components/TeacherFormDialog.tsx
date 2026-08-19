@@ -196,7 +196,7 @@ export function TeacherFormDialog({
           fullWidth
         />
         <TextField
-          label="Subject specializations"
+          label="Course specializations"
           value={specializations}
           onChange={(e) => setSpecializations(e.target.value)}
           fullWidth
@@ -238,7 +238,7 @@ export function TeacherFormDialog({
               value={designation}
               onChange={(e) => setDesignation(e.target.value)}
               fullWidth
-              helperText="e.g. Senior Teacher, Head of Department."
+              helperText="e.g. Senior Lecturer, Head of Department."
             />
             <TextField
               label="Education (optional)"
