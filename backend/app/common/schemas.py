@@ -97,25 +97,19 @@ class TeacherRef(BaseModel):
     full_name: str
 
 
-class ClassRef(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
-    name: str
-    grade_level: str
-    section: str | None = None
+class CourseRef(BaseModel):
+    """A catalog entry — what is taught. Renamed from `SubjectRef` by D31.
 
+    `credits` is included because almost every screen that names a course also shows
+    what it is worth, and credits live ONLY here: an offering never carries them (D31,
+    and the reason the credit-weighted GPA is trustworthy).
+    """
 
-class SubjectRef(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     name: str
     code: str | None = None
-
-
-class ClassSubjectRef(BaseModel):
-    class_subject_id: UUID
-    class_ref: ClassRef
-    subject: SubjectRef
+    credits: int | None = None
 
 
 class SemesterRef(BaseModel):
@@ -124,6 +118,27 @@ class SemesterRef(BaseModel):
     name: str
     sequence: int
     is_active: bool
+
+
+class OfferingRef(BaseModel):
+    """A course scheduled in a term — replaces both `ClassRef` and `ClassSubjectRef`.
+
+    D31 merged those two. `ClassRef` described a HOMEROOM (`name` "Form 1A",
+    `grade_level` "Form 1", `section` "A") and `ClassSubjectRef` wrapped it together with
+    the subject it taught, because a homeroom taught many. An offering teaches exactly one
+    course, so one ref covers it.
+
+    `label` is the display string (`offering_label`: "MATH1110-01") and is sent rather
+    than assembled client-side, so the backend and the demo handlers cannot disagree about
+    how an offering is named — the same reasoning that put the GPA in one function.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    course: CourseRef
+    semester: SemesterRef | None = None
+    section_code: str | None = None
+    label: str
 
 
 class AcademicYearRef(BaseModel):

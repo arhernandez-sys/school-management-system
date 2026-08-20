@@ -2,14 +2,14 @@
  * Attendance data hooks (TanStack Query). Own the query-key identity + cache
  * invalidation for the attendance feature; the transport lives in api/attendanceApi.
  *
- * Query keys include their inputs (section + date) so the cache stays correct as the
- * teacher switches sections/dates. The save mutation invalidates the affected register
- * and that section's summary so both screens reflect the new record immediately.
+ * Query keys include their inputs (offering + date) so the cache stays correct as the
+ * lecturer switches offerings/dates. The save mutation invalidates the affected register
+ * and that offering's summary so both screens reflect the new record immediately.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getAttendanceRegister,
-  getAttendanceSections,
+  getAttendanceOfferings,
   getAttendanceSummary,
   getMyAttendance,
   putAttendanceRegister,
@@ -17,42 +17,42 @@ import {
 
 export const attendanceKeys = {
   all: ['attendance'] as const,
-  sections: (academicYearId?: string | null) =>
-    [...attendanceKeys.all, 'sections', academicYearId ?? null] as const,
-  register: (sectionId: string, date: string) =>
-    [...attendanceKeys.all, 'register', sectionId, date] as const,
-  summary: (sectionId: string) => [...attendanceKeys.all, 'summary', sectionId] as const,
+  offerings: (academicYearId?: string | null) =>
+    [...attendanceKeys.all, 'offerings', academicYearId ?? null] as const,
+  register: (offeringId: string, date: string) =>
+    [...attendanceKeys.all, 'register', offeringId, date] as const,
+  summary: (offeringId: string) => [...attendanceKeys.all, 'summary', offeringId] as const,
   // Both period ids are in the key so the global switcher refetches rather than
   // re-serving the previous period.
   me: (academicYearId?: string | null, semesterId?: string | null) =>
     [...attendanceKeys.all, 'me', academicYearId ?? null, semesterId ?? null] as const,
 };
 
-/** Sections the caller may view/record (drives the section picker), year-scoped. */
-export function useAttendanceSections(academicYearId?: string) {
+/** Offerings the caller may view/record (drives the picker), year-scoped. */
+export function useAttendanceOfferings(academicYearId?: string) {
   return useQuery({
-    queryKey: attendanceKeys.sections(academicYearId),
-    queryFn: ({ signal }) => getAttendanceSections(academicYearId, signal),
-    staleTime: 5 * 60 * 1000, // sections rarely change within a demo session
+    queryKey: attendanceKeys.offerings(academicYearId),
+    queryFn: ({ signal }) => getAttendanceOfferings(academicYearId, signal),
+    staleTime: 5 * 60 * 1000, // offerings rarely change within a demo session
   });
 }
 
-/** The daily register for a (section, date). Disabled until a section is chosen. */
-export function useAttendanceRegister(sectionId: string | null, date: string) {
+/** The daily register for an (offering, date). Disabled until an offering is chosen. */
+export function useAttendanceRegister(offeringId: string | null, date: string) {
   return useQuery({
-    queryKey: attendanceKeys.register(sectionId ?? '', date),
-    queryFn: ({ signal }) => getAttendanceRegister({ section_id: sectionId!, date }, signal),
-    enabled: Boolean(sectionId) && Boolean(date),
-    placeholderData: (prev) => prev, // avoid a flash when switching date/section
+    queryKey: attendanceKeys.register(offeringId ?? '', date),
+    queryFn: ({ signal }) => getAttendanceRegister({ offering_id: offeringId!, date }, signal),
+    enabled: Boolean(offeringId) && Boolean(date),
+    placeholderData: (prev) => prev, // avoid a flash when switching date/offering
   });
 }
 
-/** Per-section attendance summary over the seeded window. */
-export function useAttendanceSummary(sectionId: string | null) {
+/** Per-offering attendance summary over the seeded window. */
+export function useAttendanceSummary(offeringId: string | null) {
   return useQuery({
-    queryKey: attendanceKeys.summary(sectionId ?? ''),
-    queryFn: ({ signal }) => getAttendanceSummary(sectionId!, signal),
-    enabled: Boolean(sectionId),
+    queryKey: attendanceKeys.summary(offeringId ?? ''),
+    queryFn: ({ signal }) => getAttendanceSummary(offeringId!, signal),
+    enabled: Boolean(offeringId),
   });
 }
 
@@ -64,16 +64,16 @@ export function useMyAttendance(academicYearId?: string, semesterId?: string) {
   });
 }
 
-/** Save (bulk upsert) the register; invalidates that register + the section summary. */
+/** Save (bulk upsert) the register; invalidates that register + the offering summary. */
 export function useSaveAttendance() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: putAttendanceRegister,
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({
-        queryKey: attendanceKeys.register(variables.section_id, variables.date),
+        queryKey: attendanceKeys.register(variables.offering_id, variables.date),
       });
-      void qc.invalidateQueries({ queryKey: attendanceKeys.summary(variables.section_id) });
+      void qc.invalidateQueries({ queryKey: attendanceKeys.summary(variables.offering_id) });
     },
   });
 }

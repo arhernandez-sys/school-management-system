@@ -119,8 +119,9 @@ export interface DemoProgramCourse {
   is_required: boolean;
 }
 
-// ── Subject catalog (api-spec §5b) ──────────────────────────────────────────────
-export interface DemoSubject {
+// ── Course catalog (api-spec §5b) ───────────────────────────────────────────────
+/** D31 renamed this from `DemoSubject`, with `/subjects` → `/courses`. */
+export interface DemoCourse {
   id: string;
   name: string;
   /**
@@ -131,39 +132,63 @@ export interface DemoSubject {
   /**
    * D30 §D2 — the field the whole catalog cutover was for. Until a stored grade could
    * reach a credit value, credit-weighted GPA and credits-earned were impossible
-   * (plan §B3). Still 3 across the board here: this dataset is the pre-D30
-   * high-school one and is rebuilt against the BAJC sequences in Phase 2D.
+   * (plan §B3). Real per-course values, from the BAJC 26/27 sequences.
    */
   credits: number;
   component: 'GEC' | 'SEC' | 'CEC' | null;
   is_active: boolean;
 }
 
-// ── Subject classes (D29) ───────────────────────────────────────────────────────
+// ── Course offerings (D31) ──────────────────────────────────────────────────────
 /**
- * One SUBJECT CLASS — "Math-1". Named `DemoSection` still because it maps to the
- * `classes` table and the wire field is `section_id` throughout; what changed under D29 is
- * what a row MEANS. It used to be a homeroom teaching many subjects; it is now one subject,
- * one teacher set, one weekly slot, one roster — and a student belongs to several.
+ * One COURSE OFFERING — "MATH1110-01, Semester 1".
+ *
+ * **This ONE row replaces the two D29 tables**, `DemoSection` (which mapped to `classes`,
+ * a homeroom scoped to an academic YEAR) and `DemoClassSubject` (the join that existed only
+ * because a homeroom taught ~7 subjects). One offering teaches one course, so the join
+ * collapsed to a column and the two ids collapsed to one.
+ *
+ * What went, and why each mattered:
+ *  - **`name`** — an offering stores none. Its label derives from course code + section +
+ *    term, and it is derived in ONE place (`offeringLabel` in the selectors) exactly as the
+ *    server derives it in `offerings/labels.py`. Storing it would be a second home for one
+ *    fact, and the demo would then be able to disagree with the API about what a thing is
+ *    called.
+ *  - **`grade_level`** — the Form the homeroom was for. `varchar(50) NOT NULL`, so every
+ *    offering had to declare one even where the concept did not apply.
+ *  - **`section`** / **`homeroom_label`** — the division letter and its display label.
+ *    `section_code` is a different thing: "01"/"02" for PARALLEL SECTIONS of one course.
+ *  - **`academic_year_id`** — replaced by `semester_id`. This is the whole point of D31: a
+ *    year-scoped row cannot say "MATH1110 runs in Semester 1 AND again in Semester 2".
+ *
+ * Identity is `(course_id, semester_id, section_code)`, and a NULL `section_code` counts as
+ * a section — so two unsectioned offerings of one course in one term collide, matching the
+ * `COALESCE` in the real unique index.
  */
-export interface DemoSection {
+export interface DemoOffering {
   id: string;
-  academic_year_id: string;
-  name: string; // e.g. "Math-1"
-  grade_level: string; // the YEAR GROUP the class is for, e.g. "Lower 6"
-  section: string | null; // division letter; usually null for a sixth-form subject class
-  homeroom_label: string | null; // legacy display label; null under D29
-  capacity: number;
+  course_id: string;
+  /** Replaces `academic_year_id`. The year is a hop through the semester. */
+  semester_id: string;
+  /** "01", "02" for parallel sections; null when the course has only one. */
+  section_code: string | null;
+  capacity: number | null;
   is_archived: boolean;
+  /** Assigned lecturer(s); the lead is named separately, not implied by position. */
+  teacher_ids: string[];
+  lead_teacher_id: string | null;
+  /** Lecturer-set stored drop-lowest fallback (D25); 0 = none. */
+  drop_lowest_count: number;
 }
 
-// ── Weekly meetings: when and where a subject class meets ───────────────────────
-export interface DemoClassMeeting {
+// ── Weekly meetings: when and where an offering meets ───────────────────────────
+export interface DemoOfferingMeeting {
   id: string;
-  class_subject_id: string;
+  offering_id: string;
   day_of_week: 1 | 2 | 3 | 4 | 5; // ISO: 1 = Mon … 5 = Fri
   start_time: string; // "HH:MM:SS"
   end_time: string;
+  /** Per MEETING: one course can meet in a lecture room Monday and a lab Wednesday. */
   room: string | null;
 }
 
@@ -212,10 +237,11 @@ export interface DemoStudent {
   address: string;
   phone: string;
   /**
-   * The student's own level — "Year 1" / "Year 2" (D29). Distinct from a class's
-   * `grade_level`, which says which level the CLASS is for.
+   * The student's own level. D30 renamed this from `year_group` and narrowed it to
+   * `enum('First','Second')` — the two BAJC years — so free text is off-contract. It is no
+   * longer distinct from anything on an offering, because an offering has no level at all.
    */
-  year_group: string | null;
+  year_of_study: 'First' | 'Second' | null;
   /**
    * The BAJC programme the student is registered on (D30 §D12). Real on the demo
    * dataset from Phase 2D so programme-scoped rules — the per-programme pass mark and
@@ -226,30 +252,18 @@ export interface DemoStudent {
    */
   program_id: string | null;
   /**
-   * NOTE: there is deliberately no `section_id` here any more. It was a convenience
-   * denormalization of "the student's ONE current section", and under D29 a student sits
-   * many subject classes — any single-class field would be an arbitrary pick. Enrollment is
-   * read from `enrollments` (see `sectionsForStudent` in selectors).
+   * NOTE: there is deliberately no `section_id`/`offering_id` here. It was a convenience
+   * denormalization of "the student's ONE current section", and a student sits many
+   * offerings — any single-offering field would be an arbitrary pick. Enrollment is read
+   * from `enrollments` (see `offeringsForStudent` in selectors).
    */
 }
 
-// ── class_subjects: a subject taught within a section, with its teacher(s) ────────
-export interface DemoClassSubject {
-  id: string; // class_subject_id
-  section_id: string;
-  subject_id: string;
-  teacher_ids: string[]; // assigned teacher(s); first = lead
-  lead_teacher_id: string | null;
-  is_active: boolean;
-  /** Teacher-set stored drop-lowest fallback (D25); 0 = none. */
-  drop_lowest_count: number;
-}
-
-// ── Enrollment: student ↔ section for a semester ────────────────────────────────
+// ── Enrollment: student ↔ offering for a semester ────────────────────────────────
 export interface DemoEnrollment {
   id: string; // enrollment_id
   student_id: string;
-  section_id: string;
+  offering_id: string;
   semester_id: string;
   enrolled_at: string; // RFC3339
   unenrolled_at: string | null; // null = active member
@@ -258,7 +272,7 @@ export interface DemoEnrollment {
 // ── Assessment categories (optional weighting groups) ───────────────────────────
 export interface DemoAssessmentCategory {
   id: string;
-  class_subject_id: string;
+  offering_id: string;
   name: string; // e.g. "Quizzes"
   weight: number; // 0..1 relative weight
   drop_lowest_count: number;
@@ -267,7 +281,12 @@ export interface DemoAssessmentCategory {
 // ── Assessments (assessment-first) ──────────────────────────────────────────────
 export interface DemoAssessment {
   id: string;
-  class_subject_id: string;
+  offering_id: string;
+  /**
+   * Kept alongside `offering_id` even though it is now derivable from it — the real schema
+   * keeps it too, because `term_grade_snapshots` is a frozen record where denormalisation
+   * is correct and dropping it from assessments would widen the refactor.
+   */
   semester_id: string;
   category_id: string | null;
   title: string;
@@ -291,10 +310,10 @@ export interface DemoAssessmentGrade {
   is_released: boolean | null; // null => inherit assessment.is_released
 }
 
-// ── Attendance (per-section, per-day) ───────────────────────────────────────────
+// ── Attendance (per-offering, per-day) ──────────────────────────────────────────
 export interface DemoAttendanceRecord {
   id: string;
-  section_id: string;
+  offering_id: string;
   student_id: string;
   enrollment_id: string;
   semester_id: string;
@@ -309,8 +328,13 @@ export interface DemoAnnouncement {
   id: string;
   title: string;
   body: string;
+  /**
+   * The `'class'` member of the enum is KEPT on purpose: it is a wire value shared by the
+   * ORM, the API and these handlers, and renaming an enum member is a migration, not a
+   * relabel. The TARGET it points at is an offering now.
+   */
   audience: AnnouncementAudience;
-  section_id: string | null; // required iff audience=class
+  offering_id: string | null; // required iff audience=class
   author_user_id: string;
   published_at: string; // RFC3339
   expires_at: string | null;
@@ -558,15 +582,14 @@ export interface DemoDataset {
   school_profile: DemoSchoolProfile;
   academic_years: DemoAcademicYear[];
   semesters: DemoSemester[];
-  subjects: DemoSubject[];
+  courses: DemoCourse[];
   programs: DemoProgram[];
   program_courses: DemoProgramCourse[];
   course_prerequisites: DemoCoursePrerequisite[];
-  sections: DemoSection[];
+  offerings: DemoOffering[];
   teachers: DemoTeacher[];
   students: DemoStudent[];
-  class_subjects: DemoClassSubject[];
-  class_meetings: DemoClassMeeting[];
+  offering_meetings: DemoOfferingMeeting[];
   enrollments: DemoEnrollment[];
   assessment_categories: DemoAssessmentCategory[];
   assessments: DemoAssessment[];

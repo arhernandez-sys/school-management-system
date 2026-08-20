@@ -25,8 +25,9 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
+import { strings } from '@i18n/strings';
 import { useCreateStudent, useStudentsList } from './hooks/useStudents';
-import { useClassOptions, useYearGroupOptions } from './hooks/useSections';
+import { useOfferingOptions, YEAR_OF_STUDY_OPTIONS } from './hooks/useOfferingOptions';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import type { StudentListItem, StudentWritePayload, StudentsListParams } from './types';
 import type { StudentStatus } from '@shared/types/enums';
@@ -63,8 +64,8 @@ export function StudentsListPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
   const [status, setStatus] = useState<StudentStatus | ''>('');
-  const [classId, setClassId] = useState('');
-  const [yearGroup, setYearGroup] = useState('');
+  const [offeringId, setOfferingId] = useState('');
+  const [yearOfStudy, setYearOfStudy] = useState('');
   // D30 §D10: the register is ordered by SURNAME then given name. `last_name` is the
   // API's spelling of that composite ordering — it is not a single-column sort.
   const [sortField, setSortField] = useState('last_name');
@@ -77,18 +78,16 @@ export function StudentsListPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
   const [toast, setToast] = useState<string | null>(null);
 
-  const classesQuery = useClassOptions();
-  const classes = classesQuery.data ?? [];
-  const yearGroupsQuery = useYearGroupOptions();
-  const yearGroups = yearGroupsQuery.data ?? [];
+  const offeringsQuery = useOfferingOptions();
+  const offerings = offeringsQuery.data ?? [];
 
   const params = useMemo<StudentsListParams>(
     () => ({
       search: debouncedSearch || undefined,
       status: status || undefined,
-      class_id: classId || undefined,
-      // D29: filters on the student's OWN level, not on a class's grade_level.
-      year_group: yearGroup || undefined,
+      offering_id: offeringId || undefined,
+      // Filters on the student's OWN level, not on anything derived from what they take.
+      year_of_study: yearOfStudy || undefined,
       academic_year_id: yearId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
@@ -97,8 +96,8 @@ export function StudentsListPage() {
     [
       debouncedSearch,
       status,
-      classId,
-      yearGroup,
+      offeringId,
+      yearOfStudy,
       yearId,
       page,
       pageSize,
@@ -127,7 +126,7 @@ export function StudentsListPage() {
     });
   };
 
-  const hasFilters = Boolean(debouncedSearch || status || classId || yearGroup);
+  const hasFilters = Boolean(debouncedSearch || status || offeringId || yearOfStudy);
 
   const columns: DataTableColumn<StudentListItem>[] = [
     {
@@ -155,20 +154,21 @@ export function StudentsListPage() {
       render: (s) => <Typography variant="body2">{s.student_number}</Typography>,
     },
     {
-      // D29: the student's own level replaced the homeroom name. Their subject CLASSES are
-      // a variable-length list that belongs on the profile, not in a table cell — the count
-      // is what is scannable here, and the class filter above narrows by a specific one.
-      field: 'year_group',
-      headerName: 'Year group',
+      // The student's OWN level (D29 replaced the homeroom name; D30 renamed the field to
+      // `year_of_study` and made it an enum). The offerings they take are a variable-length
+      // list that belongs on the profile, not in a table cell — the count is what is
+      // scannable here, and the course filter above narrows by a specific one.
+      field: 'year_of_study',
+      headerName: 'Year',
       sortable: true,
-      render: (s) => <Typography variant="body2">{s.year_group || '—'}</Typography>,
+      render: (s) => <Typography variant="body2">{s.year_of_study || '—'}</Typography>,
     },
     {
-      field: 'class_count',
+      field: 'offering_count',
       headerName: 'Courses',
       align: 'right',
       hideOnMobile: true,
-      render: (s) => <Typography variant="body2">{s.class_count}</Typography>,
+      render: (s) => <Typography variant="body2">{s.offering_count}</Typography>,
     },
     {
       field: 'guardian_name',
@@ -244,38 +244,39 @@ export function StudentsListPage() {
             <TextField
               select
               size="small"
-              label="Year group"
-              value={yearGroup}
+              label="Year"
+              value={yearOfStudy}
               onChange={(e) => {
-                setYearGroup(e.target.value);
+                setYearOfStudy(e.target.value);
                 setPage(0);
               }}
-              disabled={yearGroupsQuery.isLoading}
               sx={{ minWidth: 150 }}
             >
-              <MenuItem value="">All year groups</MenuItem>
-              {yearGroups.map((g) => (
-                <MenuItem key={g} value={g}>
-                  {g}
+              {/* Two fixed values, not a derived list — `year_of_study` is a server-side
+                  enum, so there is nothing to discover from the directory. */}
+              <MenuItem value="">All years</MenuItem>
+              {YEAR_OF_STUDY_OPTIONS.map((y) => (
+                <MenuItem key={y} value={y}>
+                  {y}
                 </MenuItem>
               ))}
             </TextField>
             <TextField
               select
               size="small"
-              label="Course"
-              value={classId}
+              label={strings.terms.courseOffering}
+              value={offeringId}
               onChange={(e) => {
-                setClassId(e.target.value);
+                setOfferingId(e.target.value);
                 setPage(0);
               }}
-              disabled={classesQuery.isLoading}
-              sx={{ minWidth: 190 }}
+              disabled={offeringsQuery.isLoading}
+              sx={{ minWidth: 220 }}
             >
-              <MenuItem value="">All classes</MenuItem>
-              {classes.map((c) => (
-                <MenuItem key={c.id} value={c.id}>
-                  {c.subject_name ? `${c.name} — ${c.subject_name}` : c.name}
+              <MenuItem value="">All offerings</MenuItem>
+              {offerings.map((o) => (
+                <MenuItem key={o.id} value={o.id}>
+                  {o.course_name ? `${o.label} — ${o.course_name}` : o.label}
                 </MenuItem>
               ))}
             </TextField>

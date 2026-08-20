@@ -116,21 +116,23 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
               <EmptyState
                 icon={<MenuBookIcon fontSize="inherit" />}
                 title="No classes yet"
-                description="You aren't enrolled in any subjects this term."
+                description="You aren't enrolled in any courses this term."
                 variant="card"
               />
             ) : (
               <List disablePadding>
                 {data.my_classes.map((c, i) => (
-                  <Box key={c.class_subject_id}>
+                  <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
                     <ListItem sx={{ px: 0, py: 1.25 }}>
                       <Stack sx={{ minWidth: 0 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
-                          {c.subject_name}
+                          {c.offering.course.name}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {c.teacher_name}
+                          {/* Label + lecturer: the label is what tells one section of a
+                              course from another. */}
+                          {[c.offering.label, c.teacher_name].filter(Boolean).join(' · ')}
                         </Typography>
                       </Stack>
                     </ListItem>
@@ -170,7 +172,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                           {g.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {g.subject_name} · {g.score}/{g.max_score}
+                          {g.offering?.course.name ?? '—'} · {g.score}/{g.max_score}
                         </Typography>
                       </Stack>
                     </ListItem>
@@ -207,7 +209,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.subject_name} · {formatDate(a.assessment_date)}
+                          {a.offering?.course.name ?? '—'} · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
                     </ListItem>

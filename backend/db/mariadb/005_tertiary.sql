@@ -217,33 +217,39 @@ WHERE NOT EXISTS (SELECT 1 FROM `courses` c WHERE c.`id` = s.`id`);
 
 
 -- ----------------------------------------------------------------------------
--- 2b. THE FK SWAP IS *NOT* DONE HERE - it moved to 006_courses_cutover.sql.
+-- 2b. THE FK SWAP IS NOT DONE HERE - it lives in 006_courses_cutover.sql, and this
+--     file must NOT touch those two constraints at all.
 --
--- WHY, because this was got wrong once and the reasoning matters:
+-- HISTORY, because this was got wrong twice and both mistakes matter:
 --
---   An earlier version of this file re-pointed `class_subjects.subject_id` and
---   `term_grade_snapshots.subject_id` from `subjects` to `courses`. The DDL applied
---   cleanly and the carried-over rows all resolved - and then 73 tests failed with
---   1452 "a foreign key constraint fails".
+--   MISTAKE 1 (2026-08-14). An earlier version of this file re-pointed
+--   `class_subjects.subject_id` and `term_grade_snapshots.subject_id` from `subjects`
+--   to `courses`. The DDL applied cleanly and every carried-over row resolved - and
+--   then 73 tests failed with 1452 "a foreign key constraint fails". Carrying the
+--   EXISTING rows across is only half the problem: every write path still created a
+--   subject in `subjects` only, so a newly-created subject had nothing for the FK to
+--   resolve against. Re-pointing the FK without moving the writes puts the database
+--   ahead of the application. The swap therefore belongs in the same step as the code
+--   change that moves the catalog, which is `006`.
 --
---   The reason is that carrying the EXISTING rows across is only half the problem.
---   Every WRITE path still creates a subject in `subjects` only, so the moment the
---   service inserted a new subject and then a `class_subjects` row pointing at it, the
---   FK had nothing to resolve against. Re-pointing the FK without moving the writes
---   puts the database ahead of the application.
+--   MISTAKE 2 (found 2026-08-18, D31). The fix for mistake 1 was to make this file
+--   ENSURE the two FKs point at `subjects`: it DROPPED `fk_class_subjects_course` and
+--   `fk_term_snapshot_course` - the exact names `006` creates - and re-added the
+--   `subjects` ones. That made this file and `006` direct opposites. Because this file
+--   is idempotent and re-running it is an ENCOURAGED operation, `005` silently reverted
+--   `006` on every replay, and `005` won: the live database was found with the catalog
+--   FKs back on `subjects` long after the ORM had moved to `courses`, so 114 of the 125
+--   `courses` rows could not be attached to anything at all.
 --
---   So the swap is a COORDINATED schema + code change: the FK moves in the same step
---   that `Subject.__tablename__` becomes `courses` and the subjects service starts
---   writing there. That is Phase 2 (plan §D2), and it lives in `006`.
+--   The repair is not a smarter guard - it is REMOVING the DDL. `006` owns the FK
+--   target, exclusively. A migration must never undo a later one however defensively it
+--   is written, and `db/mariadb/verify_schema.py` now asserts these FKs land on
+--   `courses` so a regression of this shape fails loudly instead of silently.
 --
--- This file therefore ENSURES the two FKs still point at `subjects`, which also
--- REPAIRS a database where the earlier version of this file already moved them. It is
--- a no-op on a database that never had the swap applied.
+-- `courses` above is still created and still populated here. It simply sits unused
+-- until `006`, which costs nothing and keeps this file additive.
 --
--- `courses` above is still created and still populated - it simply sits unused until
--- `006`. Nothing references it yet, so that costs nothing and keeps this file additive.
---
--- VERIFIED: these are the ONLY two foreign keys into `subjects` in the whole schema
+-- VERIFIED: those two were the ONLY foreign keys into `subjects` in the whole schema
 -- (`sims.sql:327`, `sims.sql:778` / `001:552`).
 --
 -- SYNTAX NOTE for `006` and anything after it: MariaDB places `IF NOT EXISTS` AFTER
@@ -251,23 +257,6 @@ WHERE NOT EXISTS (SELECT 1 FROM `courses` c WHERE c.`id` = s.`id`);
 -- CHECK, but a 1064 syntax error for a FOREIGN KEY. `001_missing_fields.sql:552` has
 -- the correct form.
 -- ----------------------------------------------------------------------------
-ALTER TABLE `class_subjects`
-  DROP FOREIGN KEY IF EXISTS `fk_class_subjects_course`;
-ALTER TABLE `class_subjects`
-  ADD CONSTRAINT `fk_class_subjects_subject` FOREIGN KEY IF NOT EXISTS (`subject_id`)
-    REFERENCES `subjects` (`id`) ON UPDATE NO ACTION;
-ALTER TABLE `class_subjects`
-  MODIFY COLUMN `subject_id` uuid NOT NULL
-    COMMENT 'FK -> subjects. Moves to courses in 006 (D30 catalog cutover).';
-
-ALTER TABLE `term_grade_snapshots`
-  DROP FOREIGN KEY IF EXISTS `fk_term_snapshot_course`;
-ALTER TABLE `term_grade_snapshots`
-  ADD CONSTRAINT `fk_term_snapshot_subject` FOREIGN KEY IF NOT EXISTS (`subject_id`)
-    REFERENCES `subjects` (`id`) ON DELETE NO ACTION;
-ALTER TABLE `term_grade_snapshots`
-  MODIFY COLUMN `subject_id` uuid NOT NULL
-    COMMENT 'Frozen catalog identity. FK -> subjects; moves to courses in 006.';
 
 
 -- ============================================================================
@@ -616,31 +605,51 @@ ALTER TABLE `student_profiles`
 -- rows not yet split): last token -> lastname, first token -> firstname, the rest ->
 -- middlename. The Registrar corrects the handful this gets wrong; a person's name is
 -- not reliably parseable and this is a one-time convenience, not a rule.
-UPDATE `student_profiles`
+--
+-- GUARDED (D31, 2026-08-18). `007_student_names.sql` DROPS `full_name`, so on a
+-- database that has reached `007` these two statements are a 1054 "Unknown column".
+-- `apply_sql.py` continues past a failure, so replaying this file used to report 47/49
+-- and leave a reader guessing which two mattered. On a fresh provision `005` still runs
+-- before `007` and the backfill does its job; afterwards it correctly does nothing.
+-- Same lesson as §2b above: a migration must not break when replayed in a later state.
+SET @has_full_name = (
+  SELECT COUNT(*) FROM information_schema.columns
+   WHERE table_schema = DATABASE()
+     AND table_name = 'student_profiles'
+     AND column_name = 'full_name'
+);
+
+SET @sql_namesplit = IF(@has_full_name > 0, 'UPDATE `student_profiles`
 SET
-  `firstname` = TRIM(SUBSTRING_INDEX(TRIM(`full_name`), ' ', 1)),
-  `lastname`  = TRIM(SUBSTRING_INDEX(TRIM(`full_name`), ' ', -1)),
+  `firstname` = TRIM(SUBSTRING_INDEX(TRIM(`full_name`), '' '', 1)),
+  `lastname`  = TRIM(SUBSTRING_INDEX(TRIM(`full_name`), '' '', -1)),
   `middlename` = NULLIF(TRIM(
       SUBSTRING(
         TRIM(`full_name`),
-        CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), ' ', 1)) + 2,
+        CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), '' '', 1)) + 2,
         GREATEST(
           CHAR_LENGTH(TRIM(`full_name`))
-            - CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), ' ', 1))
-            - CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), ' ', -1)) - 2,
+            - CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), '' '', 1))
+            - CHAR_LENGTH(SUBSTRING_INDEX(TRIM(`full_name`), '' '', -1)) - 2,
           0)
       )
-  ), '')
+  ), '''')
 WHERE `firstname` IS NULL
   AND `full_name` IS NOT NULL
-  AND TRIM(`full_name`) <> '';
+  AND TRIM(`full_name`) <> ''''', 'DO 0');
+PREPARE st_namesplit FROM @sql_namesplit;
+EXECUTE st_namesplit;
+DEALLOCATE PREPARE st_namesplit;
 
 -- Single-word names: the split above puts the same token in both slots. Keep it as
 -- the lastname (that is what listings sort on) and clear the firstname.
-UPDATE `student_profiles`
+SET @sql_oneword = IF(@has_full_name > 0, 'UPDATE `student_profiles`
 SET `firstname` = NULL
 WHERE `firstname` = `lastname`
-  AND TRIM(`full_name`) NOT LIKE '% %';
+  AND TRIM(`full_name`) NOT LIKE ''% %''', 'DO 0');
+PREPARE st_oneword FROM @sql_oneword;
+EXECUTE st_oneword;
+DEALLOCATE PREPARE st_oneword;
 
 
 -- ============================================================================

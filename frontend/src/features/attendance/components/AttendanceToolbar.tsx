@@ -2,12 +2,12 @@ import { MenuItem, Stack, TextField } from '@mui/material';
 import { schoolToday } from '@shared/utils/schoolDate';
 import { YearSelect } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
-import type { AttendanceSectionsResponse } from '../types';
+import type { AttendanceOfferingsResponse } from '../types';
 
 export interface AttendanceToolbarProps {
-  sections: AttendanceSectionsResponse['items'];
-  sectionId: string | null;
-  onSectionChange: (sectionId: string) => void;
+  offerings: AttendanceOfferingsResponse['items'];
+  offeringId: string | null;
+  onOfferingChange: (offeringId: string) => void;
   /** Date controls only appear on the register (summary is window-wide). */
   date?: string;
   onDateChange?: (date: string) => void;
@@ -22,27 +22,32 @@ export interface AttendanceToolbarProps {
 }
 
 /**
- * Year + class (+ optional date) pickers for attendance. Class is required; date
+ * Year + offering (+ optional date) pickers for attendance. The offering is required; date
  * defaults to the school-local today (`schoolToday()`, America/Belize — matching the
  * backend's `school_today()`) and is capped there so future dates cannot be chosen
  * (FR-ATT-05) — the server also rejects them with `future_date_not_allowed`. Selections
- * are lifted to the parent, which persists them to the URL (?section_id=&date=).
+ * are lifted to the parent, which persists them to the URL (?offering_id=&date=).
  *
- * **D29** — the register is per SUBJECT CLASS, so this picker lists the classes the caller
- * teaches ("Math-1"), not homerooms. A student can be present in Biology and absent in Math
- * on the same day. The `section_id` wire/param name is unchanged: it addresses a `classes`
- * row, which is what it always did.
+ * The register is per OFFERING, so this picker lists the offerings the caller teaches. A
+ * student can be present in Biology and absent in Algebra on the same day.
  *
- * Teacher / Form / Section narrowing filters used to live here for principal/secretary;
- * they now belong to the Grades module. The summary is scoped by Year + Class only.
+ * **D31 renamed the param**: `?section_id=` became `?offering_id=`. The old name was kept
+ * through D29 on the reasoning that "it addresses a `classes` row, which is what it always
+ * did" — and that is precisely why it had to change once the row became an offering.
+ *
+ * The option label is the offering's SERVER-DERIVED `label` (course code + section). It
+ * previously printed the homeroom's `name`, a column that no longer exists.
+ *
+ * Lecturer / Form / Section narrowing filters used to live here for the Dean and Registrar;
+ * they now belong to the Grades module. The summary is scoped by Year + Offering only.
  *
  * All controls use `size="small"` and top-align so the year picker lines up with the
- * class field regardless of which fields reserve a helper-text row.
+ * offering field regardless of which fields reserve a helper-text row.
  */
 export function AttendanceToolbar({
-  sections,
-  sectionId,
-  onSectionChange,
+  offerings,
+  offeringId,
+  onOfferingChange,
   date,
   onDateChange,
   showDate = true,
@@ -78,15 +83,15 @@ export function AttendanceToolbar({
         select
         size="small"
         label="Course offering"
-        value={sectionId ?? ''}
-        onChange={(e) => onSectionChange(e.target.value)}
-        disabled={disabled || sections.length === 0}
-        sx={{ minWidth: 240 }}
-        helperText={sections.length === 0 ? 'No classes available' : ' '}
+        value={offeringId ?? ''}
+        onChange={(e) => onOfferingChange(e.target.value)}
+        disabled={disabled || offerings.length === 0}
+        sx={{ minWidth: 260 }}
+        helperText={offerings.length === 0 ? 'No course offerings available' : ' '}
       >
-        {sections.map((s) => (
-          <MenuItem key={s.id} value={s.id}>
-            {s.name} · {s.enrolled_count} students
+        {offerings.map((o) => (
+          <MenuItem key={o.offering.id} value={o.offering.id}>
+            {o.offering.label} · {o.enrolled_count} students
           </MenuItem>
         ))}
       </TextField>

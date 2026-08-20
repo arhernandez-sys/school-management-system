@@ -30,17 +30,17 @@ from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.core.timeutil import utcnow
 from app.modules.assessments.models import Assessment
 from app.modules.attendance.models import AttendanceRecord
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from app.modules.offerings.labels import offering_label
 from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
@@ -84,20 +84,28 @@ class _Graph:
         )
         db_session.add_all([self.sem, self.sem2])
 
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"Sec {tag}", grade_level="Form 1",
-            section="A", capacity=30,
-        )
-        db_session.add(self.section)
-        self.subject = Subject(name=f"AAA Math {tag}", code=f"MA{tag[:3].upper()}")
-        self.subject2 = Subject(name=f"BBB Science {tag}", code=f"SC{tag[:3].upper()}")
+        self.subject = Course(name=f"AAA Math {tag}", code=f"MA{tag[:3].upper()}")
+        self.subject2 = Course(name=f"BBB Science {tag}", code=f"SC{tag[:3].upper()}")
         db_session.add_all([self.subject, self.subject2])
         db_session.flush()
 
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
-        self.cs2 = ClassSubject(class_id=self.section.id, subject_id=self.subject2.id, is_active=True)
+        # `capacity` moved from `classes` to `course_offerings` (D31) and the enrolment
+        # report still prints it.
+        self.cs = CourseOffering(
+            course_id=self.subject.id,
+            semester_id=self.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+            capacity=30,
+        )
+        self.cs2 = CourseOffering(
+            course_id=self.subject2.id,
+            semester_id=self.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+            capacity=30,
+        )
         db_session.add_all([self.cs, self.cs2])
         db_session.flush()
+        self.section = self.cs
 
         self.principal_user = make_user(role=Role.PRINCIPAL, full_name="The Principal")
         self.secretary_user = make_user(role=Role.SECRETARY, full_name="Front Office")
@@ -108,7 +116,7 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
         db_session.flush()
 
         self.student, self.enrollment = self.add_student(name="Ana Lopez", with_login=True)
@@ -127,25 +135,36 @@ class _Graph:
             status="active",
             # D29: the level lives on the student, not on a homeroom, and the report
             # card header reads it from here.
-            year_group="Lower 6",
+            year_of_study="First",
         )
         if with_login:
             user = self._make_user(role=Role.STUDENT, full_name=s.full_name)
             s.user_id = user.id
         self._db.add(s)
         self._db.flush()
-        enr = ClassEnrollment(
-            class_id=self.section.id, student_id=s.id,
-            semester_id=(semester or self.sem).id,
-        )
-        self._db.add(enr)
+        # ONE ENROLMENT PER OFFERING (D31). A single row used to point at the homeroom
+        # and cover everything it taught, which is why the report-card assertions below
+        # expect BOTH subjects to print. An offering teaches one course, so a student
+        # sitting two courses needs two rows.
+        enrolments = [
+            ClassEnrollment(
+                offering_id=offering.id,
+                student_id=s.id,
+                semester_id=(semester or self.sem).id,
+            )
+            for offering in (self.cs, self.cs2)
+        ]
+        self._db.add_all(enrolments)
         self._db.flush()
-        return s, enr
+        # The first is returned for the many call sites that thread "the" enrolment
+        # through to a grade; grades are per assessment, and every assessment in this
+        # graph belongs to one of these two offerings.
+        return s, enrolments[0]
 
     def assessment(self, *, cs=None, status="graded", max_score="100", weight="1",
                    is_released=True, semester=None):
         a = Assessment(
-            class_subject_id=(cs or self.cs).id,
+            offering_id=(cs or self.cs).id,
             semester_id=(semester or self.sem).id,
             title=f"A {uuid.uuid4().hex[:5]}",
             type="quiz",
@@ -169,7 +188,7 @@ class _Graph:
 
     def attendance(self, student, enrollment, *, status="present", on=None, semester=None):
         r = AttendanceRecord(
-            class_id=self.section.id, student_id=student.id, enrollment_id=enrollment.id,
+            offering_id=self.section.id, student_id=student.id, enrollment_id=enrollment.id,
             semester_id=(semester or self.sem).id,
             attendance_date=on or date(2025, 10, 15), status=status,
         )
@@ -181,7 +200,7 @@ class _Graph:
                  letter="B", subject=None):
         snap = TermGradeSnapshot(
             student_id=(student or self.student).id,
-            class_subject_id=(cs or self.cs).id,
+            offering_id=(cs or self.cs).id,
             semester_id=(semester or self.sem).id,
             subject_id=(subject or self.subject).id,
             numeric_grade=Decimal(numeric),
@@ -217,7 +236,7 @@ class TestAuthGate:
             f"{R}/report-card?student_id={graph.student.id}",
             f"{R}/report-card/me",
             f"{R}/transcript?student_id={graph.student.id}",
-            f"{R}/class-grades?class_subject_id={graph.cs.id}",
+            f"{R}/offering-grades?offering_id={graph.cs.id}",
             f"{R}/attendance?section_id={graph.section.id}",
             f"{R}/enrollment",
         ):
@@ -228,7 +247,7 @@ class TestAuthGate:
             f"{R}/students",
             f"{R}/report-card?student_id={graph.student.id}",
             f"{R}/transcript?student_id={graph.student.id}",
-            f"{R}/class-grades?class_subject_id={graph.cs.id}",
+            f"{R}/offering-grades?offering_id={graph.cs.id}",
             f"{R}/attendance?section_id={graph.section.id}",
             f"{R}/enrollment",
         ):
@@ -259,9 +278,9 @@ class TestStudentPicker:
         item = next(i for i in body["items"] if i["id"] == str(graph.student.id))
         assert set(item.keys()) == {
             "id", "full_name", "student_number", "date_of_birth", "status",
-            "year_group",
+            "year_of_study",
         }
-        assert item["year_group"] == "Lower 6"
+        assert item["year_of_study"] == "First"
         assert item["date_of_birth"] == "2012-03-04"
 
     def test_search_by_name(self, client, graph) -> None:
@@ -299,13 +318,13 @@ class TestReportCard:
     def test_top_level_keys(self, client, graph) -> None:
         body = _card(client, graph, student_id=graph.student.id).json()
         assert set(body.keys()) == {
-            "student", "year_group", "semester", "school", "subjects",
+            "student", "year_of_study", "semester", "school", "subjects",
             "attendance_summary", "term_average", "term_average_letter", "is_frozen",
             # D30 Phase 3 — the BAJC layout's header labels plus the credit-weighted GPA.
             "program_code", "period", "block", "gpa", "total_credits",
         }
         # D29: the header names the student's LEVEL, not a homeroom.
-        assert body["year_group"] == "Lower 6"
+        assert body["year_of_study"] == "First"
 
     def test_unknown_student_404(self, client, graph) -> None:
         r = _card(client, graph, student_id=uuid.uuid4())
@@ -524,17 +543,31 @@ class TestReportCardGpa:
         """Five 3-credit offerings on the student's section (the graph ships two)."""
         extra = []
         for n in range(3):
-            subject = Subject(
+            subject = Course(
                 name=f"GPA Course {n} {graph.tag}",
                 code=f"GP{n}{graph.tag[:3].upper()}",
                 credits=3,
             )
             db_session.add(subject)
             db_session.flush()
-            cs = ClassSubject(
-                class_id=graph.section.id, subject_id=subject.id, is_active=True
+            cs = CourseOffering(
+                course_id=subject.id,
+                semester_id=graph.sem.id,
+                section_code=uuid.uuid4().hex[:6],
             )
             db_session.add(cs)
+            db_session.flush()
+            # D31: enrolment is per OFFERING, so each extra needs its own row. The GPA
+            # denominator is ENROLLED credits, and pre-D31 one homeroom enrolment covered
+            # everything the homeroom taught — which is why 15 (5 x 3) is the expected
+            # total below.
+            db_session.add(
+                ClassEnrollment(
+                    offering_id=cs.id,
+                    student_id=graph.student.id,
+                    semester_id=graph.sem.id,
+                )
+            )
             extra.append(cs)
         # The two the graph created default to 3 credits (the schema default), but say so.
         graph.subject.credits = 3
@@ -573,15 +606,27 @@ class TestReportCardGpa:
         credits in the denominator.
         """
         _reband_to_bajc(db_session, graph.year.id)
-        subject3 = Subject(
+        subject3 = Course(
             name=f"GPA Third {graph.tag}", code=f"G3{graph.tag[:3].upper()}", credits=3
         )
         db_session.add(subject3)
         db_session.flush()
-        cs3 = ClassSubject(
-            class_id=graph.section.id, subject_id=subject3.id, is_active=True
-        )
+        cs3 = CourseOffering(
+                course_id=subject3.id,
+                semester_id=graph.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(cs3)
+        db_session.flush()
+        # Enrolment is per offering (D31), and the GPA denominator counts ENROLLED
+        # credits — so the third course only reaches the card if the student sits it.
+        db_session.add(
+            ClassEnrollment(
+                offering_id=cs3.id,
+                student_id=graph.student.id,
+                semester_id=graph.sem.id,
+            )
+        )
         db_session.flush()
 
         for cs, score in zip([graph.cs, graph.cs2, cs3], ["82", "92", "93"]):
@@ -853,16 +898,18 @@ class TestTranscript:
             academic_year_id=older.id, name="Semester 1", sequence=1,
             start_date=date(2024, 9, 1), end_date=date(2025, 1, 31), is_active=False,
         )
-        older_section = Class(
-            academic_year_id=older.id, name=f"Old Sec {graph.tag}", grade_level="Prep",
-        )
-        db_session.add_all([older_sem, older_section])
+        db_session.add_all([older_sem])
         db_session.flush()
-        old_cs = ClassSubject(class_id=older_section.id, subject_id=graph.subject.id, is_active=True)
+        old_cs = CourseOffering(
+                course_id=graph.subject.id,
+                semester_id=graph.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(old_cs)
         db_session.flush()
+        older_section = old_cs
         db_session.add(ClassEnrollment(
-            class_id=older_section.id, student_id=graph.student.id, semester_id=older_sem.id
+            offering_id=older_section.id, student_id=graph.student.id, semester_id=older_sem.id
         ))
         db_session.flush()
         graph.snapshot(cs=old_cs, semester=older_sem, numeric="75.00", letter="C")
@@ -886,16 +933,19 @@ class TestTranscript:
             academic_year_id=older.id, name="Semester 1", sequence=1,
             start_date=date(2024, 9, 1), end_date=date(2025, 1, 31), is_active=False,
         )
-        older_section = Class(
-            academic_year_id=older.id, name=f"Old Sec {graph.tag}", grade_level="Prep",
-        )
-        db_session.add_all([older_sem, older_section])
+        db_session.add_all([older_sem])
         db_session.flush()
-        old_cs = ClassSubject(class_id=older_section.id, subject_id=graph.subject.id, is_active=True)
+        # The SAME course, offered again in the older year's term — the thing the
+        # year-scoped model could not express, and what makes this transcript test real.
+        old_cs = CourseOffering(
+            course_id=graph.subject.id,
+            semester_id=older_sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
         db_session.add(old_cs)
         db_session.flush()
         db_session.add(ClassEnrollment(
-            class_id=older_section.id, student_id=graph.student.id, semester_id=older_sem.id
+            offering_id=old_cs.id, student_id=graph.student.id, semester_id=older_sem.id
         ))
         db_session.flush()
         graph.snapshot(cs=old_cs, semester=older_sem, numeric="60.00", letter="D")
@@ -922,28 +972,32 @@ class TestTranscript:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-class TestClassGrades:
+class TestOfferingGrades:
     def test_shape(self, client, graph) -> None:
-        body = client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.P).json()
         assert set(body.keys()) == {
-            "class_subject", "semester", "students", "class_average", "distribution"
+            "offering", "semester", "students", "class_average", "distribution"
         }
-        assert body["class_subject"]["section_name"] == graph.section.name
-        assert body["class_subject"]["subject_name"] == graph.subject.name
+        assert body["offering"]["id"] == str(graph.cs.id)
+        assert body["offering"]["course"]["name"] == graph.subject.name
+        # The label is DERIVED (D31) — there is no stored section name to echo.
+        assert body["offering"]["label"] == offering_label(
+            graph.subject.code, graph.cs.section_code
+        )
 
     def test_unknown_offering_404(self, client, graph) -> None:
-        r = client.get(f"{R}/class-grades?class_subject_id={uuid.uuid4()}", headers=graph.P)
+        r = client.get(f"{R}/offering-grades?offering_id={uuid.uuid4()}", headers=graph.P)
         assert r.status_code == 404
 
     def test_missing_param_422(self, client, graph) -> None:
-        assert client.get(f"{R}/class-grades", headers=graph.P).status_code == 422
+        assert client.get(f"{R}/offering-grades", headers=graph.P).status_code == 422
 
     def test_rows_and_class_average(self, client, graph) -> None:
         a = graph.assessment(cs=graph.cs, max_score="100")
         peer, peer_enr = graph.add_student(name="Bob Peer")
         graph.grade(a, graph.student, graph.enrollment, score="90")
         graph.grade(a, peer, peer_enr, score="70")
-        body = client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.P).json()
         rows = {r["student"]["full_name"]: r["numeric"] for r in body["students"]}
         assert rows["Ana Lopez"] == 90.0
         assert rows["Bob Peer"] == 70.0
@@ -960,7 +1014,7 @@ class TestClassGrades:
         graph.add_student(name="Zed Last")
         graph.add_student(name="Aaron First")
         rows = client.get(
-            f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P
+            f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.P
         ).json()["students"]
         names = [r["student"]["full_name"] for r in rows]
 
@@ -970,29 +1024,33 @@ class TestClassGrades:
     def test_distribution_covers_every_band(self, client, graph) -> None:
         a = graph.assessment(cs=graph.cs, max_score="100")
         graph.grade(a, graph.student, graph.enrollment, score="95")
-        body = client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.P).json()
         dist = {d["letter"]: d["count"] for d in body["distribution"]}
         assert dist["A"] == 1
         # Zero-count bands are still listed so the chart axis is stable.
         assert dist["F"] == 0
 
     def test_ungraded_students_have_null_numeric(self, client, graph) -> None:
-        body = client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.P).json()
         assert body["students"][0]["numeric"] is None
         assert body["class_average"] is None
 
     def test_teacher_may_read(self, client, graph) -> None:
-        assert client.get(f"{R}/class-grades?class_subject_id={graph.cs.id}", headers=graph.T).status_code == 200
+        assert client.get(f"{R}/offering-grades?offering_id={graph.cs.id}", headers=graph.T).status_code == 200
 
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestAttendanceReport:
-    def test_shape_uses_the_class_key(self, client, graph) -> None:
+    def test_shape_uses_the_offering_key(self, client, graph) -> None:
         """The section ref is serialized under `class`, matching the mock."""
         body = client.get(f"{R}/attendance?section_id={graph.section.id}", headers=graph.P).json()
-        assert set(body.keys()) == {"class", "semester", "summary"}
-        assert body["class"]["id"] == str(graph.section.id)
-        assert body["class"]["grade_level"] == "Form 1"
+        assert set(body.keys()) == {"offering", "semester", "summary"}
+        assert body["offering"]["id"] == str(graph.section.id)
+        # The homeroom's `grade_level` is gone; an offering identifies itself by its
+        # course and derived label.
+        assert body["offering"]["label"] == offering_label(
+            graph.subject.code, graph.section.section_code
+        )
 
     def test_summary_includes_present_and_counts_late_as_present(self, client, graph) -> None:
         graph.attendance(graph.student, graph.enrollment, status="present")
@@ -1020,38 +1078,45 @@ class TestAttendanceReport:
 class TestEnrollmentReport:
     def test_shape(self, client, graph) -> None:
         body = client.get(f"{R}/enrollment", headers=graph.P).json()
-        assert set(body.keys()) == {"totals", "by_grade", "by_class"}
-        assert set(body["totals"].keys()) == {"students", "classes"}
+        assert set(body.keys()) == {"totals", "by_programme", "by_offering"}
+        assert set(body["totals"].keys()) == {"students", "offerings"}
 
-    def test_by_class_carries_capacity_and_headcount(self, client, graph) -> None:
+    def test_by_offering_carries_capacity_and_headcount(self, client, graph) -> None:
         graph.add_student()
         row = next(
-            c for c in client.get(f"{R}/enrollment", headers=graph.P).json()["by_class"]
-            if c["class_ref"]["id"] == str(graph.section.id)
+            c for c in client.get(f"{R}/enrollment", headers=graph.P).json()["by_offering"]
+            if c["offering"]["id"] == str(graph.section.id)
         )
-        assert set(row.keys()) == {"class_ref", "enrolled", "capacity"}
+        assert set(row.keys()) == {"offering", "enrolled", "capacity"}
         assert row["capacity"] == 30
         assert row["enrolled"] == 2  # Ana + the new one
 
-    def test_by_grade_aggregates(self, client, graph) -> None:
+    def test_by_programme_aggregates(self, client, graph) -> None:
+        """D31 replaced the by-FORM breakdown — `classes.grade_level` is gone and a
+        junior college has no Form axis. Students with no programme are reported as one
+        "Not assigned" row rather than dropped, which is where this graph's students sit
+        until the Phase 5 seed lands."""
         graph.add_student()
         rows = {
-            g["grade_level"]: g["count"]
-            for g in client.get(f"{R}/enrollment", headers=graph.P).json()["by_grade"]
+            g["programme"]: g["count"]
+            for g in client.get(f"{R}/enrollment", headers=graph.P).json()["by_programme"]
         }
-        assert rows["Form 1"] >= 2
+        assert rows.get("Not assigned", 0) >= 2
 
-    def test_archived_sections_excluded(self, client, graph, db_session) -> None:
+    def test_archived_offerings_excluded(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
         db_session.flush()
         ids = {
-            c["class_ref"]["id"]
-            for c in client.get(f"{R}/enrollment", headers=graph.P).json()["by_class"]
+            c["offering"]["id"]
+            for c in client.get(f"{R}/enrollment", headers=graph.P).json()["by_offering"]
         }
         assert str(graph.section.id) not in ids
 
-    def test_by_grade_sorted(self, client, graph) -> None:
-        grades = [
-            g["grade_level"] for g in client.get(f"{R}/enrollment", headers=graph.P).json()["by_grade"]
+    def test_by_programme_is_busiest_first(self, client, graph) -> None:
+        """Ordered by headcount descending (then code), matching the dashboard tile —
+        not alphabetically, which is what the by-Form version asserted."""
+        counts = [
+            g["count"]
+            for g in client.get(f"{R}/enrollment", headers=graph.P).json()["by_programme"]
         ]
-        assert grades == sorted(grades)
+        assert counts == sorted(counts, reverse=True)

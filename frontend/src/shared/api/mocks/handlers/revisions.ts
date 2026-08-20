@@ -3,10 +3,11 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
-  getClassSubject,
-  getSection,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
-  getSubject,
+  offeringLabel,
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoGradeRevisionRequest } from '@shared/api/mocks/demo/dataset';
 import { errorResponse } from './_helpers';
@@ -58,9 +59,9 @@ function read(row: DemoGradeRevisionRequest, role: string) {
   const assessment = grade
     ? D.assessments.find((a) => a.id === grade.assessment_id)
     : undefined;
-  const cs = assessment ? getClassSubject(assessment.class_subject_id) : undefined;
-  const subject = cs ? getSubject(cs.subject_id) : undefined;
-  const section = cs ? getSection(cs.section_id) : undefined;
+  const offering = assessment ? getOffering(assessment.offering_id) : undefined;
+  const course = offering ? getCourse(offering.course_id) : undefined;
+  const semester = offering ? getSemester(offering.semester_id) : undefined;
   const student = grade ? getStudent(grade.student_id) : undefined;
   const requester = D.users.find((u) => u.id === row.requested_by_user_id);
   const decider = row.decided_by_user_id
@@ -87,10 +88,27 @@ function read(row: DemoGradeRevisionRequest, role: string) {
     assessment_id: assessment?.id ?? null,
     assessment_title: assessment?.title ?? '',
     max_score: assessment?.max_score ?? null,
-    class_subject_id: cs?.id ?? null,
-    subject_name: subject?.name ?? '',
-    subject_code: subject?.code ?? null,
-    section_name: section?.name ?? '',
+    // D31: one shared `OfferingRef` replaces the flat `class_subject_id` + `subject_name` +
+    // `subject_code` + `section_name` quartet. Three of those existed only to render the
+    // queue row's label, and the label is derived in one place now.
+    offering: offering
+      ? {
+          id: offering.id,
+          course: course
+            ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+            : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+          semester: semester
+            ? {
+                id: semester.id,
+                name: semester.name,
+                sequence: semester.sequence,
+                is_active: semester.is_active,
+              }
+            : null,
+          section_code: offering.section_code,
+          label: offeringLabel(offering),
+        }
+      : null,
     requested_by_user_id: row.requested_by_user_id,
     requested_by_name: requester?.full_name ?? '',
     decided_by_user_id: row.decided_by_user_id,
@@ -119,7 +137,7 @@ export const revisionsHandlers = [
     }
     const url = new URL(request.url);
     const status = url.searchParams.get('status');
-    const classSubjectId = url.searchParams.get('class_subject_id');
+    const offeringId = url.searchParams.get('offering_id');
 
     let rows = [...D.grade_revision_requests];
     if (role === 'teacher') {
@@ -128,13 +146,13 @@ export const revisionsHandlers = [
       rows = rows.filter((r) => r.requested_by_user_id === currentUserId(role));
     }
     if (status) rows = rows.filter((r) => r.status === status);
-    if (classSubjectId) {
+    if (offeringId) {
       rows = rows.filter((r) => {
         const grade = D.assessment_grades.find((g) => g.id === r.assessment_grade_id);
         const assessment = grade
           ? D.assessments.find((a) => a.id === grade.assessment_id)
           : undefined;
-        return assessment?.class_subject_id === classSubjectId;
+        return assessment?.offering_id === offeringId;
       });
     }
     // Oldest first, with the id as a TIEBREAKER — `created_at` has whole-second precision
@@ -181,8 +199,10 @@ export const revisionsHandlers = [
         );
       }
       const teacherId = currentTeacherId(role);
-      const cs = getClassSubject(assessment.class_subject_id);
-      if (!cs || (teacherId && !cs.teacher_ids.includes(teacherId))) {
+      const offering = getOffering(assessment.offering_id);
+      // 404, not 403: a lecturer who does not teach the offering must not learn that the
+      // assessment exists, so an unowned-but-real row answers exactly like a nonexistent one.
+      if (!offering || (teacherId && !offering.teacher_ids.includes(teacherId))) {
         return errorResponse(404, 'not_found', 'Resource not found.');
       }
 

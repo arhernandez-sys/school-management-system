@@ -31,24 +31,25 @@ from app.core.timeutil import utcnow
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.service import _summarize
-from app.modules.classes.models import (
-    Class,
+from app.modules.programs.queries import enrollment_by_programme
+from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
+from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades import calc
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.reports.schemas import (
     AttendanceReport,
     AttendanceReportSummary,
-    ClassGradesClassSubjectRef,
-    ClassGradesDistributionItem,
-    ClassGradesReport,
-    ClassGradesStudentRow,
-    EnrollmentByClass,
-    EnrollmentByGrade,
+    OfferingGradesDistributionItem,
+    OfferingGradesReport,
+    OfferingGradesStudentRow,
+    EnrollmentByOffering,
+    EnrollmentByProgramme,
     EnrollmentReport,
     EnrollmentTotals,
     ReportAcademicYearRef,
@@ -56,7 +57,6 @@ from app.modules.reports.schemas import (
     ReportCard,
     ReportCardSubjectRow,
     ReportSchool,
-    ReportSectionRef,
     ReportSemesterRef,
     ReportStudentRef,
     ReportSubjectRef,
@@ -138,7 +138,7 @@ def _semester_ref(db: Session, semester: Semester) -> ReportSemesterRef:
 
 def _classes_for(
     db: Session, student_id: uuid.UUID, semester_id: uuid.UUID | None
-) -> list[Class]:
+) -> list[CourseOffering]:
     """Every subject class the student sat in for a given term (D29).
 
     Was `_section_for`, which returned one homeroom — a report card built from it
@@ -150,15 +150,16 @@ def _classes_for(
     if semester_id is not None:
         rows = list(
             db.scalars(
-                select(Class)
-                .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+                select(CourseOffering)
+                .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
+                .join(Course, CourseOffering.course_id == Course.id)
                 .where(
                     ClassEnrollment.student_id == student_id,
                     ClassEnrollment.semester_id == semester_id,
                     ClassEnrollment.unenrolled_at.is_(None),
-                    Class.deleted_at.is_(None),
+                    CourseOffering.deleted_at.is_(None),
                 )
-                .order_by(Class.name.asc())
+                .order_by(*OFFERING_ORDER)
             ).all()
         )
         if rows:
@@ -166,21 +167,22 @@ def _classes_for(
     return _dedupe_classes(
         list(
             db.scalars(
-                select(Class)
-                .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+                select(CourseOffering)
+                .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
+                .join(Course, CourseOffering.course_id == Course.id)
                 .where(
                     ClassEnrollment.student_id == student_id,
-                    Class.deleted_at.is_(None),
+                    CourseOffering.deleted_at.is_(None),
                 )
-                .order_by(Class.name.asc())
+                .order_by(*OFFERING_ORDER)
             ).all()
         )
     )
 
 
-def _dedupe_classes(rows: list[Class]) -> list[Class]:
+def _dedupe_classes(rows: list[CourseOffering]) -> list[CourseOffering]:
     """Same class enrolled across both semesters yields two rows; keep one."""
-    seen: dict[uuid.UUID, Class] = {}
+    seen: dict[uuid.UUID, CourseOffering] = {}
     for cls in rows:
         seen.setdefault(cls.id, cls)
     return list(seen.values())
@@ -193,7 +195,13 @@ def _student_ref(db: Session, student: StudentProfile) -> ReportStudentRef:
         student_number=student.student_number,
         date_of_birth=student.date_of_birth,
         status=student.status.value if hasattr(student.status, "value") else student.status,
-        year_group=student.year_group,
+        # Same defensive read as `status` above: the column is enum-typed in the ORM but
+        # comes back as a plain `str` on some load paths.
+        year_of_study=(
+            student.year_of_study.value
+            if hasattr(student.year_of_study, "value")
+            else student.year_of_study
+        ),
     )
 
 
@@ -240,9 +248,9 @@ def _lead_teacher_names(db: Session, cs_ids: list[uuid.UUID]) -> dict[uuid.UUID,
     if not cs_ids:
         return {}
     rows = db.execute(
-        select(ClassTeacher.class_subject_id, TeacherProfile.full_name, ClassTeacher.is_lead)
+        select(ClassTeacher.offering_id, TeacherProfile.full_name, ClassTeacher.is_lead)
         .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
-        .where(ClassTeacher.class_subject_id.in_(cs_ids))
+        .where(ClassTeacher.offering_id.in_(cs_ids))
     ).all()
     out: dict[uuid.UUID, str] = {}
     for cs_id, name, is_lead in sorted(rows, key=lambda r: (not r[2], r[1])):
@@ -281,7 +289,7 @@ def _subject_results(
     db: Session,
     *,
     student_id: uuid.UUID,
-    sections: list[Class],
+    sections: list[CourseOffering],
     semester: Semester,
     year: AcademicYear | None,
     frozen: bool,
@@ -298,11 +306,11 @@ def _subject_results(
         return []
 
     offerings = db.execute(
-        select(ClassSubject, Subject)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
-            ClassSubject.class_id.in_([s.id for s in sections]),
-            ClassSubject.deleted_at.is_(None),
+            CourseOffering.id.in_([s.id for s in sections]),
+            CourseOffering.deleted_at.is_(None),
         )
     ).all()
     if not offerings:
@@ -315,7 +323,7 @@ def _subject_results(
 
     if frozen:
         snapshots = {
-            s.class_subject_id: s
+            s.offering_id: s
             for s in db.scalars(
                 select(TermGradeSnapshot).where(
                     TermGradeSnapshot.student_id == student_id,
@@ -348,7 +356,7 @@ def _subject_results(
     assessments = list(
         db.scalars(
             select(Assessment).where(
-                Assessment.class_subject_id.in_(cs_ids),
+                Assessment.offering_id.in_(cs_ids),
                 Assessment.semester_id == semester.id,
                 Assessment.deleted_at.is_(None),
             )
@@ -356,7 +364,7 @@ def _subject_results(
     )
     by_cs: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in assessments:
-        by_cs[a.class_subject_id].append(a)
+        by_cs[a.offering_id].append(a)
 
     my_grades: dict[uuid.UUID, AssessmentGrade] = {}
     if assessments:
@@ -372,12 +380,12 @@ def _subject_results(
 
     categories = list(
         db.scalars(
-            select(AssessmentCategory).where(AssessmentCategory.class_subject_id.in_(cs_ids))
+            select(AssessmentCategory).where(AssessmentCategory.offering_id.in_(cs_ids))
         ).all()
     )
     cats_by_cs: dict[uuid.UUID, list[AssessmentCategory]] = defaultdict(list)
     for c in categories:
-        cats_by_cs[c.class_subject_id].append(c)
+        cats_by_cs[c.offering_id].append(c)
     cats_by_id = {c.id: c for c in categories}
     school = _school_policy(db)
 
@@ -562,6 +570,9 @@ def _build_report_card(
     db: Session, *, student: StudentProfile, semester: Semester, release_filter: bool
 ) -> ReportCard:
     sections = _classes_for(db, student.id, semester.id)
+    # The TERM already names its year — `year_of_offering` takes an OFFERING, and passing
+    # a `Semester` to it was a mechanical D31 substitution that typechecks and then reads
+    # `.semester_id` off the wrong object at runtime.
     year = db.get(AcademicYear, semester.academic_year_id)
     frozen = year is not None and year.archived_at is not None
     bands, _pass_mark = _bands(db, semester.academic_year_id)
@@ -618,7 +629,13 @@ def _build_report_card(
 
     return ReportCard(
         student=_student_ref(db, student),
-        year_group=student.year_group,
+        # Same defensive read as `status` above: the column is enum-typed in the ORM but
+        # comes back as a plain `str` on some load paths.
+        year_of_study=(
+            student.year_of_study.value
+            if hasattr(student.year_of_study, "value")
+            else student.year_of_study
+        ),
         semester=_semester_ref(db, semester),
         school=_school(db),
         program_code=_program_code_for(db, student),
@@ -851,39 +868,39 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GET /reports/class-grades
+# GET /reports/offering-grades
 # ──────────────────────────────────────────────────────────────────────────────
-def get_class_grades(
-    db: Session, *, actor: User, class_subject_id: uuid.UUID, semester_id: uuid.UUID | None
-) -> ClassGradesReport:
+def get_offering_grades(
+    db: Session, *, actor: User, offering_id: uuid.UUID, semester_id: uuid.UUID | None
+) -> OfferingGradesReport:
     """Per-offering grade summary + letter distribution.
 
     No frontend screen calls this today (FR-RPT-02 is served by the real gradebook);
     built per api-spec §5.10 as a print-friendly aggregate.
     """
     cs = db.scalar(
-        select(ClassSubject).where(
-            ClassSubject.id == class_subject_id, ClassSubject.deleted_at.is_(None)
+        select(CourseOffering).where(
+            CourseOffering.id == offering_id, CourseOffering.deleted_at.is_(None)
         )
     )
     if cs is None:
-        raise NotFound("Class subject not found.", code="not_found")
-    section = db.get(Class, cs.class_id)
-    subject = db.get(Subject, cs.subject_id)
-    if section is None or subject is None:  # pragma: no cover - FK guarantees these
-        raise NotFound("Class subject not found.", code="not_found")
+        raise NotFound("Offering not found.", code="not_found")
+    section = cs  # D31: the offering IS the section
+    subject = db.get(Course, cs.course_id)
+    if subject is None:  # pragma: no cover - the FK guarantees this
+        raise NotFound("Offering not found.", code="not_found")
 
     semester = _resolve_semester(db, semester_id)
-    year = db.get(AcademicYear, section.academic_year_id)
+    year = year_of_offering(db, section)
     frozen = year is not None and year.archived_at is not None
-    bands, _pass_mark = _bands(db, section.academic_year_id)
+    bands, _pass_mark = _bands(db, year_id_of_offering(db, section))
 
     students = list(
         db.scalars(
             select(StudentProfile)
             .join(ClassEnrollment, ClassEnrollment.student_id == StudentProfile.id)
             .where(
-                ClassEnrollment.class_id == section.id,
+                ClassEnrollment.offering_id == section.id,
                 ClassEnrollment.semester_id == semester.id,
                 ClassEnrollment.unenrolled_at.is_(None),
                 StudentProfile.deleted_at.is_(None),
@@ -892,7 +909,7 @@ def get_class_grades(
         ).all()
     )
 
-    rows: list[ClassGradesStudentRow] = []
+    rows: list[OfferingGradesStudentRow] = []
     numerics: list[Decimal] = []
     for student in students:
         # Scoped to THIS class only — the class-grades report is about one gradebook,
@@ -904,7 +921,7 @@ def get_class_grades(
         mine = next((r for r in results if r.cs_id == cs.id), None)
         numeric = mine.numeric if mine else None
         rows.append(
-            ClassGradesStudentRow(
+            OfferingGradesStudentRow(
                 student=_student_ref(db, student),
                 numeric=_f(numeric),
                 letter=mine.letter if mine else None,
@@ -920,18 +937,13 @@ def get_class_grades(
         if row.letter in tally:
             tally[row.letter] += 1
 
-    return ClassGradesReport(
-        class_subject=ClassGradesClassSubjectRef(
-            id=cs.id,
-            section_id=section.id,
-            section_name=section.name,
-            subject_name=subject.name,
-        ),
+    return OfferingGradesReport(
+        offering=offering_ref(cs, subject),
         semester=_semester_ref(db, semester),
         students=rows,
         class_average=_f(_mean(numerics)),
         distribution=[
-            ClassGradesDistributionItem(letter=letter, count=count)
+            OfferingGradesDistributionItem(letter=letter, count=count)
             for letter, count in tally.items()
         ],
     )
@@ -946,28 +958,27 @@ def get_attendance_report(
     """Per-section attendance summary. No frontend caller (FR-RPT-03 is served by
     `/attendance/summary`); built per api-spec §5.10 for a print view."""
     section = db.scalar(
-        select(Class).where(Class.id == section_id, Class.deleted_at.is_(None))
+        select(CourseOffering).where(CourseOffering.id == section_id, CourseOffering.deleted_at.is_(None))
     )
     if section is None:
         raise NotFound("Section not found.", code="not_found")
 
     statuses = list(
         db.scalars(
-            select(AttendanceRecord.status).where(AttendanceRecord.class_id == section.id)
+            select(AttendanceRecord.status).where(AttendanceRecord.offering_id == section.id)
         ).all()
     )
     counts = _summarize(statuses)
     active = db.scalar(
         select(Semester).where(
-            Semester.academic_year_id == section.academic_year_id,
+            Semester.academic_year_id == year_id_of_offering(db, section),
             Semester.is_active.is_(True),
         )
     )
 
+    course = db.get(Course, section.course_id)
     return AttendanceReport(
-        section=ReportSectionRef(
-            id=section.id, name=section.name, grade_level=section.grade_level
-        ),
+        offering=offering_ref(section, course),
         semester=_semester_ref(db, active) if active else None,
         summary=AttendanceReportSummary(
             present=counts.present,
@@ -983,7 +994,7 @@ def get_attendance_report(
 # GET /reports/enrollment
 # ──────────────────────────────────────────────────────────────────────────────
 def get_enrollment_report(db: Session, *, actor: User) -> EnrollmentReport:
-    """Headcount by grade and by section. **P/S only.**
+    """Headcount by programme and by offering. **P/S only.**
 
     No frontend caller (FR-RPT-04 is served by the principal dashboard); built per
     api-spec §5.10.
@@ -1004,34 +1015,29 @@ def get_enrollment_report(db: Session, *, actor: User) -> EnrollmentReport:
             Semester.academic_year_id == year.id, Semester.is_active.is_(True)
         )
     )
-    sections = list(
-        db.scalars(
-            select(Class)
-            .where(
-                Class.academic_year_id == year.id,
-                Class.deleted_at.is_(None),
-                Class.is_archived.is_(False),
-            )
-            .order_by(Class.name.asc())
-        ).all()
-    )
+    sections = db.execute(
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.is_archived.is_(False),
+        )
+        .order_by(*OFFERING_ORDER)
+    ).all()
 
     counts: dict[uuid.UUID, int] = {}
     if semester is not None:
         counts = dict(
             db.execute(
-                select(ClassEnrollment.class_id, func.count(func.distinct(ClassEnrollment.student_id)))
+                select(ClassEnrollment.offering_id, func.count(func.distinct(ClassEnrollment.student_id)))
                 .where(
                     ClassEnrollment.semester_id == semester.id,
                     ClassEnrollment.unenrolled_at.is_(None),
                 )
-                .group_by(ClassEnrollment.class_id)
+                .group_by(ClassEnrollment.offering_id)
             ).all()
         )
-
-    by_grade: dict[str, int] = defaultdict(int)
-    for section in sections:
-        by_grade[section.grade_level] += counts.get(section.id, 0)
 
     total_students = db.scalar(
         select(func.count())
@@ -1043,19 +1049,19 @@ def get_enrollment_report(db: Session, *, actor: User) -> EnrollmentReport:
     ) or 0
 
     return EnrollmentReport(
-        totals=EnrollmentTotals(students=total_students, classes=len(sections)),
-        by_grade=[
-            EnrollmentByGrade(grade_level=grade, count=count)
-            for grade, count in sorted(by_grade.items())
+        totals=EnrollmentTotals(students=total_students, offerings=len(sections)),
+        # Programme, not Form. `classes.grade_level` is gone with the homeroom, and the
+        # same query backs the principal dashboard tile so the two cannot disagree.
+        by_programme=[
+            EnrollmentByProgramme(programme=row.name, count=row.count)
+            for row in enrollment_by_programme(db, year)
         ],
-        by_class=[
-            EnrollmentByClass(
-                class_ref=ReportSectionRef(
-                    id=s.id, name=s.name, grade_level=s.grade_level
-                ),
-                enrolled=counts.get(s.id, 0),
-                capacity=s.capacity,
+        by_offering=[
+            EnrollmentByOffering(
+                offering=offering_ref(o, c),
+                enrolled=counts.get(o.id, 0),
+                capacity=o.capacity,
             )
-            for s in sections
+            for o, c in sections
         ],
     )

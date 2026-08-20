@@ -43,7 +43,7 @@ from app.modules.assessments.router import router as assessments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.announcements.router import router as announcements_router
 from app.modules.attendance.router import router as attendance_router
-from app.modules.classes.router import router as classes_router
+from app.modules.offerings.router import router as offerings_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.events.router import router as events_router
 from app.modules.grades.router import assessment_grades_router
@@ -58,7 +58,7 @@ from app.modules.programs.router import router as programs_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
 from app.modules.students.router import router as students_router
-from app.modules.subjects.router import router as subjects_router
+from app.modules.courses.router import router as courses_router
 from app.modules.teachers.router import router as teachers_router
 from app.modules.timetable.router import router as timetable_router
 
@@ -72,14 +72,14 @@ API_V1_PREFIX = "/api/v1"
 MODULE_ROUTERS: list[APIRouter] = [
     auth_router,  # 7.1 — serves /api/v1/auth/* (api-spec §2)
     settings_router,  # 7.2 — serves /api/v1/settings/* (api-spec §5 Module 11)
-    subjects_router,  # 7.2 — serves /api/v1/subjects/* (api-spec §5 Module 5b)
+    courses_router,  # 7.2 — serves /api/v1/courses/* (api-spec §5 Module 5b)
     programs_router,  # D30 2B — serves /api/v1/programs/* (studies + curriculum, §D3)
-    prerequisites_router,  # D30 2C — /api/v1/subjects/{id}/prerequisites (§D4)
+    prerequisites_router,  # D30 2C — /api/v1/courses/{id}/prerequisites (§D4)
     students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
     applications_router,  # D30 4 — /api/v1/applications/* (admissions, §D11)
     credit_transfers_router,  # D30 4 — /api/v1/credit-transfers/* (Dean decides, brief §13)
     teachers_router,  # 7.3 — serves /api/v1/teachers/* (api-spec §5 Module 4)
-    classes_router,  # 7.4 — serves /api/v1/classes/* (api-spec §5 Module 5)
+    offerings_router,  # D31 — serves /api/v1/offerings/* (api-spec §5 Module 5)
     assessments_router,  # 7.5 — serves /api/v1/assessments/* (api-spec §6)
     assessment_categories_router,  # 7.5 — /api/v1/classes/{id}/subjects/{cs}/categories
     grades_router,  # 7.6 — serves /api/v1/grades/* (api-spec §7)

@@ -58,8 +58,9 @@ function formatDeadline(iso: string): string {
  * Reached from the assessment list: instead of the full students×assessments grid, the
  * teacher grades the WHOLE CLASS for a SINGLE assessment. Reuses the gradebook read
  * (roster + existing marks), filters to this one assessment's column, and saves via the
- * one grade-write path (PUT /assessments/{id}/grades). P/S see it read-only; a teacher
- * who does not own the offering gets a clean not-authorized state (the gradebook 404s).
+ * one grade-write path (PUT /assessments/{id}/grades). The Dean and Registrar see it
+ * read-only; a lecturer who does not own the offering gets a clean not-authorized state
+ * (the gradebook 404s — 404, not 403, so the response does not reveal that it exists).
  */
 export function AssessmentGradingScreen() {
   const navigate = useNavigate();
@@ -69,11 +70,11 @@ export function AssessmentGradingScreen() {
   // enforces ownership and 403s anybody else, so this is UX, not the boundary.
   const isLecturer = user?.role === 'teacher';
   const [searchParams] = useSearchParams();
-  const classSubjectId = searchParams.get('class_subject_id');
+  const offeringId = searchParams.get('offering_id');
 
-  const gradebookQuery = useGradebook(classSubjectId);
-  const saveMut = useSaveGrades(classSubjectId);
-  const releaseMut = useSetRelease(classSubjectId);
+  const gradebookQuery = useGradebook(offeringId);
+  const saveMut = useSaveGrades(offeringId);
+  const releaseMut = useSetRelease(offeringId);
 
   const [draft, setDraft] = useState<Map<string, GradeCellValue>>(new Map());
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -88,7 +89,7 @@ export function AssessmentGradingScreen() {
   useEffect(() => {
     setDraft(new Map());
     setSaveError(null);
-  }, [assessmentId, classSubjectId]);
+  }, [assessmentId, offeringId]);
 
   const gradebook = gradebookQuery.data;
   const assessment = useMemo(
@@ -141,14 +142,14 @@ export function AssessmentGradingScreen() {
   const backToList = () => navigate(ROUTES.grades);
 
   // ── Guard states ─────────────────────────────────────────────────────────────────
-  if (!classSubjectId) {
+  if (!offeringId) {
     return (
       <Box sx={{ pt: 3 }}>
         <BackButton onClick={backToList} />
         <EmptyState
           variant="page"
-          title="No class selected"
-          description="Open an assessment from the Grades list to grade its class."
+          title="No offering selected"
+          description="Open an assessment from the Grades list to grade the students enrolled in it."
         />
       </Box>
     );
@@ -158,12 +159,12 @@ export function AssessmentGradingScreen() {
     <Box sx={{ pb: dirtyCount > 0 ? 10 : 3, pt: 3 }}>
       <BackButton onClick={backToList} />
 
-      {gradebookQuery.isLoading && <LoadingState variant="table" rows={8} label="Loading class" />}
+      {gradebookQuery.isLoading && <LoadingState variant="table" rows={8} label="Loading roster" />}
 
       {gradebookQuery.isError && (
         <ErrorState
-          title="You can't grade this class"
-          message="This assessment isn't in a class you're assigned to."
+          title="You can't grade this offering"
+          message="This assessment isn't in an offering you're assigned to."
           onRetry={() => void gradebookQuery.refetch()}
         />
       )}
@@ -180,7 +181,13 @@ export function AssessmentGradingScreen() {
         <>
           <PageHeader
             title={assessment.title}
-            subtitle={gradebook.class_subject?.display_name}
+            subtitle={
+              gradebook.offering
+                ? [gradebook.offering.offering.label, gradebook.semester?.name]
+                    .filter(Boolean)
+                    .join(' · ')
+                : undefined
+            }
             primaryAction={
               canEdit ? (
                 <Button

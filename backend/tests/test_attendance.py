@@ -22,12 +22,11 @@ from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.modules.attendance.models import AttendanceRecord
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
@@ -82,25 +81,24 @@ class _Graph:
         )
         db_session.add(self.sem)
 
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"AAA Sec {tag}", grade_level="Form 1",
-            section="A", homeroom_label=f"Room {tag}",
-        )
-        self.other_section = Class(
-            academic_year_id=self.year.id, name=f"ZZZ Other {tag}", grade_level="Form 2",
-            section="B",
-        )
-        db_session.add_all([self.section, self.other_section])
-        self.subject = Subject(name=f"Subj {tag}", code=tag.upper())
+        self.subject = Course(name=f"Subj {tag}", code=tag.upper())
         db_session.add(self.subject)
         db_session.flush()
 
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
-        self.other_cs = ClassSubject(
-            class_id=self.other_section.id, subject_id=self.subject.id, is_active=True
-        )
+        self.cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
+        self.other_cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add_all([self.cs, self.other_cs])
         db_session.flush()
+        self.other_section = self.other_cs
+        self.section = self.cs
 
         self.teacher_user = make_user(role=Role.TEACHER, full_name="Maria Reyes")
         self.teacher = TeacherProfile(
@@ -109,7 +107,7 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
 
         # Owns the OTHER section only.
         self.other_teacher_user = make_user(role=Role.TEACHER, full_name="Other Teacher")
@@ -120,7 +118,7 @@ class _Graph:
         db_session.add(self.other_teacher)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
+            ClassTeacher(offering_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
         )
         db_session.flush()
 
@@ -148,7 +146,7 @@ class _Graph:
         enr = None
         if enroll:
             enr = ClassEnrollment(
-                class_id=(section or self.section).id, student_id=s.id, semester_id=self.sem.id
+                offering_id=(section or self.section).id, student_id=s.id, semester_id=self.sem.id
             )
             self._db.add(enr)
             self._db.flush()
@@ -156,7 +154,7 @@ class _Graph:
 
     def record(self, student, enrollment, *, status="present", on=None, section=None):
         r = AttendanceRecord(
-            class_id=(section or self.section).id,
+            offering_id=(section or self.section).id,
             student_id=student.id,
             enrollment_id=enrollment.id,
             semester_id=self.sem.id,
@@ -170,6 +168,17 @@ class _Graph:
     def student_headers(self, student):
         return self._auth_headers(user_id=student._login.id, role=Role.STUDENT)
 
+    def label(self, offering) -> str:  # noqa: ANN001
+        """The label the API sends for `offering`.
+
+        Built with the SERVER's `offering_label`, not re-spelled here: deriving the label
+        in one place buys nothing if the test hardcodes a second formula that happens to
+        agree today. Both offerings in this graph teach `self.subject`.
+        """
+        from app.modules.offerings.labels import offering_label
+
+        return offering_label(self.subject.code, offering.section_code)
+
 
 @pytest.fixture
 def graph(db_session, make_user, auth_headers, archive_seeded_active_year) -> _Graph:
@@ -179,46 +188,46 @@ def graph(db_session, make_user, auth_headers, archive_seeded_active_year) -> _G
 # ════════════════════════════════════════════════════════════════════════════
 class TestAuthGate:
     def test_sections_requires_auth(self, client) -> None:
-        assert client.get(f"{AT}/sections").status_code == 401
+        assert client.get(f"{AT}/offerings").status_code == 401
 
     def test_register_requires_auth(self, client) -> None:
-        assert client.get(f"{AT}?section_id={uuid.uuid4()}").status_code == 401
+        assert client.get(f"{AT}?offering_id={uuid.uuid4()}").status_code == 401
 
     def test_upsert_requires_auth(self, client) -> None:
-        body = {"section_id": str(uuid.uuid4()), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(uuid.uuid4()), "date": "2025-10-15", "entries": []}
         assert client.put(AT, json=body).status_code == 401
 
     def test_summary_requires_auth(self, client) -> None:
-        assert client.get(f"{AT}/summary?section_id={uuid.uuid4()}").status_code == 401
+        assert client.get(f"{AT}/summary?offering_id={uuid.uuid4()}").status_code == 401
 
     def test_me_requires_auth(self, client) -> None:
         assert client.get(f"{AT}/me").status_code == 401
 
     def test_student_forbidden_on_sections(self, client, graph) -> None:
         s, _ = graph.student(with_login=True)
-        r = client.get(f"{AT}/sections", headers=graph.student_headers(s))
+        r = client.get(f"{AT}/offerings", headers=graph.student_headers(s))
         assert r.status_code == 403
         _assert_envelope(r.json(), code="forbidden")
 
     def test_student_forbidden_on_register(self, client, graph) -> None:
         s, _ = graph.student(with_login=True)
-        r = client.get(f"{AT}?section_id={graph.section.id}", headers=graph.student_headers(s))
+        r = client.get(f"{AT}?offering_id={graph.section.id}", headers=graph.student_headers(s))
         assert r.status_code == 403
 
     def test_student_forbidden_on_summary(self, client, graph) -> None:
         s, _ = graph.student(with_login=True)
-        r = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.student_headers(s))
+        r = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.student_headers(s))
         assert r.status_code == 403
 
     def test_principal_forbidden_on_upsert(self, client, graph) -> None:
         """Unusual for this codebase: P/S read the register but cannot mark it."""
-        body = {"section_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
         r = client.put(AT, json=body, headers=graph.P)
         assert r.status_code == 403
         _assert_envelope(r.json(), code="forbidden")
 
     def test_secretary_forbidden_on_upsert(self, client, graph) -> None:
-        body = {"section_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
         assert client.put(AT, json=body, headers=graph.S).status_code == 403
 
     def test_teacher_forbidden_on_me(self, client, graph) -> None:
@@ -229,12 +238,12 @@ class TestAuthGate:
 # ════════════════════════════════════════════════════════════════════════════
 class TestSections:
     def test_teacher_sees_only_sections_they_teach_in(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{AT}/sections", headers=graph.H).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{AT}/offerings", headers=graph.H).json()["items"]}
         assert str(graph.section.id) in ids
         assert str(graph.other_section.id) not in ids
 
     def test_principal_sees_all_sections(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{AT}/sections", headers=graph.P).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{AT}/offerings", headers=graph.P).json()["items"]}
         assert {str(graph.section.id), str(graph.other_section.id)} <= ids
 
     def test_year_filter(self, client, graph, db_session) -> None:
@@ -244,13 +253,13 @@ class TestSections:
         )
         db_session.add(older)
         db_session.flush()
-        r = client.get(f"{AT}/sections?academic_year_id={older.id}", headers=graph.P)
+        r = client.get(f"{AT}/offerings?academic_year_id={older.id}", headers=graph.P)
         assert r.json()["items"] == []
 
     def test_archived_sections_excluded_when_no_year_given(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
         db_session.flush()
-        ids = {i["id"] for i in client.get(f"{AT}/sections", headers=graph.P).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{AT}/offerings", headers=graph.P).json()["items"]}
         assert str(graph.section.id) not in ids
 
     def test_enrolled_count_counts_active_enrollments(self, client, graph, db_session) -> None:
@@ -261,48 +270,83 @@ class TestSections:
         _dropped, dropped_enr = graph.student()
         dropped_enr.unenrolled_at = utcnow()
         db_session.flush()
-        item = next(i for i in client.get(f"{AT}/sections", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.section.id))
+        item = next(i for i in client.get(f"{AT}/offerings", headers=graph.H).json()["items"]
+                    if i["offering"]["id"] == str(graph.section.id))
         assert item["enrolled_count"] == 2
 
     def test_teachers_use_the_key_name_not_full_name(self, client, graph) -> None:
         """Binding: the attendance screens read `t.name`. Grades' ref uses full_name."""
-        item = next(i for i in client.get(f"{AT}/sections", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.section.id))
+        item = next(i for i in client.get(f"{AT}/offerings", headers=graph.H).json()["items"]
+                    if i["offering"]["id"] == str(graph.section.id))
         assert item["teachers"][0]["name"] == "Maria Reyes"
         assert "full_name" not in item["teachers"][0]
 
-    def test_teachers_deduped_across_offerings(self, client, graph, db_session) -> None:
-        """The same teacher on two subjects of one section appears once."""
-        second_subject = Subject(name=f"Second {graph.tag}", code=f"S{graph.tag[:3].upper()}")
+    def test_a_teacher_on_two_offerings_is_listed_on_each_separately(
+        self, client, graph, db_session
+    ) -> None:
+        """D31 REPLACED a dedup test whose premise is gone.
+
+        This used to assert that a teacher taking two SUBJECTS of one homeroom appeared
+        once on that homeroom's register — a real concern when one `classes` row taught
+        seven subjects and the picker had to collapse them. An offering teaches exactly
+        one course, so there is nothing left to collapse.
+
+        What matters instead is the property that dedup used to protect: each register
+        names ITS OWN staff. A teacher on two offerings must appear on both, and neither
+        may pick up the other's teachers.
+        """
+        second_subject = Course(name=f"Second {graph.tag}", code=f"S{graph.tag[:3].upper()}")
         db_session.add(second_subject)
         db_session.flush()
-        cs2 = ClassSubject(class_id=graph.section.id, subject_id=second_subject.id, is_active=True)
+        cs2 = CourseOffering(
+            course_id=second_subject.id,
+            semester_id=graph.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
         db_session.add(cs2)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=cs2.id, teacher_id=graph.teacher.id))
+        db_session.add(ClassTeacher(offering_id=cs2.id, teacher_id=graph.teacher.id))
         db_session.flush()
-        item = next(i for i in client.get(f"{AT}/sections", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.section.id))
-        assert [t["name"] for t in item["teachers"]] == ["Maria Reyes"]
+
+        items = {
+            i["offering"]["id"]: i
+            for i in client.get(f"{AT}/offerings", headers=graph.H).json()["items"]
+        }
+        assert [t["name"] for t in items[str(graph.section.id)]["teachers"]] == ["Maria Reyes"]
+        assert [t["name"] for t in items[str(cs2.id)]["teachers"]] == ["Maria Reyes"]
+        # And the other teacher's offering is not in this teacher's picker at all.
+        assert str(graph.other_section.id) not in items
 
     def test_can_record_only_for_teacher(self, client, graph) -> None:
-        assert client.get(f"{AT}/sections", headers=graph.H).json()["can_record"] is True
-        assert client.get(f"{AT}/sections", headers=graph.P).json()["can_record"] is False
-        assert client.get(f"{AT}/sections", headers=graph.S).json()["can_record"] is False
+        assert client.get(f"{AT}/offerings", headers=graph.H).json()["can_record"] is True
+        assert client.get(f"{AT}/offerings", headers=graph.P).json()["can_record"] is False
+        assert client.get(f"{AT}/offerings", headers=graph.S).json()["can_record"] is False
 
-    def test_homeroom_label_and_section_coerce_to_empty_string(self, client, graph, db_session) -> None:
-        graph.section.homeroom_label = None
-        graph.section.section = None
-        db_session.flush()
-        item = next(i for i in client.get(f"{AT}/sections", headers=graph.P).json()["items"]
-                    if i["id"] == str(graph.section.id))
-        assert item["homeroom_label"] == ""
-        assert item["section"] == ""
+    def test_the_picker_sends_a_derived_label_not_a_stored_name(self, client, graph) -> None:
+        """D31 replaced this file's `homeroom_label`/`section` coercion test.
 
-    def test_items_sorted_by_name(self, client, graph) -> None:
-        names = [i["name"] for i in client.get(f"{AT}/sections", headers=graph.P).json()["items"]]
-        assert names == sorted(names)
+        Those columns are gone, and with them the "nullable in the ORM, non-nullable in
+        the frontend type" coercion they existed to pin. What replaces them is the thing
+        that can now go wrong instead: the label is DERIVED, so the register must be told
+        what an offering is called rather than reading a column.
+        """
+        item = next(
+            i
+            for i in client.get(f"{AT}/offerings", headers=graph.P).json()["items"]
+            if i["offering"]["id"] == str(graph.section.id)
+        )
+        assert item["offering"]["label"] == graph.label(graph.section)
+        assert item["offering"]["course"]["code"]
+
+    def test_items_sorted_by_course_code_then_section(self, client, graph) -> None:
+        """Ordered in SQL by `OFFERING_ORDER`, never by the formatted label — "MATH1110-2"
+        sorts before "MATH1110-10" as a string."""
+        items = client.get(f"{AT}/offerings", headers=graph.P).json()["items"]
+        keys = [
+            (i["offering"]["course"]["code"], i["offering"]["section_code"] or "")
+            for i in items
+        ]
+        assert keys == sorted(keys)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -313,43 +357,43 @@ class TestRegisterRead:
         _assert_envelope(r.json(), code="validation_error")
 
     def test_unknown_section_404(self, client, graph) -> None:
-        r = client.get(f"{AT}?section_id={uuid.uuid4()}", headers=graph.P)
+        r = client.get(f"{AT}?offering_id={uuid.uuid4()}", headers=graph.P)
         assert r.status_code == 404
         _assert_envelope(r.json(), code="not_found")
 
     def test_teacher_not_on_the_section_404(self, client, graph) -> None:
-        r = client.get(f"{AT}?section_id={graph.other_section.id}", headers=graph.H)
+        r = client.get(f"{AT}?offering_id={graph.other_section.id}", headers=graph.H)
         assert r.status_code == 404
 
     def test_unrecorded_students_have_null_status(self, client, graph) -> None:
         graph.student()
         graph.student()
-        body = client.get(f"{AT}?section_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
         assert len(body["entries"]) == 2
         assert all(e["status"] is None and e["recorded_at"] is None for e in body["entries"])
 
     def test_recorded_students_report_status_and_recorded_at(self, client, graph) -> None:
         s, e = graph.student()
         rec = graph.record(s, e, status="late", on=date(2025, 10, 15))
-        body = client.get(f"{AT}?section_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
         entry = next(x for x in body["entries"] if x["student"]["id"] == str(s.id))
         assert entry["status"] == "late"
         assert entry["recorded_at"] is not None
         assert entry["enrollment_id"] == str(e.id)
 
     def test_date_defaults_to_today(self, client, graph) -> None:
-        body = client.get(f"{AT}?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}", headers=graph.H).json()
         assert body["date"] == _school_today().isoformat()
 
     def test_entries_sorted_by_student_name(self, client, graph) -> None:
         graph.student(name="Zoe Last")
         graph.student(name="Ana First")
-        body = client.get(f"{AT}?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}", headers=graph.H).json()
         assert [e["student"]["full_name"] for e in body["entries"]] == ["Ana First", "Zoe Last"]
 
     def test_last_recorded_is_null_when_nothing_recorded(self, client, graph) -> None:
         graph.student()
-        body = client.get(f"{AT}?section_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
         assert body["last_recorded"] is None
 
     def test_last_recorded_by_is_a_plain_name_string(self, client, graph) -> None:
@@ -358,13 +402,13 @@ class TestRegisterRead:
         client.put(
             AT,
             json={
-                "section_id": str(graph.section.id),
+                "offering_id": str(graph.section.id),
                 "date": "2025-10-15",
                 "entries": [{"student_id": str(s.id), "status": "present"}],
             },
             headers=graph.H,
         )
-        body = client.get(f"{AT}?section_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}&date=2025-10-15", headers=graph.H).json()
         assert isinstance(body["last_recorded"]["by"], str)
         assert body["last_recorded"]["by"] == "Maria Reyes"
         assert set(body["last_recorded"].keys()) == {"by", "at"}
@@ -375,12 +419,12 @@ class TestRegisterRead:
         gone, gone_enr = graph.student()
         gone_enr.unenrolled_at = utcnow()
         db_session.flush()
-        body = client.get(f"{AT}?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}", headers=graph.H).json()
         assert str(gone.id) not in {e["student"]["id"] for e in body["entries"]}
 
     def test_principal_can_read_with_can_record_false(self, client, graph) -> None:
         graph.student()
-        body = client.get(f"{AT}?section_id={graph.section.id}", headers=graph.P).json()
+        body = client.get(f"{AT}?offering_id={graph.section.id}", headers=graph.P).json()
         assert body["can_record"] is False
         assert len(body["entries"]) == 1
 
@@ -388,7 +432,7 @@ class TestRegisterRead:
 # ════════════════════════════════════════════════════════════════════════════
 class TestRegisterUpsert:
     def _body(self, graph, entries, on="2025-10-15"):
-        return {"section_id": str(graph.section.id), "date": on, "entries": entries}
+        return {"offering_id": str(graph.section.id), "date": on, "entries": entries}
 
     def test_happy_path_returns_count_and_summary(self, client, graph) -> None:
         s1, _ = graph.student()
@@ -415,14 +459,14 @@ class TestRegisterUpsert:
 
         count = db_session.scalar(
             select(func.count()).select_from(AttendanceRecord).where(
-                AttendanceRecord.class_id == graph.section.id,
+                AttendanceRecord.offering_id == graph.section.id,
                 AttendanceRecord.student_id == s.id,
                 AttendanceRecord.attendance_date == date(2025, 10, 15),
             )
         )
         row = db_session.scalar(
             select(AttendanceRecord).where(
-                AttendanceRecord.class_id == graph.section.id,
+                AttendanceRecord.offering_id == graph.section.id,
                 AttendanceRecord.student_id == s.id,
             )
         )
@@ -432,7 +476,7 @@ class TestRegisterUpsert:
     def test_non_owning_teacher_404(self, client, graph) -> None:
         s, _ = graph.student()
         body = {
-            "section_id": str(graph.other_section.id),
+            "offering_id": str(graph.other_section.id),
             "date": "2025-10-15",
             "entries": [{"student_id": str(s.id), "status": "present"}],
         }
@@ -519,7 +563,7 @@ class TestRegisterUpsert:
         assert r.status_code == 422
         written = db_session.scalar(
             select(func.count()).select_from(AttendanceRecord).where(
-                AttendanceRecord.class_id == graph.section.id
+                AttendanceRecord.offering_id == graph.section.id
             )
         )
         assert written == 0
@@ -569,8 +613,8 @@ class TestSummary:
     def test_shapes(self, client, graph) -> None:
         s, e = graph.student()
         graph.record(s, e, status="present", on=date(2025, 10, 15))
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
-        assert set(body.keys()) == {"section", "overall", "by_date", "by_student"}
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
+        assert set(body.keys()) == {"offering", "overall", "by_date", "by_student"}
         assert body["by_date"][0]["date"] == "2025-10-15"
         assert body["by_student"][0]["student"]["id"] == str(s.id)
 
@@ -582,7 +626,7 @@ class TestSummary:
         graph.record(s1, e1, status="present", on=date(2025, 10, 15))
         graph.record(s2, e2, status="late", on=date(2025, 10, 15))
         graph.record(s3, e3, status="absent", on=date(2025, 10, 15))
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
         # 2 of 3 -> 66.7, NOT 33.3 (which a present-only formula would give).
         assert body["overall"]["pct_present"] == 66.7
 
@@ -590,12 +634,12 @@ class TestSummary:
         for status in ("present", "present", "absent"):
             s, e = graph.student()
             graph.record(s, e, status=status, on=date(2025, 10, 15))
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
         assert body["overall"]["pct_present"] == 66.7
 
     def test_zero_records_yields_zero_not_a_division_error(self, client, graph) -> None:
         graph.student()
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
         assert body["overall"]["pct_present"] == 0.0
         assert body["overall"]["present"] == 0
         assert body["by_date"] == []
@@ -604,7 +648,7 @@ class TestSummary:
         s, e = graph.student()
         for day in (date(2025, 10, 17), date(2025, 10, 15), date(2025, 10, 16)):
             graph.record(s, e, status="present", on=day)
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
         dates = [d["date"] for d in body["by_date"]]
         assert dates == sorted(dates)
 
@@ -612,7 +656,7 @@ class TestSummary:
         marked, e = graph.student(name="AAA Marked")
         graph.student(name="BBB Never Marked")
         graph.record(marked, e, status="present", on=date(2025, 10, 15))
-        body = client.get(f"{AT}/summary?section_id={graph.section.id}", headers=graph.H).json()
+        body = client.get(f"{AT}/summary?offering_id={graph.section.id}", headers=graph.H).json()
         rows = {r["student"]["full_name"]: r for r in body["by_student"]}
         assert rows["BBB Never Marked"]["present"] == 0
         assert rows["BBB Never Marked"]["pct_present"] == 0.0
@@ -621,13 +665,13 @@ class TestSummary:
         s, e = graph.student()
         graph.record(s, e, status="present", on=date(2025, 10, 1))
         graph.record(s, e, status="absent", on=date(2025, 11, 1))
-        url = f"{AT}/summary?section_id={graph.section.id}&from=2025-10-20&to=2025-11-30"
+        url = f"{AT}/summary?offering_id={graph.section.id}&from=2025-10-20&to=2025-11-30"
         body = client.get(url, headers=graph.H).json()
         assert body["overall"]["present"] == 0
         assert body["overall"]["absent"] == 1
 
     def test_non_owning_teacher_404(self, client, graph) -> None:
-        r = client.get(f"{AT}/summary?section_id={graph.other_section.id}", headers=graph.H)
+        r = client.get(f"{AT}/summary?offering_id={graph.other_section.id}", headers=graph.H)
         assert r.status_code == 404
 
     def test_missing_section_id_422(self, client, graph) -> None:

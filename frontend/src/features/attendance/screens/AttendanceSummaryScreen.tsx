@@ -12,7 +12,7 @@ import {
   type DataTableColumn,
 } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
-import { useAttendanceSections, useAttendanceSummary } from '../hooks/useAttendance';
+import { useAttendanceOfferings, useAttendanceSummary } from '../hooks/useAttendance';
 import { AttendanceToolbar } from '../components/AttendanceToolbar';
 import { ATTENDANCE_STATUS_META } from '../attendanceStatus';
 import type { PerStudentAttendance } from '../types';
@@ -26,32 +26,32 @@ function shortDate(iso: string): string {
 }
 
 /**
- * Attendance history / summary (design-system §7.6b, §7 Module 8) — per-section rate over
+ * Attendance history / summary (design-system §7.6b, §7 Module 8) — per-offering rate over
  * the recent (~2-week) window. Reached by teachers (own classes) and P/S (view-all). Shows
  * headline counts (StatCards) + a daily "% present" trend and a status breakdown, each via
  * ChartWithTable so the data is available to screen readers as an equivalent table.
  *
- * The selected section persists to the URL (?section_id=).
+ * The selected offering persists to the URL (?offering_id=).
  */
 export function AttendanceSummaryScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const sectionId = searchParams.get('section_id');
+  const offeringId = searchParams.get('offering_id');
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   // Client-side pagination for the per-student list (the payload arrives whole).
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
 
-  const sectionsQuery = useAttendanceSections(yearId);
-  const summaryQuery = useAttendanceSummary(sectionId);
+  const offeringsQuery = useAttendanceOfferings(yearId);
+  const summaryQuery = useAttendanceSummary(offeringId);
 
-  // Switching year clears the (year-specific) section so the effect re-picks one.
+  // Switching year clears the (year-specific) offering so the effect re-picks one.
   const handleChangeYear = (value: string) =>
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', value);
-        next.delete('section_id');
+        next.delete('offering_id');
         return next;
       },
       { replace: true },
@@ -60,31 +60,31 @@ export function AttendanceSummaryScreen() {
   // Preselect the caller's first available class. As in the register screen, this `items[0]`
   // is a picker default, not a "primary class" assumption (D29).
   useEffect(() => {
-    if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
+    if (!offeringId && offeringsQuery.data && offeringsQuery.data.items.length > 0) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set('section_id', sectionsQuery.data!.items[0]!.id);
+          next.set('offering_id', offeringsQuery.data!.items[0]!.offering.id);
           return next;
         },
         { replace: true },
       );
     }
-  }, [sectionId, sectionsQuery.data, setSearchParams]);
+  }, [offeringId, offeringsQuery.data, setSearchParams]);
 
   // Reset the per-student list to page 1 whenever the class changes.
-  useEffect(() => setPage(0), [sectionId]);
+  useEffect(() => setPage(0), [offeringId]);
 
-  const handleChangeSection = (value: string) =>
+  const handleChangeOffering = (value: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set('section_id', value);
+      next.set('offering_id', value);
       return next;
     });
 
-  if (sectionsQuery.isLoading) return <LoadingState variant="page" label="Loading classes" />;
-  if (sectionsQuery.isError) return <ErrorState onRetry={() => void sectionsQuery.refetch()} />;
-  if (sectionsQuery.data && sectionsQuery.data.items.length === 0) {
+  if (offeringsQuery.isLoading) return <LoadingState variant="page" label="Loading course offerings" />;
+  if (offeringsQuery.isError) return <ErrorState onRetry={() => void offeringsQuery.refetch()} />;
+  if (offeringsQuery.data && offeringsQuery.data.items.length === 0) {
     return (
       <>
         <PageHeader title="Attendance summary" />
@@ -136,15 +136,15 @@ export function AttendanceSummaryScreen() {
         title="Attendance summary"
         subtitle={
           summaryQuery.data
-            ? `${summaryQuery.data.section.name} · last two weeks`
-            : 'Per-section attendance over the recent window'
+            ? `${summaryQuery.data.offering.offering.label} · last two weeks`
+            : 'Per-offering attendance over the recent window'
         }
       />
 
       <AttendanceToolbar
-        sections={sectionsQuery.data?.items ?? []}
-        sectionId={sectionId}
-        onSectionChange={handleChangeSection}
+        offerings={offeringsQuery.data?.items ?? []}
+        offeringId={offeringId}
+        onOfferingChange={handleChangeOffering}
         showDate={false}
         years={years}
         yearId={yearId}

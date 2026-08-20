@@ -4,12 +4,14 @@ import {
   DEMO_DATASET,
   DEMO_TODAY,
   announcementsForUser,
-  getSection,
+  getCourse,
+  getOffering,
+  offeringLabel,
+  offeringsOwnedByTeacher,
   paginate,
-  sectionsOwnedByTeacher,
   unreadCountForUser,
 } from '@shared/api/mocks/demo/dataset';
-import type { DemoAnnouncement, DemoSection, DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoAnnouncement, DemoOffering, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
 import { pendingRevisionsFor } from './revisions';
 
@@ -19,7 +21,14 @@ import { pendingRevisionsFor } from './revisions';
  * Backs features/announcements/** offline against the shared demo dataset so the
  * targeted feed, detail, compose/edit, delete, mark-read and unread-count all render
  * real, reconciled data without a backend. Response shapes match the api-spec models
- * (AnnouncementListItem / AnnouncementDetail / UserRef / ClassRef).
+ * (AnnouncementListItem / AnnouncementDetail / AnnouncementAuthorRef /
+ * AnnouncementOfferingRef).
+ *
+ * **D31** — the `class` audience targets an OFFERING (`offering_id`), and the 422 code is
+ * `class_audience_requires_offering_id`. The audience enum member `'class'` is unchanged: it
+ * is a shared wire value, and the backend's CHECK constraint
+ * `ck_announcements_offering_audience` still enforces "audience='class' iff a target is set"
+ * — a stakeholder rule, re-created rather than dropped when the column was re-pointed.
  *
  * "Current user" is resolved from the mock session role cookie (auth.ts sets
  * `sis_mock_session=<role>`) → a canonical seeded dataset user per role, exactly like
@@ -30,7 +39,7 @@ import { pendingRevisionsFor } from './revisions';
  * Endpoints (api-spec §5 Module 9):
  *   GET    /announcements                — targeted feed, Page[AnnouncementListItem]
  *   GET    /announcements/unread-count   — { unread_count }
- *   GET    /announcements/target-classes — sections the caller may target (compose picker)
+ *   GET    /announcements/target-offerings — offerings the caller may target (compose picker)
  *   GET    /announcements/{id}           — AnnouncementDetail (404 if not targeted)
  *   POST   /announcements                — create (per-audience ownership rule)
  *   PATCH  /announcements/{id}           — edit (author or principal)
@@ -46,7 +55,7 @@ const D = DEMO_DATASET;
 // Reyes) — the same seeded user every other handler (dashboard/grades/attendance/
 // assessments/students) resolves the "teacher" session to — so the acting teacher is
 // the same person across every tab. She owns sections, so class/teacher/all-audience
-// announcements reach her; the student (user-stu-1, Ana Lopez) receives section notices.
+// announcements reach her; the student (user-stu-1, Freddy Lopez) receives offering notices.
 const USER_BY_ROLE: Record<string, string> = {
   principal: 'user-principal',
   secretary: 'user-secretary',
@@ -72,11 +81,21 @@ function userRef(userId: string) {
   return { id: userId, full_name: u?.full_name ?? 'Unknown', role: u?.role ?? 'principal' };
 }
 
-function classRef(sectionId: string | null) {
-  if (!sectionId) return null;
-  const sec = getSection(sectionId);
-  if (!sec) return null;
-  return { id: sec.id, name: sec.name, grade_level: sec.grade_level };
+/**
+ * The narrow offering ref a feed row needs: the derived label plus the course name.
+ *
+ * Not the full shared `OfferingRef` — nothing on an announcement reads the term, the section
+ * code or the credits, and shipping them would invite a screen to start depending on them.
+ */
+function offeringRef(offeringId: string | null) {
+  if (!offeringId) return null;
+  const offering = getOffering(offeringId);
+  if (!offering) return null;
+  return {
+    id: offering.id,
+    label: offeringLabel(offering),
+    course_name: getCourse(offering.course_id)?.name ?? null,
+  };
 }
 
 const BODY_PREVIEW_LEN = 140;
@@ -91,7 +110,7 @@ function listItem(a: DemoAnnouncement, userId: string) {
     title: a.title,
     body_preview: bodyPreview(a.body),
     audience: a.audience,
-    class_ref: classRef(a.section_id),
+    offering: offeringRef(a.offering_id),
     author: userRef(a.author_user_id),
     published_at: a.published_at,
     expires_at: a.expires_at,
@@ -105,7 +124,7 @@ function detail(a: DemoAnnouncement, userId: string) {
     title: a.title,
     body: a.body,
     audience: a.audience,
-    class_ref: classRef(a.section_id),
+    offering: offeringRef(a.offering_id),
     author: userRef(a.author_user_id),
     published_at: a.published_at,
     expires_at: a.expires_at,
@@ -113,27 +132,27 @@ function detail(a: DemoAnnouncement, userId: string) {
   };
 }
 
-/** True if `user` may create an announcement with this audience/section (FR-ANN-02/07). */
-function canCreate(user: DemoUser, audience: string, sectionId: string | null): boolean {
+/** True if `user` may create an announcement with this audience/target (FR-ANN-02/07). */
+function canCreate(user: DemoUser, audience: string, offeringId: string | null): boolean {
   if (user.role === 'principal' || user.role === 'secretary') return true;
   if (user.role === 'teacher') {
-    // A teacher may only post to a section they own a subject of — never broadcast.
-    if (audience !== 'class' || !sectionId) return false;
+    // A lecturer may only post to an offering they teach — never broadcast.
+    if (audience !== 'class' || !offeringId) return false;
     const teacher = D.teachers.find((t) => t.user_id === user.id);
     if (!teacher) return false;
-    return sectionsOwnedByTeacher(teacher.id).some((s) => s.id === sectionId);
+    return offeringsOwnedByTeacher(teacher.id).some((o) => o.id === offeringId);
   }
   return false; // students never
 }
 
-/** Sections the caller may target with a `class` announcement (compose picker source). */
-function targetableSections(user: DemoUser): DemoSection[] {
+/** Offerings the caller may target with a `class` announcement (compose picker source). */
+function targetableOfferings(user: DemoUser): DemoOffering[] {
   if (user.role === 'principal' || user.role === 'secretary') {
-    return D.sections.filter((s) => !s.is_archived);
+    return D.offerings.filter((o) => !o.is_archived);
   }
   if (user.role === 'teacher') {
     const teacher = D.teachers.find((t) => t.user_id === user.id);
-    return teacher ? sectionsOwnedByTeacher(teacher.id).filter((s) => !s.is_archived) : [];
+    return teacher ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived) : [];
   }
   return [];
 }
@@ -142,7 +161,7 @@ interface AnnouncementWriteBody {
   title?: string;
   body?: string;
   audience?: DemoAnnouncement['audience'];
-  class_id?: string | null;
+  offering_id?: string | null;
   published_at?: string | null;
   expires_at?: string | null;
 }
@@ -188,15 +207,15 @@ export const announcementsHandlers = [
     });
   }),
 
-  // ── GET /announcements/target-classes — sections the caller may target ────────
-  // (Not in the public api-spec surface; a demo-only helper so the compose dialog has
-  //  a self-contained, role-scoped section source without reaching into /classes.)
-  http.get(`${API_BASE_URL}/announcements/target-classes`, ({ cookies }) => {
+  // ── GET /announcements/target-offerings — offerings the caller may target ─────
+  // A role-scoped source for the compose dialog, so it does not have to reach into
+  // /offerings and re-derive who may be targeted.
+  http.get(`${API_BASE_URL}/announcements/target-offerings`, ({ cookies }) => {
     const user = currentUser(cookies);
-    const items = targetableSections(user).map((s) => ({
-      id: s.id,
-      name: s.name,
-      grade_level: s.grade_level,
+    const items = targetableOfferings(user).map((o) => ({
+      id: o.id,
+      label: offeringLabel(o),
+      course_name: getCourse(o.course_id)?.name ?? null,
     }));
     return HttpResponse.json({ items });
   }),
@@ -220,7 +239,7 @@ export const announcementsHandlers = [
     const user = currentUser(cookies);
     const body = (await request.json()) as AnnouncementWriteBody;
     const audience = body.audience ?? 'all';
-    const sectionId = audience === 'class' ? (body.class_id ?? null) : null;
+    const offeringId = audience === 'class' ? (body.offering_id ?? null) : null;
 
     if (!body.title?.trim() || !body.body?.trim()) {
       return errorResponse(422, 'validation_error', 'Title and body are required.', {
@@ -228,12 +247,12 @@ export const announcementsHandlers = [
         ...(body.body?.trim() ? {} : { body: ['Body is required.'] }),
       });
     }
-    if (audience === 'class' && !sectionId) {
+    if (audience === 'class' && !offeringId) {
       return errorResponse(
         422,
-        'class_audience_requires_class_id',
-        'Choose a class for a class-targeted announcement.',
-        { class_id: ['A class is required for this audience.'] },
+        'class_audience_requires_offering_id',
+        'Choose a course offering for an offering-targeted announcement.',
+        { offering_id: ['An offering is required for this audience.'] },
       );
     }
     if (user.role === 'teacher' && audience !== 'class') {
@@ -243,7 +262,7 @@ export const announcementsHandlers = [
         'Teachers can only post announcements to their own classes.',
       );
     }
-    if (!canCreate(user, audience, sectionId)) {
+    if (!canCreate(user, audience, offeringId)) {
       return errorResponse(403, 'forbidden', 'You cannot post to this audience.');
     }
 
@@ -259,7 +278,7 @@ export const announcementsHandlers = [
       title: body.title.trim(),
       body: body.body.trim(),
       audience,
-      section_id: sectionId,
+      offering_id: offeringId,
       author_user_id: user.id,
       published_at: publishedAt,
       expires_at: body.expires_at ?? null,
@@ -279,7 +298,7 @@ export const announcementsHandlers = [
     }
     const body = (await request.json()) as AnnouncementWriteBody;
     const audience = body.audience ?? a.audience;
-    const sectionId = audience === 'class' ? (body.class_id ?? a.section_id) : null;
+    const offeringId = audience === 'class' ? (body.offering_id ?? a.offering_id) : null;
 
     if (body.title !== undefined && !body.title.trim()) {
       return errorResponse(422, 'validation_error', 'Title cannot be empty.', {
@@ -291,17 +310,17 @@ export const announcementsHandlers = [
         body: ['Body is required.'],
       });
     }
-    if (audience === 'class' && !sectionId) {
+    if (audience === 'class' && !offeringId) {
       return errorResponse(
         422,
-        'class_audience_requires_class_id',
-        'Choose a class for a class-targeted announcement.',
-        { class_id: ['A class is required for this audience.'] },
+        'class_audience_requires_offering_id',
+        'Choose a course offering for an offering-targeted announcement.',
+        { offering_id: ['An offering is required for this audience.'] },
       );
     }
-    // Re-check ownership for the (possibly changed) audience — a teacher edit cannot
-    // escalate to a broadcast or a section they do not own.
-    if (user.role === 'teacher' && !canCreate(user, audience, sectionId)) {
+    // Re-check ownership for the (possibly changed) audience — a lecturer edit cannot
+    // escalate to a broadcast or an offering they do not teach.
+    if (user.role === 'teacher' && !canCreate(user, audience, offeringId)) {
       return errorResponse(
         403,
         'teacher_cannot_broadcast',
@@ -318,7 +337,7 @@ export const announcementsHandlers = [
     if (body.title !== undefined) a.title = body.title.trim();
     if (body.body !== undefined) a.body = body.body.trim();
     a.audience = audience;
-    a.section_id = sectionId;
+    a.offering_id = offeringId;
     if (body.published_at !== undefined && body.published_at) a.published_at = body.published_at;
     if (body.expires_at !== undefined) a.expires_at = body.expires_at ?? null;
     return HttpResponse.json(detail(a, user.id));

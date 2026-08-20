@@ -40,7 +40,7 @@ class PrerequisiteItem(BaseModel):
 
 
 class PrerequisiteList(BaseModel):
-    """GET /subjects/{id}/prerequisites."""
+    """GET /courses/{id}/prerequisites."""
 
     items: list[PrerequisiteItem]
     #: The raw string from the course-sequence PDF, for comparison. DOCUMENTATION

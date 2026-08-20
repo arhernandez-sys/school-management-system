@@ -37,12 +37,11 @@ import pytest
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.attendance.models import AttendanceRecord
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, Semester
@@ -58,10 +57,14 @@ V1 = "/api/v1"
 class _Year:
     """One academic year's worth of rows, all tagged so assertions can tell them apart."""
 
-    def __init__(self, year, sem, section, cs, assessment, category, enrollment):  # noqa: ANN001
+    def __init__(self, year, sem, cs, assessment, category, enrollment):  # noqa: ANN001
         self.year = year
         self.sem = sem
-        self.section = section
+        # D31: one row, not two. `section` and `cs` were a homeroom and the subject
+        # attached to it; an offering is both. Kept as two names so the assertions
+        # below still read as "the section" or "the class_subject" where that is what
+        # they are talking about.
+        self.section = cs
         self.cs = cs
         self.assessment = assessment
         self.category = category
@@ -92,7 +95,7 @@ class _TwoYears:
         tag = uuid.uuid4().hex[:6]
         self.tag = tag
 
-        self.subject = Subject(name=f"YS Subject {tag}", code=f"YS{tag[:4].upper()}")
+        self.subject = Course(name=f"YS Subject {tag}", code=f"YS{tag[:4].upper()}")
         db_session.add(self.subject)
 
         # People first — both years reference them.
@@ -153,7 +156,7 @@ class _TwoYears:
         db_session.flush()
         db_session.add(
             ClassEnrollment(
-                class_id=self.cur.section.id,
+                offering_id=self.cur.section.id,
                 student_id=self.cur_only_student.id,
                 semester_id=self.cur.sem.id,
             )
@@ -183,34 +186,32 @@ class _TwoYears:
             end_date=end,
             is_active=sem_active,
         )
-        section = Class(
-            academic_year_id=year.id,
-            name=section_name,
-            grade_level="Form 1",
-            section="A",
-        )
-        db.add_all([sem, section])
+        db.add_all([sem])
         db.flush()
 
-        cs = ClassSubject(class_id=section.id, subject_id=self.subject.id, is_active=True)
+        cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db.add(cs)
         db.flush()
 
-        db.add(ClassTeacher(class_subject_id=cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db.add(ClassTeacher(offering_id=cs.id, teacher_id=self.teacher.id, is_lead=True))
         enrollment = ClassEnrollment(
-            class_id=section.id, student_id=self.student.id, semester_id=sem.id
+            offering_id=cs.id, student_id=self.student.id, semester_id=sem.id
         )
         db.add(enrollment)
         db.flush()
 
         category = AssessmentCategory(
-            class_subject_id=cs.id, name=f"Cat {name}", weight=Decimal("100"), drop_lowest_count=0
+            offering_id=cs.id, name=f"Cat {name}", weight=Decimal("100"), drop_lowest_count=0
         )
         db.add(category)
         db.flush()
 
         assessment = Assessment(
-            class_subject_id=cs.id,
+            offering_id=cs.id,
             semester_id=sem.id,
             category_id=category.id,
             title=f"Test in {name}",
@@ -236,7 +237,7 @@ class _TwoYears:
         )
         db.add(
             AttendanceRecord(
-                class_id=section.id,
+                offering_id=cs.id,
                 student_id=self.student.id,
                 enrollment_id=enrollment.id,
                 semester_id=sem.id,
@@ -245,7 +246,7 @@ class _TwoYears:
             )
         )
         db.flush()
-        return _Year(year, sem, section, cs, assessment, category, enrollment)
+        return _Year(year, sem, cs, assessment, category, enrollment)
 
     def _add_second_semester(self, target: _Year, *, score: str, attendance_on) -> None:  # noqa: ANN001
         """Give `target` a SECOND semester holding its own distinguishable rows.
@@ -253,7 +254,7 @@ class _TwoYears:
         Needed because the year-level fixture above builds exactly one semester per
         year, so it cannot express the property the student's new year·semester
         switcher needs: *within a single year*, Semester 1 returns S1's data, Semester 2
-        returns S2's data, and they differ. Same year, same section, same offering, same
+        returns S2's data, and they differ. Same year, same same offering, same
         student — only the semester differs, so a `semester_id` filter cannot appear to
         work merely by returning "things this student is attached to".
         """
@@ -270,7 +271,7 @@ class _TwoYears:
         db.flush()
 
         enrollment2 = ClassEnrollment(
-            class_id=target.section.id,
+            offering_id=target.section.id,
             student_id=self.student.id,
             semester_id=sem2.id,
         )
@@ -278,7 +279,7 @@ class _TwoYears:
         db.flush()
 
         assessment2 = Assessment(
-            class_subject_id=target.cs.id,
+            offering_id=target.cs.id,
             semester_id=sem2.id,
             category_id=target.category.id,
             title=f"Sem2 test in {target.year.name}",
@@ -303,7 +304,7 @@ class _TwoYears:
         )
         db.add(
             AttendanceRecord(
-                class_id=target.section.id,
+                offering_id=target.section.id,
                 student_id=self.student.id,
                 enrollment_id=enrollment2.id,
                 semester_id=sem2.id,
@@ -322,20 +323,32 @@ def two(db_session, make_user, auth_headers, archive_seeded_active_year) -> _Two
 
 
 def _ids(body: dict, key: str = "items") -> set[str]:
+    """Ids of the listed rows THEMSELVES — assessment ids from /assessments, and so on."""
     return {str(i["id"]) for i in body[key]}
+
+
+def _offering_ids(body: dict, key: str = "items") -> set[str]:
+    """Ids of the OFFERINGS the listed rows point at.
+
+    Separate from `_ids` on purpose. D31 moved the offering behind a nested `offering`
+    ref on the pickers that used to inline it (attendance, grades), and a helper that
+    guessed which id a row meant would silently compare assessment ids against offering
+    ids on `/assessments`, where BOTH keys are now present.
+    """
+    return {str(i["offering"]["id"]) for i in body[key]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # The staff per-module year filter (`?academic_year_id=`)
 # ══════════════════════════════════════════════════════════════════════════════
 class TestClassesYearFilter:
-    """`GET /classes` — backs ClassesListPage (staff) and StudentClassesPage (student)."""
+    """`GET /offerings` — backs the offerings list (staff) and the student's own list."""
 
     @pytest.mark.parametrize("role", ["P", "S", "T"])
     def test_partitions_sections_by_year(self, client, two, role) -> None:
         headers = getattr(two, role)
-        prev = client.get(f"{V1}/classes?academic_year_id={two.prev.year_id}", headers=headers)
-        cur = client.get(f"{V1}/classes?academic_year_id={two.cur.year_id}", headers=headers)
+        prev = client.get(f"{V1}/offerings?academic_year_id={two.prev.year_id}", headers=headers)
+        cur = client.get(f"{V1}/offerings?academic_year_id={two.cur.year_id}", headers=headers)
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
 
@@ -348,9 +361,9 @@ class TestClassesYearFilter:
     def test_student_sees_only_their_own_section_for_that_year(self, client, two) -> None:
         """The student global switcher drives this call with `academic_year_id`."""
         prev = client.get(
-            f"{V1}/classes?academic_year_id={two.prev.year_id}", headers=two.STU
+            f"{V1}/offerings?academic_year_id={two.prev.year_id}", headers=two.STU
         )
-        cur = client.get(f"{V1}/classes?academic_year_id={two.cur.year_id}", headers=two.STU)
+        cur = client.get(f"{V1}/offerings?academic_year_id={two.cur.year_id}", headers=two.STU)
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
         assert two.prev.section_id in _ids(prev.json())
@@ -377,29 +390,29 @@ class TestAssessmentsYearFilter:
 
 
 class TestAttendanceYearFilter:
-    """`GET /attendance/sections` — the register/summary picker."""
+    """`GET /attendance/offerings` — the register/summary picker."""
 
     @pytest.mark.parametrize("role", ["P", "S", "T"])
     def test_partitions_sections_by_year(self, client, two, role) -> None:
         headers = getattr(two, role)
         prev = client.get(
-            f"{V1}/attendance/sections?academic_year_id={two.prev.year_id}", headers=headers
+            f"{V1}/attendance/offerings?academic_year_id={two.prev.year_id}", headers=headers
         )
         cur = client.get(
-            f"{V1}/attendance/sections?academic_year_id={two.cur.year_id}", headers=headers
+            f"{V1}/attendance/offerings?academic_year_id={two.cur.year_id}", headers=headers
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        assert two.prev.section_id in _ids(prev.json())
-        assert two.cur.section_id not in _ids(prev.json())
-        assert two.cur.section_id in _ids(cur.json())
-        assert two.prev.section_id not in _ids(cur.json())
+        assert two.prev.section_id in _offering_ids(prev.json())
+        assert two.cur.section_id not in _offering_ids(prev.json())
+        assert two.cur.section_id in _offering_ids(cur.json())
+        assert two.prev.section_id not in _offering_ids(cur.json())
 
 
 class TestGradesPickerYearFilter:
-    """`GET /grades/class-subjects` — the gradebook picker.
+    """`GET /grades/offerings` — the gradebook picker.
 
-    Note this endpoint deliberately does NOT filter `class_subjects.is_active`, because
+    Note this endpoint deliberately does NOT filter `is_archived`, because
     past-year offerings are inactive and the year switcher must still list them
     (progress-tracker, Module 7.6). That makes a genuine year filter the ONLY thing
     keeping the picker from showing every year at once.
@@ -409,17 +422,17 @@ class TestGradesPickerYearFilter:
     def test_partitions_offerings_by_year(self, client, two, role) -> None:
         headers = getattr(two, role)
         prev = client.get(
-            f"{V1}/grades/class-subjects?academic_year_id={two.prev.year_id}", headers=headers
+            f"{V1}/grades/offerings?academic_year_id={two.prev.year_id}", headers=headers
         )
         cur = client.get(
-            f"{V1}/grades/class-subjects?academic_year_id={two.cur.year_id}", headers=headers
+            f"{V1}/grades/offerings?academic_year_id={two.cur.year_id}", headers=headers
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        assert str(two.prev.cs.id) in _ids(prev.json())
-        assert str(two.cur.cs.id) not in _ids(prev.json())
-        assert str(two.cur.cs.id) in _ids(cur.json())
-        assert str(two.prev.cs.id) not in _ids(cur.json())
+        assert str(two.prev.cs.id) in _offering_ids(prev.json())
+        assert str(two.cur.cs.id) not in _offering_ids(prev.json())
+        assert str(two.cur.cs.id) in _offering_ids(cur.json())
+        assert str(two.prev.cs.id) not in _offering_ids(cur.json())
 
 
 class TestStudentsListYearFilter:
@@ -460,7 +473,7 @@ class TestStudentsListYearFilter:
         assert str(two.cur_only_student.id) in cur_ids
 
     def test_classes_resolve_to_that_years_classes(self, client, two) -> None:
-        """`current_classes` must follow the requested year, not the active one.
+        """`current_offerings` must follow the requested year, not the active one.
 
         This is the assertion that actually proves the parameter reached the query: the
         same student, two years, two different resolved class sets.
@@ -473,10 +486,10 @@ class TestStudentsListYearFilter:
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        prev_ids = [c["id"] for c in prev.json()["current_classes"]]
-        cur_ids = [c["id"] for c in cur.json()["current_classes"]]
-        assert prev_ids == [two.prev.section_id], prev.json()["current_classes"]
-        assert cur_ids == [two.cur.section_id], cur.json()["current_classes"]
+        prev_ids = [c["id"] for c in prev.json()["current_offerings"]]
+        cur_ids = [c["id"] for c in cur.json()["current_offerings"]]
+        assert prev_ids == [two.prev.section_id], prev.json()["current_offerings"]
+        assert cur_ids == [two.cur.section_id], cur.json()["current_offerings"]
         assert prev_ids != cur_ids
 
 
@@ -494,8 +507,8 @@ class TestStudentAssessmentsYearFilter:
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        prev_cs = {g["class_subject_id"] for g in prev.json()["items"]}
-        cur_cs = {g["class_subject_id"] for g in cur.json()["items"]}
+        prev_cs = {g["offering_id"] for g in prev.json()["items"]}
+        cur_cs = {g["offering_id"] for g in cur.json()["items"]}
         assert str(two.prev.cs.id) in prev_cs
         assert str(two.cur.cs.id) not in prev_cs
         assert str(two.cur.cs.id) in cur_cs
@@ -705,7 +718,7 @@ class TestAssessmentsSemesterFilter:
         assert str(two.cur.assessment.id) not in s2_ids
 
     def test_semester_composes_with_year_rather_than_replacing_it(self, client, two) -> None:
-        """Both params on one call: the year filters the section, the semester the
+        """Both params on one call: the year filters the the semester the
         assessment. Sending them together must narrow, not conflict."""
         r = client.get(
             f"{V1}/assessments"
@@ -835,7 +848,7 @@ class TestMyProfileFollowsTheSwitcher:
     screen the switcher re-scoped.
     """
 
-    def test_current_classes_are_resolved_for_the_selected_year(self, client, two) -> None:
+    def test_current_offerings_are_resolved_for_the_selected_year(self, client, two) -> None:
         prev = client.get(
             f"{V1}/students/me?academic_year_id={two.prev.year_id}", headers=two.STU
         )
@@ -844,8 +857,8 @@ class TestMyProfileFollowsTheSwitcher:
         )
         assert prev.status_code == 200, prev.text
         assert cur.status_code == 200, cur.text
-        prev_ids = [c["id"] for c in prev.json()["current_classes"]]
-        cur_ids = [c["id"] for c in cur.json()["current_classes"]]
+        prev_ids = [c["id"] for c in prev.json()["current_offerings"]]
+        cur_ids = [c["id"] for c in cur.json()["current_offerings"]]
         assert prev_ids and cur_ids
         assert prev_ids == [two.prev.section_id]
         assert cur_ids == [two.cur.section_id]

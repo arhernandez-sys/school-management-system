@@ -27,20 +27,26 @@ from app.common.enums import AnnouncementAudience, Role
 from app.common.schemas import Page
 from app.core.errors import Forbidden, NotFound, ValidationError
 from app.core.pagination import PageParams
-from app.core.rbac import teacher_section_ids
+from app.core.rbac import teacher_offering_ids
 from app.core.timeutil import ensure_aware, utcnow
 from app.modules.announcements.models import Announcement, AnnouncementRead
 from app.modules.announcements.schemas import (
     BODY_PREVIEW_LEN,
-    AnnouncementClassRef,
+    AnnouncementOfferingRef,
     AnnouncementCreateRequest,
     AnnouncementDetail,
     AnnouncementListItem,
     AnnouncementUpdateRequest,
-    TargetClassesResponse,
+    TargetOfferingsResponse,
     UnreadCountResponse,
 )
-from app.modules.classes.models import Class, ClassEnrollment, ClassSubject, ClassTeacher
+from app.modules.offerings.labels import OFFERING_ORDER, offering_label
+from app.modules.offerings.models import (
+    ClassEnrollment,
+    ClassTeacher,
+    Course,
+    CourseOffering,
+)
 from app.modules.settings.models import AuditLog
 from app.modules.students.models import StudentProfile
 from app.modules.users.models import User
@@ -81,7 +87,7 @@ def _linked_section_ids(db: Session, user: User) -> list[uuid.UUID]:
     if user.role == Role.STUDENT:
         return list(
             db.scalars(
-                select(ClassEnrollment.class_id)
+                select(ClassEnrollment.offering_id)
                 .join(StudentProfile, ClassEnrollment.student_id == StudentProfile.id)
                 .where(
                     StudentProfile.user_id == user.id,
@@ -91,7 +97,7 @@ def _linked_section_ids(db: Session, user: User) -> list[uuid.UUID]:
             ).all()
         )
     if user.role == Role.TEACHER:
-        return teacher_section_ids(db, user)
+        return teacher_offering_ids(db, user)
     return []
 
 
@@ -155,7 +161,7 @@ def _audience_clause(db: Session, user: User) -> ColumnElement[bool]:
         clauses.append(
             and_(
                 Announcement.audience == AnnouncementAudience.CLASS,
-                Announcement.class_id.in_(section_ids),
+                Announcement.offering_id.in_(section_ids),
             )
         )
     return or_(*clauses)
@@ -186,15 +192,19 @@ def _unread_filter(user: User) -> ColumnElement[bool]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Refs / serialization
 # ──────────────────────────────────────────────────────────────────────────────
-def _class_refs(db: Session, class_ids: list[uuid.UUID]) -> dict[uuid.UUID, AnnouncementClassRef]:
-    if not class_ids:
+def _offering_refs(db: Session, offering_ids: list[uuid.UUID]) -> dict[uuid.UUID, AnnouncementOfferingRef]:
+    if not offering_ids:
         return {}
     rows = db.execute(
-        select(Class.id, Class.name, Class.grade_level).where(Class.id.in_(class_ids))
+        select(CourseOffering.id, Course.code, CourseOffering.section_code, Course.name)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.id.in_(offering_ids))
     ).all()
     return {
-        cid: AnnouncementClassRef(id=cid, name=name, grade_level=grade)
-        for cid, name, grade in rows
+        oid: AnnouncementOfferingRef(
+            id=oid, label=offering_label(code, section), course_name=cname
+        )
+        for oid, code, section, cname in rows
     }
 
 
@@ -230,14 +240,14 @@ def _is_read(db: Session, announcement_id: uuid.UUID, user: User) -> bool:
 
 
 def _detail(db: Session, row: Announcement, user: User) -> AnnouncementDetail:
-    class_refs = _class_refs(db, [row.class_id] if row.class_id else [])
+    offering_refs = _offering_refs(db, [row.offering_id] if row.offering_id else [])
     authors = _author_refs(db, [row.author_id] if row.author_id else [])
     return AnnouncementDetail(
         id=row.id,
         title=row.title,
         body=row.body,
         audience=row.audience,
-        class_ref=class_refs.get(row.class_id) if row.class_id else None,
+        offering=offering_refs.get(row.offering_id) if row.offering_id else None,
         author=authors.get(row.author_id) if row.author_id else None,
         published_at=row.published_at,
         expires_at=row.expires_at,
@@ -249,7 +259,7 @@ def _detail(db: Session, row: Announcement, user: User) -> AnnouncementDetail:
 # Write authorization (FR-ANN-02/07)
 # ──────────────────────────────────────────────────────────────────────────────
 def _assert_can_target(
-    db: Session, actor: User, audience: AnnouncementAudience, class_id: uuid.UUID | None
+    db: Session, actor: User, audience: AnnouncementAudience, offering_id: uuid.UUID | None
 ) -> None:
     """P/S may target any audience. A teacher may target ONLY a `class` audience on
     a section they own — never a broadcast. Students never post."""
@@ -263,7 +273,7 @@ def _assert_can_target(
             "Teachers can only post announcements to their own classes.",
             code="teacher_cannot_broadcast",
         )
-    if class_id is None or class_id not in _linked_section_ids(db, actor):
+    if offering_id is None or offering_id not in _linked_section_ids(db, actor):
         raise Forbidden(
             "Teachers can only post announcements to their own classes.",
             code="teacher_cannot_broadcast",
@@ -303,22 +313,22 @@ def _validate_window(published_at: datetime, expires_at: datetime | None) -> Non
             )
 
 
-def _resolve_class_id(
-    audience: AnnouncementAudience, class_id: uuid.UUID | None
+def _resolve_offering_id(
+    audience: AnnouncementAudience, offering_id: uuid.UUID | None
 ) -> uuid.UUID | None:
-    """A `class` audience requires a class; any other audience clears it.
+    """A `class` audience requires an offering; any other audience clears it.
 
-    The DB enforces the same invariant via `ck_announcements_class_audience`, so this
+    The DB enforces the same invariant via `ck_announcements_offering_audience`, so this
     pre-check exists to return the documented 422 rather than an opaque integrity error.
     """
     if audience == AnnouncementAudience.CLASS:
-        if class_id is None:
+        if offering_id is None:
             raise ValidationError(
-                "Choose a class for a class-targeted announcement.",
-                code="class_audience_requires_class_id",
-                fields={"class_id": ["A class is required for this audience."]},
+                "Choose an offering for a class-targeted announcement.",
+                code="class_audience_requires_offering_id",
+                fields={"offering_id": ["An offering is required for this audience."]},
             )
-        return class_id
+        return offering_id
     return None
 
 
@@ -363,7 +373,7 @@ def list_announcements(
                 )
             ).all()
         )
-    class_refs = _class_refs(db, [r.class_id for r in rows if r.class_id])
+    offering_refs = _offering_refs(db, [r.offering_id for r in rows if r.offering_id])
     authors = _author_refs(db, [r.author_id for r in rows if r.author_id])
 
     items = [
@@ -372,7 +382,7 @@ def list_announcements(
             title=r.title,
             body_preview=_body_preview(r.body),
             audience=r.audience,
-            class_ref=class_refs.get(r.class_id) if r.class_id else None,
+            offering=offering_refs.get(r.offering_id) if r.offering_id else None,
             author=authors.get(r.author_id) if r.author_id else None,
             published_at=r.published_at,
             expires_at=r.expires_at,
@@ -422,29 +432,35 @@ def unread_count(db: Session, *, actor: User) -> UnreadCountResponse:
     )
 
 
-def target_classes(db: Session, *, actor: User) -> TargetClassesResponse:
+def target_offerings(db: Session, *, actor: User) -> TargetOfferingsResponse:
     """Sections the caller may aim a `class` announcement at (compose picker).
 
     P/S → every live, non-archived section. Teacher → only sections they own a
     subject in. Students never compose, so they get an empty list rather than a 403 —
     the endpoint is a picker source, and the compose UI is already hidden from them.
     """
-    stmt = select(Class.id, Class.name, Class.grade_level).where(
-        Class.deleted_at.is_(None), Class.is_archived.is_(False)
+    stmt = (
+        select(CourseOffering.id, Course.code, CourseOffering.section_code, Course.name)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(
+            CourseOffering.deleted_at.is_(None), CourseOffering.is_archived.is_(False)
+        )
     )
     if actor.role == Role.TEACHER:
         owned = _linked_section_ids(db, actor)
         if not owned:
-            return TargetClassesResponse(items=[])
-        stmt = stmt.where(Class.id.in_(owned))
+            return TargetOfferingsResponse(items=[])
+        stmt = stmt.where(CourseOffering.id.in_(owned))
     elif actor.role not in (Role.PRINCIPAL, Role.SECRETARY):
-        return TargetClassesResponse(items=[])
+        return TargetOfferingsResponse(items=[])
 
-    rows = db.execute(stmt.order_by(Class.name.asc())).all()
-    return TargetClassesResponse(
+    rows = db.execute(stmt.order_by(*OFFERING_ORDER)).all()
+    return TargetOfferingsResponse(
         items=[
-            AnnouncementClassRef(id=cid, name=name, grade_level=grade)
-            for cid, name, grade in rows
+            AnnouncementOfferingRef(
+                id=oid, label=offering_label(code, section), course_name=cname
+            )
+            for oid, code, section, cname in rows
         ]
     )
 
@@ -492,18 +508,18 @@ def create_announcement(
     db: Session, *, actor: User, payload: AnnouncementCreateRequest
 ) -> AnnouncementDetail:
     """POST /announcements. NOTE: no `year_archived` guard — see the module docstring."""
-    class_id = _resolve_class_id(payload.audience, payload.class_id)
-    _assert_can_target(db, actor, payload.audience, class_id)
+    offering_id = _resolve_offering_id(payload.audience, payload.offering_id)
+    _assert_can_target(db, actor, payload.audience, offering_id)
 
-    if class_id is not None:
+    if offering_id is not None:
         section = db.scalar(
-            select(Class).where(Class.id == class_id, Class.deleted_at.is_(None))
+            select(CourseOffering).where(CourseOffering.id == offering_id, CourseOffering.deleted_at.is_(None))
         )
         if section is None:
             raise ValidationError(
-                "Choose a class for a class-targeted announcement.",
-                code="class_audience_requires_class_id",
-                fields={"class_id": ["That class does not exist."]},
+                "Choose an offering for a class-targeted announcement.",
+                code="class_audience_requires_offering_id",
+                fields={"offering_id": ["That offering does not exist."]},
             )
 
     published_at = payload.published_at or utcnow()
@@ -514,7 +530,7 @@ def create_announcement(
         title=payload.title.strip(),
         body=payload.body.strip(),
         audience=payload.audience,
-        class_id=class_id,
+        offering_id=offering_id,
         published_at=published_at,
         expires_at=payload.expires_at,
         created_by=actor.id,
@@ -538,12 +554,12 @@ def update_announcement(
 
     provided = payload.model_dump(exclude_unset=True)
     audience = provided.get("audience", row.audience)
-    class_id = _resolve_class_id(
-        audience, provided.get("class_id", row.class_id if audience == row.audience else None)
+    offering_id = _resolve_offering_id(
+        audience, provided.get("offering_id", row.offering_id if audience == row.audience else None)
     )
     # Re-check targeting against the MERGED audience, so a teacher cannot escalate
     # an owned class notice into a school-wide broadcast by editing it.
-    _assert_can_target(db, actor, audience, class_id)
+    _assert_can_target(db, actor, audience, offering_id)
 
     published_at = provided.get("published_at") or row.published_at
     expires_at = provided["expires_at"] if "expires_at" in provided else row.expires_at
@@ -554,7 +570,7 @@ def update_announcement(
     if "body" in provided:
         row.body = provided["body"].strip()
     row.audience = audience
-    row.class_id = class_id
+    row.offering_id = offering_id
     if provided.get("published_at") is not None:
         row.published_at = provided["published_at"]
     if "expires_at" in provided:

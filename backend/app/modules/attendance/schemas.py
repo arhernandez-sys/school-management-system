@@ -4,7 +4,8 @@ Write models set `extra="forbid"` (§1.4); wire is snake_case (§1.2). Read shap
 are reconciled to the finished frontend MSW handler + types
 (`handlers/attendance.ts`, `features/attendance/types.ts`), which WIN on divergence:
 
-  * section ref     = {id, name, grade_level, section, homeroom_label, teachers[]}
+  * offering ref    = {offering: OfferingRef, teachers[]}   (D31 — was a flat
+      `{id, name, grade_level, section, homeroom_label, teachers[]}` homeroom ref)
     - `teachers[]` items use the key **`name`** (NOT `full_name`). This differs on
       purpose from the Grades module's teacher ref; the attendance screens read
       `t.name` and the two modules were built in parallel.
@@ -31,26 +32,30 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.enums import AttendanceStatus
+from app.common.schemas import OfferingRef
 
 
 # ── Refs (frontend shape) ──────────────────────────────────────────────────────
 class AttendanceTeacherRef(BaseModel):
-    """A teacher who teaches any subject in the section. Key is `name` (binding)."""
+    """A lecturer assigned to the offering. Key is `name` (binding)."""
 
     id: UUID
     name: str
 
 
-class AttendanceSectionRef(BaseModel):
-    """`section` and `homeroom_label` are nullable columns but non-nullable
-    `string` in `features/attendance/types.ts`, so the service coerces `None` → ""
-    rather than emitting a null the screens would render as "null"."""
+class AttendanceOfferingRef(BaseModel):
+    """The shared `OfferingRef`, plus who staffs it.
 
-    id: UUID
-    name: str
-    grade_level: str
-    section: str = ""
-    homeroom_label: str = ""
+    D31 replaced a flat homeroom ref (`name`, `grade_level`, `section`,
+    `homeroom_label`) that read four columns `course_offerings` no longer has. The
+    offering half now comes from `offerings.labels.offering_ref` — the single builder —
+    so this module cannot drift from Grades or Reports about how an offering is named.
+
+    `teachers` stays OUTSIDE the shared ref on purpose: who teaches an offering is an
+    attendance concern (the register names them), not part of identifying the offering.
+    """
+
+    offering: OfferingRef
     teachers: list[AttendanceTeacherRef] = Field(default_factory=list)
 
 
@@ -70,13 +75,13 @@ class AttendanceCounts(BaseModel):
     pct_present: float = 0.0
 
 
-# ── GET /attendance/sections ───────────────────────────────────────────────────
-class AttendanceSectionPickerItem(AttendanceSectionRef):
+# ── GET /attendance/offerings ───────────────────────────────────────────────────
+class AttendanceOfferingPickerItem(AttendanceOfferingRef):
     enrolled_count: int = 0
 
 
-class AttendanceSectionsResponse(BaseModel):
-    items: list[AttendanceSectionPickerItem] = Field(default_factory=list)
+class AttendanceOfferingsResponse(BaseModel):
+    items: list[AttendanceOfferingPickerItem] = Field(default_factory=list)
     can_record: bool = False
 
 
@@ -94,7 +99,7 @@ class LastRecorded(BaseModel):
 
 
 class AttendanceRegister(BaseModel):
-    section: AttendanceSectionRef
+    offering: AttendanceOfferingRef
     date: _date
     can_record: bool = False
     entries: list[AttendanceEntry] = Field(default_factory=list)
@@ -110,7 +115,7 @@ class AttendanceUpsertEntry(BaseModel):
 
 class AttendanceUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    section_id: UUID
+    offering_id: UUID
     date: _date
     entries: list[AttendanceUpsertEntry] = Field(default_factory=list)
 
@@ -130,7 +135,7 @@ class AttendanceStudentPoint(AttendanceCounts):
 
 
 class AttendanceSummaryResponse(BaseModel):
-    section: AttendanceSectionRef
+    offering: AttendanceOfferingRef
     overall: AttendanceCounts
     by_date: list[AttendanceDatePoint] = Field(default_factory=list)
     by_student: list[AttendanceStudentPoint] = Field(default_factory=list)

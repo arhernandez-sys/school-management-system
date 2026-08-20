@@ -39,7 +39,7 @@ from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
 from app.modules.auth.service import build_current_user
-from app.modules.classes.models import Class
+from app.modules.offerings.models import CourseOffering
 from app.modules.settings.grading_defaults import (
     BAJC_GRADING_BANDS,
     DEFAULT_PASS_MARK,
@@ -663,9 +663,15 @@ def archive_academic_year(
         .where(GradingScale.academic_year_id == year.id)
         .values(is_frozen=True)
     )
+    # D31: an offering is scoped to a SEMESTER, not to a year, so "archive this year's
+    # offerings" is now a subquery through `semesters` rather than a direct column match.
     db.execute(
-        update(Class)
-        .where(Class.academic_year_id == year.id)
+        update(CourseOffering)
+        .where(
+            CourseOffering.semester_id.in_(
+                select(Semester.id).where(Semester.academic_year_id == year.id)
+            )
+        )
         .values(is_archived=True)
     )
     # Deactivate this year's semesters so the school has no active term until a new

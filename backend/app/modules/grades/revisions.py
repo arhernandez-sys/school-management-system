@@ -42,9 +42,10 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import GradeRevisionStatus, GradeStatus, Role
 from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
-from app.core.rbac import assert_teacher_owns_class_subject
+from app.core.rbac import assert_teacher_owns_offering
 from app.modules.assessments.models import Assessment
-from app.modules.classes.models import Class, ClassSubject, Subject
+from app.modules.offerings.labels import offering_ref
+from app.modules.offerings.models import Course, CourseOffering
 from app.modules.grades.models import AssessmentGrade, GradeRevisionRequest
 from app.modules.grades.schemas import (
     GradeRevisionCreateRequest,
@@ -106,9 +107,8 @@ def _read(
     """
     grade = db.get(AssessmentGrade, row.assessment_grade_id)
     assessment = db.get(Assessment, grade.assessment_id) if grade else None
-    cs = db.get(ClassSubject, assessment.class_subject_id) if assessment else None
-    subject = db.get(Subject, cs.subject_id) if cs else None
-    section = db.get(Class, cs.class_id) if cs else None
+    offering = db.get(CourseOffering, assessment.offering_id) if assessment else None
+    course = db.get(Course, offering.course_id) if offering else None
     student = db.get(StudentProfile, grade.student_id) if grade else None
     requester = db.get(User, row.requested_by_user_id)
     decider = db.get(User, row.decided_by_user_id) if row.decided_by_user_id else None
@@ -135,10 +135,9 @@ def _read(
         assessment_id=assessment.id if assessment else None,
         assessment_title=assessment.title if assessment else "",
         max_score=_f(assessment.max_score) if assessment else None,
-        class_subject_id=cs.id if cs else None,
-        subject_name=subject.name if subject else "",
-        subject_code=subject.code if subject else None,
-        section_name=section.name if section else "",
+        offering=(
+            offering_ref(offering, course) if offering is not None and course is not None else None
+        ),
         requested_by_user_id=row.requested_by_user_id,
         requested_by_name=requester.full_name if requester else "",
         decided_by_user_id=row.decided_by_user_id,
@@ -185,7 +184,7 @@ def list_revisions(
     *,
     actor: User,
     status: GradeRevisionStatus | None,
-    class_subject_id: uuid.UUID | None,
+    offering_id: uuid.UUID | None,
 ) -> GradeRevisionList:
     """The queue. `?status=pending` IS the Dean's work list (§D8).
 
@@ -205,13 +204,13 @@ def list_revisions(
         stmt = stmt.where(GradeRevisionRequest.requested_by_user_id == actor.id)
     if status is not None:
         stmt = stmt.where(GradeRevisionRequest.status == status)
-    if class_subject_id is not None:
+    if offering_id is not None:
         # Reached through the grade row, since a revision hangs off `assessment_grades`.
         stmt = stmt.where(
             GradeRevisionRequest.assessment_grade_id.in_(
                 select(AssessmentGrade.id)
                 .join(Assessment, Assessment.id == AssessmentGrade.assessment_id)
-                .where(Assessment.class_subject_id == class_subject_id)
+                .where(Assessment.offering_id == offering_id)
             )
         )
 
@@ -269,7 +268,7 @@ def create_revision(
 
     Guards, in the order they matter:
 
-      * the Lecturer must OWN the offering — `assert_teacher_owns_class_subject`, which
+      * the Lecturer must OWN the offering — `assert_teacher_owns_offering`, which
         denies with 404 rather than 403 so an un-owned offering's existence is not
         confirmed (api-spec §3.3);
       * the student must already HAVE a grade row. A revision revises something; if the
@@ -292,7 +291,7 @@ def create_revision(
         raise NotFound("Assessment not found.", code="not_found")
 
     if actor.role == Role.TEACHER:
-        assert_teacher_owns_class_subject(db, actor, assessment.class_subject_id)
+        assert_teacher_owns_offering(db, actor, assessment.offering_id)
     else:
         # The Dean decides revisions; letting them file one too would put both halves of
         # the workflow in one pair of hands and leave the audit trail with no independent

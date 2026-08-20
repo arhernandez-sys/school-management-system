@@ -27,7 +27,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
-from app.modules.classes.models import Class, ClassSubject, ClassTeacher, Subject
+from app.modules.offerings.models import CourseOffering, CourseOffering, ClassTeacher, Course
 from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
@@ -83,26 +83,32 @@ def _active_year_id(db_session) -> uuid.UUID:  # noqa: ANN001
 
 
 def _assign_active_subject(db_session, teacher) -> ClassTeacher:  # noqa: ANN001
-    """Give the teacher an ACTIVE class_subject assignment (for the deactivate/delete
-    409 guards)."""
-    section = Class(
-        academic_year_id=_active_year_id(db_session),
-        name=f"Section {uuid.uuid4().hex[:8]}",
-        grade_level="Form 1",
-    )
-    db_session.add(section)
-    db_session.flush()
+    """Give the teacher a LIVE offering assignment (for the deactivate/delete 409
+    guards). D31: one row, not a section plus a subject attached to it."""
+    from sqlalchemy import select as _select
+
+    from app.modules.settings.models import Semester
+
     # D30: `courses.code` is NOT NULL, so every course fixture carries one.
-    subject = Subject(
+    subject = Course(
         name=f"Subject {uuid.uuid4().hex[:8]}",
         code=uuid.uuid4().hex[:8].upper(),
     )
     db_session.add(subject)
     db_session.flush()
-    cs = ClassSubject(class_id=section.id, subject_id=subject.id, is_active=True)
+    semester_id = db_session.scalar(
+        _select(Semester.id).where(
+            Semester.academic_year_id == _active_year_id(db_session)
+        ).order_by(Semester.sequence.asc()).limit(1)
+    )
+    cs = CourseOffering(
+        course_id=subject.id,
+        semester_id=semester_id,
+        section_code=uuid.uuid4().hex[:6],
+    )
     db_session.add(cs)
     db_session.flush()
-    ct = ClassTeacher(class_subject_id=cs.id, teacher_id=teacher.id)
+    ct = ClassTeacher(offering_id=cs.id, teacher_id=teacher.id)
     db_session.add(ct)
     db_session.flush()
     return ct

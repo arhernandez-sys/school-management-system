@@ -63,7 +63,11 @@ Open http://localhost:5173.
 
 ### Logins
 
-All seeded accounts share the password **`SimsDemo2025!`**.
+**Every account has its OWN generated password, printed once per seed run to
+`backend/db/mariadb/generated/demo-credentials.txt`** (untracked). Read them there — there is
+no shared password any more. Before D31 Phase 5 all 19 accounts shared `SimsDemo2025!` with
+`must_change_password = false`, and the Argon2 hash of it was committed in
+`010_seed_demo.sql`, so rotating the constant in the script fixed nothing.
 
 | Role | Email | Count |
 |---|---|---|
@@ -74,6 +78,14 @@ All seeded accounts share the password **`SimsDemo2025!`**.
 
 The login field accepts an **email address** (the API field is `identifier`, not `email`).
 Note only 6 of the 45 student profiles have user accounts — the rest exist as records only.
+
+**Expect to change the password on first login.** Every seeded account starts with
+`must_change_password = true`, and the server ENFORCES it: until you change it, the API answers
+**403 `password_change_required`** on everything except `GET /auth/me`,
+`PATCH /auth/me/password` and `POST /auth/logout`. In the browser the app redirects you to the
+change-password screen; with `curl` or the docs UI you must `PATCH /api/v1/auth/me/password`
+first (`current_password` may be omitted in this flow). The exempt set lives in
+`backend/app/core/deps.py`.
 
 ### Why the base URL must stay relative
 
@@ -184,6 +196,18 @@ leaving you to find it. It exists because Alembic cannot be used here (see above
 | 6 | `backend/db/mariadb/005_tertiary.sql` | **D30 tertiary / junior-college model (BAJC)** — the `courses` catalog, `programs`, curriculum, prerequisites, grade points, applications, credit transfer, grade revisions, `YYYYMM###` student-ID sequences. See `docs/tertiary-refactor-plan.md` |
 | 7 | `backend/db/mariadb/006_courses_cutover.sql` | **D30 Phase 2A catalog cutover** — swaps the catalog FKs from `subjects` to `courses` and comments `subjects` as retired (it is kept, not dropped). Applied 2026-08-16 together with the ORM change that points `Subject.__tablename__` at `courses`; applying it against an OLDER checkout of the app breaks every course write with 1452. |
 | 8 | `backend/db/mariadb/007_student_names.sql` | **D30 Phase 1 name split** — tightens `student_profiles.lastname` to NOT NULL and **drops `full_name`**, which becomes a computed property on the ORM. Same rule as `006`: apply it with the matching code, never against an older checkout, or every student INSERT fails on the NOT NULL column. |
+| 9 | `backend/db/mariadb/008_course_offerings.sql` | **D31 offering model** — `course_offerings` replaces `classes` + `class_subjects`. Re-points every child (`assessments`, `assessment_categories`, `class_teachers`, `class_meetings`, `term_grade_snapshots`, `class_enrollments`, `attendance_records`, `announcements`) from `class_id`/`class_subject_id` to `offering_id`, drops `student_profiles.year_group`, and quarantines 7 superseded tables as `*_legacy_pre_d31` (renamed, never dropped). Same rule as `006`/`007`, and it matters most here: **apply it with the matching code**, or every offering write breaks. Verify with `python db\mariadb\verify_schema.py --expect 008` (20 probes). See `docs/tertiary-offerings-refactor-plan.md` |
+
+> 🔴 **`008` is DESTRUCTIVE, and its destructive half is gated on a pre-collapse sentinel.**
+> Every `DELETE` is keyed on `class_subjects` still existing, so a replay *after* the demo data
+> has been re-seeded deletes nothing. That gate is why the deletes are safe to ship inside a
+> migration at all. It also carries **no hardcoded `USE \`sims\`;`** (unlike `005`–`007`), so
+> it honours the DSN you connect with — which is what makes rehearsing it on a copy possible.
+>
+> ⚠️ **The pre-`008` demo data is destroyed, not migrated.** Forced, not chosen: `classes` is
+> year-scoped and an offering is semester-scoped, so one academic year maps to *two* semesters
+> and nothing in the data says which. Take a backup first
+> (`apply_sql.py --backup` plus a `mysqldump`).
 
 Then seed. **(a) and (b) are both reference data — run both, in order. (c) is optional.**
 
@@ -228,11 +252,20 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 > silently destroy 114 courses and every programme curriculum hanging off them. `seed_demo`
 > resolves its courses by code and fails loudly if the catalog seed has not been run.
 >
-> 🔴 It also creates 19 accounts sharing the hardcoded password `SimsDemo2025!` with
-> `must_change_password = false`. **This must never run against production.**
+> 🔴 It creates 19 login accounts and deletes every row in ~34 tables. **This must never run
+> against production.** Two independent guards must both be satisfied on purpose
+> (`ENVIRONMENT=local` **and** `SIS_ALLOW_DEMO_SEED=yes-destroy-my-data`), and it prints the
+> target database — with the password redacted — when it refuses.
 >
-> The static equivalent is `backend/db/mariadb/010_seed_demo.sql` (4,494 lines) if you'd
-> rather run it in HeidiSQL.
+> Since D31 Phase 5 each of those accounts gets its OWN generated password with
+> `must_change_password = true`, written to `backend/db/mariadb/generated/demo-credentials.txt`.
+>
+> The static equivalent is now **`backend/db/mariadb/generated/010_seed_demo.sql`**, written by
+> the same run, if you'd rather load it in HeidiSQL. It is gitignored and must not be committed
+> or copied between machines: it carries that run's password hashes. Re-generate instead.
+>
+> It also requires `008_course_offerings.sql` to have been applied, and says so before touching
+> anything rather than failing halfway through the sweep.
 
 ### Fresh machine, first time
 
@@ -394,26 +427,32 @@ request; the app cannot enforce them for you.
 
 ### 10.1 BLOCKER — the demo accounts must not exist
 
-The `sims` database on this machine was populated by `seed_demo`, which creates **19
-accounts sharing the password `SimsDemo2025!`** with `must_change_password = false`. That
-password is written in plain text in this repository and in the seed script. If that
-database is what goes live, the system is open to anyone who has seen either.
+**Still a blocker, but for a smaller reason than before.** D31 Phase 5 fixed the *cause*: the
+seed now generates a separate password per account with `must_change_password = true`, the
+server enforces that flag, and the SQL file carrying the hashes is no longer tracked in git.
+What it could not fix is *data already written* — and until the `sims` cut-over is run (see
+`docs/tertiary-offerings-refactor-plan.md`, "The `sims` cut-over"), the `sims` database on this
+machine **still holds the 19 pre-D31 accounts sharing `SimsDemo2025!` with
+`must_change_password = false`**, and that password is still in this repository's git history.
+If that database is what goes live, the system is open to anyone who has read the history.
 
-Before go-live, either provision a fresh database (§4, minimal seed `(a)`) or, on the
-existing one:
+Before go-live, either provision a fresh database (§4, minimal seed `(a)`) or, on the existing
+one:
 
 ```sql
 -- See what you have. Every row here is a live credential.
+-- The pre-D31 rows are the ones with must_change_password = 0.
 SELECT email, role, must_change_password FROM users ORDER BY role, email;
 ```
 
 Then delete every demo account you do not need, and for the ones you keep, force a reset
 (`must_change_password = 1`) **and** set a fresh individual password through the app.
-Flipping `must_change_password` alone does not invalidate the old password.
+Flipping `must_change_password` alone does not invalidate the old password — though it now does
+stop the account doing anything else until the change is made, which it did not before.
 
-`seed_demo` now refuses to run unless `ENVIRONMENT=local` **and**
-`SIS_ALLOW_DEMO_SEED=yes-destroy-my-data` — but that guard protects the future, not the
-data already seeded.
+`seed_demo` refuses to run unless `ENVIRONMENT=local` **and**
+`SIS_ALLOW_DEMO_SEED=yes-destroy-my-data`, and it never writes a shared password — but those
+guards protect the future, not the data already seeded.
 
 ### 10.2 BLOCKER — TLS, and one origin
 
@@ -565,10 +604,17 @@ see `[MSW] Mock layer active` in a production console, the build was made with
 Tracked in the production-readiness plan; none block local use. **For public deployment,
 read §10 — several of these become blockers there.**
 
-- 🔴 **The live `sims` database contains 19 accounts sharing the password
-  `SimsDemo2025!`** (`must_change_password = false`), because `seed_demo` created them and
-  that password is in this repository. Harmless on a laptop, catastrophic on a public URL.
-  See §10.1 before going live.
+- 🔴 **The live `sims` database still contains 19 accounts sharing the password
+  `SimsDemo2025!`** (`must_change_password = false`), because the pre-D31 `seed_demo` created
+  them and that password is in this repository's git history. Harmless on a laptop,
+  catastrophic on a public URL. **The code cause is fixed** — the seed now generates a password
+  per account with the forced-change flag, the server enforces that flag, and the hash file is
+  untracked — but these ROWS survive until the `sims` cut-over re-seeds them
+  (`docs/tertiary-offerings-refactor-plan.md`). See §10.1 before going live.
+- ⚠️ **This checkout cannot run against `sims` yet.** D31 is committed and the code expects
+  `008_course_offerings.sql`, which is deliberately **not** applied to `sims`. Point
+  `DATABASE_URL` at `sims_d31` (which has `008` and the D31 demo data) until the cut-over is
+  done.
 - ~~**`GET /students/me/years` and `GET /students/{id}/years` return 404 live**~~ — **stale,
   both are served.** Verified in the live route table (`app/modules/students/router.py:104`
   and `:142`), with `/me/years` declared first so "me" is never parsed as a UUID. The

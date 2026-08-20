@@ -25,7 +25,6 @@ import {
   ErrorState,
   LoadingState,
   ProfileLayout,
-  StatusBadge,
   type DetailTab,
 } from '@shared/components';
 import type { ReactNode } from 'react';
@@ -159,44 +158,44 @@ function AssignmentsTab({ classes }: { classes: TeacherClassTaught[] }) {
       <EmptyState
         variant="card"
         title="No assignments"
-        description="This teacher is not assigned to any classes yet."
+        description="This lecturer is not assigned to any course offerings yet."
       />
     );
   }
   return (
     <List disablePadding>
-      {classes.map((c) => {
-        const sectionName = c.class_ref?.name ?? 'Unknown section';
-        const subjectName = c.subject?.name ?? 'Unknown subject';
-        return (
-          <ListItem
-            key={c.class_subject_id}
-            divider
-            secondaryAction={
-              <MuiLink
-                component={RouterLink}
-                to={`${ROUTES.grades}?class_subject_id=${c.class_subject_id}`}
-                underline="hover"
-              >
-                Gradebook
-              </MuiLink>
+      {classes.map((c) => (
+        <ListItem
+          key={c.offering_id}
+          divider
+          secondaryAction={
+            <MuiLink
+              component={RouterLink}
+              to={`${ROUTES.grades}?offering_id=${c.offering_id}`}
+              underline="hover"
+            >
+              Gradebook
+            </MuiLink>
+          }
+        >
+          <ListItemText
+            primary={
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {/* Label + course name. The label (code + section) is what tells one
+                      section of a course from another; the pair this replaced was a homeroom
+                      name and a subject name — two rows' worth of identity. */}
+                  {c.offering.label} · {c.offering.course.name}
+                </Typography>
+                {c.is_lead && <Chip label="Lead" size="small" color="primary" />}
+              </Stack>
             }
-          >
-            <ListItemText
-              primary={
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    {sectionName} · {subjectName}
-                  </Typography>
-                  {c.is_lead && <Chip label="Lead" size="small" color="primary" />}
-                  {!c.is_active && <StatusBadge label="Inactive" kind="neutral" />}
-                </Stack>
-              }
-              secondary={c.class_ref?.grade_level ?? undefined}
-            />
-          </ListItem>
-        );
-      })}
+            /* The TERM, where this printed the homeroom's Form. It is the fact that
+               distinguishes two otherwise identical assignments. */
+            secondary={c.offering.semester?.name ?? undefined}
+          />
+        </ListItem>
+      ))}
     </List>
   );
 }
@@ -207,39 +206,34 @@ function GradesTab({ classes }: { classes: TeacherClassTaught[] }) {
     return (
       <EmptyState
         variant="card"
-        title="No subjects to grade"
-        description="This teacher is not assigned to any classes yet."
+        title="No courses to grade"
+        description="This lecturer is not assigned to any course offerings yet."
       />
     );
   }
   return (
     <List disablePadding>
-      {classes.map((c) => {
-        const sectionName = c.class_ref?.name ?? 'Unknown section';
-        const subjectName = c.subject?.name ?? 'Unknown subject';
-        return (
-          <ListItemButton
-            key={c.class_subject_id}
-            component={RouterLink}
-            to={`${ROUTES.grades}?class_subject_id=${c.class_subject_id}`}
-            divider
-          >
-            <ListItemText
-              primary={
-                <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    {sectionName} · {subjectName}
-                  </Typography>
-                  {c.is_lead && <Chip label="Lead" size="small" color="primary" />}
-                  {!c.is_active && <StatusBadge label="Inactive" kind="neutral" />}
-                </Stack>
-              }
-              secondary={c.class_ref?.grade_level ?? undefined}
-            />
-            <GradingOutlinedIcon fontSize="small" color="action" />
-          </ListItemButton>
-        );
-      })}
+      {classes.map((c) => (
+        <ListItemButton
+          key={c.offering_id}
+          component={RouterLink}
+          to={`${ROUTES.grades}?offering_id=${c.offering_id}`}
+          divider
+        >
+          <ListItemText
+            primary={
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {c.offering.label} · {c.offering.course.name}
+                </Typography>
+                {c.is_lead && <Chip label="Lead" size="small" color="primary" />}
+              </Stack>
+            }
+            secondary={c.offering.semester?.name ?? undefined}
+          />
+          <GradingOutlinedIcon fontSize="small" color="action" />
+        </ListItemButton>
+      ))}
     </List>
   );
 }

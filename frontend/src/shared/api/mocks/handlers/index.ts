@@ -12,13 +12,13 @@
  */
 import { authHandlers } from './auth';
 import { settingsHandlers } from './settings';
-import { subjectsHandlers } from './subjects';
+import { coursesHandlers } from './courses';
 import { programsHandlers } from './programs';
 import { prerequisitesHandlers } from './prerequisites';
 import { studentsHandlers } from './students';
 import { admissionsHandlers } from './admissions';
 import { teachersHandlers } from './teachers';
-import { classesHandlers } from './classes';
+import { offeringsHandlers } from './offerings';
 import { assessmentsHandlers } from './assessments';
 import { gradesHandlers } from './grades';
 import { revisionsHandlers } from './revisions';
@@ -32,13 +32,13 @@ import { timetableHandlers } from './timetable';
 export const handlers = [
   ...authHandlers,
   ...settingsHandlers,
-  ...subjectsHandlers,
+  ...coursesHandlers,
   ...programsHandlers,
   ...prerequisitesHandlers,
   ...studentsHandlers,
   ...admissionsHandlers,
   ...teachersHandlers,
-  ...classesHandlers,
+  ...offeringsHandlers,
   ...assessmentsHandlers,
   ...gradesHandlers,
   ...revisionsHandlers,

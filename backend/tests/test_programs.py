@@ -33,7 +33,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.common.enums import Role
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.programs.models import Program, ProgramCourse
 from app.modules.settings.models import AuditLog
 from app.modules.users.models import User  # noqa: F401 — FK target for the flushes below
@@ -58,10 +58,10 @@ def _assert_envelope(body: dict, *, code: str) -> dict:
     return err
 
 
-def _make_course(db_session, *, code=None, name=None, credits=3, is_active=True) -> Subject:
+def _make_course(db_session, *, code=None, name=None, credits=3, is_active=True) -> Course:
     """A catalog course, direct in the rolled-back session."""
     tag = uuid.uuid4().hex[:8].upper()
-    c = Subject(
+    c = Course(
         code=code or f"C{tag}",
         name=name or f"Course {tag}",
         credits=credits,

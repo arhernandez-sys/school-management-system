@@ -2,31 +2,35 @@
  * Grades transport — thin wrappers over the shared axios client (Bearer + refresh +
  * credentialed cookie live there). The demo's MSW grades handler answers these paths.
  * Keeping the transport here lets the hooks own query-key identity + cache invalidation.
+ *
+ * **D31 re-pathed two of these.** `/grades/class-subjects` → `/grades/offerings` and
+ * `/grades/class-subject/{id}` → `/grades/offering/{id}`: the old paths named the
+ * `class_subjects` join table, which no longer exists.
  */
 import { api } from '@shared/api/client';
 import type {
-  ClassSubjectOptionsResponse,
   Gradebook,
   GradeEntry,
   GradeEntryResponse,
   MyGrades,
+  OfferingOptionsResponse,
 } from '../types';
 
-/** GET /grades/class-subjects — the role-scoped gradebook picker (year-scoped). */
-export async function fetchClassSubjectOptions(
+/** GET /grades/offerings — the role-scoped gradebook picker (year-scoped). */
+export async function fetchOfferingOptions(
   academicYearId?: string,
   signal?: AbortSignal,
-): Promise<ClassSubjectOptionsResponse> {
-  const res = await api.get<ClassSubjectOptionsResponse>('/grades/class-subjects', {
+): Promise<OfferingOptionsResponse> {
+  const res = await api.get<OfferingOptionsResponse>('/grades/offerings', {
     params: academicYearId ? { academic_year_id: academicYearId } : undefined,
     signal,
   });
   return res.data;
 }
 
-/** GET /grades/class-subject/{id} — the gradebook grid. */
-export async function fetchGradebook(classSubjectId: string, signal?: AbortSignal): Promise<Gradebook> {
-  const res = await api.get<Gradebook>(`/grades/class-subject/${classSubjectId}`, { signal });
+/** GET /grades/offering/{id} — the gradebook grid. */
+export async function fetchGradebook(offeringId: string, signal?: AbortSignal): Promise<Gradebook> {
+  const res = await api.get<Gradebook>(`/grades/offering/${offeringId}`, { signal });
   return res.data;
 }
 

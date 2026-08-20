@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Autocomplete, FormControlLabel, Stack, Switch, TextField } from '@mui/material';
 import { FormDialog } from '@shared/components';
-import { useSubjectsList } from '@features/settings/hooks/useSubjects';
+import { useCoursesList } from '@features/settings/hooks/useCourses';
 import type { ProgramCourseItem, TermBlock } from '../types';
 
 export interface ProgramCourseFormValues {
@@ -57,7 +57,7 @@ export function ProgramCourseDialog({
   const moving = Boolean(entry);
 
   // The catalog picker. Only needed when ADDING — a move keeps its course.
-  const catalog = useSubjectsList({ page: 1, page_size: 100, sort: 'code', is_active: true });
+  const catalog = useCoursesList({ page: 1, page_size: 100, sort: 'code', is_active: true });
   const options = useMemo(
     () => (catalog.data?.items ?? []).filter((c) => !usedCourseIds.includes(c.id)),
     [catalog.data, usedCourseIds],

@@ -94,6 +94,20 @@ class AccountInactive(AppError):
     code = "account_inactive"
 
 
+class PasswordChangeRequired(AppError):
+    """The caller holds a valid token but `must_change_password` is still set.
+
+    A 403 rather than a 401: the credentials ARE valid, the account is simply not
+    cleared to do anything else yet. `core/deps.get_current_user` raises this for
+    every request outside the small exempt set (read your own identity, change your
+    password, log out), which is what makes the forced change a SERVER rule instead
+    of a redirect one client happens to perform.
+    """
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "password_change_required"
+
+
 class RateLimited(AppError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "rate_limited"

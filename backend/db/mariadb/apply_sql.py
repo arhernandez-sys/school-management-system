@@ -36,6 +36,7 @@ NOTES
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -46,20 +47,33 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 def connection_kwargs() -> dict[str, object]:
-    """Parse DATABASE_URL out of backend/.env into pymysql connect() kwargs.
+    """Resolve the DSN into pymysql connect() kwargs.
+
+    An EXPORTED `DATABASE_URL` wins over `backend/.env`, matching what
+    `backend/tests/conftest.py` already does. That precedence is what makes it possible
+    to point these tools at a scratch or staging database:
+
+        DATABASE_URL=mysql+pymysql://root:pw@127.0.0.1:3306/sims_probe           python db/mariadb/apply_sql.py db/mariadb/008_course_offerings.sql
+
+    Before this, both tools read `.env` unconditionally, so a migration could only ever
+    be applied to - or verified against - the one database named there. Rehearsing a
+    destructive file on a copy was impossible, and `verify_schema.py` silently reported on
+    `sims` while you believed you were checking somewhere else. (D31; see also the note in
+    `008_course_offerings.sql` about not hardcoding a `USE` statement.)
 
     The password is URL-encoded in the DSN (`.env.example` insists on it: `@` -> `%40`),
-    so it has to be unquoted here — pymysql wants the raw value.
+    so it has to be unquoted here - pymysql wants the raw value.
     """
-    if not ENV_FILE.exists():
-        raise SystemExit(f"No .env at {ENV_FILE}")
+    url: str | None = os.environ.get("DATABASE_URL") or None
 
-    url: str | None = None
-    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        if line.startswith("DATABASE_URL="):
-            url = line.split("=", 1)[1].strip()
+    if url is None:
+        if not ENV_FILE.exists():
+            raise SystemExit(f"No .env at {ENV_FILE} and DATABASE_URL is not exported")
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("DATABASE_URL="):
+                url = line.split("=", 1)[1].strip()
     if not url:
-        raise SystemExit(f"DATABASE_URL not found in {ENV_FILE}")
+        raise SystemExit(f"DATABASE_URL not found in {ENV_FILE} and not exported")
 
     parsed = urlparse(url.replace("mysql+pymysql://", "mysql://", 1))
     return {

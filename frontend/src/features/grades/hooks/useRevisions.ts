@@ -23,13 +23,13 @@ import type {
  */
 export const revisionKeys = {
   all: ['grade-revisions'] as const,
-  list: (params: { status?: GradeRevisionStatus; class_subject_id?: string }) =>
+  list: (params: { status?: GradeRevisionStatus; offering_id?: string }) =>
     [...revisionKeys.all, 'list', params] as const,
   detail: (id: string) => [...revisionKeys.all, 'detail', id] as const,
 };
 
 async function listRevisions(
-  params: { status?: GradeRevisionStatus; class_subject_id?: string },
+  params: { status?: GradeRevisionStatus; offering_id?: string },
   signal?: AbortSignal,
 ): Promise<GradeRevisionList> {
   const res = await api.get<GradeRevisionList>('/grade-revisions', { params, signal });
@@ -38,7 +38,7 @@ async function listRevisions(
 
 export function useGradeRevisions(params: {
   status?: GradeRevisionStatus;
-  class_subject_id?: string;
+  offering_id?: string;
 }) {
   return useQuery({
     queryKey: revisionKeys.list(params),

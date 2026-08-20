@@ -20,7 +20,7 @@ import { schoolToday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import {
   useAttendanceRegister,
-  useAttendanceSections,
+  useAttendanceOfferings,
   useSaveAttendance,
 } from '../hooks/useAttendance';
 import { AttendanceToolbar } from '../components/AttendanceToolbar';
@@ -39,33 +39,33 @@ function formatRecordedAt(iso: string): string {
 
 /**
  * Attendance entry sheet (design-system §7.6) — tablet-first daily register for one
- * (section, date). All rows default to Present (FR-ATT-02); the teacher taps to change
+ * (offering, date). All rows default to Present (FR-ATT-02); the lecturer taps to change
  * a status, can "Mark all present", sees running counts, and Saves via PUT /attendance
  * (upsert, FR-ATT-03). Future dates are blocked (FR-ATT-05). P/S land here read-only and
  * are steered to the Summary tab (they view-all, they do not record).
  *
- * Selection persists to the URL (?section_id=&date=) so the sheet is shareable/reloadable.
+ * Selection persists to the URL (?offering_id=&date=) so the sheet is shareable/reloadable.
  */
 export function AttendanceRegisterScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const sectionId = searchParams.get('section_id');
+  const offeringId = searchParams.get('offering_id');
   // Defaults to the school-local today (America/Belize), matching the backend's
   // `school_today()`. Previously the demo dataset's fixed 2025-10-15, so against the
   // real API the register opened on a date months in the past.
   const date = searchParams.get('date') ?? schoolToday();
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
-  const sectionsQuery = useAttendanceSections(yearId);
-  const registerQuery = useAttendanceRegister(sectionId, date);
+  const offeringsQuery = useAttendanceOfferings(yearId);
+  const registerQuery = useAttendanceRegister(offeringId, date);
   const saveMut = useSaveAttendance();
 
-  // Switching year clears the (year-specific) section so the effect re-picks one.
+  // Switching year clears the (year-specific) offering so the effect re-picks one.
   const handleChangeYear = (value: string) =>
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', value);
-        next.delete('section_id');
+        next.delete('offering_id');
         return next;
       },
       { replace: true },
@@ -75,7 +75,7 @@ export function AttendanceRegisterScreen() {
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canRecord = registerQuery.data?.can_record ?? sectionsQuery.data?.can_record ?? false;
+  const canRecord = registerQuery.data?.can_record ?? offeringsQuery.data?.can_record ?? false;
 
   // Preselect the caller's first available class (keeps the URL the source of truth).
   //
@@ -83,18 +83,18 @@ export function AttendanceRegisterScreen() {
   // removed elsewhere — it just picks a starting class for the picker, which the user then
   // changes. Every class in the list is equally valid; there is no primary one.
   useEffect(() => {
-    if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
+    if (!offeringId && offeringsQuery.data && offeringsQuery.data.items.length > 0) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set('section_id', sectionsQuery.data!.items[0]!.id);
+          next.set('offering_id', offeringsQuery.data!.items[0]!.offering.id);
           if (!next.get('date')) next.set('date', schoolToday());
           return next;
         },
         { replace: true },
       );
     }
-  }, [sectionId, sectionsQuery.data, setSearchParams]);
+  }, [offeringId, offeringsQuery.data, setSearchParams]);
 
   // Seed the editable draft from the loaded register (unrecorded → default Present).
   useEffect(() => {
@@ -131,10 +131,10 @@ export function AttendanceRegisterScreen() {
   const markAllPresent = () =>
     setDraft(Object.fromEntries(entries.map((e) => [e.student.id, DEFAULT_STATUS] as const)));
 
-  const handleChangeSection = (value: string) =>
+  const handleChangeOffering = (value: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set('section_id', value);
+      next.set('offering_id', value);
       return next;
     });
 
@@ -146,11 +146,11 @@ export function AttendanceRegisterScreen() {
     });
 
   const handleSave = () => {
-    if (!sectionId) return;
+    if (!offeringId) return;
     setError(null);
     saveMut.mutate(
       {
-        section_id: sectionId,
+        offering_id: offeringId,
         date,
         entries: entries.map((e) => ({
           student_id: e.student.id,
@@ -159,7 +159,7 @@ export function AttendanceRegisterScreen() {
       },
       {
         onSuccess: (res) => {
-          const section = registerQuery.data?.section.name ?? 'class';
+          const section = registerQuery.data?.offering.offering.label ?? 'this offering';
           setSaved(`Attendance saved for ${section} · ${res.upserted} students`);
         },
         onError: (err) => setError(apiErrorMessage(err)),
@@ -177,11 +177,11 @@ export function AttendanceRegisterScreen() {
   };
 
   // ── UI states ────────────────────────────────────────────────────────────────
-  if (sectionsQuery.isLoading) return <LoadingState variant="page" label="Loading classes" />;
-  if (sectionsQuery.isError) {
-    return <ErrorState onRetry={() => void sectionsQuery.refetch()} />;
+  if (offeringsQuery.isLoading) return <LoadingState variant="page" label="Loading course offerings" />;
+  if (offeringsQuery.isError) {
+    return <ErrorState onRetry={() => void offeringsQuery.refetch()} />;
   }
-  if (sectionsQuery.data && sectionsQuery.data.items.length === 0) {
+  if (offeringsQuery.data && offeringsQuery.data.items.length === 0) {
     return (
       <>
         <PageHeader title="Record attendance" />
@@ -200,15 +200,15 @@ export function AttendanceRegisterScreen() {
         title={canRecord ? 'Record attendance' : 'Attendance'}
         subtitle={
           registerQuery.data
-            ? `${registerQuery.data.section.name} · ${entries.length} students`
+            ? `${registerQuery.data.offering.offering.label} · ${entries.length} students`
             : 'Per-day register for one subject class'
         }
       />
 
       <AttendanceToolbar
-        sections={sectionsQuery.data?.items ?? []}
-        sectionId={sectionId}
-        onSectionChange={handleChangeSection}
+        offerings={offeringsQuery.data?.items ?? []}
+        offeringId={offeringId}
+        onOfferingChange={handleChangeOffering}
         date={date}
         onDateChange={handleChangeDate}
         years={years}

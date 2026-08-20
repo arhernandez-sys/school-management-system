@@ -18,6 +18,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.common.enums import AnnouncementAudience, AssessmentStatus
+from app.common.schemas import OfferingRef
 
 
 class DashboardAnnouncement(BaseModel):
@@ -34,8 +35,22 @@ class DashboardAnnouncement(BaseModel):
     is_read: bool = False
 
 
-class EnrollmentByGradeItem(BaseModel):
-    grade_level: str
+class EnrollmentByProgrammeItem(BaseModel):
+    """One programme and how many students are on it (D31).
+
+    Replaces `EnrollmentByGradeItem`, which grouped by `classes.grade_level` — the
+    homeroom's Form level ("Form 1".."Form 4"). A junior college has no Forms; the
+    equivalent question is "how many students on each Associate degree?".
+
+    `programme_code` is the short BAJC code the Dean recognises (BMAD); `programme_name`
+    is the full title. Students with no programme are reported under a single
+    `programme_id = None` row rather than dropped, so the tile cannot quietly under-count
+    the roll.
+    """
+
+    programme_id: UUID | None = None
+    programme_code: str | None = None
+    programme_name: str
     count: int
 
 
@@ -84,7 +99,7 @@ class AdminStats(BaseModel):
 class AdminDashboard(_Base):
     role: Literal["principal"] = "principal"
     stats: AdminStats
-    enrollment_by_grade: list[EnrollmentByGradeItem] = Field(default_factory=list)
+    enrollment_by_programme: list[EnrollmentByProgrammeItem] = Field(default_factory=list)
     grade_distribution: list[GradeDistributionItem] = Field(default_factory=list)
     enrollment_trend: list[EnrollmentTrendItem] = Field(default_factory=list)
     recent_teachers: list[DashboardPerson] = Field(default_factory=list)
@@ -107,7 +122,9 @@ class SecretaryStats(BaseModel):
 class SecretaryEnrollmentItem(BaseModel):
     enrollment_id: UUID
     student_name: str
-    section_name: str
+    #: The offering's derived label, e.g. "MATH1110-01" (D31; was `section_name`, a
+    #: homeroom's stored name).
+    offering_label: str
     enrolled_at: datetime
 
 
@@ -120,8 +137,12 @@ class SecretaryDashboard(_Base):
 
 # ── Teacher ────────────────────────────────────────────────────────────────────
 class TeacherStats(BaseModel):
-    my_sections: int = 0
-    my_class_subjects: int = 0
+    #: How many offerings this lecturer teaches. D31 collapsed `my_sections` and
+    #: `my_class_subjects` into one figure: they counted homerooms and the subjects
+    #: taught within them, and with one course per offering they are now the same
+    #: number. Two tiles showing the same value would imply a distinction that the
+    #: tertiary model does not have.
+    my_offerings: int = 0
     attendance_due_today: int = 0
     #: Assessments still being MARKED — lifecycle status `published` or `grading`.
     #: The teacher's remaining marking workload.
@@ -137,19 +158,15 @@ class TeacherStats(BaseModel):
     awaiting_release_items: int = 0
 
 
-class TeacherTodayClass(BaseModel):
-    class_subject_id: UUID | None = None
-    section_id: UUID
-    section_name: str
-    subject_name: str = ""
+class TeacherTodayOffering(BaseModel):
+    offering: OfferingRef
     attendance_recorded: bool = False
 
 
 class TeacherAssessmentItem(BaseModel):
     id: UUID
     title: str
-    subject_name: str = ""
-    section_name: str = ""
+    offering: OfferingRef | None = None
     assessment_date: date | None = None
     #: Enum-typed for the same reason as `DashboardAnnouncement.audience`.
     status: AssessmentStatus
@@ -158,11 +175,11 @@ class TeacherAssessmentItem(BaseModel):
 class TeacherAwaitingReleaseItem(TeacherAssessmentItem):
     """An assessment holding marked-but-hidden work — the awaiting-release tile's rows.
 
-    Extends `TeacherAssessmentItem` (same id/title/subject/section/date/status) and
+    Extends `TeacherAssessmentItem` (same id/title/offering/date/status) and
     adds the two things the row needs to be ACTIONABLE rather than merely informative:
 
-    * `class_subject_id` — the gradebook is addressed by offering, not by assessment
-      (`/grades?class_subject_id=…`), and the base item deliberately does not carry
+    * `offering_id` — the gradebook is addressed by offering, not by assessment
+      (`/grades?offering_id=…`), and the base item deliberately does not carry
       one. Without it the tile could only link to the gradebook picker.
     * `graded_unreleased_count` — how many students are still waiting, so the teacher
       can tell a whole unreleased column from one straggler left hidden by an earlier
@@ -172,14 +189,14 @@ class TeacherAwaitingReleaseItem(TeacherAssessmentItem):
     grade status.
     """
 
-    class_subject_id: UUID
+    offering_id: UUID
     graded_unreleased_count: int = 0
 
 
 class TeacherDashboard(_Base):
     role: Literal["teacher"] = "teacher"
     stats: TeacherStats
-    today_classes: list[TeacherTodayClass] = Field(default_factory=list)
+    today_classes: list[TeacherTodayOffering] = Field(default_factory=list)
     recent_assessments: list[TeacherAssessmentItem] = Field(default_factory=list)
     #: Standing "what have I marked but not published?" queue. Capped like the other
     #: cards; `stats.awaiting_release_items` counts the full set.
@@ -205,16 +222,15 @@ class StudentStats(BaseModel):
     upcoming_count: int = 0
 
 
-class StudentClassItem(BaseModel):
-    class_subject_id: UUID
-    subject_name: str = ""
+class StudentOfferingItem(BaseModel):
+    offering: OfferingRef
     teacher_name: str = "Unassigned"
 
 
 class StudentGradeItem(BaseModel):
     assessment_id: UUID
     title: str
-    subject_name: str = ""
+    offering: OfferingRef | None = None
     score: float
     max_score: float
     letter: str = ""
@@ -223,14 +239,14 @@ class StudentGradeItem(BaseModel):
 class StudentUpcomingItem(BaseModel):
     id: UUID
     title: str
-    subject_name: str = ""
+    offering: OfferingRef | None = None
     assessment_date: date | None = None
 
 
 class StudentDashboard(_Base):
     role: Literal["student"] = "student"
     stats: StudentStats
-    my_classes: list[StudentClassItem] = Field(default_factory=list)
+    my_classes: list[StudentOfferingItem] = Field(default_factory=list)
     recent_grades: list[StudentGradeItem] = Field(default_factory=list)
     upcoming_assessments: list[StudentUpcomingItem] = Field(default_factory=list)
     #: NOTE the key is `announcements` here, not `recent_announcements` as on every

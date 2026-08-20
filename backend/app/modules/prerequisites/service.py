@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.common.enums import CreditTransferStatus, PrerequisiteType
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.modules.admissions.models import CreditTransferRequest
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.grades import calc
 from app.modules.grades import service as grades_service
 from app.modules.prerequisites.models import CoursePrerequisite
@@ -65,9 +65,9 @@ def _audit(
     )
 
 
-def _course_or_404(db: Session, course_id: uuid.UUID) -> Subject:
+def _course_or_404(db: Session, course_id: uuid.UUID) -> Course:
     course = db.scalar(
-        select(Subject).where(Subject.id == course_id, Subject.deleted_at.is_(None))
+        select(Course).where(Course.id == course_id, Course.deleted_at.is_(None))
     )
     if course is None:
         raise NotFound("Course not found.", code="not_found")
@@ -79,7 +79,7 @@ def _course_or_404(db: Session, course_id: uuid.UUID) -> Subject:
 # ──────────────────────────────────────────────────────────────────────────────
 def _item(
     row: CoursePrerequisite,
-    course: Subject | None,
+    course: Course | None,
     program: Program | None,
 ) -> PrerequisiteItem:
     return PrerequisiteItem(
@@ -93,7 +93,7 @@ def _item(
 
 
 def list_prerequisites(db: Session, *, course_id: uuid.UUID) -> PrerequisiteList:
-    """GET /subjects/{id}/prerequisites (authenticated).
+    """GET /courses/{id}/prerequisites (authenticated).
 
     Reading is open: a course's prerequisites are published prospectus material, and
     a student deciding what to take next needs them.
@@ -108,7 +108,7 @@ def list_prerequisites(db: Session, *, course_id: uuid.UUID) -> PrerequisiteList
     course_ids = [r.prerequisite_course_id for r in rows if r.prerequisite_course_id]
     program_ids = [r.program_id for r in rows if r.program_id]
     courses = (
-        {c.id: c for c in db.scalars(select(Subject).where(Subject.id.in_(course_ids))).all()}
+        {c.id: c for c in db.scalars(select(Course).where(Course.id.in_(course_ids))).all()}
         if course_ids
         else {}
     )
@@ -137,7 +137,7 @@ def list_prerequisites(db: Session, *, course_id: uuid.UUID) -> PrerequisiteList
 def add_prerequisite(
     db: Session, *, actor: User, course_id: uuid.UUID, payload: PrerequisiteCreateRequest
 ) -> PrerequisiteList:
-    """POST /subjects/{id}/prerequisites (Dean only).
+    """POST /courses/{id}/prerequisites (Dean only).
 
     Returns the whole list, not the created row: the editor is a list, and a single
     row would make it re-fetch to render.
@@ -167,7 +167,7 @@ def add_prerequisite(
                 "An 'all program courses' requirement cannot also name a course.",
                 fields={"prerequisite_course_id": ["Must be omitted."]},
             )
-        prerequisite: Subject | None = None
+        prerequisite: Course | None = None
     else:
         if payload.prerequisite_course_id is None:
             raise ValidationError(
@@ -180,9 +180,9 @@ def add_prerequisite(
                 fields={"prerequisite_course_id": ["Cannot be this course."]},
             )
         prerequisite = db.scalar(
-            select(Subject).where(
-                Subject.id == payload.prerequisite_course_id,
-                Subject.deleted_at.is_(None),
+            select(Course).where(
+                Course.id == payload.prerequisite_course_id,
+                Course.deleted_at.is_(None),
             )
         )
         if prerequisite is None:
@@ -269,7 +269,7 @@ def _assert_no_cycle(
 def remove_prerequisite(
     db: Session, *, actor: User, course_id: uuid.UUID, prerequisite_id: uuid.UUID
 ) -> PrerequisiteList:
-    """DELETE /subjects/{id}/prerequisites/{prerequisite_id} (Dean only).
+    """DELETE /courses/{id}/prerequisites/{prerequisite_id} (Dean only).
 
     Scoped to the course in the path — by id alone, one course's URL could delete
     another's requirement.
@@ -406,7 +406,7 @@ def check_eligibility(
                 ok, letter, numeric = satisfied(required_id)
                 if ok:
                     continue
-                course = db.get(Subject, required_id)
+                course = db.get(Course, required_id)
                 issues.append(
                     EligibilityIssue(
                         course_code=course.code if course else "?",
@@ -427,7 +427,7 @@ def check_eligibility(
         ok, letter, numeric = satisfied(rule.prerequisite_course_id)
         if ok:
             continue
-        course = db.get(Subject, rule.prerequisite_course_id)
+        course = db.get(Course, rule.prerequisite_course_id)
         issues.append(
             EligibilityIssue(
                 course_code=course.code if course else "?",

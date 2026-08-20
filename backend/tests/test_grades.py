@@ -23,12 +23,11 @@ from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.modules.assessments.models import Assessment, AssessmentCategory
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.settings.models import AcademicYear, Semester
@@ -73,18 +72,18 @@ class _Graph:
             start_date=date(2025, 9, 1), end_date=date(2026, 1, 31), is_active=True,
         )
         db_session.add(self.sem)
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"Sec {tag}", grade_level="Form 1",
-            section="A", homeroom_label=f"Homeroom {tag}",
-        )
-        db_session.add(self.section)
-        self.subject = Subject(name=f"Subj {tag}", code=tag.upper())
+        self.subject = Course(name=f"Subj {tag}", code=tag.upper())
         db_session.add(self.subject)
         db_session.flush()
 
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
+        self.cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(self.cs)
         db_session.flush()
+        self.section = self.cs
 
         self.teacher_user = make_user(role=Role.TEACHER, full_name="Owner Teacher")
         self.teacher = TeacherProfile(
@@ -93,15 +92,17 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
 
         # A second offering in the same section, owned by somebody else.
-        self.other_subject = Subject(name=f"Other {tag}", code=f"O{tag[:3].upper()}")
+        self.other_subject = Course(name=f"Other {tag}", code=f"O{tag[:3].upper()}")
         db_session.add(self.other_subject)
         db_session.flush()
-        self.other_cs = ClassSubject(
-            class_id=self.section.id, subject_id=self.other_subject.id, is_active=True
-        )
+        self.other_cs = CourseOffering(
+                course_id=self.other_subject.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(self.other_cs)
         db_session.flush()
         self.other_teacher_user = make_user(role=Role.TEACHER, full_name="Other Teacher")
@@ -112,7 +113,7 @@ class _Graph:
         db_session.add(self.other_teacher)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
+            ClassTeacher(offering_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
         )
         db_session.flush()
 
@@ -133,7 +134,7 @@ class _Graph:
         assessment_date=None, title=None,
     ) -> Assessment:
         a = Assessment(
-            class_subject_id=cs_id or self.cs.id,
+            offering_id=cs_id or self.cs.id,
             semester_id=semester_id or self.sem.id,
             category_id=category_id,
             title=title or f"A {uuid.uuid4().hex[:5]}",
@@ -150,7 +151,7 @@ class _Graph:
 
     def category(self, *, weight="100", drop=None, cs_id=None) -> AssessmentCategory:
         c = AssessmentCategory(
-            class_subject_id=cs_id or self.cs.id,
+            offering_id=cs_id or self.cs.id,
             name=f"Cat {uuid.uuid4().hex[:5]}",
             weight=Decimal(weight),
             drop_lowest_count=drop,
@@ -176,7 +177,7 @@ class _Graph:
         enr = None
         if enroll:
             enr = ClassEnrollment(
-                class_id=self.section.id, student_id=s.id, semester_id=self.sem.id
+                offering_id=self.section.id, student_id=s.id, semester_id=self.sem.id
             )
             self._db.add(enr)
             self._db.flush()
@@ -200,6 +201,13 @@ class _Graph:
     def student_headers(self, student):
         return self._auth_headers(user_id=student._login.id, role=Role.STUDENT)
 
+    def label(self, offering) -> str:  # noqa: ANN001
+        """The label the API sends for `offering`, built with the SERVER's
+        `offering_label` rather than re-spelled here."""
+        from app.modules.offerings.labels import offering_label
+
+        return offering_label(self.subject.code, offering.section_code)
+
 
 @pytest.fixture
 def graph(db_session, make_user, auth_headers, archive_seeded_active_year, make_grading_scale) -> _Graph:
@@ -208,17 +216,17 @@ def graph(db_session, make_user, auth_headers, archive_seeded_active_year, make_
 
 def _book(client, graph, cs_id=None, headers=None, **params):
     query = "&".join(f"{k}={v}" for k, v in params.items())
-    url = f"{G}/class-subject/{cs_id or graph.cs.id}" + (f"?{query}" if query else "")
+    url = f"{G}/offering/{cs_id or graph.cs.id}" + (f"?{query}" if query else "")
     return client.get(url, headers=headers or graph.H)
 
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestAuthGate:
     def test_picker_requires_auth(self, client) -> None:
-        assert client.get(f"{G}/class-subjects").status_code == 401
+        assert client.get(f"{G}/offerings").status_code == 401
 
     def test_gradebook_requires_auth(self, client) -> None:
-        assert client.get(f"{G}/class-subject/{uuid.uuid4()}").status_code == 401
+        assert client.get(f"{G}/offering/{uuid.uuid4()}").status_code == 401
 
     def test_write_requires_auth(self, client) -> None:
         assert client.put(f"{A}/{uuid.uuid4()}/grades", json={"entries": []}).status_code == 401
@@ -231,7 +239,7 @@ class TestAuthGate:
 
     def test_student_forbidden_on_picker(self, client, graph) -> None:
         s, _ = graph.student(with_login=True)
-        r = client.get(f"{G}/class-subjects", headers=graph.student_headers(s))
+        r = client.get(f"{G}/offerings", headers=graph.student_headers(s))
         assert r.status_code == 403
         _assert_envelope(r.json(), code="forbidden")
 
@@ -255,15 +263,15 @@ class TestAuthGate:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-class TestClassSubjectPicker:
+class TestOfferingPicker:
     def test_teacher_sees_only_owned_offerings(self, client, graph) -> None:
-        body = client.get(f"{G}/class-subjects", headers=graph.H).json()
-        ids = {i["id"] for i in body["items"]}
+        body = client.get(f"{G}/offerings", headers=graph.H).json()
+        ids = {i["offering"]["id"] for i in body["items"]}
         assert str(graph.cs.id) in ids
         assert str(graph.other_cs.id) not in ids
 
     def test_principal_sees_all_offerings_in_the_year(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{G}/class-subjects", headers=graph.P).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{G}/offerings", headers=graph.P).json()["items"]}
         assert {str(graph.cs.id), str(graph.other_cs.id)} <= ids
 
     def test_year_filter_excludes_other_years(self, client, graph, db_session) -> None:
@@ -273,7 +281,7 @@ class TestClassSubjectPicker:
         )
         db_session.add(other_year)
         db_session.flush()
-        url = f"{G}/class-subjects?academic_year_id={other_year.id}"
+        url = f"{G}/offerings?academic_year_id={other_year.id}"
         assert client.get(url, headers=graph.P).json()["items"] == []
 
     def test_inactive_offering_is_still_listed(self, client, graph, db_session) -> None:
@@ -284,7 +292,7 @@ class TestClassSubjectPicker:
         """
         graph.cs.is_active = False
         db_session.flush()
-        ids = {i["id"] for i in client.get(f"{G}/class-subjects", headers=graph.H).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{G}/offerings", headers=graph.H).json()["items"]}
         assert str(graph.cs.id) in ids
 
     def test_soft_deleted_offering_is_excluded(self, client, graph, db_session) -> None:
@@ -292,7 +300,7 @@ class TestClassSubjectPicker:
 
         graph.cs.deleted_at = utcnow()
         db_session.flush()
-        ids = {i["id"] for i in client.get(f"{G}/class-subjects", headers=graph.P).json()["items"]}
+        ids = {i["offering"]["id"] for i in client.get(f"{G}/offerings", headers=graph.P).json()["items"]}
         assert str(graph.cs.id) not in ids
 
     def test_assessment_count_counts_live_assessments(self, client, graph, db_session) -> None:
@@ -303,34 +311,35 @@ class TestClassSubjectPicker:
         gone = graph.assessment()
         gone.deleted_at = utcnow()
         db_session.flush()
-        item = next(i for i in client.get(f"{G}/class-subjects", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.cs.id))
+        item = next(i for i in client.get(f"{G}/offerings", headers=graph.H).json()["items"]
+                    if i["offering"]["id"] == str(graph.cs.id))
         assert item["assessment_count"] == 2
 
     def test_can_edit_true_for_teacher_false_for_principal(self, client, graph) -> None:
-        mine = next(i for i in client.get(f"{G}/class-subjects", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.cs.id))
-        theirs = next(i for i in client.get(f"{G}/class-subjects", headers=graph.P).json()["items"]
-                      if i["id"] == str(graph.cs.id))
+        mine = next(i for i in client.get(f"{G}/offerings", headers=graph.H).json()["items"]
+                    if i["offering"]["id"] == str(graph.cs.id))
+        theirs = next(i for i in client.get(f"{G}/offerings", headers=graph.P).json()["items"]
+                      if i["offering"]["id"] == str(graph.cs.id))
         assert mine["can_edit"] is True
         assert theirs["can_edit"] is False
 
-    def test_ref_shape_uses_id_not_class_subject_id(self, client, graph) -> None:
-        """Grades' ClassSubjectRef is keyed `id`; Attendance's uses different keys."""
-        item = next(i for i in client.get(f"{G}/class-subjects", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.cs.id))
-        assert "class_subject_id" not in item
+    def test_ref_is_the_SHARED_offering_ref_plus_staffing(self, client, graph) -> None:
+        """D31 replaced this file's "Grades keys its ref on `id`, Attendance does not" test.
+
+        Three modules each defining their own offering ref was survivable while the ref
+        merely wrapped two rows. The label is DERIVED now, so three private derivations
+        would drift — and the screens are where the drift would show. The ref is shared;
+        what stays local is the STAFFING the gradebook needs and Attendance shapes
+        differently (`full_name` here, `name` there — still deliberately not the same).
+        """
+        item = next(i for i in client.get(f"{G}/offerings", headers=graph.H).json()["items"]
+                    if i["offering"]["id"] == str(graph.cs.id))
+        assert item["offering"]["label"] == graph.label(graph.cs)
+        assert item["offering"]["course"]["id"] == str(graph.subject.id)
         assert item["lead_teacher_id"] == str(graph.teacher.id)
         assert item["teachers"][0]["full_name"] == "Owner Teacher"
-        assert "full_name" in item["teachers"][0]
-        assert item["display_name"] == f"{graph.section.name} · {graph.subject.name}"
-
-    def test_null_section_coerces_to_empty_string(self, client, graph, db_session) -> None:
-        graph.section.section = None
-        db_session.flush()
-        item = next(i for i in client.get(f"{G}/class-subjects", headers=graph.H).json()["items"]
-                    if i["id"] == str(graph.cs.id))
-        assert item["section"]["section"] == ""
+        # The homeroom ref is gone entirely, not renamed.
+        assert "section" not in item and "display_name" not in item
 
     def test_teacher_with_no_offerings_gets_empty_list(self, client, graph, make_user, auth_headers, db_session) -> None:
         user = make_user(role=Role.TEACHER)
@@ -340,7 +349,7 @@ class TestClassSubjectPicker:
         ))
         db_session.flush()
         headers = auth_headers(user_id=user.id, role=Role.TEACHER)
-        assert client.get(f"{G}/class-subjects", headers=headers).json()["items"] == []
+        assert client.get(f"{G}/offerings", headers=headers).json()["items"] == []
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -548,7 +557,7 @@ class TestGradebookRead:
         body = _book(client, graph).json()
         assert body["assessments"] == []
         assert body["rows"] == []
-        assert body["class_subject"]["id"] == str(graph.cs.id)
+        assert body["offering"]["offering"]["id"] == str(graph.cs.id)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -904,7 +913,7 @@ class TestMyGrades:
         graph.grade(hidden, s, e, status="graded", score="4")
 
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         ids = {x["assessment_id"] for x in subject["assessments"]}
         assert str(shown.id) in ids
         assert str(hidden.id) not in ids
@@ -914,7 +923,7 @@ class TestMyGrades:
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="pending", score=None)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert subject["assessments"] == []
 
     def test_per_row_release_exposes_an_unreleased_assessment(self, client, graph) -> None:
@@ -922,7 +931,7 @@ class TestMyGrades:
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="graded", score="18", is_released=True)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert [x["assessment_id"] for x in subject["assessments"]] == [str(a.id)]
 
     def test_score_is_null_for_a_non_graded_status(self, client, graph) -> None:
@@ -930,7 +939,7 @@ class TestMyGrades:
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="absent", score=None)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         item = subject["assessments"][0]
         assert item["status"] == "absent"
         assert item["score"] is None
@@ -940,7 +949,7 @@ class TestMyGrades:
         graph.assessment(is_released=True)
         s, _ = graph.student(with_login=True)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert subject["teacher"]["full_name"] == "Owner Teacher"
 
     def test_student_without_a_profile_404(self, client, graph, make_user, auth_headers) -> None:
@@ -971,7 +980,7 @@ class TestMyGrades:
             r for r in _book(client, graph).json()["rows"] if r["student"]["id"] == str(s.id)
         )
         mine = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in mine["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in mine["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert teacher_row["term_numeric"] == 80.0
         assert subject["term_numeric"] == teacher_row["term_numeric"]
         assert subject["term_letter"] == teacher_row["term_letter"]
@@ -987,7 +996,7 @@ class TestMyGrades:
             r for r in _book(client, graph).json()["rows"] if r["student"]["id"] == str(s.id)
         )
         mine = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in mine["by_subject"] if x["class_subject"]["id"] == str(graph.cs.id))
+        subject = next(x for x in mine["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert teacher_row["term_numeric"] == 50.0
         assert subject["term_numeric"] == 90.0
 
@@ -997,7 +1006,7 @@ class TestMyGrades:
         graph.assessment(is_released=True)
         s, _ = graph.student(with_login=True)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        assert str(graph.cs.id) in {x["class_subject"]["id"] for x in body["by_subject"]}
+        assert str(graph.cs.id) in {x["offering"]["offering"]["id"] for x in body["by_subject"]}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1018,7 +1027,7 @@ class TestTermEndpoint:
         s, e = graph.student()
         graph.grade(a, s, e, status="graded", score="75")
         body = client.get(
-            f"{G}/term?class_subject_id={graph.cs.id}", headers=graph.H
+            f"{G}/term?offering_id={graph.cs.id}", headers=graph.H
         ).json()
         item = next(i for i in body["items"] if i["student"]["id"] == str(s.id))
         assert item["numeric"] == 75.0
@@ -1027,14 +1036,14 @@ class TestTermEndpoint:
         assert item["weight_base_used"] == 1.0
 
     def test_teacher_reading_an_unowned_offering_404(self, client, graph) -> None:
-        r = client.get(f"{G}/term?class_subject_id={graph.other_cs.id}", headers=graph.H)
+        r = client.get(f"{G}/term?offering_id={graph.other_cs.id}", headers=graph.H)
         assert r.status_code == 404
 
     def test_principal_can_read_any_offering(self, client, graph) -> None:
         a = graph.assessment(max_score="100")
         s, e = graph.student()
         graph.grade(a, s, e, status="graded", score="65")
-        body = client.get(f"{G}/term?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{G}/term?offering_id={graph.cs.id}", headers=graph.P).json()
         assert any(i["student"]["id"] == str(s.id) for i in body["items"])
 
     def test_archived_year_reads_the_frozen_snapshot(self, client, graph, db_session) -> None:
@@ -1045,7 +1054,7 @@ class TestTermEndpoint:
         graph.grade(a, s, e, status="graded", score="20")  # live compute would say 20
 
         db_session.add(TermGradeSnapshot(
-            student_id=s.id, class_subject_id=graph.cs.id, semester_id=graph.sem.id,
+            student_id=s.id, offering_id=graph.cs.id, semester_id=graph.sem.id,
             subject_id=graph.subject.id, numeric_grade=Decimal("88.00"), letter_grade="B",
             weight_base_used=Decimal("3.00"),
             effective_policy={"absent_as_zero": True, "allow_makeup": False, "drop_lowest_count": 1},
@@ -1054,7 +1063,7 @@ class TestTermEndpoint:
         graph.year.status = AcademicYearStatus.ARCHIVED
         db_session.flush()
 
-        body = client.get(f"{G}/term?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{G}/term?offering_id={graph.cs.id}", headers=graph.P).json()
         item = next(i for i in body["items"] if i["student"]["id"] == str(s.id))
         assert item["is_frozen"] is True
         assert item["numeric"] == 88.0  # the snapshot wins over live compute
@@ -1068,3 +1077,85 @@ class TestTermEndpoint:
 
     def test_scope_me_rejects_a_bad_value(self, client, graph) -> None:
         assert client.get(f"{G}/term?scope=everyone", headers=graph.P).status_code == 422
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestGradebookTermIsTheOfferings:
+    """D31 — an offering's gradebook shows THE OFFERING'S term, not its year's.
+
+    `_semester_for_section` used to reason from the academic YEAR (that year's active
+    semester, else its `sequence=1` term) because `classes` carried no semester and the
+    term genuinely had to be guessed. `course_offerings.semester_id` makes the guess both
+    unnecessary and wrong, and the D31 demo seed is what exposed it: a Semester-2 offering
+    resolved to Semester 1, `_assessments_for` then filtered on that semester, and the
+    offering's own assessments and roster BOTH matched nothing — an empty gradebook with no
+    error anywhere.
+    """
+
+    def _second_term_offering(self, graph, db):
+        """An offering of a new course in Semester 2 of the SAME (active) year."""
+        sem2 = Semester(
+            academic_year_id=graph.year.id, name="Semester 2", sequence=2,
+            start_date=date(2026, 2, 2), end_date=date(2026, 6, 30), is_active=False,
+        )
+        course = Course(name=f"S2 {graph.tag}", code=f"S2{graph.tag[:4].upper()}")
+        db.add_all([sem2, course])
+        db.flush()
+        off = CourseOffering(
+            course_id=course.id, semester_id=sem2.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
+        db.add(off)
+        db.flush()
+        db.add(ClassTeacher(offering_id=off.id, teacher_id=graph.teacher.id, is_lead=True))
+        db.flush()
+        return off, sem2
+
+    def test_a_second_term_offering_shows_its_own_assessments(
+        self, client, graph, db_session
+    ) -> None:
+        off, sem2 = self._second_term_offering(graph, db_session)
+        graph.assessment(cs_id=off.id, semester_id=sem2.id, title="S2 Quiz")
+
+        body = _book(client, graph, cs_id=off.id).json()
+        assert body["semester"]["id"] == str(sem2.id), (
+            "the gradebook resolved a different term than the offering's own"
+        )
+        titles = [a["title"] for a in body["assessments"]]
+        assert titles == ["S2 Quiz"], titles
+
+    def test_a_second_term_offering_shows_its_own_roster(
+        self, client, graph, db_session
+    ) -> None:
+        """The roster is filtered by the resolved term too, so it vanished with the
+        assessments — an offering with 23 enrolments rendered zero rows."""
+        off, sem2 = self._second_term_offering(graph, db_session)
+        graph.assessment(cs_id=off.id, semester_id=sem2.id)
+        student, _enr = graph.student(enroll=False)
+        db_session.add(ClassEnrollment(
+            offering_id=off.id, student_id=student.id, semester_id=sem2.id,
+        ))
+        db_session.flush()
+
+        body = _book(client, graph, cs_id=off.id).json()
+        assert [r["student"]["id"] for r in body["rows"]] == [str(student.id)]
+
+    def test_an_explicit_semester_id_still_wins(self, client, graph, db_session) -> None:
+        """The query parameter is unchanged — only the DEFAULT moved to the offering."""
+        off, sem2 = self._second_term_offering(graph, db_session)
+        graph.assessment(cs_id=off.id, semester_id=sem2.id)
+
+        body = _book(client, graph, cs_id=off.id, semester_id=graph.sem.id).json()
+        assert body["semester"]["id"] == str(graph.sem.id)
+        assert body["assessments"] == [], (
+            "asking for a term the offering does not run in is a contradictory question; "
+            "it answers empty rather than silently substituting another term"
+        )
+
+    def test_the_active_terms_gradebook_is_unchanged(self, client, graph) -> None:
+        """The common case still resolves to the active term, which is now simply the
+        offering's own."""
+        graph.assessment(title="S1 Quiz")
+        body = _book(client, graph).json()
+        assert body["semester"]["id"] == str(graph.sem.id)
+        assert [a["title"] for a in body["assessments"]] == ["S1 Quiz"]

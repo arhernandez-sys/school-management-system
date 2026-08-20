@@ -38,9 +38,14 @@ class Announcement(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     audience: Mapped[AnnouncementAudience] = mapped_column(
         enum_col(AnnouncementAudience), nullable=False
     )
-    class_id: Mapped[uuid.UUID | None] = mapped_column(
+    #: FK -> course_offerings; required iff audience='class'. NULL = school-wide.
+    #: D31 renamed the column; the `audience` ENUM keeps its `'class'` member because it
+    #: is a wire value the API, the ORM and the MSW handlers all share.
+    offering_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
-        ForeignKey("classes.id", ondelete="CASCADE", name="fk_announcements_class"),
+        ForeignKey(
+            "course_offerings.id", ondelete="CASCADE", name="fk_announcements_offering"
+        ),
         nullable=True,
     )
     published_at: Mapped[datetime] = mapped_column(
@@ -50,8 +55,8 @@ class Announcement(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint(
-            "(audience = 'class') = (class_id IS NOT NULL)",
-            name="ck_announcements_class_audience",
+            "(audience = 'class') = (offering_id IS NOT NULL)",
+            name="ck_announcements_offering_audience",
         ),
         Index(
             "ix_announcements_published",
@@ -59,9 +64,9 @@ class Announcement(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
-            "ix_announcements_class",
-            "class_id",
-            postgresql_where=text("class_id IS NOT NULL"),
+            "ix_announcements_offering",
+            "offering_id",
+            postgresql_where=text("offering_id IS NOT NULL"),
         ),
         Index("ix_announcements_audience", "audience"),
     )

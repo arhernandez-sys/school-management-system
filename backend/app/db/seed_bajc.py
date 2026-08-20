@@ -44,7 +44,7 @@ from app.db.bajc_catalog import (
     PROGRAMS,
 )
 from app.db.session import SessionLocal
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.prerequisites.models import CoursePrerequisite
 from app.modules.programs.models import Program, ProgramCourse
 
@@ -75,17 +75,17 @@ class Report:
         )
 
 
-def _seed_courses(db: Session, report: Report) -> dict[str, Subject]:
-    by_code: dict[str, Subject] = {
+def _seed_courses(db: Session, report: Report) -> dict[str, Course]:
+    by_code: dict[str, Course] = {
         c.code.upper(): c
-        for c in db.scalars(select(Subject).where(Subject.deleted_at.is_(None))).all()
+        for c in db.scalars(select(Course).where(Course.deleted_at.is_(None))).all()
     }
 
     for code, name, credits, component, prereq_text in COURSES:
         existing = by_code.get(code.upper())
         component_enum = CourseComponent(component)
         if existing is None:
-            course = Subject(
+            course = Course(
                 code=code,
                 name=name,
                 credits=credits,
@@ -168,7 +168,7 @@ def _seed_programs(db: Session, report: Report) -> dict[str, Program]:
 def _seed_curriculum(
     db: Session,
     report: Report,
-    courses: dict[str, Subject],
+    courses: dict[str, Course],
     programs: dict[str, Program],
 ) -> None:
     for program_code, blocks in CURRICULUM.items():
@@ -211,7 +211,7 @@ def _seed_curriculum(
 def _seed_prerequisites(
     db: Session,
     report: Report,
-    courses: dict[str, Subject],
+    courses: dict[str, Course],
     programs: dict[str, Program],
 ) -> None:
     def exists(course_id, prereq_id, program_id) -> bool:  # noqa: ANN001

@@ -15,6 +15,15 @@ Scoping (api-spec §3.3, no existence leak):
 Year resolution: everything is scoped to ONE academic year — the active one by
 default, or an explicit `academic_year_id` so the year switcher can look back. Without
 that scope an archived year's classes would be interleaved into the current week.
+
+TERM resolution (added by D31, and it is not cosmetic). A week belongs to ONE TERM, not
+to a year. Under the year-scoped `classes` model that distinction was invisible, because
+a course could only be offered once per year — so scoping to the year happened to select
+one term's worth of teaching. D31 makes "the same course in two terms" a first-class
+capability, and the moment the demo seed used it the bug showed: a student enrolled in
+`MATH1110-01` in BOTH Semester 1 and Semester 2 got Monday 08:00 rendered TWICE, one of
+the two being a class that does not start for another four months. `_narrow_to_one_term`
+is the fix — the year is still the outer scope, but the grid shows a single term's week.
 """
 
 from __future__ import annotations
@@ -25,16 +34,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.common.enums import DayOfWeek, Role
-from app.common.schemas import StudentRef, SubjectRef, TeacherRef
+from app.common.schemas import StudentRef, TeacherRef
 from app.core.errors import NotFound
 from app.core.rbac import _teacher_profile_id
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.queries import offerings_in_year
+from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
     ClassMeeting,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
@@ -43,7 +53,7 @@ from app.modules.timetable.schemas import (
     TimetableDay,
     TimetableEntry,
     TimetableView,
-    UnscheduledClass,
+    UnscheduledOffering,
 )
 from app.modules.users.models import User
 
@@ -72,61 +82,95 @@ def _student_profile_or_404(db: Session, user: User) -> StudentProfile:
     return profile
 
 
-def _student_class_ids(
+def _narrow_to_one_term(
+    db: Session, pairs: list[tuple[uuid.UUID, uuid.UUID]]
+) -> list[uuid.UUID]:
+    """Keep only the offerings belonging to the ONE term this week should show.
+
+    `pairs` is (offering_id, semester_id) for everything the caller holds in the
+    resolved year, which after D31 can span both of its terms (see the module
+    docstring). The term is chosen from what the CALLER actually holds, not from the
+    calendar, and in this order:
+
+      1. the ACTIVE semester, if the caller has anything in it — "this week" for the
+         current year, which is what an unqualified request means;
+      2. otherwise the highest `sequence` present — for an ARCHIVED year, the last term
+         the caller actually sat, rather than a term of that year they were not in
+         (which would render as a blank grid and read as a broken filter).
+
+    Choosing from what the caller holds is what makes the archived case work without a
+    `semester_id` on the wire. Letting the client SELECT the term is the follow-on: it
+    is a contract change (a query parameter plus the chosen term on the response) and
+    belongs with the API surface, not here.
+    """
+    if not pairs:
+        return []
+    semester_ids = {sem for _off, sem in pairs}
+    rows = db.execute(
+        select(Semester.id, Semester.is_active, Semester.sequence).where(
+            Semester.id.in_(semester_ids)
+        )
+    ).all()
+    if not rows:
+        return list(dict.fromkeys(off for off, _sem in pairs))
+    active = [r for r in rows if r.is_active]
+    chosen = active[0].id if active else max(rows, key=lambda r: r.sequence).id
+    return list(dict.fromkeys(off for off, sem in pairs if sem == chosen))
+
+
+def _student_offering_ids(
     db: Session,
     *,
     student_id: uuid.UUID,
     academic_year_id: uuid.UUID | None,
 ) -> list[uuid.UUID]:
-    """The classes a student actively sits in the given year.
+    """The classes a student actively sits, in ONE term of the given year.
 
-    Scoped through `semesters` rather than `classes.academic_year_id` so a class whose
-    year was later corrected cannot appear under two years at once: the enrolment's own
-    semester is what actually places the student in time.
+    Scoped through `semesters` rather than the offering's year so a class whose year was
+    later corrected cannot appear under two years at once: the enrolment's own semester
+    is what actually places the student in time.
     """
     stmt = (
-        select(ClassEnrollment.class_id)
+        select(ClassEnrollment.offering_id, ClassEnrollment.semester_id)
         .join(Semester, ClassEnrollment.semester_id == Semester.id)
-        .join(Class, ClassEnrollment.class_id == Class.id)
+        .join(CourseOffering, ClassEnrollment.offering_id == CourseOffering.id)
         .where(
             ClassEnrollment.student_id == student_id,
             ClassEnrollment.unenrolled_at.is_(None),
-            Class.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
     )
     if academic_year_id is not None:
         stmt = stmt.where(Semester.academic_year_id == academic_year_id)
-    return list(dict.fromkeys(db.scalars(stmt)))
+    return _narrow_to_one_term(db, [(row[0], row[1]) for row in db.execute(stmt)])
 
 
-def _teacher_class_ids(
+def _teacher_offering_ids(
     db: Session, *, user: User, academic_year_id: uuid.UUID | None
 ) -> list[uuid.UUID]:
-    """The classes a teacher is assigned to teach in the given year."""
+    """The classes a teacher is assigned to teach, in ONE term of the given year."""
     try:
         teacher_id = _teacher_profile_id(db, user)
     except NotFound:
         # A teacher account with no profile owns nothing — an empty week, not a 404.
         return []
     stmt = (
-        select(ClassSubject.class_id)
-        .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
-        .join(Class, ClassSubject.class_id == Class.id)
+        select(CourseOffering.id, CourseOffering.semester_id)
+        .join(ClassTeacher, ClassTeacher.offering_id == CourseOffering.id)
         .where(
             ClassTeacher.teacher_id == teacher_id,
-            ClassSubject.deleted_at.is_(None),
-            Class.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
     )
     if academic_year_id is not None:
-        stmt = stmt.where(Class.academic_year_id == academic_year_id)
-    return list(dict.fromkeys(db.scalars(stmt)))
+        stmt = stmt.where(offerings_in_year(academic_year_id))
+    return _narrow_to_one_term(db, [(row[0], row[1]) for row in db.execute(stmt)])
 
 
 def _build_view(
     db: Session,
     *,
-    class_ids: list[uuid.UUID],
+    offering_ids: list[uuid.UUID],
     academic_year_id: uuid.UUID | None,
     student: StudentRef | None = None,
 ) -> TimetableView:
@@ -142,29 +186,27 @@ def _build_view(
     view = TimetableView(
         student=student, academic_year_id=academic_year_id, days=days, unscheduled=[]
     )
-    if not class_ids:
+    if not offering_ids:
         return view
 
     offerings = db.execute(
-        select(ClassSubject, Class, Subject)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
-            ClassSubject.class_id.in_(class_ids),
-            ClassSubject.deleted_at.is_(None),
-            Class.deleted_at.is_(None),
+            CourseOffering.id.in_(offering_ids),
+            CourseOffering.deleted_at.is_(None),
         )
-        .order_by(Class.name.asc(), ClassSubject.id.asc())
+        .order_by(*OFFERING_ORDER)
     ).all()
     if not offerings:
         return view
 
-    cs_ids = [cs.id for (cs, _c, _s) in offerings]
+    offering_ids_present = [offering.id for (offering, _course) in offerings]
 
     teacher_rows = db.execute(
-        select(ClassTeacher.class_subject_id, TeacherProfile)
+        select(ClassTeacher.offering_id, TeacherProfile)
         .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
-        .where(ClassTeacher.class_subject_id.in_(cs_ids))
+        .where(ClassTeacher.offering_id.in_(offering_ids_present))
         .order_by(ClassTeacher.is_lead.desc(), TeacherProfile.full_name.asc())
     ).all()
     teachers_by_cs: dict[uuid.UUID, list[TeacherRef]] = {}
@@ -174,29 +216,23 @@ def _build_view(
     meetings = db.execute(
         select(ClassMeeting)
         .where(
-            ClassMeeting.class_subject_id.in_(cs_ids),
+            ClassMeeting.offering_id.in_(offering_ids_present),
             ClassMeeting.deleted_at.is_(None),
         )
         .order_by(ClassMeeting.day_of_week.asc(), ClassMeeting.start_time.asc())
     ).scalars()
     meetings_by_cs: dict[uuid.UUID, list[ClassMeeting]] = {}
     for m in meetings:
-        meetings_by_cs.setdefault(m.class_subject_id, []).append(m)
+        meetings_by_cs.setdefault(m.offering_id, []).append(m)
 
     by_day = {d.day_of_week: d for d in view.days}
-    for cs, section, subject in offerings:
-        subject_ref = SubjectRef.model_validate(subject)
-        teachers = teachers_by_cs.get(cs.id, [])
-        slots = meetings_by_cs.get(cs.id, [])
+    for offering, course in offerings:
+        ref = offering_ref(offering, course)
+        teachers = teachers_by_cs.get(offering.id, [])
+        slots = meetings_by_cs.get(offering.id, [])
         if not slots:
             view.unscheduled.append(
-                UnscheduledClass(
-                    class_id=section.id,
-                    class_name=section.name,
-                    class_subject_id=cs.id,
-                    subject=subject_ref,
-                    teachers=teachers,
-                )
+                UnscheduledOffering(offering=ref, teachers=teachers)
             )
             continue
         for m in slots:
@@ -208,10 +244,7 @@ def _build_view(
             day.entries.append(
                 TimetableEntry(
                     meeting_id=m.id,
-                    class_id=section.id,
-                    class_name=section.name,
-                    class_subject_id=cs.id,
-                    subject=subject_ref,
+                    offering=ref,
                     teachers=teachers,
                     room=m.room,
                     day_of_week=m.day_of_week,
@@ -220,9 +253,10 @@ def _build_view(
                 )
             )
 
+    # Within a day, by start time; ties broken by the offering label. `offerings` was
+    # already fetched in `OFFERING_ORDER`, so `unscheduled` needs no further sort.
     for day in view.days:
-        day.entries.sort(key=lambda e: (e.start_time, e.class_name))
-    view.unscheduled.sort(key=lambda u: u.class_name)
+        day.entries.sort(key=lambda e: (e.start_time, e.offering.label))
     return view
 
 
@@ -242,21 +276,21 @@ def my_timetable(
 
     if caller.role == Role.STUDENT:
         profile = _student_profile_or_404(db, caller)
-        class_ids = _student_class_ids(
+        offering_ids = _student_offering_ids(
             db, student_id=profile.id, academic_year_id=year_id
         )
         return _build_view(
             db,
-            class_ids=class_ids,
+            offering_ids=offering_ids,
             academic_year_id=year_id,
             student=StudentRef.model_validate(profile),
         )
 
     if caller.role == Role.TEACHER:
-        class_ids = _teacher_class_ids(db, user=caller, academic_year_id=year_id)
-        return _build_view(db, class_ids=class_ids, academic_year_id=year_id)
+        offering_ids = _teacher_offering_ids(db, user=caller, academic_year_id=year_id)
+        return _build_view(db, offering_ids=offering_ids, academic_year_id=year_id)
 
-    return _build_view(db, class_ids=[], academic_year_id=year_id)
+    return _build_view(db, offering_ids=[], academic_year_id=year_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -282,10 +316,10 @@ def student_timetable(
         raise NotFound("Student not found.", code="student_not_found")
 
     year_id = academic_year_id or _active_year_id(db)
-    class_ids = _student_class_ids(db, student_id=profile.id, academic_year_id=year_id)
+    offering_ids = _student_offering_ids(db, student_id=profile.id, academic_year_id=year_id)
     return _build_view(
         db,
-        class_ids=class_ids,
+        offering_ids=offering_ids,
         academic_year_id=year_id,
         student=StudentRef.model_validate(profile),
     )

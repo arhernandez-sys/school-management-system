@@ -38,9 +38,9 @@ function formatDate(iso: string | null): string {
  * `?class_subject_id=` (a query param, not a path segment — see
  * `features/grades/GradeAssessmentsScreen.tsx`); with no id it opens the picker.
  */
-function gradebookLink(classSubjectId?: string): string {
-  return classSubjectId
-    ? `${ROUTES.grades}?class_subject_id=${encodeURIComponent(classSubjectId)}`
+function gradebookLink(offeringId?: string): string {
+  return offeringId
+    ? `${ROUTES.grades}?offering_id=${encodeURIComponent(offeringId)}`
     : ROUTES.grades;
 }
 
@@ -58,11 +58,11 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
       {/* Stat row */}
       <Grid item xs={12} sm={6} lg={3}>
         <StatCard
-          label="My classes"
-          value={stats.my_sections}
+          label="My courses"
+          value={stats.my_offerings}
           icon={<ClassIcon />}
           color="primary"
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
@@ -98,7 +98,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
           helperText={
             stats.awaiting_release_items > 0 ? 'Students cannot see these' : 'All released'
           }
-          to={gradebookLink(data.awaiting_release[0]?.class_subject_id)}
+          to={gradebookLink(data.awaiting_release[0]?.offering_id)}
         />
       </Grid>
 
@@ -113,13 +113,13 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               <EmptyState
                 icon={<ClassIcon fontSize="inherit" />}
                 title="No classes assigned"
-                description="You have no sections in the active term yet."
+                description="You have no course offerings in the active term yet."
                 variant="card"
               />
             ) : (
               <List disablePadding>
                 {data.today_classes.map((c, i) => (
-                  <Box key={c.section_id}>
+                  <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
                     <ListItem
                       sx={{ px: 0, py: 1.5, gap: 1, flexWrap: 'wrap' }}
@@ -139,8 +139,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                     >
                       <Stack spacing={0.5} sx={{ minWidth: 0 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
-                          {c.section_name}
-                          {c.subject_name ? ` · ${c.subject_name}` : ''}
+                          {c.offering.label} · {c.offering.course.name}
                         </Typography>
                         <StatusBadge
                           label={c.attendance_recorded ? 'Recorded' : 'Not recorded'}
@@ -193,7 +192,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                       secondaryAction={
                         <Button
                           component={RouterLink}
-                          to={gradebookLink(a.class_subject_id)}
+                          to={gradebookLink(a.offering_id)}
                           size="small"
                           variant="contained"
                         >
@@ -206,9 +205,8 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.section_name}
-                          {a.subject_name ? ` · ${a.subject_name}` : ''} ·{' '}
-                          {a.graded_unreleased_count}{' '}
+                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
+                          · {a.graded_unreleased_count}{' '}
                           {a.graded_unreleased_count === 1 ? 'student' : 'students'} waiting
                         </Typography>
                       </Stack>
@@ -255,8 +253,8 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.section_name}
-                          {a.subject_name ? ` · ${a.subject_name}` : ''} · {formatDate(a.assessment_date)}
+                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
+                          · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
                       <StatusBadge

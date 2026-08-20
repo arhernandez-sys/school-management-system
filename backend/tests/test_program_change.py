@@ -34,12 +34,11 @@ from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.core.timeutil import school_today
 from app.modules.admissions.models import CreditTransferRequest
 from app.modules.assessments.models import Assessment
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade
 from app.modules.programs.models import Program, ProgramCourse
@@ -106,20 +105,16 @@ class _Graph:
             academic_year_id=self.year.id, name="Semester 1", sequence=1,
             start_date=date(2025, 9, 1), end_date=date(2026, 1, 31), is_active=True,
         )
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"PCSec {self.tag}",
-            grade_level="First", section="A",
-        )
-        db_session.add_all([self.sem, self.section])
+        db_session.add_all([self.sem])
 
         # `shared` is required by BOTH programmes; `only_a` by A alone, `only_b` by B alone.
-        self.shared = Subject(name=f"Shared {self.tag}", code=f"SH{self.tag[:4].upper()}", credits=3)
-        self.only_a = Subject(name=f"OnlyA {self.tag}", code=f"OA{self.tag[:4].upper()}", credits=4)
-        self.only_b = Subject(name=f"OnlyB {self.tag}", code=f"OB{self.tag[:4].upper()}", credits=6)
-        # Required by Programme B and NEVER OFFERED in this year. That is the only way a
-        # curriculum course reads as `remaining`: the student is enrolled in the whole
-        # SECTION, so every course that has an offering there is one they are sitting.
-        self.unoffered = Subject(
+        self.shared = Course(name=f"Shared {self.tag}", code=f"SH{self.tag[:4].upper()}", credits=3)
+        self.only_a = Course(name=f"OnlyA {self.tag}", code=f"OA{self.tag[:4].upper()}", credits=4)
+        self.only_b = Course(name=f"OnlyB {self.tag}", code=f"OB{self.tag[:4].upper()}", credits=6)
+        # Required by Programme B and NEVER OFFERED in this year. That is what makes a
+        # curriculum course read as `remaining`: the graph enrols the student in every
+        # offering it creates, so a course with no offering is the only one left unsat.
+        self.unoffered = Course(
             name=f"Unoffered {self.tag}", code=f"UN{self.tag[:4].upper()}", credits=2
         )
         db_session.add_all([self.shared, self.only_a, self.only_b, self.unoffered])
@@ -162,13 +157,17 @@ class _Graph:
         db_session.add(self.teacher)
         db_session.flush()
 
-        self.offerings: dict[uuid.UUID, ClassSubject] = {}
+        self.offerings: dict[uuid.UUID, CourseOffering] = {}
         for course in (self.shared, self.only_a, self.only_b):
-            cs = ClassSubject(class_id=self.section.id, subject_id=course.id, is_active=True)
+            cs = CourseOffering(
+                course_id=course.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
             db_session.add(cs)
             db_session.flush()
             db_session.add(
-                ClassTeacher(class_subject_id=cs.id, teacher_id=self.teacher.id, is_lead=True)
+                ClassTeacher(offering_id=cs.id, teacher_id=self.teacher.id, is_lead=True)
             )
             self.offerings[course.id] = cs
 
@@ -179,14 +178,28 @@ class _Graph:
             enrollment_date=date(2025, 9, 1),
             status="active",
             program_id=self.program_a.id,
-            year_group="First",
+            year_of_study="First",
         )
         db_session.add(self.student)
         db_session.flush()
-        self.enrollment = ClassEnrollment(
-            class_id=self.section.id, student_id=self.student.id, semester_id=self.sem.id
-        )
-        db_session.add(self.enrollment)
+        # ONE ENROLMENT PER OFFERING (D31). This used to be a single row pointing at the
+        # homeroom, which enrolled the student in everything that homeroom taught at once
+        # — which is why the assertions below expect all three courses in progress. An
+        # offering teaches one course, so covering the same load takes three rows.
+        self.enrollments = {
+            course.id: ClassEnrollment(
+                offering_id=offering.id,
+                student_id=self.student.id,
+                semester_id=self.sem.id,
+            )
+            for course, offering in (
+                (c, self.offerings[c.id]) for c in (self.shared, self.only_a, self.only_b)
+            )
+        }
+        db_session.add_all(list(self.enrollments.values()))
+        #: The shared course's enrolment — the one both programmes require, so it is the
+        #: row that must survive a programme change.
+        self.enrollment = self.enrollments[self.shared.id]
         # Registered on A from the start, the way acceptance would have left it.
         db_session.add(
             StudentProgramHistory(
@@ -196,10 +209,10 @@ class _Graph:
         )
         db_session.flush()
 
-    def grade(self, course: Subject, score: str) -> None:
+    def grade(self, course: Course, score: str) -> None:
         """Give the student a released, graded result in `course`."""
         assessment = Assessment(
-            class_subject_id=self.offerings[course.id].id,
+            offering_id=self.offerings[course.id].id,
             semester_id=self.sem.id,
             title=f"Final {course.code}",
             type="exam",
@@ -480,7 +493,7 @@ class TestDerivedAcademicHistory:
         """Enrolled with nothing marked: not remaining (they are sitting it) and not
         completed."""
         assessment = Assessment(
-            class_subject_id=graph.offerings[graph.shared.id].id,
+            offering_id=graph.offerings[graph.shared.id].id,
             semester_id=graph.sem.id, title="Pending", type="quiz",
             max_score=Decimal("100"), weight=Decimal("1"), status="published",
         )
@@ -652,7 +665,7 @@ class TestChangeReDerivesAgainstTheNewProgramme:
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestTransferredCredit:
-    def _grant(self, client, graph, db_session, course: Subject) -> None:
+    def _grant(self, client, graph, db_session, course: Course) -> None:
         """Give the student an approved transfer for `course`, through the real endpoints."""
         app_id = client.post(
             "/api/v1/applications",

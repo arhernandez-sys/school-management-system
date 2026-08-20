@@ -24,6 +24,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.common.schemas import OfferingRef
+
 GradeReportStatus = Literal["graded", "pending"]
 
 
@@ -31,7 +33,7 @@ class ReportStudentRef(BaseModel):
     """The student as printed on a report card / transcript / picker row.
 
     D29 replaced `section_id` / `section_name` / `grade_level` — all read off the
-    student's homeroom — with `year_group`, which is the student's own level. A
+    student's homeroom — with `year_of_study`, which is the student's own level. A
     sixth-former has no single class whose name could head their report card.
     """
 
@@ -40,7 +42,7 @@ class ReportStudentRef(BaseModel):
     student_number: str
     date_of_birth: date | None = None
     status: str
-    year_group: str | None = None
+    year_of_study: str | None = None
 
 
 class ReportSchool(BaseModel):
@@ -65,12 +67,6 @@ class ReportSubjectRef(BaseModel):
     id: UUID
     name: str
     code: str = ""
-
-
-class ReportSectionRef(BaseModel):
-    id: UUID
-    name: str
-    grade_level: str
 
 
 class ReportAcademicYearRef(BaseModel):
@@ -116,7 +112,7 @@ class ReportCard(BaseModel):
     #: The student's level, e.g. "Lower 6". Replaces the old `section` block: under
     #: D29 a card covers every subject class the student sits, so there is no one
     #: class to name in the header.
-    year_group: str | None = None
+    year_of_study: str | None = None
     semester: ReportSemesterRef
     school: ReportSchool
     #: The programme's CODE, e.g. `BMAD` — the BAJC layout's `Program` label (D30 §D13).
@@ -197,30 +193,23 @@ class Transcript(BaseModel):
 
 
 # ── GET /reports/class-grades ──────────────────────────────────────────────────
-class ClassGradesStudentRow(BaseModel):
+class OfferingGradesStudentRow(BaseModel):
     student: ReportStudentRef
     numeric: float | None = None
     letter: str | None = None
 
 
-class ClassGradesClassSubjectRef(BaseModel):
-    id: UUID
-    section_id: UUID
-    section_name: str = ""
-    subject_name: str = ""
-
-
-class ClassGradesDistributionItem(BaseModel):
+class OfferingGradesDistributionItem(BaseModel):
     letter: str
     count: int = 0
 
 
-class ClassGradesReport(BaseModel):
-    class_subject: ClassGradesClassSubjectRef
+class OfferingGradesReport(BaseModel):
+    offering: OfferingRef
     semester: ReportSemesterRef | None = None
-    students: list[ClassGradesStudentRow] = Field(default_factory=list)
+    students: list[OfferingGradesStudentRow] = Field(default_factory=list)
     class_average: float | None = None
-    distribution: list[ClassGradesDistributionItem] = Field(default_factory=list)
+    distribution: list[OfferingGradesDistributionItem] = Field(default_factory=list)
 
 
 # ── GET /reports/attendance ────────────────────────────────────────────────────
@@ -233,8 +222,10 @@ class AttendanceReportSummary(BaseModel):
 
 
 class AttendanceReport(BaseModel):
-    #: Key is `class`, matching the mock. Aliased because `class` is a Python keyword.
-    section: ReportSectionRef = Field(serialization_alias="class")
+    #: D31 dropped the `serialization_alias="class"` this carried for the mock. `class`
+    #: was the right key while the subject was a homeroom; it is the wrong noun now, and
+    #: keeping a Python-keyword alias to preserve it would outlive the reason for it.
+    offering: OfferingRef
     semester: ReportSemesterRef | None = None
     summary: AttendanceReportSummary
 
@@ -244,21 +235,33 @@ class AttendanceReport(BaseModel):
 # ── GET /reports/enrollment ────────────────────────────────────────────────────
 class EnrollmentTotals(BaseModel):
     students: int = 0
-    classes: int = 0
+    offerings: int = 0
 
 
-class EnrollmentByGrade(BaseModel):
-    grade_level: str
+class EnrollmentByProgramme(BaseModel):
+    """One row of the enrolment breakdown.
+
+    D31 replaced `EnrollmentByGrade`, which grouped on `classes.grade_level` (`Form 1`..
+    `Form 4`) — a homeroom column `008` dropped and a K-12 axis a junior college does
+    not have. Programme is the tertiary equivalent, and it matches the dashboard tile
+    (`_enrollment_by_programme`) so the two screens cannot disagree.
+
+    Students with no programme are reported as one **"Not assigned"** row rather than
+    dropped: until the Phase 5 seed lands that row is the whole college, and a report
+    that silently omitted them would read as "no students".
+    """
+
+    programme: str
     count: int = 0
 
 
-class EnrollmentByClass(BaseModel):
-    class_ref: ReportSectionRef
+class EnrollmentByOffering(BaseModel):
+    offering: OfferingRef
     enrolled: int = 0
     capacity: int | None = None
 
 
 class EnrollmentReport(BaseModel):
     totals: EnrollmentTotals
-    by_grade: list[EnrollmentByGrade] = Field(default_factory=list)
-    by_class: list[EnrollmentByClass] = Field(default_factory=list)
+    by_programme: list[EnrollmentByProgramme] = Field(default_factory=list)
+    by_offering: list[EnrollmentByOffering] = Field(default_factory=list)

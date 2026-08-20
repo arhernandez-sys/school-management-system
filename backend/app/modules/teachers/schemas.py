@@ -11,7 +11,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.enums import Role, TeacherStatus
-from app.common.schemas import AuditStamp, ClassRef, SubjectRef
+from app.common.schemas import AuditStamp, OfferingRef, CourseRef
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -30,11 +30,15 @@ class TeacherListItem(BaseModel):
 
 
 class ClassTaught(BaseModel):
-    """One (section, subject) offering this teacher is assigned to (D23)."""
+    """One offering this lecturer is assigned to.
 
-    class_subject_id: UUID
-    class_ref: ClassRef
-    subject: SubjectRef
+    D31 collapsed `(class_ref, subject)` into a single `offering`: an offering carries its
+    own course, so sending both was sending the same fact twice and inviting them to
+    disagree.
+    """
+
+    offering_id: UUID
+    offering: OfferingRef
     is_lead: bool
 
 

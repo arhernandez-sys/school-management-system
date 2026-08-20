@@ -1,7 +1,7 @@
 /**
  * DEMO DATASET — the single in-memory fake dataset (frontend-only client demo).
  *
- * A realistic Belize **sixth form** (D29). EVERYTHING reconciles: dashboards, lists,
+ * A realistic Belize **junior college** (BAJC). EVERYTHING reconciles: dashboards, lists,
  * gradebooks, report cards and transcripts are all derived from THIS object by the
  * selectors in `selectors.ts`, so counts and grades agree across screens.
  *
@@ -14,22 +14,35 @@
  * selectors; do not mutate it (handlers may mutate a working copy — see selectors).
  *
  * ────────────────────────────────────────────────────────────────────────────────
- * D29 — WHY THIS DATASET IS SHAPED THE WAY IT IS
+ * D31 — WHY THIS DATASET IS SHAPED THE WAY IT IS
  * ────────────────────────────────────────────────────────────────────────────────
- * This used to be 8 homerooms ("Form 1A") each teaching 7 subjects, with every student
- * enrolled in exactly one. A sixth form works like a university: the office creates
- * SUBJECT CLASSES ("Math-1", "Math-2") and enrols each student into the ones they take.
+ * It began as 8 homerooms ("Form 1A") each teaching 7 subjects, with every student in
+ * exactly one. D29 broke that into per-subject classes. **D31 finished the job**: the unit
+ * is a COURSE OFFERING — one catalog course, one SEMESTER, an optional section code — and
+ * `sections` + `class_subjects` collapsed into one `offerings` table.
  *
- * The dataset therefore hard-codes the scenario that PROVES the model, rather than
- * generating one:
+ * The dataset hard-codes the two scenarios that PROVE the model rather than generating them:
  *
- *     Freddy Lopez (stu-1)  →  Math-1 · Biology-10 · English-5 · Chemistry-3
- *     John Garcia  (stu-2)  →  Math-2 · Biology-10 · English-5 · IT-2
+ *   1. **Parallel sections.** Two students share courses but sit different sections:
  *
- * They share Biology and English but sit in DIFFERENT Math classes, so their timetables
- * differ in exactly one slot. A homeroom model cannot express that at all — which is the
- * point. `stu-1` is the seeded `student` login (DEMO_REPRESENTATIVE_USER_ID), so signing
- * in as the demo student lands on Freddy.
+ *          Freddy Lopez (stu-1)  →  MATH1110-01 · BIOL1102-01 · ENGL1102-01 · CHEM1100-01
+ *          John Garcia  (stu-2)  →  MATH1110-02 · BIOL1102-01 · ENGL1102-01 · ITEC1104-01
+ *
+ *      Same Biology and English, DIFFERENT Algebra section, so their timetables differ in
+ *      exactly one slot. A homeroom model cannot express that at all.
+ *
+ *   2. **The same course in two terms.** `MATH1110-01` and `BIOL1102-01` each run again in
+ *      Semester 2 as separate offerings with their own rosters and assessments. THIS is the
+ *      capability the year-scoped `classes` model could not express, and the reason D31
+ *      exists — a year-scoped row can only say "Algebra, sometime in 2025-2026".
+ *
+ * `stu-1` is the seeded `student` login (DEMO_REPRESENTATIVE_USER_ID), so signing in as the
+ * demo student lands on Freddy.
+ *
+ * An offering has NO `name`. Its label ("MATH1110-01") is derived from course code + section
+ * code by `offeringLabel` in the selectors — the one place, mirroring the server's
+ * `offerings/labels.py`. The seeds below use a `key` (also "MATH1110-01") purely as a
+ * build-time handle for wiring loads together; it is never stored on a row.
  */
 import type {
   DemoAcademicYear,
@@ -42,23 +55,22 @@ import type {
   DemoAssessmentGrade,
   DemoAssessmentPolicy,
   DemoAttendanceRecord,
-  DemoClassMeeting,
+  DemoCourse,
+  DemoCoursePrerequisite,
   DemoCreditTransferRequest,
-  DemoGradeRevisionRequest,
-  DemoClassSubject,
-  DemoEvent,
   DemoDataset,
   DemoEnrollment,
+  DemoEvent,
+  DemoGradeRevisionRequest,
   DemoGradingScale,
-  DemoSchoolProfile,
-  DemoSection,
+  DemoOffering,
+  DemoOfferingMeeting,
   DemoProgram,
-  DemoCoursePrerequisite,
   DemoProgramCourse,
+  DemoSchoolProfile,
   DemoSemester,
   DemoStudent,
   DemoStudentProgramHistory,
-  DemoSubject,
   DemoTeacher,
   DemoUser,
 } from './types';
@@ -207,15 +219,15 @@ const semesters: DemoSemester[] = [
 // Generating both sides from one source is the point: demo mode and the real backend
 // cannot disagree about what the college offers, and this project has already paid
 // twice for a demo that certified something the server answered differently.
-const subjects: DemoSubject[] = BAJC_COURSES.map(([code, name, credits, component]) => ({
-  id: `subj-${code.toLowerCase()}`,
+const courses: DemoCourse[] = BAJC_COURSES.map(([code, name, credits, component]) => ({
+  id: `course-${code.toLowerCase()}`,
   name,
   code,
   credits,
   component,
   is_active: true,
 }));
-const subjectId = (code: string): string => `subj-${code.toLowerCase()}`;
+const courseId = (code: string): string => `course-${code.toLowerCase()}`;
 /** Display name for a catalog code — throws loudly if a seed names a course that
  *  is not in the 26/27 sequences, which is a data error, not a soft failure. */
 const courseName = (code: string): string => {
@@ -224,84 +236,107 @@ const courseName = (code: string): string => {
   return found[1];
 };
 
-// ── Subject classes (D29) ───────────────────────────────────────────────────────
+// ── Course offerings (D31) ──────────────────────────────────────────────────────
 //
-// Each row is one class: a subject, the teacher who leads it, a room, a capacity, and the
-// weekly slots it meets in. Two parallel Math classes at Lower 6 are the whole reason this
-// dataset exists — they are what lets Freddy and John differ.
+// Each row is one offering: a catalog course, a TERM, an optional section code, the lecturer
+// who leads it, a room, a capacity, and the weekly slots it meets in.
 //
-// Meetings are written as [ISO weekday, start, end]; rooms come from the class, since a
-// subject class in this school always meets in the same place.
-const YEAR_LOWER6 = 'Lower 6';
-const YEAR_UPPER6 = 'Upper 6';
-
-interface ClassSeed {
-  name: string;
-  /** Subject catalog code (see `subjectSeed`). */
+// Two things in this seed are load-bearing, and each one is a capability the previous model
+// could not express:
+//
+//   * **`MATH1110` has THREE parallel sections in Semester 1** (01 / 02 / 03), which is what
+//     lets Freddy and John share every other course and still hold different timetables.
+//   * **`MATH1110-01` and `BIOL1102-01` run AGAIN in Semester 2** as separate offerings.
+//     Under the year-scoped `classes` model those were unrepresentable: one row could only
+//     say "Algebra, sometime in 2025-2026", and the two terms' assessments piled into the
+//     same gradebook.
+//
+// Meetings are written as [ISO weekday, start, end]. `room` is applied to every meeting of
+// the offering here for brevity, but it is stored PER MEETING — `course_offerings` has no
+// room column, because a course can legitimately meet in a lecture room and a lab.
+interface OfferingSeed {
+  /**
+   * Build-time handle, spelled like the label the selectors will derive. NOT stored: it
+   * only wires student loads and the historical mirror to the right row.
+   */
+  key: string;
+  /** Catalog code — must exist in BAJC_COURSES. */
   code: string;
-  yearGroup: string;
-  /** Teacher codes; the first is the lead. Defaults to the subject's usual teacher. */
-  teacherCodes?: string[];
+  /** "01"/"02" for parallel sections; null when the course has only one. */
+  sectionCode: string | null;
+  /** Defaults to the active term. */
+  semesterId?: string;
+  /**
+   * Lecturer NAMES; the first is the lead. Omit to take the course's usual lecturer (the
+   * first active specialist). Named rather than resolved by course code so a parallel
+   * section can genuinely be staffed by somebody else — resolving by code returns the same
+   * specialist the sibling section already has.
+   */
+  teacherNames?: string[];
   room: string;
-  capacity: number;
+  /** `null` = no capacity limit, which is a real and previously untested state. */
+  capacity: number | null;
   meetings: ReadonlyArray<[1 | 2 | 3 | 4 | 5, string, string]>;
 }
 
-// D30 Phase 2D: every class now teaches a REAL BAJC course. The shape is unchanged —
-// two parallel offerings of one course at the same level are still what makes Freddy
-// and John's timetables differ — but `code` is a catalog code the college actually
-// uses, so credits and components on screen are the real ones.
-//
-// MATH1210 (Pre-Calculus) is here on purpose: it genuinely requires MATH1110
-// (Intermediate Algebra) in the 26/27 sequences, so the prerequisite gate fires in
-// demo mode on a real rule rather than an invented one.
-const classSeed: readonly ClassSeed[] = [
-  // ── Year 1 ──
-  { name: 'Algebra-1', code: 'MATH1110', yearGroup: YEAR_LOWER6, room: 'Room A', capacity: 20,
+// MATH1210 (Pre-Calculus) is here on purpose: it genuinely requires MATH1110 (Intermediate
+// Algebra) in the 26/27 sequences, so the prerequisite gate fires in demo mode on a real
+// rule rather than an invented one.
+const offeringSeed: readonly OfferingSeed[] = [
+  // ── Semester 1 of the active year ──
+  { key: 'MATH1110-01', code: 'MATH1110', sectionCode: '01', room: 'Room A', capacity: 20,
     meetings: [[1, '08:00', '09:30'], [3, '08:00', '09:30']] },
-  // Algebra-2 is Algebra-1's parallel: same course, same level, different teacher/room/time.
-  { name: 'Algebra-2', code: 'MATH1110', yearGroup: YEAR_LOWER6, teacherCodes: ['MATH1210'], room: 'Room C', capacity: 20,
+  // -02 is -01's parallel section: same course, same term, different lecturer/room/time.
+  // The lecturer is NAMED, not derived: `teacherByCode` returns the first active specialist,
+  // and for either MATH code that is Maria Reyes — who already leads -01. Deriving it
+  // produced a "parallel section" taught by the same person an hour later, which is exactly
+  // the claim this row exists to make true.
+  { key: 'MATH1110-02', code: 'MATH1110', sectionCode: '02', teacherNames: ['Marlon Pou'], room: 'Room C', capacity: 20,
     meetings: [[1, '10:00', '11:30'], [3, '10:00', '11:30']] },
-  { name: 'Biology-10', code: 'BIOL1102', yearGroup: YEAR_LOWER6, room: 'Lab 1', capacity: 24,
+  // Capacity 26, not 24: every first-year load includes Biology, and the archived year's
+  // fallback load adds the graduated/withdrawn students on top, so 24 seated 25. Enrolling
+  // over capacity is warn-only (D-Q6) rather than refused, so the old number did not fail —
+  // it quietly seeded a college that breaks its own rule on the screen showing the warning.
+  { key: 'BIOL1102-01', code: 'BIOL1102', sectionCode: '01', room: 'Lab 1', capacity: 26,
     meetings: [[2, '09:00', '10:30'], [4, '09:00', '10:30']] },
-  // Wednesday sits at 13:00, NOT 11:00: Algebra-2 runs Wed 10:00–11:30, and every student
+  // Wednesday sits at 13:00, NOT 11:00: MATH1110-02 runs Wed 10:00–11:30, and every student
   // on that load also takes English, so an 11:00 English would put 15 of them in two rooms
   // at once. The seeded week must be one a real student could actually walk.
-  { name: 'English-5', code: 'ENGL1102', yearGroup: YEAR_LOWER6, room: 'Room D', capacity: 26,
+  //
+  // Capacity 32 for the same reason as Biology, only larger: EVERY one of the 30 first-years
+  // takes English, so any capacity below the intake is over-subscribed by construction.
+  { key: 'ENGL1102-01', code: 'ENGL1102', sectionCode: '01', room: 'Room D', capacity: 32,
     meetings: [[3, '13:00', '14:00'], [5, '11:00', '12:00']] },
-  { name: 'Chemistry-3', code: 'CHEM1100', yearGroup: YEAR_LOWER6, room: 'Lab 2', capacity: 18,
+  { key: 'CHEM1100-01', code: 'CHEM1100', sectionCode: '01', room: 'Lab 2', capacity: 18,
     meetings: [[2, '11:00', '12:30']] },
-  { name: 'Computers-2', code: 'ITEC1104', yearGroup: YEAR_LOWER6, room: 'Computer Lab', capacity: 22,
+  { key: 'ITEC1104-01', code: 'ITEC1104', sectionCode: '01', room: 'Computer Lab', capacity: 22,
     meetings: [[5, '08:00', '09:30']] },
-  // ── Year 2 ──
-  { name: 'Algebra-3', code: 'MATH1110', yearGroup: YEAR_UPPER6, room: 'Room A', capacity: 18,
+  // A third section of the same course, for the second-year cohort.
+  { key: 'MATH1110-03', code: 'MATH1110', sectionCode: '03', room: 'Room A', capacity: 18,
     meetings: [[2, '08:00', '09:30'], [4, '11:00', '12:30']] },
   // Gated on Algebra: enrolling a student who has not passed MATH1110 is a 409 naming it.
-  { name: 'PreCalculus-1', code: 'MATH1210', yearGroup: YEAR_UPPER6, room: 'Room F', capacity: 16,
+  { key: 'MATH1210-01', code: 'MATH1210', sectionCode: '01', room: 'Room F', capacity: 16,
     meetings: [[1, '13:00', '14:30']] },
-  { name: 'Management-1', code: 'MGMT1106', yearGroup: YEAR_UPPER6, room: 'Room B', capacity: 20,
+  { key: 'MGMT1106-01', code: 'MGMT1106', sectionCode: '01', room: 'Room B', capacity: 20,
     meetings: [[4, '13:00', '14:30']] },
-  { name: 'Spanish-2', code: 'SPAN2112', yearGroup: YEAR_UPPER6, room: 'Room E', capacity: 20,
+  { key: 'SPAN2112-01', code: 'SPAN2112', sectionCode: '01', room: 'Room E', capacity: 20,
     meetings: [[5, '13:00', '14:00']] },
+
+  // ── Semester 2 of the active year — THE D31 PROOF ──
+  // The same course, the same section code, a DIFFERENT term. Under the old model these
+  // would have collided with the rows above (one class row per course per YEAR); here they
+  // are distinct offerings with their own rosters, assessments and gradebooks. Capacity is
+  // null on both, which exercises the "no limit" branch nothing else covered.
+  { key: 'MATH1110-01@S2', code: 'MATH1110', sectionCode: '01', semesterId: SEM_2025_2, room: 'Room A', capacity: null,
+    meetings: [[1, '08:00', '09:30'], [3, '08:00', '09:30']] },
+  { key: 'BIOL1102-01@S2', code: 'BIOL1102', sectionCode: '01', semesterId: SEM_2025_2, room: 'Lab 1', capacity: null,
+    meetings: [[2, '09:00', '10:30'], [4, '09:00', '10:30']] },
 ];
 
-const sections: DemoSection[] = classSeed.map((c, i) => ({
-  id: `sec-${i + 1}`,
-  academic_year_id: YEAR_ACTIVE,
-  name: c.name,
-  grade_level: c.yearGroup,
-  // A sixth-form subject class has no division letter, and no homeroom label — both
-  // belonged to the retired model.
-  section: null,
-  homeroom_label: null,
-  capacity: c.capacity,
-  is_archived: false,
-}));
-const sectionByName = (name: string): DemoSection => {
-  const found = sections.find((s) => s.name === name);
-  if (!found) throw new Error(`demo dataset: no subject class named ${name}`);
-  return found;
-};
+/** Offering keys that belong to Semester 2 — used when seeding loads and assessments. */
+const SEM2_KEYS = offeringSeed
+  .filter((o) => o.semesterId === SEM_2025_2)
+  .map((o) => o.key);
 
 // ── Teachers (~12, Belizean names) ──────────────────────────────────────────────
 type TeacherLike = 'active' | 'inactive';
@@ -372,51 +407,67 @@ const teacherByCode = (code: string): DemoTeacher => {
   const name = courseName(code);
   return teachers.find((t) => t.status === 'active' && t.subject_specializations.includes(name))!;
 };
+/** A NAMED active lecturer, for offerings that must not take the default specialist. */
+const teacherByName = (fullName: string): DemoTeacher => {
+  const found = teachers.find((t) => t.status === 'active' && t.full_name === fullName);
+  if (!found) throw new Error(`demo dataset: no active lecturer named ${fullName}`);
+  return found;
+};
 
-// ── class_subjects: EXACTLY ONE per subject class (D29) ─────────────────────────
+// ── offerings: one row per seed (D31) ───────────────────────────────────────────
 //
-// The join table survives (every assessment, grade and teacher assignment keys off
-// `class_subject_id`), but it is now 1:1 with the class rather than 1:many. `cs-N` lines up
-// with `sec-N`, which keeps the fixtures readable.
-const class_subjects: DemoClassSubject[] = classSeed.map((c, i) => {
-  const leadCode = c.teacherCodes?.[0] ?? c.code;
-  const lead = teacherByCode(leadCode);
-  const extra = (c.teacherCodes ?? []).slice(1).map((code) => teacherByCode(code).id);
-  // One co-taught class (Math-1) so the "many teachers per class" path (D16) is exercised.
-  const coTeacher = c.name === 'Algebra-1' ? teachers.find((t) => t.id === 'teach-4') : undefined;
+// `off-N` lines up with `offeringSeed[N-1]`, which keeps the fixtures readable. There is no
+// second table behind these: the D29 pair of `sec-N` + `cs-N` is this one row.
+const offerings: DemoOffering[] = offeringSeed.map((o, i) => {
+  const lead = o.teacherNames?.[0] ? teacherByName(o.teacherNames[0]) : teacherByCode(o.code);
+  const extra = (o.teacherNames ?? []).slice(1).map((name) => teacherByName(name).id);
+  // One co-taught offering so the "many lecturers on one offering" path (D16) is exercised.
+  const coTeacher = o.key === 'MATH1110-01' ? teachers.find((tt) => tt.id === 'teach-4') : undefined;
   const teacher_ids = [
     lead.id,
     ...extra,
     ...(coTeacher && coTeacher.id !== lead.id ? [coTeacher.id] : []),
   ];
   return {
-    id: `cs-${i + 1}`,
-    section_id: `sec-${i + 1}`,
-    subject_id: subjectId(c.code),
+    id: `off-${i + 1}`,
+    course_id: courseId(o.code),
+    semester_id: o.semesterId ?? SEM_ACTIVE,
+    section_code: o.sectionCode,
+    capacity: o.capacity,
+    is_archived: false,
     teacher_ids: [...new Set(teacher_ids)],
     lead_teacher_id: lead.id,
-    is_active: true,
-    drop_lowest_count: c.code === 'MATH' ? 1 : 0,
+    // Drop-lowest on the Algebra offerings, so the D25 fallback is exercised by something.
+    // This used to read `c.code === 'MATH'`, which never matched: 'MATH' is a PROGRAMME
+    // code, not a course code, so the stored fallback was 0 everywhere and untested.
+    drop_lowest_count: o.code === 'MATH1110' ? 1 : 0,
   };
 });
-// ── class_meetings: the weekly slot(s) each subject class occupies ──────────────
-const class_meetings: DemoClassMeeting[] = [];
+/** Resolve a seed key to its offering row. Throws on a typo — a data error, not a soft miss. */
+const offeringByKey = (key: string): DemoOffering => {
+  const idx = offeringSeed.findIndex((o) => o.key === key);
+  if (idx < 0) throw new Error(`demo dataset: no offering seeded with key ${key}`);
+  return offerings[idx]!;
+};
+
+// ── offering_meetings: the weekly slot(s) each offering occupies ─────────────────
+const offering_meetings: DemoOfferingMeeting[] = [];
 let meetingCounter = 0;
-classSeed.forEach((c, i) => {
-  for (const [day, start, end] of c.meetings) {
+offeringSeed.forEach((o, i) => {
+  for (const [day, start, end] of o.meetings) {
     meetingCounter += 1;
-    class_meetings.push({
+    offering_meetings.push({
       id: `mtg-${meetingCounter}`,
-      class_subject_id: `cs-${i + 1}`,
+      offering_id: `off-${i + 1}`,
       day_of_week: day,
       start_time: `${start}:00`,
       end_time: `${end}:00`,
-      room: c.room,
+      room: o.room,
     });
   }
 });
 
-// ── Students (~45, Belizean names), each enrolled in ONE section ────────────────
+// ── Students (~45, Belizean names), each enrolled in SEVERAL offerings ──────────
 const FIRST_NAMES = [
   'Ana', 'Luis', 'Keisha', 'Jamal', 'Sofia', 'Marco', 'Tanya', 'Elvin', 'Rina', 'Kester',
   'Denise', 'Andre', 'Shanice', 'Oscar', 'Mila', 'Trevaughn', 'Paola', 'Dwayne', 'Nayeli', 'Colin',
@@ -431,55 +482,74 @@ const LAST_NAMES = [
 ];
 
 /**
- * The subject load each student takes, by year group. A sixth-former picks a handful of
- * subjects rather than receiving a fixed set, so the generator rotates students through
- * these combinations — including the two parallel Math classes, which is what makes any
- * two students' timetables genuinely different.
+ * The course load each student takes, by year of study. A college student picks a handful of
+ * courses rather than receiving a fixed set, so the generator rotates students through these
+ * combinations — including the parallel Algebra sections, which is what makes any two
+ * students' timetables genuinely different.
+ *
+ * Values are offering seed KEYS, so a typo throws at build rather than silently enrolling
+ * nobody.
  */
-const LOWER6_LOADS: ReadonlyArray<readonly string[]> = [
-  ['Algebra-1', 'Biology-10', 'English-5', 'Chemistry-3'],
-  ['Algebra-2', 'Biology-10', 'English-5', 'Computers-2'],
-  ['Algebra-1', 'Biology-10', 'English-5', 'Computers-2'],
-  ['Algebra-2', 'Chemistry-3', 'English-5', 'Computers-2'],
+const FIRST_YEAR_LOADS: ReadonlyArray<readonly string[]> = [
+  ['MATH1110-01', 'BIOL1102-01', 'ENGL1102-01', 'CHEM1100-01'],
+  ['MATH1110-02', 'BIOL1102-01', 'ENGL1102-01', 'ITEC1104-01'],
+  ['MATH1110-01', 'BIOL1102-01', 'ENGL1102-01', 'ITEC1104-01'],
+  ['MATH1110-02', 'CHEM1100-01', 'ENGL1102-01', 'ITEC1104-01'],
 ];
-const UPPER6_LOADS: ReadonlyArray<readonly string[]> = [
-  ['Algebra-3', 'PreCalculus-1', 'Spanish-2'],
-  ['Management-1', 'Spanish-2', 'Algebra-3'],
-  ['Algebra-3', 'PreCalculus-1', 'Management-1'],
+const SECOND_YEAR_LOADS: ReadonlyArray<readonly string[]> = [
+  ['MATH1110-03', 'MATH1210-01', 'SPAN2112-01'],
+  ['MGMT1106-01', 'SPAN2112-01', 'MATH1110-03'],
+  ['MATH1110-03', 'MATH1210-01', 'MGMT1106-01'],
 ];
 
 /**
- * The two named students the whole D29 demo turns on. Hard-coded rather than generated so
- * the scenario cannot drift: same Biology, same English, DIFFERENT Math.
+ * The two named students the whole demo turns on. Hard-coded rather than generated so the
+ * scenario cannot drift: same Biology, same English, DIFFERENT Algebra section.
  * `stu-1` is the seeded student login, so the demo lands on Freddy.
  */
-const SCENARIO: Record<string, { name: string; yearGroup: string; classes: readonly string[] }> = {
+const SCENARIO: Record<
+  string,
+  { name: string; yearOfStudy: 'First' | 'Second'; offerings: readonly string[] }
+> = {
   'stu-1': {
     name: 'Freddy Lopez',
-    yearGroup: YEAR_LOWER6,
-    classes: ['Algebra-1', 'Biology-10', 'English-5', 'Chemistry-3'],
+    yearOfStudy: 'First',
+    offerings: ['MATH1110-01', 'BIOL1102-01', 'ENGL1102-01', 'CHEM1100-01'],
   },
   'stu-2': {
     name: 'John Garcia',
-    yearGroup: YEAR_LOWER6,
-    classes: ['Algebra-2', 'Biology-10', 'English-5', 'Computers-2'],
+    yearOfStudy: 'First',
+    offerings: ['MATH1110-02', 'BIOL1102-01', 'ENGL1102-01', 'ITEC1104-01'],
   },
 };
 
 const students: DemoStudent[] = [];
 const rngStu = makeRng(4242);
-/** studentId → the class names they take. Built alongside students, consumed by enrollments. */
+/** studentId → the offering KEYS they take. Built alongside students, read by enrollments. */
 const loadByStudent = new Map<string, readonly string[]>();
+/**
+ * Rotation position WITHIN each cohort, not the raw student index.
+ *
+ * `i % loads.length` is degenerate here, and the seeded data is what proved it: second-year
+ * students are exactly the indices where `i % 3 === 2`, so `i % 3` picked
+ * `SECOND_YEAR_LOADS[2]` for all 15 of them — two of the three second-year combinations were
+ * unreachable and `SPAN2112-01` ended up an offering with an EMPTY roster. Counting within
+ * the cohort is what makes the rotation actually rotate.
+ */
+const cohortSeen: Record<'First' | 'Second', number> = { First: 0, Second: 0 };
 
 for (let i = 0; i < 45; i += 1) {
   const id = `stu-${i + 1}`;
   const scenario = SCENARIO[id];
-  // Roughly two-thirds Lower 6 (the larger intake), the rest Upper 6.
-  const yearGroup = scenario?.yearGroup ?? (i % 3 === 2 ? YEAR_UPPER6 : YEAR_LOWER6);
+  // Roughly two-thirds first-year (the larger intake), the rest second-year.
+  const yearOfStudy: 'First' | 'Second' =
+    scenario?.yearOfStudy ?? (i % 3 === 2 ? 'Second' : 'First');
+  const rotation = cohortSeen[yearOfStudy];
+  cohortSeen[yearOfStudy] += 1;
   const first = FIRST_NAMES[i]!;
   const last = pick(rngStu, LAST_NAMES);
-  // Sixth-formers are ~16-18: Lower 6 born ~2008, Upper 6 ~2007.
-  const birthYear = yearGroup === YEAR_UPPER6 ? 2007 : 2008;
+  // Junior-college entrants are ~16-18: first-year born ~2008, second-year ~2007.
+  const birthYear = yearOfStudy === 'Second' ? 2007 : 2008;
   const dob = `${birthYear}-${String(randInt(rngStu, 1, 12)).padStart(2, '0')}-${String(
     randInt(rngStu, 1, 28),
   ).padStart(2, '0')}`;
@@ -504,10 +574,10 @@ for (let i = 0; i < 45; i += 1) {
   const load =
     status === 'graduated' || status === 'withdrawn'
       ? []
-      : (scenario?.classes ??
-        (yearGroup === YEAR_UPPER6
-          ? UPPER6_LOADS[i % UPPER6_LOADS.length]!
-          : LOWER6_LOADS[i % LOWER6_LOADS.length]!));
+      : (scenario?.offerings ??
+        (yearOfStudy === 'Second'
+          ? SECOND_YEAR_LOADS[rotation % SECOND_YEAR_LOADS.length]!
+          : FIRST_YEAR_LOADS[rotation % FIRST_YEAR_LOADS.length]!));
   loadByStudent.set(id, load);
 
   students.push({
@@ -522,7 +592,7 @@ for (let i = 0; i < 45; i += 1) {
     gender: i % 2 === 0 ? 'female' : 'male',
     enrollment_date: '2025-09-01',
     status,
-    year_group: yearGroup,
+    year_of_study: yearOfStudy,
     // D30 §D12 — every demo student is registered on a real BAJC programme, rotated
     // deterministically. Primary Education is deliberately in the rotation: it is the
     // one programme that passes at C (2.00) rather than C+ (2.50), so the
@@ -536,105 +606,139 @@ for (let i = 0; i < 45; i += 1) {
   });
 }
 
-// ── Enrollments: MANY per student (D29) — one row per subject class they take ───
+// ── Enrollments: MANY per student — one row per offering they take ──────────────
+//
+// An enrollment's `semester_id` now MUST agree with its offering's: an offering belongs to
+// one term, so a Semester-1 offering cannot hold a Semester-2 enrollment. It is read off the
+// offering rather than passed in, which makes that impossible to get wrong here.
 const enrollments: DemoEnrollment[] = [];
 let enrollCounter = 0;
-for (const stu of students) {
-  for (const className of loadByStudent.get(stu.id) ?? []) {
-    enrollCounter += 1;
-    enrollments.push({
-      id: `enr-${enrollCounter}`,
-      student_id: stu.id,
-      section_id: sectionByName(className).id,
-      semester_id: SEM_ACTIVE,
-      enrolled_at: '2025-09-01T08:00:00Z',
-      unenrolled_at: null,
-    });
-  }
-}
-// One student switched Math classes mid-term: a closed row on Math-1 plus an active row on
-// Math-2. Under D29 this is a genuine SWITCH of one subject class, not the old whole-student
-// "transfer" — and it still exercises the "grade rows ∪ active roster" path in Module 3.
-const switchStudent = students.find((s) => s.status === 'transferred');
-if (switchStudent) {
+function enrol(studentId: string, offering: DemoOffering, unenrolledAt: string | null = null) {
   enrollCounter += 1;
   enrollments.push({
     id: `enr-${enrollCounter}`,
-    student_id: switchStudent.id,
-    section_id: sectionByName('Algebra-1').id,
-    semester_id: SEM_ACTIVE,
-    enrolled_at: '2025-09-01T08:00:00Z',
-    unenrolled_at: '2025-09-25T08:00:00Z',
+    student_id: studentId,
+    offering_id: offering.id,
+    semester_id: offering.semester_id,
+    enrolled_at: offering.semester_id === SEM_ACTIVE ? '2025-09-01T08:00:00Z' : '2026-01-19T08:00:00Z',
+    unenrolled_at: unenrolledAt,
   });
 }
 
-function activeRoster(sectionId: string): DemoStudent[] {
+for (const stu of students) {
+  for (const key of loadByStudent.get(stu.id) ?? []) {
+    enrol(stu.id, offeringByKey(key));
+  }
+}
+
+/**
+ * Semester 2 continuation. Every student carrying a Semester-1 offering of a course also
+ * enrols in that course's Semester-2 offering, so the year·semester switcher shows a real,
+ * DIFFERENT term rather than an empty table — which was indistinguishable from the filter
+ * being broken.
+ *
+ * Matching is by COURSE, not by section: a student in MATH1110-02 continues into the single
+ * Semester-2 section of MATH1110, which is exactly how a real registration works.
+ */
+for (const stu of students) {
+  const sem1CourseIds = new Set(
+    (loadByStudent.get(stu.id) ?? []).map((key) => offeringByKey(key).course_id),
+  );
+  for (const key of SEM2_KEYS) {
+    const offering = offeringByKey(key);
+    if (sem1CourseIds.has(offering.course_id)) enrol(stu.id, offering);
+  }
+}
+
+// One student switched Algebra sections mid-term: a closed row on -01 plus an active row on
+// -02. This is a genuine SWITCH of one offering, not the old whole-student "transfer" — and
+// it exercises the "grade rows ∪ active roster" path in Module 3.
+const switchStudent = students.find((s) => s.status === 'transferred');
+if (switchStudent) {
+  enrol(switchStudent.id, offeringByKey('MATH1110-01'), '2025-09-25T08:00:00Z');
+}
+
+/** Active roster of one offering, in its OWN term. */
+function activeRoster(offeringId: string): DemoStudent[] {
+  const offering = offerings.find((o) => o.id === offeringId);
+  if (!offering) return [];
   const enrolledIds = enrollments
-    .filter((e) => e.section_id === sectionId && e.semester_id === SEM_ACTIVE && !e.unenrolled_at)
+    .filter(
+      (e) =>
+        e.offering_id === offeringId &&
+        e.semester_id === offering.semester_id &&
+        !e.unenrolled_at,
+    )
     .map((e) => e.student_id);
   return students.filter((s) => enrolledIds.includes(s.id));
 }
-function activeEnrollment(studentId: string, sectionId: string): DemoEnrollment | undefined {
+function activeEnrollment(studentId: string, offeringId: string): DemoEnrollment | undefined {
   return enrollments.find(
-    (e) =>
-      e.student_id === studentId &&
-      e.section_id === sectionId &&
-      e.semester_id === SEM_ACTIVE &&
-      !e.unenrolled_at,
+    (e) => e.student_id === studentId && e.offering_id === offeringId && !e.unenrolled_at,
   );
 }
 
-// ── Assessment categories: Quizzes + Tests on every class_subject ───────────────
+// ── Assessment categories: Quizzes + Tests on every offering ────────────────────
 const assessment_categories: DemoAssessmentCategory[] = [];
-for (const cs of class_subjects) {
+for (const off of offerings) {
   assessment_categories.push(
-    { id: `cat-${cs.id}-q`, class_subject_id: cs.id, name: 'Quizzes', weight: 0.4, drop_lowest_count: 1 },
-    { id: `cat-${cs.id}-t`, class_subject_id: cs.id, name: 'Tests', weight: 0.6, drop_lowest_count: 0 },
+    { id: `cat-${off.id}-q`, offering_id: off.id, name: 'Quizzes', weight: 0.4, drop_lowest_count: 1 },
+    { id: `cat-${off.id}-t`, offering_id: off.id, name: 'Tests', weight: 0.6, drop_lowest_count: 0 },
   );
 }
 
-// ── Assessments: a few per class_subject (quiz/test/project mix) ────────────────
+// ── Assessments: a few per offering (quiz/test/project mix) ─────────────────────
 //
-// `semester` on each template is what makes the student's year·SEMESTER switcher
-// demonstrable. Every active-year assessment used to be seeded into `SEM_ACTIVE`
-// (Semester 1), so switching to "2025-2026 · Semester 2" filtered correctly and showed
-// an empty table — indistinguishable from the filter being broken. The two Semester 2
-// rows below sit inside `sem-2025-2`'s real window (2026-01-19 → 2026-06-26), which is
-// after DEMO_TODAY, so they are `published`/unreleased: an upcoming term, which is both
-// realistic and exactly what a student would expect to see there.
+// **D31 changed where an assessment's term comes from, and it matters.** Under the
+// year-scoped model an assessment carried its own `semester_id` independently of its
+// class_subject, so the same gradebook held both terms' work and the seed picked a term per
+// TEMPLATE. An offering belongs to ONE term now, so the term is read off the offering — a
+// Semester-1 offering cannot hold a Semester-2 assessment, and the seed cannot express one.
+//
+// The year·semester switcher stays demonstrable because Semester 2 has its own OFFERINGS
+// (see `offeringSeed`) with their own rosters. That is a better demo than before: switching
+// terms changes which courses appear, not just which rows inside one course.
+//
+// Semester-1 rows are anchored to DEMO_TODAY (2025-10-15), inside that term's window.
+// Semester-2 rows carry absolute dates inside `sem-2025-2` (2026-01-19 → 2026-06-26), which
+// is after DEMO_TODAY — so they are `published`/unreleased: an upcoming term, which is both
+// realistic and what a student would expect to see there.
 const assessments: DemoAssessment[] = [];
 let asmtCounter = 0;
-const ASMT_TEMPLATES: ReadonlyArray<{
+interface AsmtTemplate {
   title: string;
   type: DemoAssessment['type'];
   catSuffix: 'q' | 't' | null;
   max: number;
   weight: number;
-  /** Days from DEMO_TODAY for a Semester 1 row; ignored when `date` is given. */
+  /** Days from DEMO_TODAY; used when `date` is absent. */
   offsetDays: number;
-  /** Absolute date for a row that must land inside a specific semester's window. */
+  /** Absolute date, for a term whose window is nowhere near DEMO_TODAY. */
   date?: string;
-  semester: string;
   status: DemoAssessment['status'];
   released: boolean;
-}> = [
-  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, semester: SEM_ACTIVE, status: 'graded', released: true },
-  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, semester: SEM_ACTIVE, status: 'graded', released: true },
-  { title: 'Unit Test 1', type: 'test', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, semester: SEM_ACTIVE, status: 'graded', released: false },
-  { title: 'Project', type: 'assignment', catSuffix: null, max: 100, weight: 1, offsetDays: 7, semester: SEM_ACTIVE, status: 'published', released: false },
-  // ── Semester 2 of the active year ──
-  { title: 'Quiz 3', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', semester: SEM_2025_2, status: 'published', released: false },
-  { title: 'Midterm Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', semester: SEM_2025_2, status: 'published', released: false },
+}
+const SEM1_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
+  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, status: 'graded', released: true },
+  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, status: 'graded', released: true },
+  { title: 'Unit Test 1', type: 'test', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, status: 'graded', released: false },
+  { title: 'Project', type: 'assignment', catSuffix: null, max: 100, weight: 1, offsetDays: 7, status: 'published', released: false },
 ];
-for (const cs of class_subjects) {
-  if (!cs.is_active) continue;
-  for (const tmpl of ASMT_TEMPLATES) {
+const SEM2_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
+  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', status: 'published', released: false },
+  { title: 'Midterm Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
+];
+for (const off of offerings) {
+  if (off.is_archived) continue;
+  const templates = off.semester_id === SEM_ACTIVE ? SEM1_ASMT_TEMPLATES : SEM2_ASMT_TEMPLATES;
+  for (const tmpl of templates) {
     asmtCounter += 1;
     assessments.push({
       id: `asmt-${asmtCounter}`,
-      class_subject_id: cs.id,
-      semester_id: tmpl.semester,
-      category_id: tmpl.catSuffix ? `cat-${cs.id}-${tmpl.catSuffix}` : null,
+      offering_id: off.id,
+      // Denormalised from the offering, never chosen independently of it.
+      semester_id: off.semester_id,
+      category_id: tmpl.catSuffix ? `cat-${off.id}-${tmpl.catSuffix}` : null,
       title: tmpl.title,
       type: tmpl.type,
       max_score: tmpl.max,
@@ -651,10 +755,9 @@ const assessment_grades: DemoAssessmentGrade[] = [];
 const rngGrade = makeRng(31337);
 let gradeCounter = 0;
 for (const asmt of assessments) {
-  const cs = class_subjects.find((c) => c.id === asmt.class_subject_id)!;
-  const roster = activeRoster(cs.section_id);
+  const roster = activeRoster(asmt.offering_id);
   for (const stu of roster) {
-    const enr = activeEnrollment(stu.id, cs.section_id);
+    const enr = activeEnrollment(stu.id, asmt.offering_id);
     if (!enr) continue;
     gradeCounter += 1;
     let status: GradeStatus;
@@ -667,8 +770,13 @@ for (const asmt of assessments) {
       else if (roll < 0.12) status = 'pending';
       else {
         status = 'graded';
-        // Centered around ~75% with spread; clamp to [0, max].
-        const pct = Math.min(1, Math.max(0.35, 0.75 + (rngGrade() - 0.5) * 0.5));
+        // Centred on 84%, not 75%, and clamped to [0, max]. The old centre was written
+        // against the pre-D30 5-band scale where 60 passed and 90 was an A; D30 moved
+        // BAJC's pass mark to 70 and put A at 95 WITHOUT re-centring this line, so the
+        // demo showed a college with a ~37% failure rate — and Freddy Lopez, the student
+        // demo mode lands on, held a D. The scale change made the same numbers mean
+        // something different, which no typecheck could notice.
+        const pct = Math.min(1, Math.max(0.45, 0.84 + (rngGrade() - 0.5) * 0.3));
         score = Math.round(pct * asmt.max_score);
       }
     } else {
@@ -687,7 +795,11 @@ for (const asmt of assessments) {
   }
 }
 
-// ── Attendance: recent ~2 weeks of daily per-section records ────────────────────
+// ── Attendance: recent ~2 weeks of daily per-offering records ───────────────────
+//
+// Only the ACTIVE term's offerings get records: attendance is taken in the term a course
+// actually runs, and DEMO_TODAY sits in Semester 1. Seeding the Semester-2 offerings would
+// claim a register was taken four months before the term opened.
 const attendance_records: DemoAttendanceRecord[] = [];
 const rngAtt = makeRng(55555);
 let attCounter = 0;
@@ -698,11 +810,15 @@ for (let d = -13; d <= 0; d += 1) {
   if (isWeekday(iso)) attDates.push(iso);
 }
 const principalUserId = 'user-principal';
-for (const sec of sections) {
-  const roster = activeRoster(sec.id);
+// The lecturer who records it. This used to be `teacherByCode('MATH')`, which THREW:
+// 'MATH' is a PROGRAMME code and `courseName` only knows course codes, so building the
+// dataset raised "no BAJC course with code MATH" and demo mode died at import.
+const attendanceRecorderUserId = teacherByCode('MATH1110').user_id ?? principalUserId;
+for (const off of offerings.filter((o) => o.semester_id === SEM_ACTIVE)) {
+  const roster = activeRoster(off.id);
   for (const date of attDates) {
     for (const stu of roster) {
-      const enr = activeEnrollment(stu.id, sec.id);
+      const enr = activeEnrollment(stu.id, off.id);
       if (!enr) continue;
       attCounter += 1;
       const roll = rngAtt();
@@ -714,13 +830,13 @@ for (const sec of sections) {
       else status = 'excused';
       attendance_records.push({
         id: `att-${attCounter}`,
-        section_id: sec.id,
+        offering_id: off.id,
         student_id: stu.id,
         enrollment_id: enr.id,
         semester_id: SEM_ACTIVE,
         attendance_date: date,
         status,
-        recorded_by_user_id: teacherByCode('MATH').user_id ?? principalUserId,
+        recorded_by_user_id: attendanceRecorderUserId,
         recorded_at: `${date}T08:15:00Z`,
       });
     }
@@ -734,7 +850,7 @@ const announcements: DemoAnnouncement[] = [
     title: 'Welcome back to the 2025-2026 school year',
     body: 'Classes resume Monday. Please collect timetables from the front office and review the updated code of conduct posted on the notice board.',
     audience: 'all',
-    section_id: null,
+    offering_id: null,
     author_user_id: principalUserId,
     published_at: addDays(DEMO_TODAY, -20) + 'T08:00:00Z',
     expires_at: null,
@@ -745,7 +861,7 @@ const announcements: DemoAnnouncement[] = [
     title: 'Staff meeting — Thursday 3:30 PM',
     body: 'All teaching staff should attend the term-planning meeting in the staff room. Department heads, please bring your assessment calendars.',
     audience: 'teachers',
-    section_id: null,
+    offering_id: null,
     author_user_id: principalUserId,
     published_at: addDays(DEMO_TODAY, -6) + 'T14:00:00Z',
     expires_at: addDays(DEMO_TODAY, 2) + 'T00:00:00Z',
@@ -756,7 +872,7 @@ const announcements: DemoAnnouncement[] = [
     title: 'Midterm exam schedule released',
     body: 'The midterm timetable is now available. Review your subjects and prepare accordingly. Speak to your teachers about any clashes.',
     audience: 'students',
-    section_id: null,
+    offering_id: null,
     author_user_id: 'user-secretary',
     published_at: addDays(DEMO_TODAY, -4) + 'T10:00:00Z',
     expires_at: null,
@@ -764,10 +880,12 @@ const announcements: DemoAnnouncement[] = [
   },
   {
     id: 'ann-4',
-    title: 'Form 1A — bring lab coats Friday',
-    body: 'For our first Biology practical this Friday, all Form 1A students must bring a lab coat and closed-toe shoes.',
+    // Targeted at ONE OFFERING (D31). The audience enum keeps its `'class'` member — it is a
+    // wire value shared by the ORM, API and handlers — but what it points at is an offering.
+    title: 'BIOL1102-01 — bring lab coats Friday',
+    body: 'For our first Biology practical this Friday, everyone in BIOL1102-01 must bring a lab coat and closed-toe shoes.',
     audience: 'class',
-    section_id: 'sec-1',
+    offering_id: offeringByKey('BIOL1102-01').id,
     author_user_id: 'user-teach-3',
     published_at: addDays(DEMO_TODAY, -2) + 'T11:30:00Z',
     expires_at: addDays(DEMO_TODAY, 3) + 'T00:00:00Z',
@@ -778,7 +896,7 @@ const announcements: DemoAnnouncement[] = [
     title: 'Sports Day — save the date',
     body: 'Annual Sports Day is scheduled for next month. House captains will be announced shortly. Get your teams ready!',
     audience: 'all',
-    section_id: null,
+    offering_id: null,
     author_user_id: 'user-teach-8',
     published_at: addDays(DEMO_TODAY, -1) + 'T09:00:00Z',
     expires_at: null,
@@ -789,7 +907,7 @@ const announcements: DemoAnnouncement[] = [
     title: 'Library closed for stocktake (expired)',
     body: 'The library was closed last week for the annual stocktake. It has since reopened for normal hours.',
     audience: 'all',
-    section_id: null,
+    offering_id: null,
     author_user_id: 'user-secretary',
     published_at: addDays(DEMO_TODAY, -12) + 'T08:00:00Z',
     expires_at: addDays(DEMO_TODAY, -8) + 'T00:00:00Z', // already expired
@@ -1026,91 +1144,92 @@ for (const s of students) {
 
 // ── Historical year (2024-2025) — a full parallel dataset ───────────────────────
 // So the per-module year switcher shows populated, DISTINCT data when a past year
-// is selected. Same students/teachers/subjects (those entities persist across
-// years); separate sections, offerings, enrollments, assessments, grades and
-// attendance, all tagged to the archived year's Semester 1 (`sem-2024-1`).
+// is selected. Same students/teachers/courses (those entities persist across years);
+// separate offerings, enrollments, assessments, grades and attendance, all tagged to the
+// archived year's Semester 1 (`sem-2024-1`).
 const HIST_ANCHOR = '2025-01-10'; // a weekday inside Semester 1 of 2024-2025
 const SEM_2024_1 = 'sem-2024-1';
 
-// Historical subject classes mirror the active structure but belong to the archived year.
-// They carry is_archived=true and their offerings is_active=false so that EVERY
-// existing "active year" filter (`!is_archived`, `is_active`) keeps excluding them
-// by default — current screens are unchanged. The per-module year switcher selects
-// them explicitly by academic_year_id when a past year is chosen.
+// Historical offerings mirror the active structure but sit in the archived year's term.
+// They carry is_archived=true so every existing "active" filter keeps excluding them by
+// default — current screens are unchanged. The per-module year switcher reaches them by
+// resolving the year through their semester.
 //
-// D29: last year's classes are last year's SUBJECT CLASSES — same names, so a student's
-// past-year record reads as "the Math-1 I sat last year". They get no `class_meetings`:
-// a timetable is about where to be now, and reconstructing an archived week would imply
-// the schedule is historical data, which it is not.
-const histSections: DemoSection[] = classSeed.map((c, i) => ({
-  id: `sec-2024-${i + 1}`,
-  academic_year_id: YEAR_ARCHIVED,
-  name: c.name,
-  grade_level: c.yearGroup,
-  section: null,
-  homeroom_label: null,
-  capacity: c.capacity,
-  is_archived: true,
-}));
-sections.push(...histSections);
-
-// Historical class_subjects: same subject + lead teacher as the active year's twin.
-const histClassSubjects: DemoClassSubject[] = classSeed.map((c, i) => {
-  const lead = teacherByCode(c.teacherCodes?.[0] ?? c.code);
+// **D31 makes the mirror simpler AND more correct.** It used to build two parallel tables
+// (`sec-2024-N` + `cs-2024-N`) and it scoped them by `academic_year_id`, which meant the
+// archived year's offerings could not say WHICH term they belonged to; now `semester_id`
+// says it directly. Only the SEMESTER-1 active offerings are mirrored: the Semester-2 rows
+// are this year's continuation and have no last-year twin.
+//
+// They get no `offering_meetings`: a timetable is about where to be now, and reconstructing
+// an archived week would imply the schedule is historical data, which it is not.
+const histSeed = offeringSeed.filter((o) => (o.semesterId ?? SEM_ACTIVE) === SEM_ACTIVE);
+const histOfferings: DemoOffering[] = histSeed.map((o, i) => {
+  const lead = o.teacherNames?.[0] ? teacherByName(o.teacherNames[0]) : teacherByCode(o.code);
   return {
-    id: `cs-2024-${i + 1}`,
-    section_id: `sec-2024-${i + 1}`,
-    subject_id: subjectId(c.code),
+    id: `off-2024-${i + 1}`,
+    course_id: courseId(o.code),
+    semester_id: SEM_2024_1,
+    section_code: o.sectionCode,
+    capacity: o.capacity,
+    is_archived: true,
     teacher_ids: [lead.id],
     lead_teacher_id: lead.id,
-    is_active: false,
-    drop_lowest_count: c.code === 'MATH' ? 1 : 0,
+    drop_lowest_count: o.code === 'MATH1110' ? 1 : 0,
   };
 });
-// Give the (now-inactive) teacher Trevor Neal a historical Geography assignment so
-// the Teachers directory scoped to 2024-2025 shows a believable past-year roster.
-const histGeo = histClassSubjects.find((c) => c.subject_id === subjectId('GEO'));
-if (histGeo && !histGeo.teacher_ids.includes('teach-12')) histGeo.teacher_ids.push('teach-12');
-class_subjects.push(...histClassSubjects);
+// Trevor Neal (inactive, `teach-12`) holds NO offering assignment, in either year, and that
+// is now stated rather than attempted. Two successive versions tried to give him a historical
+// one and both were dead code: the first looked for `subjectId('GEO')` and the second for
+// `courseId('THEO2201')` — neither is offered by `offeringSeed`, so `.find` returned undefined
+// and the push never ran. An inactive lecturer with no classes is a real and useful state (it
+// is what "inactive" means), so the honest fix is to drop the pretence; giving him a course he
+// does not specialise in would be inventing data to satisfy a comment.
+offerings.push(...histOfferings);
 
-for (const cs of histClassSubjects) {
+for (const off of histOfferings) {
   assessment_categories.push(
-    { id: `cat-${cs.id}-q`, class_subject_id: cs.id, name: 'Quizzes', weight: 0.4, drop_lowest_count: 1 },
-    { id: `cat-${cs.id}-t`, class_subject_id: cs.id, name: 'Tests', weight: 0.6, drop_lowest_count: 0 },
+    { id: `cat-${off.id}-q`, offering_id: off.id, name: 'Quizzes', weight: 0.4, drop_lowest_count: 1 },
+    { id: `cat-${off.id}-t`, offering_id: off.id, name: 'Tests', weight: 0.6, drop_lowest_count: 0 },
   );
 }
 
-// Historical enrollments: give each student the SAME subject load they carry this year,
-// against last year's twin of each class. D29 — this is many rows per student, not one, so
-// a past-year profile shows a full subject load rather than a single class.
+// Historical enrollments: give each student the SAME course load they carry this year,
+// against last year's twin of each offering. Many rows per student, not one, so a past-year
+// profile shows a full load rather than a single class.
 //
 // Graduated / withdrawn students hold no CURRENT load but did sit last year, so they fall
-// back to the Lower 6 default set — otherwise the archived year would show them enrolled in
-// nothing, which is exactly the record a transcript needs.
-const histEnrollmentId = new Map<string, string>(); // `${studentId}:${sectionId}` -> enrollment_id
+// back to the first-year default set — otherwise the archived year would show them enrolled
+// in nothing, which is exactly the record a transcript needs.
+const histEnrollmentId = new Map<string, string>(); // `${studentId}:${offeringId}` -> enrollment_id
 let histEnrollCounter = 0;
+/** Active-year offering id → its archived-year twin. */
+const histTwinByOfferingId = new Map<string, DemoOffering>(
+  histSeed.map((o, i) => [offeringByKey(o.key).id, histOfferings[i]!]),
+);
 for (const stu of students) {
   const current = loadByStudent.get(stu.id) ?? [];
-  const load = current.length > 0 ? current : LOWER6_LOADS[0]!;
-  for (const className of load) {
-    const idx = classSeed.findIndex((c) => c.name === className);
-    const sec = histSections[idx]!;
+  const keys = current.length > 0 ? current : FIRST_YEAR_LOADS[0]!;
+  for (const key of keys) {
+    const twin = histTwinByOfferingId.get(offeringByKey(key).id);
+    // A Semester-2 key has no last-year twin; skip rather than inventing one.
+    if (!twin) continue;
     histEnrollCounter += 1;
     const enrId = `enr-2024-${histEnrollCounter}`;
     enrollments.push({
       id: enrId,
       student_id: stu.id,
-      section_id: sec.id,
+      offering_id: twin.id,
       semester_id: SEM_2024_1,
       enrolled_at: '2024-09-02T08:00:00Z',
       unenrolled_at: null,
     });
-    histEnrollmentId.set(`${stu.id}:${sec.id}`, enrId);
+    histEnrollmentId.set(`${stu.id}:${twin.id}`, enrId);
   }
 }
-function histRoster(sectionId: string): DemoStudent[] {
+function histRoster(offeringId: string): DemoStudent[] {
   const ids = enrollments
-    .filter((e) => e.section_id === sectionId && e.semester_id === SEM_2024_1 && !e.unenrolled_at)
+    .filter((e) => e.offering_id === offeringId && e.semester_id === SEM_2024_1 && !e.unenrolled_at)
     .map((e) => e.student_id);
   return students.filter((s) => ids.includes(s.id));
 }
@@ -1130,14 +1249,14 @@ const HIST_ASMT_TEMPLATES: ReadonlyArray<{
 ];
 const histAssessments: DemoAssessment[] = [];
 let histAsmtCounter = 0;
-for (const cs of histClassSubjects) {
+for (const off of histOfferings) {
   for (const tmpl of HIST_ASMT_TEMPLATES) {
     histAsmtCounter += 1;
     histAssessments.push({
       id: `asmt-2024-${histAsmtCounter}`,
-      class_subject_id: cs.id,
+      offering_id: off.id,
       semester_id: SEM_2024_1,
-      category_id: tmpl.catSuffix ? `cat-${cs.id}-${tmpl.catSuffix}` : null,
+      category_id: tmpl.catSuffix ? `cat-${off.id}-${tmpl.catSuffix}` : null,
       title: tmpl.title,
       type: tmpl.type,
       max_score: tmpl.max,
@@ -1154,9 +1273,8 @@ assessments.push(...histAssessments);
 const rngHistGrade = makeRng(24680);
 let histGradeCounter = 0;
 for (const asmt of histAssessments) {
-  const cs = histClassSubjects.find((c) => c.id === asmt.class_subject_id)!;
-  for (const stu of histRoster(cs.section_id)) {
-    const enrId = histEnrollmentId.get(`${stu.id}:${cs.section_id}`);
+  for (const stu of histRoster(asmt.offering_id)) {
+    const enrId = histEnrollmentId.get(`${stu.id}:${asmt.offering_id}`);
     if (!enrId) continue;
     histGradeCounter += 1;
     const roll = rngHistGrade();
@@ -1190,11 +1308,11 @@ for (let d = -13; d <= 0; d += 1) {
 }
 const rngHistAtt = makeRng(99999);
 let histAttCounter = 0;
-for (const sec of histSections) {
-  const roster = histRoster(sec.id);
+for (const off of histOfferings) {
+  const roster = histRoster(off.id);
   for (const date of histAttDates) {
     for (const stu of roster) {
-      const enrId = histEnrollmentId.get(`${stu.id}:${sec.id}`);
+      const enrId = histEnrollmentId.get(`${stu.id}:${off.id}`);
       if (!enrId) continue;
       histAttCounter += 1;
       const roll = rngHistAtt();
@@ -1205,13 +1323,13 @@ for (const sec of histSections) {
       else status = 'excused';
       attendance_records.push({
         id: `att-2024-${histAttCounter}`,
-        section_id: sec.id,
+        offering_id: off.id,
         student_id: stu.id,
         enrollment_id: enrId,
         semester_id: SEM_2024_1,
         attendance_date: date,
         status,
-        recorded_by_user_id: teacherByCode('MATH').user_id ?? principalUserId,
+        recorded_by_user_id: attendanceRecorderUserId,
         recorded_at: `${date}T08:15:00Z`,
       });
     }
@@ -1243,7 +1361,7 @@ const program_courses: DemoProgramCourse[] = BAJC_CURRICULUM.flatMap(
     codes.map((code, i) => ({
       id: `pc-${progCode.toLowerCase()}-${termOrder}-${i}`,
       program_id: programId(progCode),
-      course_id: subjectId(code),
+      course_id: courseId(code),
       term_label: termLabel,
       term_order: termOrder,
       // Every course printed on a sequence counts toward the award; the PDF marks no
@@ -1257,8 +1375,8 @@ const program_courses: DemoProgramCourse[] = BAJC_CURRICULUM.flatMap(
 const course_prerequisites: DemoCoursePrerequisite[] = [
   ...BAJC_PREREQUISITES.map(([courseCode, requiredCode], i) => ({
     id: `prereq-${i + 1}`,
-    course_id: subjectId(courseCode),
-    prerequisite_course_id: subjectId(requiredCode),
+    course_id: courseId(courseCode),
+    prerequisite_course_id: courseId(requiredCode),
     program_id: null,
     requirement_type: 'course' as const,
   })),
@@ -1266,7 +1384,7 @@ const course_prerequisites: DemoCoursePrerequisite[] = [
   // sequence. A list of course ids could never say that.
   ...BAJC_ALL_COURSE_GATES.map(([courseCode, progCode], i) => ({
     id: `prereq-all-${i + 1}`,
-    course_id: subjectId(courseCode),
+    course_id: courseId(courseCode),
     prerequisite_course_id: null,
     program_id: programId(progCode),
     requirement_type: 'all_program_courses' as const,
@@ -1544,7 +1662,7 @@ const credit_transfer_requests: DemoCreditTransferRequest[] = [
     external_course_name: 'Introduction to Programming',
     external_credits: 3,
     external_grade: 'B+',
-    target_course_id: subjectId('ITEC1104'),
+    target_course_id: courseId('ITEC1104'),
     content_equivalency_pct: null,
     cta_document_id: 'appdoc-7',
     transcript_document_id: 'appdoc-8',
@@ -1585,10 +1703,10 @@ const student_program_history: DemoStudentProgramHistory[] = students
 const revisableGrade = (() => {
   const teacherId = teachers.find((t) => t.user_id === 'user-teach-1')?.id ?? teachers[0]?.id;
   const owned = new Set(
-    class_subjects.filter((cs) => cs.teacher_ids.includes(teacherId!)).map((cs) => cs.id),
+    offerings.filter((o) => o.teacher_ids.includes(teacherId!)).map((o) => o.id),
   );
   const ownedAssessments = new Set(
-    assessments.filter((a) => owned.has(a.class_subject_id) && a.status === 'graded').map((a) => a.id),
+    assessments.filter((a) => owned.has(a.offering_id) && a.status === 'graded').map((a) => a.id),
   );
   return assessment_grades.find(
     (g) => ownedAssessments.has(g.assessment_id) && g.status === 'graded' && g.score != null,
@@ -1622,15 +1740,14 @@ export const DEMO_DATASET: DemoDataset = {
   school_profile,
   academic_years,
   semesters,
-  subjects,
+  courses,
   programs,
   program_courses,
   course_prerequisites,
-  sections,
+  offerings,
   teachers,
   students,
-  class_subjects,
-  class_meetings,
+  offering_meetings,
   enrollments,
   assessment_categories,
   assessments,

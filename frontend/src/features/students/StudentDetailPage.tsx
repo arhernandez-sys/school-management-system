@@ -252,7 +252,7 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
     </>
   );
 
-  const selected = groups.find((g) => g.class_subject_id === selectedId) ?? null;
+  const selected = groups.find((g) => g.offering_id === selectedId) ?? null;
   if (selected) {
     return (
       <Box>
@@ -272,8 +272,8 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   return (
     <Grid container spacing={2}>
       {groups.map((group) => (
-        <Grid item xs={12} sm={6} key={group.class_subject_id}>
-          <SubjectCard group={group} onOpen={() => setSelectedId(group.class_subject_id)} />
+        <Grid item xs={12} sm={6} key={group.offering_id}>
+          <SubjectCard group={group} onOpen={() => setSelectedId(group.offering_id)} />
         </Grid>
       ))}
     </Grid>
@@ -462,12 +462,12 @@ function StudentActions({ student }: { student: StudentDetail }) {
   const handleEdit = (values: StudentWritePayload) => {
     setEditError(null);
     setEditFieldErrors(undefined);
-    // Class enrollment + student_number are immutable on edit; send only benign profile
-    // fields. `class_ids` is create-only server-side (PATCH rejects it), so stripping it
+    // Enrollment + student_number are immutable on edit; send only benign profile
+    // fields. `offering_ids` is create-only server-side (PATCH rejects it), so stripping it
     // here keeps the request valid rather than relying on the 422.
-    const { student_number: _sn, class_ids: _cids, ...patch } = values;
+    const { student_number: _sn, offering_ids: _oids, ...patch } = values;
     void _sn;
-    void _cids;
+    void _oids;
     updateMut.mutate(patch, {
       onSuccess: () => {
         setEditOpen(false);

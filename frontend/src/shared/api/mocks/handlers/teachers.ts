@@ -3,15 +3,15 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
-  classSubjectsOwnedByTeacher,
-  getSection,
-  getSubject,
+  getCourse,
+  getSemester,
   getTeacher,
   listTeachers,
+  offeringLabel,
+  offeringsOwnedByTeacher,
   rosterFor,
-  sectionsOwnedByTeacher,
 } from '@shared/api/mocks/demo/dataset';
-import type { DemoClassSubject, DemoTeacher, DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoOffering, DemoTeacher, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
 
 /**
@@ -58,36 +58,55 @@ function toListItem(t: DemoTeacher) {
     status: t.status,
     subject_specializations: t.subject_specializations,
     /** Convenience count for the directory table (#assignments). */
-    assignment_count: classSubjectsOwnedByTeacher(t.id).length,
+    assignment_count: offeringsOwnedByTeacher(t.id).length,
   };
 }
 
-/** A class_subject the teacher is assigned to, resolved to section + subject refs. */
-function toClassTaught(cs: DemoClassSubject, teacherId: string) {
-  const section = getSection(cs.section_id);
-  const subject = getSubject(cs.subject_id);
+/**
+ * An offering the lecturer is assigned to.
+ *
+ * **D31** — three fields collapsed into the shared `OfferingRef`. It used to carry
+ * `class_ref` (id + name + `grade_level`) beside a separate `subject` ref, because a
+ * homeroom and the subject taught in it were two rows; they are one row now, so a second
+ * ref could only ever restate the first. `is_active` went with `class_subjects.is_active` —
+ * an offering's `is_archived` is the equivalent, and it is already on the ref's parent.
+ */
+function toClassTaught(offering: DemoOffering, teacherId: string) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
   return {
-    class_subject_id: cs.id,
-    class_ref: section
-      ? { id: section.id, name: section.name, grade_level: section.grade_level }
-      : null,
-    subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
-    is_lead: cs.lead_teacher_id === teacherId,
-    is_active: cs.is_active,
+    offering_id: offering.id,
+    offering: {
+      id: offering.id,
+      course: course
+        ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+        : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+      semester: semester
+        ? {
+            id: semester.id,
+            name: semester.name,
+            sequence: semester.sequence,
+            is_active: semester.is_active,
+          }
+        : null,
+      section_code: offering.section_code,
+      label: offeringLabel(offering),
+    },
+    is_lead: offering.lead_teacher_id === teacherId,
   };
 }
 
-/** Distinct students across every section this teacher owns a subject in. */
+/** Distinct students across every offering this lecturer teaches. */
 function studentCountForTeacher(teacherId: string): number {
   const ids = new Set<string>();
-  for (const section of sectionsOwnedByTeacher(teacherId)) {
-    for (const student of rosterFor(section.id)) ids.add(student.id);
+  for (const offering of offeringsOwnedByTeacher(teacherId)) {
+    for (const student of rosterFor(offering.id)) ids.add(student.id);
   }
   return ids.size;
 }
 
 function toDetail(t: DemoTeacher) {
-  const owned = classSubjectsOwnedByTeacher(t.id);
+  const owned = offeringsOwnedByTeacher(t.id);
   return {
     id: t.id,
     user_id: t.user_id,
@@ -98,7 +117,7 @@ function toDetail(t: DemoTeacher) {
     status: t.status,
     subject_specializations: t.subject_specializations,
     has_login: t.user_id !== null,
-    classes_taught: owned.map((cs) => toClassTaught(cs, t.id)),
+    classes_taught: owned.map((off) => toClassTaught(off, t.id)),
     audit: { created_at: DEMO_TODAY_ISO, updated_at: DEMO_TODAY_ISO },
     // Extended profile (optional; may be undefined for freshly created teachers).
     avatar_url: t.avatar_url,
@@ -112,21 +131,19 @@ function toDetail(t: DemoTeacher) {
   };
 }
 
-/** Active class_subjects (is_active) this teacher is assigned to — blocks deactivate/delete. */
-function activeAssignmentsOf(teacherId: string): DemoClassSubject[] {
-  return classSubjectsOwnedByTeacher(teacherId).filter((cs) => cs.is_active);
+/** Live offerings this lecturer teaches — blocks deactivate/delete. */
+function activeAssignmentsOf(teacherId: string): DemoOffering[] {
+  return offeringsOwnedByTeacher(teacherId).filter((o) => !o.is_archived);
 }
 
-function assignmentRefs(assignments: DemoClassSubject[]) {
-  return assignments.map((cs) => {
-    const section = getSection(cs.section_id);
-    const subject = getSubject(cs.subject_id);
-    return {
-      class_subject_id: cs.id,
-      class_name: section?.name ?? null,
-      subject_name: subject?.name ?? null,
-    };
-  });
+function assignmentRefs(assignments: DemoOffering[]) {
+  return assignments.map((offering) => ({
+    offering_id: offering.id,
+    // One derived label, where this used to print `class_name` · `subject_name` — two
+    // fields describing one thing.
+    label: offeringLabel(offering),
+    course_name: getCourse(offering.course_id)?.name ?? null,
+  }));
 }
 
 let teacherSeq = 100;
@@ -302,7 +319,7 @@ export const teachersHandlers = [
           409,
           'teacher_has_active_assignments',
           'This teacher is still assigned to active classes. Reassign those classes before deactivating.',
-          { assignments: assignmentRefs(active).map((a) => `${a.class_name} · ${a.subject_name}`) },
+          { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
         );
       }
     }
@@ -320,7 +337,7 @@ export const teachersHandlers = [
         409,
         'teacher_has_active_assignments',
         'This teacher is assigned to one or more active classes and cannot be deleted. Reassign or deactivate those classes first.',
-        { assignments: assignmentRefs(active).map((a) => `${a.class_name} · ${a.subject_name}`) },
+        { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
       );
     }
     D.teachers = D.teachers.filter((t) => t.id !== teacher.id);

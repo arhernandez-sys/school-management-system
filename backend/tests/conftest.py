@@ -239,6 +239,50 @@ def database_url() -> str:
     return url
 
 
+#: Tables `008_course_offerings.sql` guarantees. The ORM has moved to the D31 shape, so a
+#: database still on `007` cannot satisfy a single offering-backed test — it fails with
+#: hundreds of unrelated-looking errors instead of one honest one.
+_D31_REQUIRED_TABLES = ("course_offerings",)
+#: Tables `008` quarantines away. Their presence means the run is pointed at a pre-`008`
+#: database — most likely `sims` itself, because `backend/.env` still names it and only an
+#: exported `DATABASE_URL` overrides that (see `_bridge_env_from_dotenv` above).
+_D31_FORBIDDEN_TABLES = ("classes", "class_subjects")
+
+
+def _assert_d31_schema(eng) -> None:  # noqa: ANN001 - sqlalchemy Engine
+    """Fail the run — loudly, once — if the target database is not on `008` (D31).
+
+    This exists because the failure it prevents is SILENT. `backend/.env` points at `sims`,
+    which is deliberately held at `007` until the D31 switchover; the suite only reaches the
+    migrated copy when `DATABASE_URL` is exported to `sims_d31`. Forget that export and every
+    offering test fails on a missing table, which reads exactly like a broken refactor. One
+    named error at session start is worth more than 500 misleading ones.
+
+    A hard failure, never a skip: the DB fixtures skip *green* when the database is
+    unreachable, so "skip" is the one verdict that could hide this.
+    """
+    from sqlalchemy import inspect
+
+    present = set(inspect(eng).get_table_names())
+    missing = [t for t in _D31_REQUIRED_TABLES if t not in present]
+    lingering = [t for t in _D31_FORBIDDEN_TABLES if t in present]
+    if not missing and not lingering:
+        return
+    # `pytest.exit`, not `UsageError`/`fail`: raising from a fixture would repeat this
+    # message once per test (33 identical errors on the first probe), which buries the one
+    # line that matters. Aborting the session says it exactly once.
+    pytest.exit(
+        "The configured test database is NOT on migration 008 (D31 course offerings).\n"
+        f"  missing tables:   {missing or 'none'}\n"
+        f"  pre-008 tables:   {lingering or 'none'}\n"
+        "The D31 work runs against the migrated copy `sims_d31`; `backend/.env` still names\n"
+        "`sims`, which is held at 007 on purpose. Export the DSN before running:\n"
+        '  DATABASE_URL="mysql+pymysql://root:...@127.0.0.1:3306/sims_d31" pytest -q\n'
+        "Confirm with: python db/mariadb/verify_schema.py --expect 008",
+        returncode=1,
+    )
+
+
 @pytest.fixture(scope="session")
 def _engine(database_url: str):  # noqa: ANN202 - sqlalchemy Engine, kept lazy
     """Session-scoped engine bound to the real test DB. Only constructed when a
@@ -247,6 +291,7 @@ def _engine(database_url: str):  # noqa: ANN202 - sqlalchemy Engine, kept lazy
 
     eng = create_engine(database_url, pool_pre_ping=True, future=True)
     try:
+        _assert_d31_schema(eng)
         yield eng
     finally:
         eng.dispose()
@@ -597,31 +642,42 @@ def archive_seeded_active_year(db_session) -> "callable":  # noqa: ANN001
 
 
 @pytest.fixture
-def make_class_subject(db_session) -> "callable":  # noqa: ANN001
-    """Factory: create a Class (section) + ClassSubject offering referencing a given
-    subject, inside the rolled-back txn. Used to exercise the DELETE subject_in_use
-    guard (a subject taught in any section cannot be hard-deleted)."""
+def make_offering(db_session) -> "callable":  # noqa: ANN001
+    """Factory: create a `CourseOffering` for a given course, inside the rolled-back txn.
+
+    D31 collapsed the two-step "create a section, then attach a subject to it" into one
+    row, so this fixture creates one object where it used to create two. Every test that
+    needs an offering should come through here rather than constructing the model
+    directly: the identity `(course_id, semester_id, section_code)` is unique, so
+    hand-rolled fixtures collide with each other the moment two tests pick the same
+    course and term. A random `section_code` keeps them apart.
+    """
     import uuid as _uuid
 
     from sqlalchemy import select
 
-    from app.common.enums import AcademicYearStatus
-    from app.modules.classes.models import Class, ClassSubject
-    from app.modules.settings.models import AcademicYear
+    from app.modules.offerings.models import CourseOffering
+    from app.modules.settings.models import Semester
 
-    def _make(subject_id: "_uuid.UUID") -> ClassSubject:
-        # Any existing year is fine (active or archived) — the offering just needs a
-        # valid academic_year_id FK. Prefer the seeded active year.
-        year_id = db_session.scalar(select(AcademicYear.id).limit(1))
-        tag = _uuid.uuid4().hex[:8]
-        section = Class(
-            academic_year_id=year_id,
-            name=f"Test Section {tag}",
-            grade_level="Form 1",
+    def _make(
+        course_id: "_uuid.UUID",
+        *,
+        semester_id: "_uuid.UUID | None" = None,
+        section_code: str | None = None,
+        capacity: int | None = None,
+    ) -> CourseOffering:
+        # Any existing term is fine — prefer the active one, fall back to whatever the
+        # seed left behind, because several suites archive the active year first.
+        if semester_id is None:
+            semester_id = db_session.scalar(
+                select(Semester.id).where(Semester.is_active.is_(True))
+            ) or db_session.scalar(select(Semester.id).limit(1))
+        offering = CourseOffering(
+            course_id=course_id,
+            semester_id=semester_id,
+            section_code=section_code or _uuid.uuid4().hex[:6],
+            capacity=capacity,
         )
-        db_session.add(section)
-        db_session.flush()
-        offering = ClassSubject(class_id=section.id, subject_id=subject_id)
         db_session.add(offering)
         db_session.flush()
         return offering

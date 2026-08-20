@@ -2,8 +2,8 @@
 
 Owns DB access + transactions for the assessment + category endpoints; routers are
 thin. Writes are teacher-only (P/S are view-all, OQ-API-2) and gated by
-`assert_teacher_owns_class_subject`. Reads are scoped: P/S view-all, Teacher to
-owned class_subjects, Student to their enrolled section (non-draft only).
+`assert_teacher_owns_offering`. Reads are scoped: P/S view-all, Teacher to
+owned offerings, Student to the offerings they are enrolled in (non-draft only).
 
 Every write rejects an assessment whose section's academic year is archived → 409
 year_archived (schema §5 rule 7). Datetime comparisons use `ensure_aware` for
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.common.enums import AssessmentStatus, Role
 from app.core.errors import Conflict, NotFound, RateLimited, ValidationError
 from app.core.pagination import PageParams, paginate
-from app.core.rbac import _teacher_profile_id, assert_teacher_owns_class_subject
+from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
 from app.core.timeutil import utcnow
 from app.modules.assessments import release_nudge
 from app.modules.assessments.models import Assessment, AssessmentCategory
@@ -30,17 +30,18 @@ from app.modules.assessments.schemas import (
     AssessmentListItem,
     AssessmentStats,
     CategoryDetail,
-    ClassSubjectRef,
+    OfferingRef,
     NudgedTeacher,
     NudgeReleaseResult,
     ReleaseResult,
 )
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
+from app.modules.offerings.queries import offerings_in_year, year_of_offering
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
@@ -71,14 +72,14 @@ def _audit(db, *, actor, action, entity_type="assessment", entity_id=None, summa
 # ──────────────────────────────────────────────────────────────────────────────
 # Lookups + guards
 # ──────────────────────────────────────────────────────────────────────────────
-def _cs_or_404(db: Session, class_subject_id: uuid.UUID) -> ClassSubject:
+def _cs_or_404(db: Session, offering_id: uuid.UUID) -> CourseOffering:
     cs = db.scalar(
-        select(ClassSubject).where(
-            ClassSubject.id == class_subject_id, ClassSubject.deleted_at.is_(None)
+        select(CourseOffering).where(
+            CourseOffering.id == offering_id, CourseOffering.deleted_at.is_(None)
         )
     )
     if cs is None:
-        raise NotFound("Subject offering not found.", code="class_subject_not_found")
+        raise NotFound("Offering not found.", code="offering_not_found")
     return cs
 
 
@@ -97,36 +98,28 @@ def _active_semester_id(db: Session) -> uuid.UUID | None:
     return db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))
 
 
-def _assert_cs_year_writable(db: Session, cs: ClassSubject) -> None:
-    section = db.get(Class, cs.class_id)
+def _assert_cs_year_writable(db: Session, cs: CourseOffering) -> None:
+    section = cs  # D31: the offering IS the section
     if section is not None and section.is_archived:
         raise Conflict("The academic year is archived.", code="year_archived")
     if section is not None:
-        year = db.get(AcademicYear, section.academic_year_id)
+        year = year_of_offering(db, section)
         if year is not None and year.archived_at is not None:
             raise Conflict("The academic year is archived.", code="year_archived")
 
 
-def _cs_ref(db: Session, cs_id: uuid.UUID) -> ClassSubjectRef:
+def _offering_ref_by_id(db: Session, offering_id: uuid.UUID) -> OfferingRef | None:
+    """Load an offering + its course and shape the shared ref, or None if it is gone.
+
+    Returns None rather than a half-built ref: `OfferingRef.label` is required, and a ref
+    naming nothing was only expressible while the label was optional.
+    """
     row = db.execute(
-        select(ClassSubject, Class, Subject)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.id == cs_id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.id == offering_id)
     ).first()
-    if row is None:
-        return ClassSubjectRef(class_subject_id=cs_id)
-    _cs, cls, subj = row
-    return _build_cs_ref(cls, subj, cs_id)
-
-
-def _build_cs_ref(cls: Class, subj: Subject, cs_id: uuid.UUID) -> ClassSubjectRef:
-    return ClassSubjectRef(
-        class_subject_id=cs_id,
-        section={"id": cls.id, "name": cls.name},
-        subject={"id": subj.id, "name": subj.name, "code": subj.code},
-        label=f"{cls.name} · {subj.name}",
-    )
+    return offering_ref(row[0], row[1]) if row is not None else None
 
 
 def _stats(db: Session, assessment_id: uuid.UUID) -> AssessmentStats:
@@ -149,10 +142,10 @@ def _stats(db: Session, assessment_id: uuid.UUID) -> AssessmentStats:
 # ──────────────────────────────────────────────────────────────────────────────
 # Shaping
 # ──────────────────────────────────────────────────────────────────────────────
-def _list_item(a: Assessment, cls: Class, subj: Subject) -> AssessmentListItem:
+def _list_item(a: Assessment, cls: CourseOffering, subj: Course) -> AssessmentListItem:
     return AssessmentListItem(
         id=a.id, title=a.title, type=a.type,
-        class_subject=_build_cs_ref(cls, subj, a.class_subject_id),
+        offering=offering_ref(cls, subj),
         category_id=a.category_id, max_score=float(a.max_score),
         weight=float(a.weight), assessment_date=a.assessment_date,
         status=a.status, is_released=a.is_released,
@@ -161,14 +154,13 @@ def _list_item(a: Assessment, cls: Class, subj: Subject) -> AssessmentListItem:
 
 def _detail(db: Session, a: Assessment, *, with_stats: bool) -> AssessmentDetail:
     row = db.execute(
-        select(Class, Subject)
-        .join(ClassSubject, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.id == a.class_subject_id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.id == a.offering_id)
     ).first()
-    cs_ref = _build_cs_ref(row[0], row[1], a.class_subject_id) if row else ClassSubjectRef(class_subject_id=a.class_subject_id)
+    cs_ref = offering_ref(row[0], row[1]) if row else None
     return AssessmentDetail(
-        id=a.id, title=a.title, type=a.type, class_subject=cs_ref,
+        id=a.id, title=a.title, type=a.type, offering=cs_ref,
         category_id=a.category_id, max_score=float(a.max_score), weight=float(a.weight),
         assessment_date=a.assessment_date, status=a.status, is_released=a.is_released,
         semester_id=a.semester_id,
@@ -187,7 +179,7 @@ def _student_profile_id(db: Session, user: User) -> uuid.UUID | None:
 def _student_section_ids(db: Session, sp_id: uuid.UUID) -> list[uuid.UUID]:
     return list(
         db.execute(
-            select(ClassEnrollment.class_id).where(
+            select(ClassEnrollment.offering_id).where(
                 ClassEnrollment.student_id == sp_id,
                 ClassEnrollment.unenrolled_at.is_(None),
             )
@@ -203,7 +195,7 @@ def list_assessments(
     *,
     caller: User,
     params: PageParams,
-    class_subject_id: uuid.UUID | None,
+    offering_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None,
     semester_id: uuid.UUID | None,
     type_filter: str | None,
@@ -211,17 +203,16 @@ def list_assessments(
     scope: str | None,
 ):
     stmt = (
-        select(Assessment, Class, Subject)
-        .join(ClassSubject, Assessment.class_subject_id == ClassSubject.id)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(Assessment, CourseOffering, Course)
+        .join(CourseOffering, Assessment.offering_id == CourseOffering.id)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(Assessment.deleted_at.is_(None))
     )
 
-    if class_subject_id is not None:
-        stmt = stmt.where(Assessment.class_subject_id == class_subject_id)
+    if offering_id is not None:
+        stmt = stmt.where(Assessment.offering_id == offering_id)
     if academic_year_id is not None:
-        stmt = stmt.where(Class.academic_year_id == academic_year_id)
+        stmt = stmt.where(offerings_in_year(academic_year_id))
     if semester_id is not None:
         # Narrows WITHIN a year: `Assessment.semester_id` is the assessment's own term,
         # while `academic_year_id` above filters on the section's year. Both may be sent.
@@ -237,7 +228,7 @@ def list_assessments(
         owns = (
             select(ClassTeacher.id)
             .where(
-                ClassTeacher.class_subject_id == Assessment.class_subject_id,
+                ClassTeacher.offering_id == Assessment.offering_id,
                 ClassTeacher.teacher_id == teacher_id,
             )
             .exists()
@@ -250,7 +241,7 @@ def list_assessments(
             stmt = stmt.where(False)
         else:
             stmt = stmt.where(
-                ClassSubject.class_id.in_(section_ids),
+                CourseOffering.id.in_(section_ids),
                 Assessment.status != AssessmentStatus.DRAFT,
             )
     # P/S: no scope filter (view-all).
@@ -289,13 +280,13 @@ def list_assessments(
 def get_assessment(db: Session, *, caller: User, assessment_id: uuid.UUID) -> AssessmentDetail:
     a = _assessment_or_404(db, assessment_id)
     if caller.role == Role.TEACHER:
-        assert_teacher_owns_class_subject(db, caller, a.class_subject_id)  # 404 if not
+        assert_teacher_owns_offering(db, caller, a.offering_id)  # 404 if not
         return _detail(db, a, with_stats=True)
     if caller.role == Role.STUDENT:
         sp_id = _student_profile_id(db, caller)
-        cs = db.get(ClassSubject, a.class_subject_id)
+        cs = db.get(CourseOffering, a.offering_id)
         section_ids = _student_section_ids(db, sp_id) if sp_id else []
-        if cs is None or cs.class_id not in section_ids or a.status == AssessmentStatus.DRAFT:
+        if cs is None or cs.id not in section_ids or a.status == AssessmentStatus.DRAFT:
             raise NotFound("Assessment not found.", code="not_found")
         return _detail(db, a, with_stats=False)
     # P/S
@@ -303,26 +294,25 @@ def get_assessment(db: Session, *, caller: User, assessment_id: uuid.UUID) -> As
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GET /assessments/class-subjects — picker feed
+# GET /assessments/offerings — picker feed
 # ══════════════════════════════════════════════════════════════════════════════
-def list_class_subjects_picker(
+def list_offerings_picker(
     db: Session, *, caller: User, academic_year_id: uuid.UUID | None
 ):
     stmt = (
-        select(ClassSubject.id, Class, Subject)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.deleted_at.is_(None), ClassSubject.is_active.is_(True))
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.deleted_at.is_(None))
     )
     if academic_year_id is not None:
-        stmt = stmt.where(Class.academic_year_id == academic_year_id)
+        stmt = stmt.where(offerings_in_year(academic_year_id))
 
     if caller.role == Role.TEACHER:
         teacher_id = _teacher_profile_id(db, caller)
         owns = (
             select(ClassTeacher.id)
             .where(
-                ClassTeacher.class_subject_id == ClassSubject.id,
+                ClassTeacher.offering_id == CourseOffering.id,
                 ClassTeacher.teacher_id == teacher_id,
             )
             .exists()
@@ -331,22 +321,23 @@ def list_class_subjects_picker(
     elif caller.role == Role.STUDENT:
         sp_id = _student_profile_id(db, caller)
         section_ids = _student_section_ids(db, sp_id) if sp_id else []
-        stmt = stmt.where(ClassSubject.class_id.in_(section_ids or [uuid.UUID(int=0)]))
+        stmt = stmt.where(CourseOffering.id.in_(section_ids or [uuid.UUID(int=0)]))
 
-    rows = db.execute(stmt).all()
-    refs = [_build_cs_ref(cls, subj, cs_id) for (cs_id, cls, subj) in rows]
-    refs.sort(key=lambda r: (r.label or ""))
-    from app.modules.assessments.schemas import ClassSubjectPickerList
+    # Ordered in SQL by course code then section, never by the formatted label — see
+    # `OFFERING_ORDER`.
+    rows = db.execute(stmt.order_by(*OFFERING_ORDER)).all()
+    refs = [offering_ref(offering, course) for (offering, course) in rows]
+    from app.modules.assessments.schemas import OfferingPickerList
 
-    return ClassSubjectPickerList(items=refs)
+    return OfferingPickerList(items=refs)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # POST /assessments
 # ══════════════════════════════════════════════════════════════════════════════
 def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
-    cs = _cs_or_404(db, payload.class_subject_id)
-    assert_teacher_owns_class_subject(db, actor, cs.id)  # 404 if not owner
+    cs = _cs_or_404(db, payload.offering_id)
+    assert_teacher_owns_offering(db, actor, cs.id)  # 404 if not owner
     _assert_cs_year_writable(db, cs)
 
     semester_id = payload.semester_id or _active_semester_id(db)
@@ -357,7 +348,7 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
         _assert_category_matches_cs(db, payload.category_id, cs.id)
 
     a = Assessment(
-        class_subject_id=cs.id,
+        offering_id=cs.id,
         semester_id=semester_id,
         category_id=payload.category_id,
         title=payload.title.strip(),
@@ -383,7 +374,7 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
 
 def _assert_category_matches_cs(db: Session, category_id: uuid.UUID, cs_id: uuid.UUID) -> None:
     cat = db.get(AssessmentCategory, category_id)
-    if cat is None or cat.class_subject_id != cs_id:
+    if cat is None or cat.offering_id != cs_id:
         raise Conflict(
             "Category does not belong to this subject offering.",
             code="category_subject_mismatch",
@@ -395,15 +386,15 @@ def _assert_category_matches_cs(db: Session, category_id: uuid.UUID, cs_id: uuid
 # ══════════════════════════════════════════════════════════════════════════════
 def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, payload) -> AssessmentDetail:
     a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_class_subject(db, actor, a.class_subject_id)
-    cs = db.get(ClassSubject, a.class_subject_id)
+    assert_teacher_owns_offering(db, actor, a.offering_id)
+    cs = db.get(CourseOffering, a.offering_id)
     _assert_cs_year_writable(db, cs)
 
     fields = payload.model_fields_set
 
     if "category_id" in fields:
         if payload.category_id is not None:
-            _assert_category_matches_cs(db, payload.category_id, a.class_subject_id)
+            _assert_category_matches_cs(db, payload.category_id, a.offering_id)
         a.category_id = payload.category_id
 
     if payload.max_score is not None and payload.max_score < float(a.max_score):
@@ -452,8 +443,8 @@ def _assert_no_scores_exceed(db: Session, assessment_id: uuid.UUID, new_max: flo
 # ══════════════════════════════════════════════════════════════════════════════
 def change_status(db: Session, *, actor: User, assessment_id: uuid.UUID, payload) -> AssessmentDetail:
     a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_class_subject(db, actor, a.class_subject_id)
-    cs = db.get(ClassSubject, a.class_subject_id)
+    assert_teacher_owns_offering(db, actor, a.offering_id)
+    cs = db.get(CourseOffering, a.offering_id)
     _assert_cs_year_writable(db, cs)
 
     # Coerce to the enum — a freshly-inserted row may hold the raw str value.
@@ -478,8 +469,8 @@ def change_status(db: Session, *, actor: User, assessment_id: uuid.UUID, payload
 # ══════════════════════════════════════════════════════════════════════════════
 def delete_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID) -> None:
     a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_class_subject(db, actor, a.class_subject_id)
-    cs = db.get(ClassSubject, a.class_subject_id)
+    assert_teacher_owns_offering(db, actor, a.offering_id)
+    cs = db.get(CourseOffering, a.offering_id)
     _assert_cs_year_writable(db, cs)
 
     from app.modules.grades.models import AssessmentGrade
@@ -531,8 +522,8 @@ def set_release(
       assessment column alone. Rows that don't exist are ignored.
     """
     a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_class_subject(db, actor, a.class_subject_id)
-    cs = db.get(ClassSubject, a.class_subject_id)
+    assert_teacher_owns_offering(db, actor, a.offering_id)
+    cs = db.get(CourseOffering, a.offering_id)
     _assert_cs_year_writable(db, cs)
 
     from app.modules.grades.models import AssessmentGrade
@@ -611,14 +602,14 @@ def nudge_release(
     the trail.
     """
     a = _assessment_or_404(db, assessment_id)
-    cs = _cs_or_404(db, a.class_subject_id)
+    cs = _cs_or_404(db, a.offering_id)
     _assert_cs_year_writable(db, cs)
 
     teachers = db.execute(
         select(TeacherProfile.id, TeacherProfile.full_name)
         .join(ClassTeacher, ClassTeacher.teacher_id == TeacherProfile.id)
         .where(
-            ClassTeacher.class_subject_id == cs.id,
+            ClassTeacher.offering_id == cs.id,
             TeacherProfile.deleted_at.is_(None),
         )
         .order_by(ClassTeacher.is_lead.desc(), TeacherProfile.full_name.asc())
@@ -654,7 +645,7 @@ def nudge_release(
         actor=actor,
         assessment_id=a.id,
         summary={
-            "class_subject_id": str(cs.id),
+            "offering_id": str(cs.id),
             "awaiting_release_count": awaiting,
             # Names, not just ids, so the trail stays readable after a teacher row
             # is renamed or soft-deleted. No contact details — audit rows are not
@@ -676,34 +667,35 @@ def nudge_release(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Categories: /classes/{class_id}/subjects/{class_subject_id}/categories
+# Categories: /classes/{class_id}/subjects/{offering_id}/categories
 # ══════════════════════════════════════════════════════════════════════════════
-def _cs_in_class_or_404(db: Session, class_id: uuid.UUID, class_subject_id: uuid.UUID) -> ClassSubject:
-    cs = db.scalar(
-        select(ClassSubject).where(
-            ClassSubject.id == class_subject_id,
-            ClassSubject.class_id == class_id,
-            ClassSubject.deleted_at.is_(None),
+def _offering_or_404(db: Session, offering_id: uuid.UUID) -> CourseOffering:
+    """D31: one lookup, not two. This used to verify that a class_subject belonged to a
+    given class, because the URL threaded both ids. An offering has no parent section."""
+    offering = db.scalar(
+        select(CourseOffering).where(
+            CourseOffering.id == offering_id,
+            CourseOffering.deleted_at.is_(None),
         )
     )
-    if cs is None:
-        raise NotFound("Subject offering not found.", code="class_subject_not_found")
-    return cs
+    if offering is None:
+        raise NotFound("Offering not found.", code="offering_not_found")
+    return offering
 
 
 def _cat_detail(c: AssessmentCategory) -> CategoryDetail:
     return CategoryDetail(
-        id=c.id, class_subject_id=c.class_subject_id, name=c.name,
+        id=c.id, offering_id=c.offering_id, name=c.name,
         weight=float(c.weight), drop_lowest_count=c.drop_lowest_count or 0,
     )
 
 
-def list_categories(db: Session, *, caller: User, class_id: uuid.UUID, class_subject_id: uuid.UUID):
-    cs = _cs_in_class_or_404(db, class_id, class_subject_id)
+def list_categories(db: Session, *, caller: User, offering_id: uuid.UUID):
+    cs = _offering_or_404(db, offering_id)
     _assert_can_read_cs(db, caller, cs)
     rows = db.execute(
         select(AssessmentCategory)
-        .where(AssessmentCategory.class_subject_id == cs.id)
+        .where(AssessmentCategory.offering_id == cs.id)
         .order_by(AssessmentCategory.name.asc())
     ).scalars().all()
     from app.modules.assessments.schemas import CategoryList
@@ -711,21 +703,21 @@ def list_categories(db: Session, *, caller: User, class_id: uuid.UUID, class_sub
     return CategoryList(items=[_cat_detail(c) for c in rows])
 
 
-def _assert_can_read_cs(db: Session, caller: User, cs: ClassSubject) -> None:
+def _assert_can_read_cs(db: Session, caller: User, cs: CourseOffering) -> None:
     if caller.role in (Role.PRINCIPAL, Role.SECRETARY):
         return
     if caller.role == Role.TEACHER:
-        assert_teacher_owns_class_subject(db, caller, cs.id)
+        assert_teacher_owns_offering(db, caller, cs.id)
         return
     sp_id = _student_profile_id(db, caller)
     section_ids = _student_section_ids(db, sp_id) if sp_id else []
-    if cs.class_id not in section_ids:
-        raise NotFound("Subject offering not found.", code="class_subject_not_found")
+    if cs.id not in section_ids:
+        raise NotFound("Offering not found.", code="offering_not_found")
 
 
 def _assert_cat_name_unique(db, cs_id, name, *, exclude_id=None) -> None:
     stmt = select(AssessmentCategory.id).where(
-        AssessmentCategory.class_subject_id == cs_id,
+        AssessmentCategory.offering_id == cs_id,
         func.lower(AssessmentCategory.name) == name.strip().lower(),
     )
     if exclude_id is not None:
@@ -735,13 +727,13 @@ def _assert_cat_name_unique(db, cs_id, name, *, exclude_id=None) -> None:
                        code="duplicate_category_name")
 
 
-def create_category(db: Session, *, actor: User, class_id, class_subject_id, payload):
-    cs = _cs_in_class_or_404(db, class_id, class_subject_id)
-    assert_teacher_owns_class_subject(db, actor, cs.id)
+def create_category(db: Session, *, actor: User, offering_id, payload):
+    cs = _offering_or_404(db, offering_id)
+    assert_teacher_owns_offering(db, actor, cs.id)
     _assert_cs_year_writable(db, cs)
     _assert_cat_name_unique(db, cs.id, payload.name)
     c = AssessmentCategory(
-        class_subject_id=cs.id, name=payload.name.strip(), weight=payload.weight,
+        offering_id=cs.id, name=payload.name.strip(), weight=payload.weight,
         drop_lowest_count=payload.drop_lowest_count, created_by=actor.id, updated_by=actor.id,
     )
     db.add(c)
@@ -756,7 +748,7 @@ def _category_or_404(db, cs_id, category_id) -> AssessmentCategory:
     c = db.scalar(
         select(AssessmentCategory).where(
             AssessmentCategory.id == category_id,
-            AssessmentCategory.class_subject_id == cs_id,
+            AssessmentCategory.offering_id == cs_id,
         )
     )
     if c is None:
@@ -764,9 +756,9 @@ def _category_or_404(db, cs_id, category_id) -> AssessmentCategory:
     return c
 
 
-def update_category(db: Session, *, actor: User, class_id, class_subject_id, category_id, payload):
-    cs = _cs_in_class_or_404(db, class_id, class_subject_id)
-    assert_teacher_owns_class_subject(db, actor, cs.id)
+def update_category(db: Session, *, actor: User, offering_id, category_id, payload):
+    cs = _offering_or_404(db, offering_id)
+    assert_teacher_owns_offering(db, actor, cs.id)
     _assert_cs_year_writable(db, cs)
     c = _category_or_404(db, cs.id, category_id)
     if payload.name is not None and payload.name.strip().lower() != c.name.lower():
@@ -783,9 +775,9 @@ def update_category(db: Session, *, actor: User, class_id, class_subject_id, cat
     return _cat_detail(c)
 
 
-def delete_category(db: Session, *, actor: User, class_id, class_subject_id, category_id) -> None:
-    cs = _cs_in_class_or_404(db, class_id, class_subject_id)
-    assert_teacher_owns_class_subject(db, actor, cs.id)
+def delete_category(db: Session, *, actor: User, offering_id, category_id) -> None:
+    cs = _offering_or_404(db, offering_id)
+    assert_teacher_owns_offering(db, actor, cs.id)
     _assert_cs_year_writable(db, cs)
     c = _category_or_404(db, cs.id, category_id)
     # Detach referencing assessments (FK SET NULL semantics).

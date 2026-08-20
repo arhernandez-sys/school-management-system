@@ -3,16 +3,16 @@
 Thin transport; the service owns DB + transactions. Mounts under `/api/v1`.
 
 Endpoints:
-  GET /attendance/sections   T/P/S     -> AttendanceSectionsResponse
-  GET /attendance            T/P/S     -> AttendanceRegister      (section_id REQUIRED)
+  GET /attendance/offerings  T/P/S     -> AttendanceOfferingsResponse
+  GET /attendance            T/P/S     -> AttendanceRegister    (offering_id REQUIRED)
   PUT /attendance            Teacher   -> AttendanceUpsertResponse
   GET /attendance/summary    T/P/S     -> AttendanceSummaryResponse
   GET /attendance/me         Student   -> MyAttendanceResponse
 
-Paths follow the finished frontend (`?section_id=`), NOT api-spec §8's original
+Paths follow the finished frontend (`?offering_id=`), NOT api-spec §8's original
 `/attendance/class/{class_id}` shape — see the api-spec reconciliation note.
 
-Route order: the literal `/sections`, `/summary` and `/me` are declared before the
+Route order: the literal `/offerings`, `/summary` and `/me` are declared before the
 bare `/attendance` handlers, though no path param makes them ambiguous.
 
 Recording is teacher-only: P/S read the register and the summary but do not mark it.
@@ -33,7 +33,7 @@ from app.core.deps import get_db, require_role
 from app.modules.attendance import service
 from app.modules.attendance.schemas import (
     AttendanceRegister,
-    AttendanceSectionsResponse,
+    AttendanceOfferingsResponse,
     AttendanceSummaryResponse,
     AttendanceUpsertRequest,
     AttendanceUpsertResponse,
@@ -50,29 +50,29 @@ _student = require_role(Role.STUDENT)
 
 
 @router.get(
-    "/sections",
-    response_model=AttendanceSectionsResponse,
-    summary="Sections the caller may view or mark",
+    "/offerings",
+    response_model=AttendanceOfferingsResponse,
+    summary="Offerings the caller may view or mark",
     responses={401: _ERR, 403: _ERR, 422: _ERR},
 )
-def list_sections(
+def list_offerings(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
-) -> AttendanceSectionsResponse:
-    """Teacher → sections where they own any subject offering; P/S → all sections
-    of the year. `can_record` is true only for a teacher."""
-    return service.list_sections(db, actor=actor, academic_year_id=academic_year_id)
+) -> AttendanceOfferingsResponse:
+    """Teacher → the offerings they are assigned to; P/S → all offerings of the
+    year. `can_record` is true only for a teacher."""
+    return service.list_offerings(db, actor=actor, academic_year_id=academic_year_id)
 
 
 @router.get(
     "/summary",
     response_model=AttendanceSummaryResponse,
-    summary="Attendance rates for a section (overall, per day, per student)",
+    summary="Attendance rates for an offering (overall, per day, per student)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def get_summary(
-    section_id: Annotated[uuid.UUID, Query()],
+    offering_id: Annotated[uuid.UUID, Query()],
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
     db: Session = Depends(get_db),
@@ -81,7 +81,7 @@ def get_summary(
     """`by_student` spans the full active roster, so a student with no records
     still appears as a zero row."""
     return service.get_summary(
-        db, actor=actor, section_id=section_id, date_from=date_from, date_to=date_to
+        db, actor=actor, offering_id=offering_id, date_from=date_from, date_to=date_to
     )
 
 
@@ -109,24 +109,24 @@ def get_my_attendance(
 @router.get(
     "",
     response_model=AttendanceRegister,
-    summary="The daily register for one (section, date)",
+    summary="The daily register for one (offering, date)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def get_register(
-    section_id: Annotated[uuid.UUID, Query()],
+    offering_id: Annotated[uuid.UUID, Query()],
     on_date: Annotated[date | None, Query(alias="date")] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
 ) -> AttendanceRegister:
-    """`section_id` is required — omitting it is a 422. `date` defaults to today.
+    """`offering_id` is required — omitting it is a 422. `date` defaults to today.
     An unmarked student has `status: null`, which is not an attendance value."""
-    return service.get_register(db, actor=actor, section_id=section_id, on_date=on_date)
+    return service.get_register(db, actor=actor, offering_id=offering_id, on_date=on_date)
 
 
 @router.put(
     "",
     response_model=AttendanceUpsertResponse,
-    summary="Mark the register for one (section, date) (teacher)",
+    summary="Mark the register for one (offering, date) (teacher)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def upsert_register(
@@ -134,7 +134,7 @@ def upsert_register(
     db: Session = Depends(get_db),
     actor: User = Depends(_teacher),
 ) -> AttendanceUpsertResponse:
-    """Teacher-only (403 for P/S) + section ownership (404). Rejects future dates
+    """Teacher-only (403 for P/S) + offering ownership (404). Rejects future dates
     (422 future_date_not_allowed), archived years (409) and non-roster students
-    (422 student_not_enrolled). Upsert key is (section, student, date)."""
+    (422 student_not_enrolled). Upsert key is (offering, student, date)."""
     return service.upsert_register(db, actor=actor, payload=payload)

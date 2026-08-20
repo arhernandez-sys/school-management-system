@@ -33,10 +33,10 @@ class AssessmentCategory(Base, TimestampMixin, AuditMixin):
     __tablename__ = "assessment_categories"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    class_subject_id: Mapped[uuid.UUID] = mapped_column(
+    offering_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey(
-            "class_subjects.id", ondelete="CASCADE", name="fk_categories_class_subject"
+            "course_offerings.id", ondelete="CASCADE", name="fk_categories_offering"
         ),
         nullable=False,
     )
@@ -49,7 +49,7 @@ class AssessmentCategory(Base, TimestampMixin, AuditMixin):
 
     __table_args__ = (
         Index(
-            "uq_categories_class_subject_name", "class_subject_id", "name", unique=True
+            "uq_categories_class_subject_name", "offering_id", "name", unique=True
         ),
         CheckConstraint("weight >= 0", name="ck_categories_weight"),
         CheckConstraint(
@@ -63,10 +63,10 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     __tablename__ = "assessments"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    class_subject_id: Mapped[uuid.UUID] = mapped_column(
+    offering_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey(
-            "class_subjects.id", ondelete="RESTRICT", name="fk_assessments_class_subject"
+            "course_offerings.id", ondelete="RESTRICT", name="fk_assessments_offering"
         ),
         nullable=False,
     )
@@ -110,7 +110,7 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
         ),
         Index(
             "ix_assessments_class_subject_semester",
-            "class_subject_id",
+            "offering_id",
             "semester_id",
             postgresql_where=text("deleted_at IS NULL"),
         ),

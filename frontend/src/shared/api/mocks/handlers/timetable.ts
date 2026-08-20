@@ -3,16 +3,18 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   currentDemoStudent,
   currentDemoTeacher,
-  currentSectionsFor,
-  classSubjectsForSection,
+  currentOfferingsFor,
+  getCourse,
+  getSemester,
   getStudent,
-  getSubject,
   getTeacher,
-  meetingsForSection,
-  sectionsForStudentInYear,
-  sectionsOwnedByTeacher,
+  meetingsForOffering,
+  offeringLabel,
+  offeringsForStudentInYear,
+  offeringsOwnedByTeacher,
+  yearIdOfOffering,
 } from '@shared/api/mocks/demo/dataset';
-import type { DemoSection } from '@shared/api/mocks/demo/dataset';
+import type { DemoOffering } from '@shared/api/mocks/demo/dataset';
 import { errorResponse } from './_helpers';
 
 /**
@@ -26,9 +28,14 @@ import { errorResponse } from './_helpers';
  * exactly like the server: the grid always has five columns, and a blank Wednesday is
  * visibly blank rather than missing.
  *
- * This is the surface that makes the demo's whole point visible — sign in as the student
- * and Monday shows Math-1 in Room A; John (stu-2) would show Math-2 in Room C at a
- * different hour, with Biology and English identical. See the D29 note in demo/data.ts.
+ * This is the surface that makes the demo's whole point visible — sign in as the student and
+ * Monday shows MATH1110-01 in Room A; John (stu-2) would show MATH1110-02 in Room C at a
+ * different hour, with Biology and English identical. See the D31 note in demo/data.ts.
+ *
+ * **D31 collapsed four entry fields into one `offering`.** An entry carried
+ * `class_id` + `class_name` + `class_subject_id` + `subject`: four fields describing two
+ * rows. A homeroom and the subject it taught are the same row now, so two of those were the
+ * same UUID under different names and `class_name` had no column to come from.
  *
  * ⚠️ Do NOT edit handlers/index.ts — `timetableHandlers` is wired in there already.
  */
@@ -44,22 +51,47 @@ function sessionRole(cookies: Record<string, string>): string {
   return cookies['sis_mock_session'] ?? 'principal';
 }
 
-function subjectRef(subjectId: string) {
-  const s = getSubject(subjectId);
-  return { id: subjectId, name: s?.name ?? 'Unknown subject', code: s?.code ?? '' };
+/** The shared `OfferingRef` — the same shape every other module now returns. */
+function offeringRef(offering: DemoOffering) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
+  return {
+    id: offering.id,
+    course: course
+      ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+      : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+    semester: semester
+      ? {
+          id: semester.id,
+          name: semester.name,
+          sequence: semester.sequence,
+          is_active: semester.is_active,
+        }
+      : null,
+    section_code: offering.section_code,
+    label: offeringLabel(offering),
+  };
 }
 function teacherRef(teacherId: string) {
   const t = getTeacher(teacherId);
-  return { id: teacherId, full_name: t?.full_name ?? 'Unknown teacher' };
+  return {
+    id: teacherId,
+    staff_number: t?.staff_number ?? '',
+    full_name: t?.full_name ?? 'Unknown lecturer',
+  };
 }
 
 /**
- * Shape the week for a set of classes.
+ * Shape the week for a set of offerings.
  *
- * A class with no meetings goes to `unscheduled` rather than being dropped — otherwise it
- * would be invisible here while still listed under My Classes, which reads as a bug.
+ * An offering with no meetings goes to `unscheduled` rather than being dropped — otherwise
+ * it would be invisible here while still listed under My Courses, which reads as a bug.
  */
-function buildView(sections: DemoSection[], student: ReturnType<typeof getStudent> | undefined, yearId: string | null) {
+function buildView(
+  offerings: DemoOffering[],
+  student: ReturnType<typeof getStudent> | undefined,
+  yearId: string | null,
+) {
   const days = [1, 2, 3, 4, 5].map((d) => ({
     day_of_week: d,
     day_name: DAY_NAMES[d]!,
@@ -68,29 +100,18 @@ function buildView(sections: DemoSection[], student: ReturnType<typeof getStuden
   const byDay = new Map(days.map((d) => [d.day_of_week, d]));
   const unscheduled: Array<Record<string, unknown>> = [];
 
-  for (const section of sections) {
-    const cs = classSubjectsForSection(section.id)[0];
-    if (!cs) continue;
-    const subject = subjectRef(cs.subject_id);
-    const teachers = cs.teacher_ids.map(teacherRef);
-    const meetings = meetingsForSection(section.id);
+  for (const offering of offerings) {
+    const ref = offeringRef(offering);
+    const teachers = offering.teacher_ids.map(teacherRef);
+    const meetings = meetingsForOffering(offering.id);
     if (meetings.length === 0) {
-      unscheduled.push({
-        class_id: section.id,
-        class_name: section.name,
-        class_subject_id: cs.id,
-        subject,
-        teachers,
-      });
+      unscheduled.push({ offering: ref, teachers });
       continue;
     }
     for (const m of meetings) {
       byDay.get(m.day_of_week)?.entries.push({
         meeting_id: m.id,
-        class_id: section.id,
-        class_name: section.name,
-        class_subject_id: cs.id,
-        subject,
+        offering: ref,
         teachers,
         room: m.room,
         day_of_week: m.day_of_week,
@@ -100,14 +121,16 @@ function buildView(sections: DemoSection[], student: ReturnType<typeof getStuden
     }
   }
 
+  const labelOf = (row: Record<string, unknown>): string =>
+    String((row.offering as { label?: string } | undefined)?.label ?? '');
   for (const d of days) {
     d.entries.sort(
       (a, b) =>
         String(a.start_time).localeCompare(String(b.start_time)) ||
-        String(a.class_name).localeCompare(String(b.class_name)),
+        labelOf(a).localeCompare(labelOf(b)),
     );
   }
-  unscheduled.sort((a, b) => String(a.class_name).localeCompare(String(b.class_name)));
+  unscheduled.sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
 
   return {
     student: student
@@ -123,9 +146,9 @@ function buildView(sections: DemoSection[], student: ReturnType<typeof getStuden
   };
 }
 
-/** Classes in scope for a student — that year if given, else their live load. */
-function studentSections(studentId: string, yearId: string | null): DemoSection[] {
-  return yearId ? sectionsForStudentInYear(studentId, yearId) : currentSectionsFor(studentId);
+/** Offerings in scope for a student — that year if given, else their live load. */
+function studentOfferings(studentId: string, yearId: string | null): DemoOffering[] {
+  return yearId ? offeringsForStudentInYear(studentId, yearId) : currentOfferingsFor(studentId);
 }
 
 export const timetableHandlers = [
@@ -138,13 +161,14 @@ export const timetableHandlers = [
     if (role === 'student') {
       const student = currentDemoStudent(role);
       if (!student) return errorResponse(404, 'student_not_found', 'Student profile not found.');
-      return HttpResponse.json(buildView(studentSections(student.id, yearId), student, yearId));
+      return HttpResponse.json(buildView(studentOfferings(student.id, yearId), student, yearId));
     }
 
     if (role === 'teacher') {
       const teacher = currentDemoTeacher(role);
-      const owned = teacher ? sectionsOwnedByTeacher(teacher.id) : [];
-      const scoped = yearId ? owned.filter((s) => s.academic_year_id === yearId) : owned;
+      const owned = teacher ? offeringsOwnedByTeacher(teacher.id) : [];
+      // The year is resolved THROUGH the offering's semester — it has no year column.
+      const scoped = yearId ? owned.filter((o) => yearIdOfOffering(o.id) === yearId) : owned;
       return HttpResponse.json(buildView(scoped, undefined, yearId));
     }
 
@@ -163,6 +187,6 @@ export const timetableHandlers = [
     if (!student) return errorResponse(404, 'student_not_found', 'Student not found.');
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id');
-    return HttpResponse.json(buildView(studentSections(student.id, yearId), student, yearId));
+    return HttpResponse.json(buildView(studentOfferings(student.id, yearId), student, yearId));
   }),
 ];

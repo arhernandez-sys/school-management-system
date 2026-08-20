@@ -11,42 +11,46 @@ export interface StudentEnrollmentPanelProps {
   student: StudentDetail;
   /** When set, personalizes the "not enrolled" copy to the selected year. */
   yearName?: string;
-  /** Links each class to its detail page. Off for a student viewing their own profile — they
-   *  have no access to a class's roster page. */
-  linkClasses?: boolean;
+  /** Links each offering to its detail page. Off for a student viewing their own profile —
+   *  they have no access to an offering's roster page. */
+  linkOfferings?: boolean;
 }
 
 /**
  * StudentEnrollmentPanel — the student's enrollment as a compact card.
  *
- * **D29 rewrite.** This card used to show ONE section (a linked title plus grade · section ·
- * enrolled-since tiles), because a student had exactly one homeroom. A sixth-former enrols in
- * each subject class separately, so the card now lists ALL their classes as chips and reports
- * how many.
+ * **D29 rewrite, D31 retitled.** This card used to show ONE section (a linked title plus
+ * grade · section · enrolled-since tiles), because a student had exactly one homeroom. A
+ * college student enrols in each course separately, so the card lists ALL their offerings as
+ * chips and reports how many.
  *
- * Year group is shown **separately from the class list**, and is read from
- * `student.year_group` — the student's own level — rather than from a class's `grade_level`.
- * Those are different facts: a Lower 6 student can legitimately sit in a class labelled for
- * Upper 6, and deriving one from the other would silently misreport it.
+ * Each chip prints the offering's server-computed `label` (course code + section), which is
+ * what makes two sections of one course distinguishable — under D29 it printed a homeroom
+ * `name`, and an offering has none.
  *
- * Shared by the P/S/teacher student detail page and the student's own "My Profile".
+ * Year of study is shown **separately from the offering list**, and is read from
+ * `student.year_of_study` — the student's own level — never derived from what they take.
+ * Those are different facts: a First-year can legitimately sit a course most Second-years
+ * take, and deriving one from the other would silently misreport it.
+ *
+ * Shared by the P/S/lecturer student detail page and the student's own "My Profile".
  */
 export function StudentEnrollmentPanel({
   student,
   yearName,
-  linkClasses = true,
+  linkOfferings = true,
 }: StudentEnrollmentPanelProps) {
-  const classes = student.current_classes ?? [];
+  const offerings = student.current_offerings ?? [];
 
-  if (classes.length === 0) {
+  if (offerings.length === 0) {
     return (
       <EmptyState
         variant="card"
         title="Not enrolled"
         description={
           yearName
-            ? `This student was not enrolled in any classes in ${yearName}.`
-            : 'This student is not enrolled in any subject classes yet.'
+            ? `This student was not enrolled in any courses in ${yearName}.`
+            : 'This student is not enrolled in any courses yet.'
         }
       />
     );
@@ -60,22 +64,22 @@ export function StudentEnrollmentPanel({
 
       <Box sx={{ mt: 1.5, mb: 2.5 }}>
         <Typography variant="overline" color="text.secondary">
-          Subject classes
+          Course offerings
         </Typography>
         <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
-          {classes.map((c) =>
-            linkClasses ? (
+          {offerings.map((o) =>
+            linkOfferings ? (
               <Chip
-                key={c.id}
+                key={o.id}
                 component={RouterLink}
-                to={`${ROUTES.classes}/${c.id}`}
-                label={c.name}
+                to={`${ROUTES.offerings}/${o.id}`}
+                label={o.label}
                 size="small"
                 clickable
                 variant="outlined"
               />
             ) : (
-              <Chip key={c.id} label={c.name} size="small" variant="outlined" />
+              <Chip key={o.id} label={o.label} size="small" variant="outlined" />
             ),
           )}
         </Stack>
@@ -90,14 +94,14 @@ export function StudentEnrollmentPanel({
       >
         <ProfileStatTile
           icon={<SchoolOutlinedIcon fontSize="small" />}
-          value={student.year_group || '—'}
-          label="Year group"
+          value={student.year_of_study || '—'}
+          label="Year of study"
           color="secondary"
         />
         <ProfileStatTile
           icon={<ClassOutlinedIcon fontSize="small" />}
-          value={String(classes.length)}
-          label={classes.length === 1 ? 'Class' : 'Classes'}
+          value={String(offerings.length)}
+          label={offerings.length === 1 ? 'Course' : 'Courses'}
           color="info"
         />
         <ProfileStatTile
@@ -108,15 +112,15 @@ export function StudentEnrollmentPanel({
         />
       </Box>
 
-      {linkClasses && (
+      {linkOfferings && (
         <Box sx={{ mt: 2 }}>
           <MuiLink
             component={RouterLink}
-            to={`${ROUTES.classes}`}
+            to={`${ROUTES.offerings}`}
             underline="hover"
             variant="body2"
           >
-            Manage class enrollment
+            Manage course enrollment
           </MuiLink>
         </Box>
       )}

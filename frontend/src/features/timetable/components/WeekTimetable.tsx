@@ -1,7 +1,7 @@
 import { Box, Paper, Stack, Typography, useMediaQuery, useTheme } from '@mui/material';
 import RoomOutlinedIcon from '@mui/icons-material/RoomOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
-import { formatTimeRange } from '@features/classes/meetingFormat';
+import { formatTimeRange } from '@features/offerings/meetingFormat';
 import type { TimetableDay, TimetableEntry } from '../types';
 
 /**
@@ -12,7 +12,7 @@ import type { TimetableDay, TimetableEntry } from '../types';
  *  - **Desktop**: five columns side by side — the shape people picture when they say
  *    "timetable", and the only way to see the whole week at once.
  *  - **Mobile**: day-grouped vertical list. Five columns on a phone would each be ~70px
- *    wide, which cannot hold a class name, so it degrades to sections rather than
+ *    wide, which cannot hold a course name, so it degrades to sections rather than
  *    horizontal scroll.
  *
  * Deliberately NOT time-proportional: blocks are laid out in start order, not positioned
@@ -20,12 +20,12 @@ import type { TimetableDay, TimetableEntry } from '../types';
  * empty vertical space, and nothing here depends on seeing that a gap is 25 minutes rather
  * than 40 — the times are printed on every card.
  *
- * `showTeacher` is off for a teacher's own week, where every row would repeat their name.
+ * `showTeacher` is off for a lecturer's own week, where every row would repeat their name.
  */
 export interface WeekTimetableProps {
   days: TimetableDay[];
   showTeacher?: boolean;
-  /** Rendered in a day column/section with no classes. */
+  /** Rendered in a day column/section with nothing on it. */
   emptyDayLabel?: string;
 }
 
@@ -42,15 +42,15 @@ function EntryCard({ entry, showTeacher }: { entry: TimetableEntry; showTeacher:
     >
       <Stack spacing={0.5}>
         <Typography variant="subtitle2" sx={{ lineHeight: 1.3 }}>
-          {entry.subject.name}
+          {entry.offering.course.name}
         </Typography>
         <Typography variant="caption" color="text.secondary">
           {formatTimeRange(entry.start_time, entry.end_time)}
         </Typography>
-        {/* The class name is what distinguishes Math-1 from Math-2 — the whole point of
-            the subject-class model, so it is never omitted. */}
+        {/* The offering label carries code + section, which is what distinguishes one
+            section of a course from the other — so it is never omitted. */}
         <Typography variant="caption" color="text.secondary">
-          {entry.class_name}
+          {entry.offering.label}
         </Typography>
         {entry.room && (
           <Stack direction="row" spacing={0.5} alignItems="center">
@@ -74,7 +74,7 @@ function EntryCard({ entry, showTeacher }: { entry: TimetableEntry; showTeacher:
 export function WeekTimetable({
   days,
   showTeacher = true,
-  emptyDayLabel = 'No classes',
+  emptyDayLabel = 'Nothing scheduled',
 }: WeekTimetableProps) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));

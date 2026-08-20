@@ -28,13 +28,12 @@ from datetime import date, datetime, time, timezone
 import pytest
 
 from app.common.enums import AcademicYearStatus, Role, StudentStatus, TeacherStatus
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
     ClassMeeting,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
@@ -56,6 +55,8 @@ class _Graph:
 
     def __init__(self, db, make_user, auth_headers, archive_seeded_active_year) -> None:
         self._db = db
+        #: offering id -> its Course, so `label()` can derive what the API sends.
+        self.courses: dict = {}
         self._make_user = make_user
         self._auth = auth_headers
         archive_seeded_active_year()
@@ -99,10 +100,10 @@ class _Graph:
         self.FREDDY = auth_headers(user_id=self.freddy_user.id, role=Role.STUDENT)
         self.JOHN = auth_headers(user_id=self.john_user.id, role=Role.STUDENT)
 
-        for cls in (self.math1, self.bio, self.eng):
-            self._enroll(cls, self.freddy)
-        for cls in (self.math2, self.bio, self.eng):
-            self._enroll(cls, self.john)
+        for offering in (self.math1, self.bio, self.eng):
+            self._enroll(self.freddy, offering)
+        for offering in (self.math2, self.bio, self.eng):
+            self._enroll(self.john, offering)
 
     # ── builders ────────────────────────────────────────────────────────────
     def _teacher(self, name, *, user_id=None) -> TeacherProfile:
@@ -114,26 +115,47 @@ class _Graph:
         self._db.flush()
         return t
 
-    def _klass(self, class_name, subject_name, teacher) -> tuple[Class, ClassSubject]:
-        cls = Class(
-            academic_year_id=self.year.id, name=class_name,
-            grade_level="Lower 6", is_archived=False,
-        )
-        self._db.add(cls)
-        self._db.flush()
-        subject = Subject(name=subject_name, code=uuid.uuid4().hex[:6])
+    def _klass(self, class_name, subject_name, teacher) -> tuple[CourseOffering, CourseOffering]:
+        """One offering of a freshly-created course, staffed by `teacher`.
+
+        Returns the SAME object twice. Pre-D31 this built a section and then attached a
+        subject to it, and the graph named them separately (`self.math1` the section,
+        `cs_math1` the class_subject). An offering is both, so the pair is kept only so
+        the call sites below still read the way they did.
+
+        `class_name` is accepted and unused: an offering has no stored name (D31). The
+        label a screen shows is derived from the course code, so the course carries the
+        identity these tests assert on — see `self.label()`.
+        """
+        subject = Course(name=subject_name, code=uuid.uuid4().hex[:6])
         self._db.add(subject)
         self._db.flush()
-        cs = ClassSubject(class_id=cls.id, subject_id=subject.id, is_active=True)
+        cs = CourseOffering(
+            course_id=subject.id,
+            semester_id=self.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
         self._db.add(cs)
         self._db.flush()
-        self._db.add(ClassTeacher(class_subject_id=cs.id, teacher_id=teacher.id, is_lead=True))
+        self._db.add(ClassTeacher(offering_id=cs.id, teacher_id=teacher.id, is_lead=True))
         self._db.flush()
-        return cls, cs
+        self.courses[cs.id] = subject
+        return cs, cs
+
+    def label(self, offering) -> str:  # noqa: ANN001
+        """The label the API sends for `offering`.
+
+        Built with the SERVER's `offering_label`, not re-spelled here: the point of
+        deriving a label in one place is lost if the test hardcodes a second formula
+        that happens to agree today.
+        """
+        from app.modules.offerings.labels import offering_label
+
+        return offering_label(self.courses[offering.id].code, offering.section_code)
 
     def _meet(self, cs, day, start, end, room) -> ClassMeeting:
         m = ClassMeeting(
-            class_subject_id=cs.id, day_of_week=day,
+            offering_id=cs.id, day_of_week=day,
             start_time=time.fromisoformat(start), end_time=time.fromisoformat(end),
             room=room,
         )
@@ -146,14 +168,16 @@ class _Graph:
         s = StudentProfile(
             user_id=user.id, student_number=f"S-{uuid.uuid4().hex[:8]}", **split_name(name),
             date_of_birth=date(2008, 4, 1), enrollment_date=date(2025, 9, 1),
-            status=StudentStatus.ACTIVE, year_group="Lower 6",
+            status=StudentStatus.ACTIVE, year_of_study="First",
         )
         self._db.add(s)
         self._db.flush()
         return s, user
 
-    def _enroll(self, cls, student) -> ClassEnrollment:
-        e = ClassEnrollment(class_id=cls.id, student_id=student.id, semester_id=self.sem.id)
+    def _enroll(self, student, offering) -> ClassEnrollment:
+        e = ClassEnrollment(
+            offering_id=offering.id, student_id=student.id, semester_id=self.sem.id
+        )
         self._db.add(e)
         self._db.flush()
         return e
@@ -165,9 +189,13 @@ def graph(db_session, make_user, auth_headers, archive_seeded_active_year) -> _G
 
 
 def _slots(body: dict) -> dict[int, list[tuple[str, str]]]:
-    """{day_of_week: [(class_name, room)]} — the shape assertions read from."""
+    """{day_of_week: [(offering label, room)]} — the shape assertions read from.
+
+    D31 replaced the entry's flat `class_name` with a nested `offering` ref carrying a
+    derived `label`.
+    """
     return {
-        d["day_of_week"]: [(e["class_name"], e["room"]) for e in d["entries"]]
+        d["day_of_week"]: [(e["offering"]["label"], e["room"]) for e in d["entries"]]
         for d in body["days"]
     }
 
@@ -204,17 +232,17 @@ class TestStudentWeek:
         body = r.json()
         assert body["student"]["id"] == str(graph.freddy.id)
         slots = _slots(body)
-        assert slots[1] == [(graph.math1.name, "Room A")]
-        assert slots[2] == [(graph.bio.name, "Lab 1")]
-        assert slots[3] == [(graph.eng.name, "Room D")]
+        assert slots[1] == [(graph.label(graph.math1), "Room A")]
+        assert slots[2] == [(graph.label(graph.bio), "Lab 1")]
+        assert slots[3] == [(graph.label(graph.eng), "Room D")]
 
     def test_john_week_differs_only_in_maths(self, client, graph) -> None:
         """THE assertion that proves D29: same Biology and English, different Math."""
         freddy = _slots(client.get(ME, headers=graph.FREDDY).json())
         john = _slots(client.get(ME, headers=graph.JOHN).json())
 
-        assert freddy[1] == [(graph.math1.name, "Room A")]
-        assert john[1] == [(graph.math2.name, "Room C")]
+        assert freddy[1] == [(graph.label(graph.math1), "Room A")]
+        assert john[1] == [(graph.label(graph.math2), "Room C")]
         assert freddy[1] != john[1], "Freddy and John are not in the same Math class"
         assert freddy[2] == john[2], "they meet together in Biology"
         assert freddy[3] == john[3], "and in English"
@@ -223,7 +251,7 @@ class TestStudentWeek:
         body = client.get(ME, headers=graph.FREDDY).json()
         monday = next(d for d in body["days"] if d["day_of_week"] == 1)
         entry = monday["entries"][0]
-        assert entry["subject"]["name"].startswith("Math ")
+        assert entry["offering"]["course"]["name"].startswith("Math ")
         assert [t["full_name"] for t in entry["teachers"]] == [graph.smith.full_name]
         assert entry["start_time"] == "08:00:00" and entry["end_time"] == "09:30:00"
 
@@ -233,8 +261,8 @@ class TestStudentWeek:
         graph._meet(cs_late, 1, "14:00", "15:00", "Room Z")
         early, cs_early = graph._klass("Aaa Early", f"Early {uuid.uuid4().hex[:5]}", graph.jones)
         graph._meet(cs_early, 1, "07:00", "07:45", "Room Y")
-        graph._enroll(late, graph.freddy)
-        graph._enroll(early, graph.freddy)
+        graph._enroll(graph.freddy, late)
+        graph._enroll(graph.freddy, early)
 
         body = client.get(ME, headers=graph.FREDDY).json()
         monday = next(d for d in body["days"] if d["day_of_week"] == 1)
@@ -245,14 +273,14 @@ class TestStudentWeek:
     def test_unscheduled_class_is_reported_not_dropped(self, client, graph) -> None:
         """A class with no meetings must not silently vanish from the timetable."""
         ghost, _cs = graph._klass("No Times Yet", f"Ghost {uuid.uuid4().hex[:5]}", graph.jones)
-        graph._enroll(ghost, graph.freddy)
+        graph._enroll(graph.freddy, ghost)
         body = client.get(ME, headers=graph.FREDDY).json()
-        assert [u["class_name"] for u in body["unscheduled"]] == ["No Times Yet"]
+        assert [u["offering"]["label"] for u in body["unscheduled"]] == [graph.label(ghost)]
 
     def test_withdrawn_enrollment_leaves_the_week(self, client, graph, db_session) -> None:
         for enr in db_session.query(ClassEnrollment).filter(
             ClassEnrollment.student_id == graph.freddy.id,
-            ClassEnrollment.class_id == graph.math1.id,
+            ClassEnrollment.offering_id == graph.math1.id,
         ):
             enr.unenrolled_at = _now()
         db_session.flush()
@@ -281,8 +309,8 @@ class TestTeacherWeek:
         body = r.json()
         assert body["student"] is None, "a teacher's week is not about a student"
         slots = _slots(body)
-        assert slots[1] == [(graph.math1.name, "Room A")]
-        assert slots[3] == [(graph.eng.name, "Room D")]
+        assert slots[1] == [(graph.label(graph.math1), "Room A")]
+        assert slots[3] == [(graph.label(graph.eng), "Room D")]
         assert slots[2] == [], "Biology-10 is Mrs. Jones's class"
 
     def test_teacher_without_profile_gets_an_empty_week(self, client, make_user, auth_headers) -> None:
@@ -300,7 +328,7 @@ class TestOfficeView:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["student"]["id"] == str(graph.john.id)
-        assert _slots(body)[1] == [(graph.math2.name, "Room C")]
+        assert _slots(body)[1] == [(graph.label(graph.math2), "Room C")]
 
     def test_unknown_student_404(self, client, graph) -> None:
         r = client.get(f"{FOR_STUDENT}/{uuid.uuid4()}", headers=graph.P)
@@ -311,3 +339,100 @@ class TestOfficeView:
         r = client.get(ME, headers=graph.P)
         assert r.status_code == 200, r.text
         assert all(d["entries"] == [] for d in r.json()["days"])
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestOneTermPerWeek:
+    """D31 — a week belongs to ONE TERM, not to a year.
+
+    This class exists because the D31 demo seed broke the old behaviour on contact.
+    Under the year-scoped `classes` model a course could only be offered once per year,
+    so scoping the timetable to the year happened to select one term's teaching. Once
+    `MATH1110-01` could run in Semester 1 AND Semester 2 of the same year, a student
+    enrolled in both got **Monday 08:00 rendered twice** — one of the two a class that
+    does not start for four months.
+    """
+
+    def _second_term_twin(self, graph, db, offering, *, student=None, teacher=None):
+        """Offer the SAME course again, in Semester 2 of the same year."""
+        sem2 = Semester(
+            academic_year_id=graph.year.id, name="Semester 2", sequence=2,
+            start_date=date(2026, 2, 2), end_date=date(2026, 6, 30), is_active=False,
+        )
+        db.add(sem2)
+        db.flush()
+        course = graph.courses[offering.id]
+        twin = CourseOffering(
+            course_id=course.id, semester_id=sem2.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
+        db.add(twin)
+        db.flush()
+        graph.courses[twin.id] = course
+        # Same weekday and hour as the Semester-1 offering: that collision is the whole
+        # point, and it is what a real continuation of a course looks like.
+        db.add(ClassMeeting(
+            offering_id=twin.id, day_of_week=1,
+            start_time=time(8, 0), end_time=time(9, 30), room="Room A",
+        ))
+        if teacher is not None:
+            db.add(ClassTeacher(offering_id=twin.id, teacher_id=teacher.id, is_lead=True))
+        if student is not None:
+            db.add(ClassEnrollment(
+                offering_id=twin.id, student_id=student.id, semester_id=sem2.id,
+            ))
+        db.flush()
+        return twin, sem2
+
+    def test_student_week_shows_the_active_term_only(self, client, graph, db_session) -> None:
+        """Two terms of one course, one Monday slot — the ACTIVE term's."""
+        twin, _sem2 = self._second_term_twin(
+            graph, db_session, graph.math1, student=graph.freddy
+        )
+        r = client.get(ME, headers=graph.FREDDY)
+        assert r.status_code == 200, r.text
+        monday = _slots(r.json())[1]
+        assert len(monday) == 1, (
+            f"Monday shows {len(monday)} entries; a year-scoped week duplicates the "
+            f"course across both of its terms: {monday}"
+        )
+        assert monday == [(graph.label(graph.math1), "Room A")]
+        assert graph.label(twin) != graph.label(graph.math1), (
+            "the twin must be a distinguishable offering, or this proves nothing"
+        )
+
+    def test_teacher_week_shows_the_active_term_only(self, client, graph, db_session) -> None:
+        """The same narrowing applies to a lecturer teaching both terms."""
+        self._second_term_twin(graph, db_session, graph.math1, teacher=graph.smith)
+        r = client.get(ME, headers=graph.SMITH)
+        assert r.status_code == 200, r.text
+        monday = _slots(r.json())[1]
+        assert monday == [(graph.label(graph.math1), "Room A")], monday
+
+    def test_office_view_of_a_students_week_is_narrowed_too(
+        self, client, graph, db_session
+    ) -> None:
+        """`/timetable/students/{id}` shares the scoping, not just `/me`."""
+        self._second_term_twin(graph, db_session, graph.math1, student=graph.freddy)
+        r = client.get(f"{FOR_STUDENT}/{graph.freddy.id}", headers=graph.P)
+        assert r.status_code == 200, r.text
+        assert _slots(r.json())[1] == [(graph.label(graph.math1), "Room A")]
+
+    def test_with_no_active_term_the_latest_one_held_is_used(
+        self, client, graph, db_session
+    ) -> None:
+        """The archived-year path: no active semester, so the highest `sequence` the
+        caller actually holds wins — not a blank grid, which reads as a broken filter.
+        """
+        twin, _sem2 = self._second_term_twin(
+            graph, db_session, graph.math1, student=graph.freddy
+        )
+        graph.sem.is_active = False
+        db_session.flush()
+
+        r = client.get(ME, headers=graph.FREDDY)
+        assert r.status_code == 200, r.text
+        monday = _slots(r.json())[1]
+        assert monday == [(graph.label(twin), "Room A")], monday
+        # Semester 1's other courses drop out with it: one term, one week.
+        assert _slots(r.json())[2] == []

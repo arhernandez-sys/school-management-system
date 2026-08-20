@@ -12,8 +12,13 @@ export const ROUTES = {
   /** Admissions — the application record and its decision (D30 §D11). */
   applications: '/applications',
   teachers: '/teachers',
-  classes: '/classes',
-  /** Student / teacher Mon–Fri week (D29 subject-class schedule). */
+  /**
+   * **D31** — was `/classes`. A route path is user-visible (bookmarks, the address bar,
+   * shared links), so leaving `/classes` on a screen titled "Course Offerings" would be
+   * the one place the retired homeroom noun still showed.
+   */
+  offerings: '/offerings',
+  /** Student / teacher Mon–Fri week, built from offering meetings. */
   timetable: '/timetable',
   assessments: '/assessments',
   grades: '/grades',

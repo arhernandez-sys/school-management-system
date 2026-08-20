@@ -36,8 +36,28 @@ prefer it. This exists because Alembic is non-functional against MariaDB here.
 
 ## Run order
 
-Apply in numeric order; each is re-runnable. `010_seed_demo.sql` / `seed_demo.py` load
-demo data and are not part of the schema chain.
+Apply in numeric order; each is re-runnable. `seed_demo.py` loads demo data and is not
+part of the schema chain.
+
+**`010_seed_demo.sql` is no longer in this directory, and that is deliberate (D31 Phase
+5).** `seed_demo.py` now writes it to the untracked `generated/` folder alongside
+`generated/demo-credentials.txt`, because the file carries per-account Argon2 hashes of
+passwords generated on that run. The tracked version shared ONE hardcoded password
+(`SimsDemo2025!`) across all 19 accounts with `must_change_password=false`, so rotating
+the constant in the script never fixed the checked-in SQL — the hash was in git either
+way. Re-generate it; never copy one between machines.
+
+```powershell
+# from backend\, with the catalog already seeded (python -m app.db.seed_bajc)
+$env:ENVIRONMENT="local"; $env:SIS_ALLOW_DEMO_SEED="yes-destroy-my-data"
+.\.venv\Scripts\python.exe -m db.mariadb.seed_demo
+# logins: db\mariadb\generated\demo-credentials.txt
+```
+
+Every seeded account starts with `must_change_password=true`, which the server now
+ENFORCES — the API answers 403 `password_change_required` on everything except
+`GET /auth/me`, `PATCH /auth/me/password` and `POST /auth/logout` until the password is
+changed (`app/core/deps.py`).
 
 | File | What it does |
 |---|---|
@@ -48,6 +68,7 @@ demo data and are not part of the schema chain.
 | `005_tertiary.sql` | **D30 tertiary / junior-college model (BAJC).** Merges the stakeholder's `sims_bk.sql` tertiary work on top of 001–004. Adds the `courses` catalog (closing the grade→credit chain that made GPA impossible), `programs`, `program_courses`, `course_prerequisites`, grade points / quality points, N calendar terms + the grade-submission deadline, the application & credit-transfer tables, programme history, grade-revision requests, and `YYYYMM###` student-ID sequences. Legacy tertiary tables are **quarantined by rename** to `*_legacy_pre_d30`, never dropped. Full rationale in that file's header and in `docs/tertiary-refactor-plan.md`. |
 | `006_courses_cutover.sql` | **D30 Phase 2A — swaps the catalog from `subjects` to `courses`.** Applied 2026-08-16, in the same step as the code change that points `Subject.__tablename__` at `courses`. ⚠️ It must never be applied against an older checkout of the app: `005` copied the EXISTING rows into `courses`, but until the ORM writes there too, a newly-created course has nothing for the FK to resolve against and every attach fails with 1452 (this cost 73 test failures once). `subjects` is kept and commented as retired, not dropped. |
 | `007_student_names.sql` | **D30 Phase 1 — retires `student_profiles.full_name`.** Tightens `lastname` to NOT NULL (`firstname` stays nullable for the legacy single-token names `005` §9 parked there) and drops `full_name`, which becomes a `hybrid_property` on `StudentProfile`. Same apply-with-the-code rule as `006`. |
+| `008_course_offerings.sql` | **D31 — collapses the K-12 offering layer into a tertiary one.** New `course_offerings` table (one course, one semester, one optional section) absorbing `classes` + `class_subjects`; every child re-pointed from `class_subject_id`/`class_id` to `offering_id`. ⚠️ **DESTRUCTIVE and must land in the SAME STEP as the code that expects it**, exactly like `006` — the homeroom-era operational data is DELETED rather than migrated (a year-scoped homeroom cannot say which semester it taught in, and its enrolments pointed at a homeroom rather than a course). The deletes are gated on a PRE-COLLAPSE SENTINEL so a replay after re-seeding destroys nothing. Read that file's header before running it, and re-seed with `seed_demo.py` afterwards. Verify with `verify_schema.py --expect 008`. |
 
 ## Mixin column reference (from `db/base.py`)
 

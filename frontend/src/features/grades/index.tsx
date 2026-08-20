@@ -9,11 +9,11 @@ import { GradeRevisionsScreen } from './GradeRevisionsScreen';
  * Grades module (Phase 7) — a nested-routed container mounted at `/grades/*`
  * (mirrors features/settings/index.tsx). Role-shaped:
  *  - Student → "My Grades" (own released grades, read-only).
- *  - Teacher / Principal / Secretary → a LIST of assessments per class·subject; clicking
- *    an assessment opens the per-assessment grading page for the whole class.
+ *  - Lecturer / Dean / Registrar → a grid of COURSE OFFERINGS; opening one lists its
+ *    assessments, and opening an assessment grades everyone enrolled in that offering.
  *
- * The class·subject selection is URL-persisted via `?class_subject_id=` and the year via
- * `?year=`. Route visibility is UX-only; the server (mocked here) is authoritative.
+ * The offering selection is URL-persisted via `?offering_id=` and the year via `?year=`.
+ * Route visibility is UX-only; the server (mocked here) is authoritative.
  */
 export function GradesPage() {
   const { user } = useAuth();

@@ -26,11 +26,13 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
-from app.common.schemas import AuditStamp, ClassRef, SubjectRef, UserRef
+from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
-from app.modules.classes.models import Class, ClassSubject, ClassTeacher, Subject
+from app.modules.offerings.queries import offerings_in_year
+from app.modules.offerings.labels import OFFERING_ORDER, offering_label
+from app.modules.offerings.models import CourseOffering, CourseOffering, ClassTeacher, Course
 from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.teachers.models import TeacherProfile
 from app.modules.teachers.schemas import (
@@ -107,27 +109,30 @@ def _assert_staff_number_unique(
 
 
 def _classes_taught(db: Session, teacher_id: uuid.UUID) -> list[ClassTaught]:
-    """The (section, subject) offerings this teacher is assigned to, in one join
-    (class_teachers → class_subjects → classes/subjects). Live offerings only."""
+    """The offerings this lecturer is assigned to. One join since D31 — ownership rows
+    point straight at the offering, where they used to reach it through `class_subjects`."""
     rows = db.execute(
-        select(ClassTeacher, ClassSubject, Class, Subject)
-        .join(ClassSubject, ClassTeacher.class_subject_id == ClassSubject.id)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(ClassTeacher, CourseOffering, Course)
+        .join(CourseOffering, ClassTeacher.offering_id == CourseOffering.id)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
             ClassTeacher.teacher_id == teacher_id,
-            ClassSubject.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
-        .order_by(Class.name.asc(), Subject.name.asc())
+        .order_by(*OFFERING_ORDER)
     ).all()
     return [
         ClassTaught(
-            class_subject_id=cs.id,
-            class_ref=ClassRef.model_validate(cls),
-            subject=SubjectRef.model_validate(subj),
+            offering_id=offering.id,
+            offering=OfferingRef(
+                id=offering.id,
+                course=CourseRef.model_validate(course),
+                section_code=offering.section_code,
+                label=offering_label(course.code, offering.section_code),
+            ),
             is_lead=ct.is_lead,
         )
-        for (ct, cs, cls, subj) in rows
+        for (ct, offering, course) in rows
     ]
 
 
@@ -160,19 +165,21 @@ def _active_assignment_refs(db: Session, teacher_id: uuid.UUID) -> list[dict]:
     offerings) — surfaced in the 409 so the admin knows what to reassign
     (FR-TCH-06)."""
     rows = db.execute(
-        select(ClassSubject.id, Class.name, Subject.name)
-        .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering.id, Course.code, CourseOffering.section_code, Course.name)
+        .join(ClassTeacher, ClassTeacher.offering_id == CourseOffering.id)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
             ClassTeacher.teacher_id == teacher_id,
-            ClassSubject.deleted_at.is_(None),
-            ClassSubject.is_active.is_(True),
+            CourseOffering.deleted_at.is_(None),
         )
     ).all()
     return [
-        {"class_subject_id": str(cs_id), "class_name": cname, "subject_name": sname}
-        for (cs_id, cname, sname) in rows
+        {
+            "offering_id": str(oid),
+            "offering_label": offering_label(code, section),
+            "course_name": cname,
+        }
+        for (oid, code, section, cname) in rows
     ]
 
 
@@ -227,10 +234,9 @@ def list_teachers(
             stmt = stmt.where(
                 exists().where(
                     ClassTeacher.teacher_id == TeacherProfile.id,
-                    ClassTeacher.class_subject_id == ClassSubject.id,
-                    ClassSubject.class_id == Class.id,
-                    ClassSubject.deleted_at.is_(None),
-                    Class.academic_year_id == academic_year_id,
+                    ClassTeacher.offering_id == CourseOffering.id,
+                    CourseOffering.deleted_at.is_(None),
+                    offerings_in_year(academic_year_id),
                 )
             )
 

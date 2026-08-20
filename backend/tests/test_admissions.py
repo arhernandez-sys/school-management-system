@@ -546,11 +546,11 @@ class TestAcceptance:
 
     def test_the_year_of_study_becomes_the_students_level(self, client, graph, db_session) -> None:
         """So the report-card header and the student list have something to print from day
-        one rather than a blank `year_group`."""
+        one rather than a blank `year_of_study`."""
         app_id = self._submitted(client, graph)
         body = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).json()
         student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
-        assert student.year_group == "First"
+        assert student.year_of_study == "First"
 
 
 # ════════════════════════════════════════════════════════════════════════════

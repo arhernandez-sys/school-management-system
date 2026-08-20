@@ -4,16 +4,19 @@ Read shapes are reconciled to the finished frontend contract, which WINS on any
 divergence: `frontend/src/features/grades/types.ts` +
 `frontend/src/shared/api/mocks/handlers/grades.ts`.
 
-Two deliberate divergences from the assessments module are load-bearing:
+One deliberate divergence is load-bearing:
 
-* Grades has its **own** `ClassSubjectRef`. The key is `id` (NOT
-  `class_subject_id`), it carries `teachers[]` / `lead_teacher_id` /
-  `display_name`, and its `section` ref is the fat one (`grade_level` +
-  `section`). Reusing `assessments.schemas.ClassSubjectRef` would silently
-  break every Grades screen. Attendance has a third variant again — none of the
-  three are interchangeable.
 * `letter` is `letter?: string` on the wire, never `string | null`. Pydantic
   would emit an explicit `null`, so `_LetterOptional` drops the key when unset.
+
+**D31 removed the other one.** Grades used to define its own `ClassSubjectRef` — keyed
+`id` where Assessments keyed `offering_id`, carrying `display_name` and a "fat" section
+ref (`grade_level`, `section`). Assessments and Attendance each had a third variant, and
+the note here said none were interchangeable. That was true, and it was the problem: an
+offering's label is DERIVED now (`offerings/labels.py`), so three private derivations of
+one string would drift and the screens would show the drift. All three modules now carry
+the shared `common.schemas.OfferingRef`; what stays local is only what is genuinely
+module-specific — here, the staffing (`teachers[]`, `lead_teacher_id`) the picker needs.
 
 Write models set `extra="forbid"` (§1.4); wire is snake_case (§1.2).
 """
@@ -32,6 +35,7 @@ from app.common.enums import (
     GradeRevisionStatus,
     GradeStatus,
 )
+from app.common.schemas import OfferingRef
 
 
 # ── Letter handling ────────────────────────────────────────────────────────────
@@ -55,36 +59,23 @@ class _LetterOptional(BaseModel):
 
 
 # ── Refs (frontend shape) ──────────────────────────────────────────────────────
-class SectionRef(BaseModel):
-    """Fat section ref. `section` is nullable in the ORM but a non-nullable
-    `string` in the frontend type, so the service coerces `None` -> `""`."""
-
-    id: UUID
-    name: str
-    grade_level: str
-    section: str = ""
-
-
-class SubjectRef(BaseModel):
-    id: UUID
-    name: str
-    code: str | None = None
-
-
 class TeacherRef(BaseModel):
     id: UUID
     full_name: str
 
 
-class ClassSubjectRef(BaseModel):
-    """Grades' class_subject ref — keyed on `id`, NOT `class_subject_id`."""
+class GradesOfferingRef(BaseModel):
+    """The shared `OfferingRef`, plus who is assigned to teach it.
 
-    id: UUID
-    section: SectionRef | None = None
-    subject: SubjectRef | None = None
+    Staffing lives here rather than in the shared ref because it is a gradebook
+    concern: `teachers[0]` is rendered as the owner, and `lead_teacher_id` is who the
+    screens attribute the marks to. Identifying and naming the offering is the shared
+    ref's job.
+    """
+
+    offering: OfferingRef
     teachers: list[TeacherRef] = Field(default_factory=list)
     lead_teacher_id: UUID | None = None
-    display_name: str = ""
 
 
 class StudentRef(BaseModel):
@@ -99,18 +90,18 @@ class SemesterRef(BaseModel):
     sequence: int
 
 
-# ── GET /grades/class-subjects ─────────────────────────────────────────────────
-class ClassSubjectOption(ClassSubjectRef):
+# ── GET /grades/offerings ─────────────────────────────────────────────────
+class OfferingOption(GradesOfferingRef):
     assessment_count: int = 0
     #: Whether THIS caller may enter grades here (teacher who owns the offering).
     can_edit: bool = False
 
 
-class ClassSubjectOptionsResponse(BaseModel):
-    items: list[ClassSubjectOption] = Field(default_factory=list)
+class OfferingOptionsResponse(BaseModel):
+    items: list[OfferingOption] = Field(default_factory=list)
 
 
-# ── GET /grades/class-subject/{id} ─────────────────────────────────────────────
+# ── GET /grades/offering/{id} ─────────────────────────────────────────────
 class GradebookAssessment(BaseModel):
     id: UUID
     title: str
@@ -154,7 +145,7 @@ class GradebookRow(BaseModel):
 
 
 class Gradebook(BaseModel):
-    class_subject: ClassSubjectRef | None = None
+    offering: GradesOfferingRef | None = None
     semester: SemesterRef | None = None
     assessments: list[GradebookAssessment] = Field(default_factory=list)
     categories: list[GradebookCategory] = Field(default_factory=list)
@@ -202,7 +193,7 @@ class GradeEntryResponse(BaseModel):
 # ── GET /grades/term ───────────────────────────────────────────────────────────
 class TermGradeItem(BaseModel):
     student: StudentRef | None = None
-    class_subject: ClassSubjectRef | None = None
+    offering: GradesOfferingRef | None = None
     semester: SemesterRef | None = None
     numeric: float | None = None
     letter: str | None = None
@@ -228,7 +219,7 @@ class MyGradeAssessment(_LetterOptional):
 
 
 class MyGradeSubject(BaseModel):
-    class_subject: ClassSubjectRef | None = None
+    offering: GradesOfferingRef | None = None
     teacher: TeacherRef | None = None
     assessments: list[MyGradeAssessment] = Field(default_factory=list)
     term_numeric: float | None = None
@@ -300,10 +291,11 @@ class GradeRevisionRead(BaseModel):
     #: The assessment's own ceiling, so a queue row can show "82 → 91 of 100" without a
     #: second call.
     max_score: float | None = None
-    class_subject_id: UUID | None = None
-    subject_name: str = ""
-    subject_code: str | None = None
-    section_name: str = ""
+    #: Which offering the disputed mark belongs to. D31 replaced the flat
+    #: `offering_id` + `subject_name` + `subject_code` + `section_name` quartet: three of
+    #: those were the offering's own identity spelled out by hand, and `section_name`
+    #: read a homeroom column that no longer exists.
+    offering: OfferingRef | None = None
     #: Who asked. `requested_by_user_id` is kept alongside so the caller can tell whether a
     #: row is their own without matching on a display name.
     requested_by_user_id: UUID

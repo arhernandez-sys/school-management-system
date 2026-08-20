@@ -33,7 +33,7 @@ from app.common.enums import (
     Role,
     StudentStatus,
 )
-from app.modules.classes.models import Class, ClassEnrollment, ClassSubject, Subject
+from app.modules.offerings.models import CourseOffering, ClassEnrollment, CourseOffering, Course
 from app.modules.grades.models import TermGradeSnapshot
 from app.modules.prerequisites.models import CoursePrerequisite
 from app.modules.programs.models import Program, ProgramCourse
@@ -49,11 +49,11 @@ from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
-SUBJECTS = "/api/v1/subjects"
+COURSES = "/api/v1/courses"
 
 
 def _prereq_path(course_id) -> str:  # noqa: ANN001
-    return f"{SUBJECTS}/{course_id}/prerequisites"
+    return f"{COURSES}/{course_id}/prerequisites"
 
 
 def _assert_envelope(body: dict, *, code: str) -> dict:
@@ -70,7 +70,7 @@ def _now() -> datetime:
 # ──────────────────────────────────────────────────────────────────────────────
 # Graph builders
 # ──────────────────────────────────────────────────────────────────────────────
-def _course(db_session, *, like=None, name=None, credits=3) -> Subject:
+def _course(db_session, *, like=None, name=None, credits=3) -> Course:
     """A catalog course.
 
     `like` echoes a REAL BAJC code so a test reads as the case it is about
@@ -80,7 +80,7 @@ def _course(db_session, *, like=None, name=None, credits=3) -> Subject:
     hermetic anyway.
     """
     tag = uuid.uuid4().hex[:8].upper()
-    c = Subject(
+    c = Course(
         code=f"{like}-{tag}" if like else f"C{tag}",
         name=name or f"Course {tag}",
         credits=credits,
@@ -160,26 +160,51 @@ def _year_with_terms(db_session, archive_seeded_active_year):
     return year, past, current, scale
 
 
-def _offering(db_session, year_id, course, *, name=None):
-    """A subject class teaching `course`, and its class_subject row."""
-    section = Class(
-        academic_year_id=year_id,
-        name=name or f"Sec {uuid.uuid4().hex[:6]}",
-        grade_level="Lower 6",
+def _offering(db_session, year_id, course, *, semester=None):
+    """One offering of `course`, in a term of `year_id`.
+
+    D31 made this ONE row where it used to be two (a section, then the subject attached
+    to it). Both return values are the same object now; the pair is kept so the ~20 call
+    sites reading `section, cs = _offering(...)` still say what they mean.
+
+    `semester` defaults to the year's ACTIVE term — the one enrolments name. An offering
+    is semester-scoped now, so it can no longer be created from a year id alone (which is
+    the whole point of D31), and enrolling into an offering that runs in a different term
+    is a `semester_mismatch` 409. Pass `semester=past` for the PRIOR-term offerings that
+    stand in for previously-completed courses.
+    """
+    from app.modules.settings.models import Semester
+
+    if semester is None:
+        semester = db_session.scalar(
+            select(Semester)
+            .where(
+                Semester.academic_year_id == year_id,
+                Semester.is_active.is_(True),
+            )
+        ) or db_session.scalar(
+            select(Semester)
+            .where(Semester.academic_year_id == year_id)
+            .order_by(Semester.sequence.asc())
+            .limit(1)
+        )
+    offering = CourseOffering(
+        course_id=course.id,
+        semester_id=semester.id,
+        # Unique on (course, semester, section), and several tests put two offerings of
+        # the same course in one term.
+        section_code=uuid.uuid4().hex[:6],
     )
-    db_session.add(section)
+    db_session.add(offering)
     db_session.flush()
-    cs = ClassSubject(class_id=section.id, subject_id=course.id)
-    db_session.add(cs)
-    db_session.flush()
-    return section, cs
+    return offering, offering
 
 
 def _snapshot(db_session, *, student, cs, semester, course, letter, numeric):
     """A FROZEN term result — what the archive freeze writes."""
     snap = TermGradeSnapshot(
         student_id=student.id,
-        class_subject_id=cs.id,
+        offering_id=cs.id,
         semester_id=semester.id,
         subject_id=course.id,
         numeric_grade=Decimal(numeric),
@@ -450,11 +475,11 @@ class TestPrerequisiteCrud:
 # THE GATE
 # ════════════════════════════════════════════════════════════════════════════
 class TestEnrolmentGate:
-    """`POST /classes/{id}/enrollments` with a prerequisite in the way."""
+    """`POST /offerings/{id}/enrollments` with a prerequisite in the way."""
 
     def _enrol(self, client, headers, section_id, student_id, semester_id):  # noqa: ANN001
         return client.post(
-            f"/api/v1/classes/{section_id}/enrollments",
+            f"/api/v1/offerings/{section_id}/enrollments",
             headers=headers,
             json={"student_ids": [str(student_id)], "semester_id": str(semester_id)},
         )
@@ -505,7 +530,7 @@ class TestEnrolmentGate:
 
         prev_section, prev_cs = _offering(db_session, year.id, required)
         db_session.add(
-            ClassEnrollment(class_id=prev_section.id, student_id=(student := _student(db_session)).id,
+            ClassEnrollment(offering_id=prev_section.id, student_id=(student := _student(db_session)).id,
                             semester_id=past.id)
         )
         db_session.flush()
@@ -532,7 +557,7 @@ class TestEnrolmentGate:
         prev_section, prev_cs = _offering(db_session, year.id, required)
         student = _student(db_session)
         db_session.add(
-            ClassEnrollment(class_id=prev_section.id, student_id=student.id, semester_id=past.id)
+            ClassEnrollment(offering_id=prev_section.id, student_id=student.id, semester_id=past.id)
         )
         db_session.flush()
         _snapshot(db_session, student=student, cs=prev_cs, semester=past,
@@ -569,7 +594,7 @@ class TestEnrolmentGate:
         same_section, same_cs = _offering(db_session, year.id, required)
         student = _student(db_session)
         db_session.add(
-            ClassEnrollment(class_id=same_section.id, student_id=student.id, semester_id=current.id)
+            ClassEnrollment(offering_id=same_section.id, student_id=student.id, semester_id=current.id)
         )
         db_session.flush()
         _snapshot(db_session, student=student, cs=same_cs, semester=current,
@@ -634,7 +659,7 @@ class TestEnrolmentGate:
         for label, program in (("lenient", lenient), ("strict", strict)):
             student = _student(db_session, program_id=program.id)
             db_session.add(
-                ClassEnrollment(class_id=prev_section.id, student_id=student.id,
+                ClassEnrollment(offering_id=prev_section.id, student_id=student.id,
                                 semester_id=past.id)
             )
             db_session.flush()
@@ -746,7 +771,7 @@ class TestEnrolmentGate:
         prev_section, prev_cs = _offering(db_session, year.id, required)
         eligible = _student(db_session)
         db_session.add(
-            ClassEnrollment(class_id=prev_section.id, student_id=eligible.id, semester_id=past.id)
+            ClassEnrollment(offering_id=prev_section.id, student_id=eligible.id, semester_id=past.id)
         )
         db_session.flush()
         _snapshot(db_session, student=eligible, cs=prev_cs, semester=past,
@@ -756,7 +781,7 @@ class TestEnrolmentGate:
         section, _cs = _offering(db_session, year.id, gated)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
-            f"/api/v1/classes/{section.id}/enrollments",
+            f"/api/v1/offerings/{section.id}/enrollments",
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
             json={
                 "student_ids": [str(eligible.id), str(blocked.id)],
@@ -767,7 +792,7 @@ class TestEnrolmentGate:
         # The ELIGIBLE student was not enrolled either.
         n = db_session.scalar(
             select(ClassEnrollment).where(
-                ClassEnrollment.class_id == section.id,
+                ClassEnrollment.offering_id == section.id,
                 ClassEnrollment.student_id == eligible.id,
             )
         )
@@ -795,7 +820,7 @@ class TestEnrolmentGate:
                 "last_name": "Registrant",
                 "date_of_birth": "2007-05-05",
                 "enrollment_date": "2026-01-19",
-                "class_ids": [str(section.id)],
+                "offering_ids": [str(section.id)],
             },
         )
         assert resp.status_code == 409, resp.text
@@ -834,7 +859,7 @@ class TestAllProgramCoursesGate:
 
         def enrol():  # noqa: ANN202
             return client.post(
-                f"/api/v1/classes/{section.id}/enrollments",
+                f"/api/v1/offerings/{section.id}/enrollments",
                 headers=H,
                 json={"student_ids": [str(student.id)], "semester_id": str(current.id)},
             )
@@ -849,7 +874,7 @@ class TestAllProgramCoursesGate:
         for course in (a,):
             prev_section, prev_cs = _offering(db_session, year.id, course)
             db_session.add(
-                ClassEnrollment(class_id=prev_section.id, student_id=student.id,
+                ClassEnrollment(offering_id=prev_section.id, student_id=student.id,
                                 semester_id=past.id)
             )
             db_session.flush()
@@ -863,7 +888,7 @@ class TestAllProgramCoursesGate:
         # Pass the rest → through. The internship itself is excluded from its own gate.
         prev_section, prev_cs = _offering(db_session, year.id, b)
         db_session.add(
-            ClassEnrollment(class_id=prev_section.id, student_id=student.id, semester_id=past.id)
+            ClassEnrollment(offering_id=prev_section.id, student_id=student.id, semester_id=past.id)
         )
         db_session.flush()
         _snapshot(db_session, student=student, cs=prev_cs, semester=past,
@@ -895,7 +920,7 @@ class TestAllProgramCoursesGate:
         section, _cs = _offering(db_session, year.id, internship)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
-            f"/api/v1/classes/{section.id}/enrollments",
+            f"/api/v1/offerings/{section.id}/enrollments",
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
             json={"student_ids": [str(student.id)], "semester_id": str(current.id)},
         )
@@ -924,7 +949,7 @@ class TestAllProgramCoursesGate:
         section, _cs = _offering(db_session, year.id, internship)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
-            f"/api/v1/classes/{section.id}/enrollments",
+            f"/api/v1/offerings/{section.id}/enrollments",
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
             json={"student_ids": [str(outsider.id)], "semester_id": str(current.id)},
         )

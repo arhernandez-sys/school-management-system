@@ -1,12 +1,14 @@
 """Attendance service (api-spec §5 Module 8, FR-ATT-*, D-Q4).
 
 Owns DB access + transactions for the 5 attendance endpoints; the router is thin.
-Attendance is **per-section, per-day**: for a (section, date) every actively
+Attendance is **per-offering, per-day**: for an (offering, date) every actively
 enrolled student carries a present/absent/late/excused status.
 
 Recording is **teacher-only** — principals and secretaries read the register and
-the summary but cannot mark it (matching the finished frontend). Section access for
-a teacher is "owns ANY class_subject of the section", via `assert_teacher_owns_section`.
+the summary but cannot mark it (matching the finished frontend). A teacher may mark an
+offering they are assigned to, via `assert_teacher_owns_offering` (D31 merged the old
+"owns the section" and "owns the class_subject" gates into one — with one course per
+offering they became the same lookup).
 
 The live `attendance_records` table has no `recorded_at`/`recorded_by` columns, so
 those wire fields map onto the audit mixin: `recorded_at` ← `updated_at`, and
@@ -24,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import AcademicYearStatus, AttendanceStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
-from app.core.rbac import _teacher_profile_id, assert_teacher_owns_section
+from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
 from app.core.timeutil import school_today, utcnow
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.schemas import (
@@ -32,9 +34,9 @@ from app.modules.attendance.schemas import (
     AttendanceDatePoint,
     AttendanceEntry,
     AttendanceRegister,
-    AttendanceSectionPickerItem,
-    AttendanceSectionRef,
-    AttendanceSectionsResponse,
+    AttendanceOfferingPickerItem,
+    AttendanceOfferingRef,
+    AttendanceOfferingsResponse,
     AttendanceStudentPoint,
     AttendanceStudentRef,
     AttendanceSummaryResponse,
@@ -45,7 +47,9 @@ from app.modules.attendance.schemas import (
     MyAttendanceHistoryItem,
     MyAttendanceResponse,
 )
-from app.modules.classes.models import Class, ClassEnrollment, ClassSubject, ClassTeacher
+from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
+from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
+from app.modules.offerings.models import ClassEnrollment, ClassTeacher, Course, CourseOffering
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
@@ -112,57 +116,57 @@ def _active_year(db: Session) -> AcademicYear | None:
     )
 
 
-def _semester_for_section(db: Session, section: Class) -> Semester | None:
-    """The section's own year's active term, else its `sequence=1` term.
+def _semester_for_offering(db: Session, offering: CourseOffering) -> Semester | None:
+    """The offering's own year's active term, else its `sequence=1` term.
 
     Same reasoning as the gradebook: keying off the globally-active semester would
-    mis-resolve for any section outside the current year.
+    mis-resolve for any offering outside the current year.
     """
     active = db.scalar(
         select(Semester).where(
             Semester.is_active.is_(True),
-            Semester.academic_year_id == section.academic_year_id,
+            Semester.academic_year_id == year_id_of_offering(db, offering),
         )
     )
     if active is not None:
         return active
     return db.scalar(
         select(Semester)
-        .where(Semester.academic_year_id == section.academic_year_id)
+        .where(Semester.academic_year_id == year_id_of_offering(db, offering))
         .order_by(Semester.sequence.asc())
         .limit(1)
     )
 
 
-def _section_or_404(db: Session, actor: User, section_id: uuid.UUID) -> Class:
-    """Load an accessible section or 404.
+def _offering_or_404(db: Session, actor: User, offering_id: uuid.UUID) -> CourseOffering:
+    """Load an accessible offering or 404.
 
-    A teacher who owns nothing in the section gets the same 404 as a nonexistent
+    A teacher who owns nothing in the offering gets the same 404 as a nonexistent
     id — the no-existence-leak rule (api-spec §3.3).
     """
-    section = db.scalar(
-        select(Class).where(Class.id == section_id, Class.deleted_at.is_(None))
+    offering = db.scalar(
+        select(CourseOffering).where(CourseOffering.id == offering_id, CourseOffering.deleted_at.is_(None))
     )
-    if section is None:
+    if offering is None:
         raise NotFound("Section not found.", code="not_found")
     if actor.role == Role.TEACHER:
-        assert_teacher_owns_section(db, actor, section.id)
-    return section
+        assert_teacher_owns_offering(db, actor, offering.id)
+    return offering
 
 
-def _teachers_for_sections(
-    db: Session, section_ids: list[uuid.UUID]
+def _teachers_for_offerings(
+    db: Session, offering_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[AttendanceTeacherRef]]:
-    """Distinct teachers per section, deduped across that section's offerings."""
-    if not section_ids:
+    """Distinct teachers per offering, deduped across that offering's offerings."""
+    if not offering_ids:
         return {}
     rows = db.execute(
-        select(ClassSubject.class_id, TeacherProfile.id, TeacherProfile.full_name)
-        .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
+        select(CourseOffering.id, TeacherProfile.id, TeacherProfile.full_name)
+        .join(ClassTeacher, ClassTeacher.offering_id == CourseOffering.id)
         .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
         .where(
-            ClassSubject.class_id.in_(section_ids),
-            ClassSubject.deleted_at.is_(None),
+            CourseOffering.id.in_(offering_ids),
+            CourseOffering.deleted_at.is_(None),
         )
     ).all()
     seen: dict[uuid.UUID, dict[uuid.UUID, str]] = defaultdict(dict)
@@ -178,13 +182,18 @@ def _teachers_for_sections(
     }
 
 
-def _section_ref(section: Class, teachers: list[AttendanceTeacherRef]) -> AttendanceSectionRef:
-    return AttendanceSectionRef(
-        id=section.id,
-        name=section.name,
-        grade_level=section.grade_level,
-        section=section.section or "",
-        homeroom_label=section.homeroom_label or "",
+def _offering_ref(
+    db: Session,
+    offering: CourseOffering,
+    teachers: list[AttendanceTeacherRef],
+    *,
+    course: Course | None = None,
+) -> AttendanceOfferingRef:
+    """The register's offering ref. `course` is accepted so a caller that already
+    joined it (the picker) does not re-fetch it once per row."""
+    course = course or db.get(Course, offering.course_id)
+    return AttendanceOfferingRef(
+        offering=offering_ref(offering, course),
         teachers=teachers,
     )
 
@@ -198,16 +207,16 @@ def _student_ref(student: StudentProfile) -> AttendanceStudentRef:
 
 
 def _active_roster(
-    db: Session, section: Class, semester: Semester | None
+    db: Session, offering: CourseOffering, semester: Semester | None
 ) -> list[tuple[StudentProfile, ClassEnrollment]]:
-    """Active enrollments for (section, semester), sorted by student name."""
+    """Active enrollments for (offering, semester), sorted by student name."""
     if semester is None:
         return []
     rows = db.execute(
         select(StudentProfile, ClassEnrollment)
         .join(ClassEnrollment, ClassEnrollment.student_id == StudentProfile.id)
         .where(
-            ClassEnrollment.class_id == section.id,
+            ClassEnrollment.offering_id == offering.id,
             ClassEnrollment.semester_id == semester.id,
             ClassEnrollment.unenrolled_at.is_(None),
         )
@@ -217,50 +226,56 @@ def _active_roster(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GET /attendance/sections
+# GET /attendance/offerings
 # ──────────────────────────────────────────────────────────────────────────────
-def list_sections(
+def list_offerings(
     db: Session, *, actor: User, academic_year_id: uuid.UUID | None
-) -> AttendanceSectionsResponse:
-    """The register's section picker. Teacher → sections where they own ANY
-    offering; P/S → every section of the year."""
-    stmt = select(Class).where(Class.deleted_at.is_(None))
+) -> AttendanceOfferingsResponse:
+    """The register's offering picker. Teacher → the offerings they are assigned to;
+    P/S → every offering of the year."""
+    stmt = (
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.deleted_at.is_(None))
+    )
 
     if academic_year_id is not None:
-        stmt = stmt.where(Class.academic_year_id == academic_year_id)
+        stmt = stmt.where(offerings_in_year(academic_year_id))
     else:
         active = _active_year(db)
         if active is None:
-            return AttendanceSectionsResponse(items=[], can_record=actor.role == Role.TEACHER)
+            return AttendanceOfferingsResponse(items=[], can_record=actor.role == Role.TEACHER)
         stmt = stmt.where(
-            Class.academic_year_id == active.id, Class.is_archived.is_(False)
+            offerings_in_year(active.id), CourseOffering.is_archived.is_(False)
         )
 
     if actor.role == Role.TEACHER:
         teacher_id = _teacher_profile_id(db, actor)
-        owned = select(ClassSubject.class_id).join(
-            ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id
+        owned = select(CourseOffering.id).join(
+            ClassTeacher, ClassTeacher.offering_id == CourseOffering.id
         ).where(
-            ClassTeacher.teacher_id == teacher_id, ClassSubject.deleted_at.is_(None)
+            ClassTeacher.teacher_id == teacher_id, CourseOffering.deleted_at.is_(None)
         )
-        stmt = stmt.where(Class.id.in_(owned))
+        stmt = stmt.where(CourseOffering.id.in_(owned))
 
-    sections = list(db.scalars(stmt).all())
-    section_ids = [s.id for s in sections]
-    teachers = _teachers_for_sections(db, section_ids)
+    # Ordered in SQL by `OFFERING_ORDER` (course code, then offering) rather than by the
+    # formatted label in Python — "MATH1110-2" sorts before "MATH1110-10" as a string.
+    rows = db.execute(stmt.order_by(*OFFERING_ORDER)).all()
+    teachers = _teachers_for_offerings(db, [offering.id for offering, _ in rows])
 
-    items: list[AttendanceSectionPickerItem] = []
-    for section in sections:
-        semester = _semester_for_section(db, section)
-        roster = _active_roster(db, section, semester)
+    items: list[AttendanceOfferingPickerItem] = []
+    for offering, course in rows:
+        semester = _semester_for_offering(db, offering)
+        roster = _active_roster(db, offering, semester)
+        ref = _offering_ref(db, offering, teachers.get(offering.id, []), course=course)
         items.append(
-            AttendanceSectionPickerItem(
-                **_section_ref(section, teachers.get(section.id, [])).model_dump(),
+            AttendanceOfferingPickerItem(
+                offering=ref.offering,
+                teachers=ref.teachers,
                 enrolled_count=len(roster),
             )
         )
-    items.sort(key=lambda i: i.name)
-    return AttendanceSectionsResponse(
+    return AttendanceOfferingsResponse(
         items=items,
         # Only a teacher marks the register; P/S are read-only here.
         can_record=actor.role == Role.TEACHER,
@@ -271,23 +286,23 @@ def list_sections(
 # GET /attendance
 # ──────────────────────────────────────────────────────────────────────────────
 def get_register(
-    db: Session, *, actor: User, section_id: uuid.UUID, on_date: date_type | None
+    db: Session, *, actor: User, offering_id: uuid.UUID, on_date: date_type | None
 ) -> AttendanceRegister:
     """The daily register: the whole active roster, left-joined to the day's records.
 
     An unrecorded student has `status=None` — that is "not yet marked", not an
     attendance value, and the UI defaults the row to present.
     """
-    section = _section_or_404(db, actor, section_id)
+    offering = _offering_or_404(db, actor, offering_id)
     target = on_date or _today()
-    semester = _semester_for_section(db, section)
-    roster = _active_roster(db, section, semester)
+    semester = _semester_for_offering(db, offering)
+    roster = _active_roster(db, offering, semester)
 
     records = {
         r.student_id: r
         for r in db.scalars(
             select(AttendanceRecord).where(
-                AttendanceRecord.class_id == section.id,
+                AttendanceRecord.offering_id == offering.id,
                 AttendanceRecord.attendance_date == target,
             )
         ).all()
@@ -316,9 +331,9 @@ def get_register(
             at=newest.updated_at,
         )
 
-    teachers = _teachers_for_sections(db, [section.id])
+    teachers = _teachers_for_offerings(db, [offering.id])
     return AttendanceRegister(
-        section=_section_ref(section, teachers.get(section.id, [])),
+        offering=_offering_ref(db, offering, teachers.get(offering.id, [])),
         date=target,
         can_record=actor.role == Role.TEACHER,
         entries=entries,
@@ -332,8 +347,8 @@ def get_register(
 def upsert_register(
     db: Session, *, actor: User, payload: AttendanceUpsertRequest
 ) -> AttendanceUpsertResponse:
-    """Bulk upsert one (section, date). Teacher-only, all-or-nothing validation."""
-    section = _section_or_404(db, actor, payload.section_id)
+    """Bulk upsert one (offering, date). Teacher-only, all-or-nothing validation."""
+    offering = _offering_or_404(db, actor, payload.offering_id)
 
     if payload.date > _today():
         raise ValidationError(
@@ -342,9 +357,9 @@ def upsert_register(
             fields={"date": ["You can't record attendance for a future date."]},
         )
 
-    if section.is_archived:
+    if offering.is_archived:
         raise Conflict("The academic year is archived.", code="year_archived")
-    year = db.get(AcademicYear, section.academic_year_id)
+    year = year_of_offering(db, offering)
     if year is not None and year.archived_at is not None:
         raise Conflict("The academic year is archived.", code="year_archived")
 
@@ -361,9 +376,9 @@ def upsert_register(
             fields={"student_id": [str(s) for s in dict.fromkeys(duplicates)]},
         )
 
-    semester = _semester_for_section(db, section)
+    semester = _semester_for_offering(db, offering)
     enrollments = {
-        student.id: enrollment for student, enrollment in _active_roster(db, section, semester)
+        student.id: enrollment for student, enrollment in _active_roster(db, offering, semester)
     }
 
     # The mock silently skips non-roster entries; we reject instead. The frontend
@@ -371,7 +386,7 @@ def upsert_register(
     not_enrolled = [sid for sid in seen if sid not in enrollments]
     if not_enrolled:
         raise ValidationError(
-            "Some students are not enrolled in this section.",
+            "Some students are not enrolled in this offering.",
             code="student_not_enrolled",
             fields={"student_id": [str(s) for s in not_enrolled]},
         )
@@ -380,7 +395,7 @@ def upsert_register(
         r.student_id: r
         for r in db.scalars(
             select(AttendanceRecord).where(
-                AttendanceRecord.class_id == section.id,
+                AttendanceRecord.offering_id == offering.id,
                 AttendanceRecord.attendance_date == payload.date,
             )
         ).all()
@@ -391,7 +406,7 @@ def upsert_register(
         row = existing.get(entry.student_id)
         if row is None:
             row = AttendanceRecord(
-                class_id=section.id,
+                offering_id=offering.id,
                 student_id=entry.student_id,
                 # Both are NOT NULL in the live schema — stamp from the enrollment.
                 enrollment_id=enrollment.id,
@@ -409,7 +424,7 @@ def upsert_register(
         db,
         actor=actor,
         action="attendance.upsert",
-        entity_id=section.id,
+        entity_id=offering.id,
         summary={"date": payload.date.isoformat(), "entries": len(payload.entries)},
     )
     db.flush()
@@ -419,7 +434,7 @@ def upsert_register(
     statuses = list(
         db.scalars(
             select(AttendanceRecord.status).where(
-                AttendanceRecord.class_id == section.id,
+                AttendanceRecord.offering_id == offering.id,
                 AttendanceRecord.attendance_date == payload.date,
             )
         ).all()
@@ -437,18 +452,18 @@ def get_summary(
     db: Session,
     *,
     actor: User,
-    section_id: uuid.UUID,
+    offering_id: uuid.UUID,
     date_from: date_type | None,
     date_to: date_type | None,
 ) -> AttendanceSummaryResponse:
-    """Overall + per-day + per-student tallies for a section.
+    """Overall + per-day + per-student tallies for a offering.
 
-    A section belongs to exactly one academic year, so this is already year-scoped
+    A offering belongs to exactly one academic year, so this is already year-scoped
     without an explicit filter; `from`/`to` narrow it further when supplied.
     """
-    section = _section_or_404(db, actor, section_id)
+    offering = _offering_or_404(db, actor, offering_id)
 
-    stmt = select(AttendanceRecord).where(AttendanceRecord.class_id == section.id)
+    stmt = select(AttendanceRecord).where(AttendanceRecord.offering_id == offering.id)
     if date_from is not None:
         stmt = stmt.where(AttendanceRecord.attendance_date >= date_from)
     if date_to is not None:
@@ -461,12 +476,12 @@ def get_summary(
         by_date[record.attendance_date].append(record.status)
         by_student[record.student_id].append(record.status)
 
-    semester = _semester_for_section(db, section)
-    roster = _active_roster(db, section, semester)
-    teachers = _teachers_for_sections(db, [section.id])
+    semester = _semester_for_offering(db, offering)
+    roster = _active_roster(db, offering, semester)
+    teachers = _teachers_for_offerings(db, [offering.id])
 
     return AttendanceSummaryResponse(
-        section=_section_ref(section, teachers.get(section.id, [])),
+        offering=_offering_ref(db, offering, teachers.get(offering.id, [])),
         overall=_summarize([r.status for r in records]),
         by_date=[
             AttendanceDatePoint(date=day, **_summarize(statuses).model_dump())

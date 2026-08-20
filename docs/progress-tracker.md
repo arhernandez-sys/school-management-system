@@ -2,9 +2,153 @@
 
 > **This is the most important document.** It is the single source of truth for project state. Updated at the end of every phase. Every agent reads this first.
 
-_Last updated: 2026-08-18 — **D30: TERTIARY (BAJC) REFACTOR — ALL FIVE PHASES COMPLETE.** Phase 5 landed the **grade-revision workflow** (Lecturer requests, Dean decides, the original score never overwritten, approval writing through a closed grade window) and **extended the notification bell** with pending revisions while fixing its permanently-empty popover; gate walked **42/42 against the live database**. Backend suite **1394 green**. **Phases 3, 4 and 5 needed no migration** (`005` had already created every column and table). **The closing report is `docs/tertiary-refactor-plan.md` §I** — read it first; the remaining work is that plan's §G (13 items to confirm with BAJC) and §F (pre-existing repo issues, incl. a go-live password blocker). Previously (2026-08-17): Phase 4 complete, gate 62/62._
+_Last updated: 2026-08-19 — **D31: TERTIARY OFFERING MODEL — ALL PHASES COMPLETE AND COMMITTED. PHASE 5 (THE TERTIARY DEMO SEED) LANDED.** `db/mariadb/seed_demo.py` rewritten onto the offering model: 22 offerings across three terms, 393 enrolments, all 45 students on a real BAJC programme with a `student_program_history` row (both were empty before), and **one generated password per account with `must_change_password = true`** — the tracked `010_seed_demo.sql`, which committed a single shared Argon2 hash for 19 accounts, is **deleted**. The forced change is now ENFORCED server-side (403 `password_change_required` in `core/deps.py`, three exempt calls) with the matching `ProtectedRoute` redirect, replacing a characterisation test that pinned the gap. **Seven defects found, five of them only by DRIVING THE SEEDED DATA THROUGH THE REAL API** — three sharing one root cause: a scope that was correct only because the old model could not express what D31 adds. A student's week showed the same class TWICE and an offering outside the active term had an EMPTY gradebook, both because the code resolved a term from the academic YEAR; and the demo college had a **37% failure rate** because D30 moved the pass mark from 60 to 70 without re-centring the seed's scores, leaving the student demo mode lands on holding a D. Backend **1415 green, 0 skipped**; frontend typecheck/lint/both builds clean, dataset probe 21/21, route parity 0 ghosts. **The only thing left in D31 is the `sims` cut-over, an OPERATOR task**: apply `008` to `sims`, then re-seed. Previously (2026-08-19): **PHASES 0-4 + 6 COMPLETE.** The frontend is migrated: `features/classes/` -> `features/offerings/`, `/classes` -> `/offerings`, `?class_subject_id=` -> `?offering_id=`, the MSW surface cut from 15 endpoints to 12, and `mocks/demo/` rebuilt so `DemoSection` + `DemoClassSubject` collapse into one `DemoOffering`. Frontend **typecheck + lint + build + build:demo all clean**; backend **1405 green**. Four findings worth carrying forward: **demo mode had been DEAD since D30** (`teacherByCode('MATH')` threw while constructing the dataset - `'MATH'` is a programme code - and neither `tsc` nor `vite build` can see a module that only fails when RUN); the client carried **the same five-way `OfferingRef` drift** Phase 3 fixed server-side; Phase 3 had **missed seven wire names** including a `/grades/term?class_id=` duplicate that bypassed an ownership 404; and **`orval`'s tag filter does not prune `components.schemas`**, so a spec refresh generated 750 model files instead of 90. Three new executable checks now cover what `tsc` cannot: `frontend/scratchpad/probe_dataset.mjs` (runs the demo dataset, 21 invariants), `check_msw_routes.mjs` (route parity vs `openapi.json`, 0 ghosts), and the pruning `orval.transformer.cjs`. **Tracking document: `docs/tertiary-offerings-refactor-plan.md`.** Previously (2026-08-18): **D31 PHASE 0 COMPLETE.** Repaired a migration chain that was silently undoing itself: `005_tertiary.sql` dropped the very constraints `006_courses_cutover.sql` creates, so replaying `005` reverted the catalog cutover and **114 of 125 `courses` rows could not be attached to any offering**. `006` is now applied (14/14), `005` replays 56/56, and a new `db/mariadb/verify_schema.py` fingerprints `001`-`007` so a regression of that shape fails loudly. Suite **1394 green, zero skips**. **Tracking document: `docs/tertiary-offerings-refactor-plan.md`** - Phases 1-6 remain (`008_course_offerings.sql`, the `classes`/`class_subjects` collapse, `Subject` -> `Course`, 41 frontend files, a new demo seed with generated passwords). Previously (2026-08-18): Last updated: 2026-08-18 — **D30: TERTIARY (BAJC) REFACTOR — ALL FIVE PHASES COMPLETE.** Phase 5 landed the **grade-revision workflow** (Lecturer requests, Dean decides, the original score never overwritten, approval writing through a closed grade window) and **extended the notification bell** with pending revisions while fixing its permanently-empty popover; gate walked **42/42 against the live database**. Backend suite **1394 green**. **Phases 3, 4 and 5 needed no migration** (`005` had already created every column and table). **The closing report is `docs/tertiary-refactor-plan.md` §I** — read it first; the remaining work is that plan's §G (13 items to confirm with BAJC) and §F (pre-existing repo issues, incl. a go-live password blocker). Previously (2026-08-17): Phase 4 complete, gate 62/62._
 
 _**D30 background.** The institution is a junior college, not a sixth form: it runs 8 named Associate-degree programmes with fixed course sequences, credits, prerequisites, a 4.00 grading scale and credit-weighted GPA. **Tracking document: `docs/tertiary-refactor-plan.md` — read it first for anything tertiary-related; it carries the phase checklists and the resume point.** Branch `tertiary-refactor`._
+
+> **🏛️ D31 — TERTIARY OFFERING MODEL: `classes` → `course_offerings`. 🟢 COMPLETE — ALL PHASES (2026-08-19), COMMITTED ON `tertiary-refactor`. BUILDS ON D30.**
+> D30 made the catalog and curriculum tertiary but left the **offering layer K-12**. Three findings, each verified against the live database: `classes` is scoped to an academic **YEAR** and carries no `semester_id`, so "Programming I — Semester 1 2026" and "— Semester 2 2026" cannot be told apart; `classes.grade_level varchar(50) **NOT NULL**` holds `Form 1`–`Form 4`, so every offering must declare a Form; and `class_subjects` is vestigial — all 17 live classes have ~7 courses attached, which only made sense when one homeroom taught seven subjects. **Tracking document: `docs/tertiary-offerings-refactor-plan.md`.** `program_courses` is NOT changing — the Programme → Course relationship was reviewed and found correct (243 rows, 8 programmes).
+>
+> - **✅ PHASE 5 — THE TERTIARY DEMO SEED (2026-08-19), AND FIVE DEFECTS IT FOUND.**
+>   `db/mariadb/seed_demo.py` **rewritten, not renamed**: the old file's eight `Form 1A`-style
+>   homerooms × ~7 `class_subjects` each have no equivalent in a model whose unit is one course
+>   in one semester. **22 offerings** across three terms, **393 enrolments**, 84 assessments,
+>   1,436 grades, 3,260 attendance records, 19 weekly meetings — and it seeds the two scenarios
+>   that PROVE the model instead of describing them: `MATH1110` §01/§02/§03 in one term, and
+>   `MATH1110`/`BIOL1102` running **again** in Semester 2 as separate offerings. All 45 students
+>   are on a real BAJC programme with a `student_program_history` row (**both were empty
+>   before** — `program_id` NULL on all 45), one carrying a CLOSED earlier row so the table is a
+>   history and not a copy of `program_id`. `courses`/`programs`/`program_courses`/
+>   `course_prerequisites` are resolved BY CODE and excluded from the clear-sweep: FK checks are
+>   off during it, so a `DELETE` there would silently destroy the real catalog.
+> - **🔴 THE SHARED DEMO PASSWORD IS GONE AT THE SOURCE — and deleting the tracked SQL file is
+>   the part that fixed it.** Each account now gets its own `generate_temp_password()` value
+>   (19 distinct Argon2 hashes, asserted) with `must_change_password = true`. The previous seed
+>   hardcoded `SimsDemo2025!` for 19 accounts *and committed its hash* in
+>   `010_seed_demo.sql`, so rotating the constant in the script never touched the credential in
+>   git. That file is deleted; the seed writes `db/mariadb/generated/010_seed_demo.sql` +
+>   `generated/demo-credentials.txt`, both gitignored. **The rows already in `sims` still need
+>   the cut-over** — see the go-live blocker above.
+> - **⚠️ `must_change_password` WAS WRITTEN BY FOUR PATHS AND READ BY NONE.** It was returned on
+>   `CurrentUser` and enforced at exactly one client call site (`LoginForm.tsx:68`), with no
+>   branch in `ProtectedRoute` — so a deep link, a stale tab or any API client with a valid
+>   token walked straight past the forced change. `core/deps.get_current_user` now raises **403
+>   `password_change_required`** for a flagged account on everything outside three argued
+>   exemptions: `GET /auth/me` (how the client LEARNS about the flag — the bootstrap is
+>   refresh-then-`/me`, so refusing it strands the screen that clears it),
+>   `PATCH /auth/me/password` (the way out) and `POST /auth/logout`. `ProtectedRoute` gained the
+>   redirect, without which the app would render its chrome and fill every panel with a 403. The
+>   suite's characterisation test that *pinned the gap* is replaced by three that assert the
+>   enforcement, the exemptions, and that the gate LIFTS on the same token after the change.
+> - **🔴 A STUDENT'S WEEK SHOWED THE SAME CLASS TWICE — found by running the seed, not reading
+>   it.** `timetable/service.py` scoped to the academic YEAR, which was *correct* while a course
+>   could only be offered once per year: scoping to the year happened to select one term. D31
+>   makes "the same course in two terms" expressible, and the moment the seed used it, Freddy's
+>   Monday 08:00 rendered TWICE — one of them a class that does not start for four months.
+>   `_narrow_to_one_term` fixes it (the active semester if the caller holds anything in it, else
+>   the highest `sequence` they actually hold, which is what makes the archived-year switch work
+>   with no `semester_id` on the wire). Four new tests, all confirmed to FAIL with the narrowing
+>   disabled. **Letting the client CHOOSE the term is a recorded follow-on** — that is a contract
+>   change and does not belong in a data phase.
+> - **THREE MORE SEED DEFECTS, EACH INVISIBLE TO A TYPECHECK, EACH PRESENT IDENTICALLY IN THE
+>   MSW DATASET.** (1) `SECOND_YEAR_LOADS[i % 3]` where second-years are exactly the indices
+>   with `i % 3 == 2` — all 15 got load `[2]`, two of three combinations were unreachable and
+>   `SPAN2112-01` was an offering with an **empty roster**. (2) Two offerings seeded **over
+>   capacity** (`ENGL1102-01` 30/26, `BIOL1102-01` 25/24); over-capacity enrolment is warn-only
+>   (D-Q6), so nothing failed — the seed just quietly built a college that breaks its own rule
+>   on the screen that shows the warning. (3) The "parallel section with a **different**
+>   lecturer" had the *same* lecturer, because the lead was resolved by course code and the
+>   first active specialist for either MATH code is the person already leading `-01`. Plus dead
+>   code that had been "fixed" once before: the MSW attempt to give the inactive lecturer a
+>   historical assignment looked up `courseId('THEO2201')`, which nothing offers, so `.find`
+>   returned undefined and the push never ran — exactly how its predecessor's `subjectId('GEO')`
+>   failed. **Both sides fixed, and the two datasets now agree row-for-row** on offerings (22),
+>   meetings (19), students (45), enrolments (393), assessments (84), grades (1,436) and
+>   attendance (3,260) — the strongest available evidence that demo mode and the real backend
+>   describe the same college.
+> - **🔴 AN OFFERING OUTSIDE THE ACTIVE TERM HAD AN EMPTY GRADEBOOK** — the timetable defect's
+>   twin, found the same way. `grades/service._semester_for_section` resolved the term from the
+>   offering's academic YEAR (that year's active semester, else its `sequence=1` term), because
+>   `classes` carried no semester and the term had to be guessed. A Semester-2 offering therefore
+>   resolved to Semester 1, the assessment query filtered on that, and **the offering's own 2
+>   assessments and its 23-student roster both matched nothing: `0 rows x 0 assessments`, no
+>   error, no log.** `course_offerings.semester_id` makes the guess unnecessary — an offering
+>   belongs to exactly one term — so the resolution became a lookup. The explicit `semester_id`
+>   parameter is unchanged, so the wire contract is untouched. Four tests; two fail with the old
+>   resolution restored.
+> - **🔴 THE DEMO COLLEGE HAD A 37% FAILURE RATE, AND ITS MARQUEE STUDENT WAS FAILING.** The seed
+>   centred scores on 75%, which was right against the pre-D30 5-band scale where 60 passed and
+>   90 was an A. **D30 moved BAJC's pass mark to 70 and put A at 95 without re-centring it**, so
+>   the same numbers quietly came to mean something worse: 36 F's in 159 term grades, and Freddy
+>   Lopez — the student demo mode LANDS on — holding a D. Re-centred on 84%: median term grade
+>   83.2 (B), **90% at C or better**, distribution still spanning A to F so no band goes
+>   untested. Nothing could have caught this — no test asserts that a demo dataset is
+>   *believable*, and both halves of the demo agreed with each other while both were wrong.
+> - **VERIFIED BY EXECUTION, NOT BY A GREEN TYPECHECK.** A 41-check integrity probe re-validates
+>   what the database could not (the inserts run with `FOREIGN_KEY_CHECKS = 0`): all 32 FK
+>   columns for orphans, then every D31 invariant. Then `create_app()` + `TestClient` against
+>   the seeded database as Principal, Lecturer and Student — login → 403 → change → re-login →
+>   dashboard, offerings, roster, gradebook, students, programme history, transcript, report
+>   card, timetable, attendance, announcements, events, grading scale. Backend **1,415 passed /
+>   0 failed / 0 skipped**; frontend typecheck + lint clean, both `vite build`s succeed, dataset
+>   probe 21/21, route parity 0 ghosts.
+> - **✅ PHASE 4 — THE FRONTEND IS MIGRATED (2026-08-19).** `features/classes/` →
+>   `features/offerings/`, `ROUTES.classes: '/classes'` → `ROUTES.offerings: '/offerings'`,
+>   `?class_subject_id=` / `?section_id=` → `?offering_id=`, `handlers/classes.ts` →
+>   `offerings.ts` (**15 endpoints → 12** — the three `/classes/{id}/subjects*` routes describe
+>   a concept that no longer exists, so they were deleted rather than renamed), and
+>   `mocks/demo/` rebuilt so `DemoSection` + `DemoClassSubject` collapse into one
+>   `DemoOffering`. **`typecheck` + `lint` + `build` + `build:demo` all clean.** The estimate
+>   was 68 files; it was **~110**, and the 40 extra were four whole modules — attendance,
+>   reports, teachers, dashboard — that spoke the dead contract under *different local names*
+>   and therefore **typechecked clean the entire time**, because each declared its own
+>   hand-authored wire types and those types still described the old shape.
+> - **🔴 DEMO MODE WAS DEAD, AND HAD BEEN SINCE D30.** `demo/data.ts` called
+>   `teacherByCode('MATH')`; `'MATH'` is a **programme** code and the resolver only knows
+>   course codes, so it threw `no BAJC course with code MATH` while *constructing the
+>   dataset* — every `npm run demo` session died at import. **`tsc` and `vite build` both pass
+>   on it**: they only need the module to type-check and bundle. Only running it finds this,
+>   which is why `frontend/scratchpad/probe_dataset.mjs` now exists — it bundles and EXECUTES
+>   the dataset and asserts 21 invariants (both D31 capabilities present, `(course, semester,
+>   section_code)` unique, every renamed FK resolves, and **no retired column name on any
+>   row**). A second dead line sat beside it: `subjectId('GEO')` matched nothing silently.
+> - **THE CLIENT HAD THE SAME FIVE-WAY DRIFT PHASE 3 FIXED SERVER-SIDE.** `features/grades`
+>   alone defined `SectionRef` + `SubjectRef` + `ClassSubjectRef`; announcements, assessments
+>   and attendance each had a fourth and fifth variant, and **two of them built the offering
+>   label themselves**. All now carry one `OfferingRef` from `@shared/types/api`, the mirror of
+>   `app/common/schemas.py` — because the label is DERIVED now, and five client derivations of
+>   one string drift where the screens show it.
+> - **PHASE 3 HAD MISSED SEVEN WIRE NAMES**, all of them things the frontend had to speak: its
+>   "zero paths containing `class`" check verified PATH strings only. `GET /students?class_id=`
+>   → `offering_id`; **`GET /grades/term?class_id=` removed** — it duplicated `offering_id`
+>   (identical filter) *and* bypassed the explicit ownership 404 the named param triggers;
+>   `current_classes` → `current_offerings`; `class_count` → `offering_count`; and
+>   `duplicate_subject_name` / `duplicate_subject_code` / `subject_in_use` →
+>   `duplicate_course_*` / `course_in_use`. That last one mattered because **a stale key in
+>   `errorMessages.ts` is invisible** — the lookup misses, the server's sentence shows instead,
+>   nothing warns. Backend suite still **1405 green** after all of it.
+> - **`orval`'s `filters.tags` does not prune `components.schemas`.** Refreshing the spec from
+>   21 to 101 paths generated **750 model files instead of 90** — a generated type for every
+>   module that deliberately hand-authors its own, i.e. exactly the drift the config warns
+>   against. Fixed in `orval.transformer.cjs`, which now keeps only the tagged operations and
+>   the `$ref` closure reachable from them: **117 files, deterministic**. `npm run generate:api`
+>   is safe to run again as a result.
+> - **MSW had no `POST /settings/school/logo` handler**, and with
+>   `onUnhandledRequest: 'bypass'` an unmatched request falls through to the **network** — so
+>   the upload silently hit a server that is not there. Found by the new
+>   `frontend/scratchpad/check_msw_routes.mjs`, which diffs registered routes against
+>   `openapi.json`: **0 ghost routes**, the only unmocked ones being `/health` and `/ready`.
+> - **⚠️ THREE SCHEMAS PUBLISH AN EMPTY CONTRACT.** `GradebookCell`, `MyGradeAssessment` and
+>   `GradeCellResult` appear in `openapi.json` as bare `{"type": "object"}`: their Pydantic
+>   base uses a wrap `@model_serializer` (to drop `letter` when unset) and that erases the
+>   generated JSON schema. So for those three **the spec is not the contract** — recorded as a
+>   follow-on, and the FE types were written against `grades/schemas.py` instead.
+> - **⚠️ MIGRATION CHAIN WAS BROKEN, AND SILENTLY. FIXED IN PHASE 0.** `005_tertiary.sql` §2b dropped `fk_class_subjects_course` / `fk_term_snapshot_course` — **the exact constraint names `006_courses_cutover.sql` creates** — and re-added the ones pointing at `subjects`. Both files reported success; because `005` is idempotent and replaying it is *encouraged*, **`005` silently reverted `006` on every replay and `005` won.** The live database was found with the catalog FKs on `subjects` while the ORM had long since moved to `courses`, so **114 of the 125 `courses` rows could not be attached to anything** and 0 of 116 offerings taught a real BAJC course. The symptom sat three layers from the cause; nothing failed and nothing logged. **The fix was REMOVING the DDL from `005`, not writing a smarter guard** — a migration must never undo a later one.
+> - **`006` is now applied** (14/14) and both catalog FKs target `courses`. Attaching `MATH1110 Intermediate Algebra` to an offering now succeeds; it was impossible before. Suite **1394 green, zero skips**, and the 73 failures this same swap caused during D30 did not recur — the database was behind the application, not ahead of it.
+> - **New `backend/db/mariadb/verify_schema.py`** — the repo had no way to answer "is the database at the revision the code expects?" (no `schema_migrations` table, Alembic is Postgres-only and dead, `apply_sql.py --check` only counts rows). It fingerprints `001`–`007` from `information_schema` and reports APPLIED / MISSING / **PARTIAL**; PARTIAL matters because `apply_sql.py` continues past a failing statement, so a half-applied file used to be invisible. Exit 1 on failure, so it works as a CI or pre-deploy gate.
+> - **`005` is replayable again** — 56/56. Its `full_name` backfill threw 1054 once `007` had dropped the column (47/49); both `UPDATE`s are now guarded by an `information_schema` + `PREPARE` check, so they work on a fresh provision and no-op afterwards.
+> - ~~**Phases 1–6 remain**~~ — **ALL COMPLETE as of 2026-08-19**: `008_course_offerings.sql`, the ORM/service sweep (245 `class_subject_id` references across 27 files, 34 modules), `Subject` → `Course`, the API surface (`/classes` → `/offerings`), ~110 frontend files (the estimate of 41 was low by two-and-a-half times), the tertiary demo seed with **generated per-account passwords** replacing the shared `SimsDemo2025!`, and the test/doc updates. What remains is not a phase: it is the **`sims` cut-over**, which applies `008` to the live database and re-seeds it, and which only an operator can decide to run.
+> - **The demo data will be rebuilt, not migrated** — forced, not chosen: a year-scoped homeroom maps to *two* semesters and nothing says which, and enrolment points at the homeroom rather than a course. Full schema+data backup taken before Phase 0.
 
 > **🎓 D30 — HIGH-SCHOOL SIMS → TERTIARY STUDENT MANAGEMENT INFORMATION SYSTEM. 🟢 COMPLETE — ALL FIVE PHASES (2026-08-18). BUILDS ON D29.**
 > Stakeholder supplied the real institutional material for **Belize Adventist Junior College**: a MariaDB dump with new tertiary tables, the 8-programme course sequence PDF (26/27), the semester report template, and both pages of the paper application form. D29's subject-class pivot turns out to be most of the way there — a `classes` row is already one subject class and a student already holds many concurrent enrolments — so **Class → Course is largely rename + attach credits/curriculum, not a remodel.**
@@ -100,7 +244,7 @@ _Last updated: 2026-07-29 — **PERIOD SWITCHERS FIXED (student global year·sem
 >
 > **🌐 PUBLIC-DEPLOYMENT HARDENING — ✅ LANDED (2026-07-29).** Prompted by the decision to host this on a **public URL reachable from any network**, which changes the threat model: the login page fronts named minors' academic records from anywhere. `RUNBOOK.md` gains **§10 "Going live on a public URL — pre-flight"** (three blockers, launch form, production `.env`, post-deploy verification) and **§11** (frontend build + how role-scoping is verified). Full backend suite re-run: **941 passed**, zero regressions.
 >
-> **🔴 THE #1 GO-LIVE BLOCKER IS DATA, NOT CODE: the live `sims` database holds 19 accounts sharing the password `SimsDemo2025!` with `must_change_password=false`** — `seed_demo` created them and that password is written in this repository. Harmless on a laptop; on a public URL it is total compromise by anyone who has read the repo. RUNBOOK §10.1 has the query and the remediation. **This cannot be fixed in code — it is a data task the operator must do before the first public request.**
+> **🔴 THE #1 GO-LIVE BLOCKER IS DATA, NOT CODE: the live `sims` database holds 19 accounts sharing the password `SimsDemo2025!` with `must_change_password=false`** — `seed_demo` created them and that password is written in this repository. Harmless on a laptop; on a public URL it is total compromise by anyone who has read the repo. RUNBOOK §10.1 has the query and the remediation. **This cannot be fixed in code — it is a data task the operator must do before the first public request.** — **UPDATE 2026-08-19 (D31 Phase 5): the CAUSE is fixed, the ROWS are not.** The seed now generates a password per account with `must_change_password = true`, the server ENFORCES that flag (403 `password_change_required`), and the SQL file carrying the hash is untracked and deleted from git. But the pre-D31 rows survive in `sims` until the `sims` cut-over re-seeds it, and the old password remains in git history — so this stays a blocker, now with a one-command remedy instead of a manual one.
 > - `seed_demo` itself is now guarded: it **refuses to run** unless `ENVIRONMENT=local` **and** `SIS_ALLOW_DEMO_SEED=yes-destroy-my-data`. Two independent conditions, the second deliberately awkward to type (not a prompt — prompts get piped `yes`). It prints the target DSN with the password redacted so the operator can see what it was about to destroy. Both refusal paths verified. Previously nothing stopped it: it wrote to whatever `DATABASE_URL` was configured, and on a server with the production `.env` beside it, one command in the wrong directory was enough to delete 22 tables of real records.
 >
 > **⚡ ROLE-SCOPED CODE SPLITTING — the stakeholder's explicit ask ("when the principal logs in only what they see will load").** All eleven feature modules are now `React.lazy` boundaries in `app/router/routes.tsx` (plus the two `/me` profile variants and `TeacherProfileRoute`). **The load-bearing detail is the nesting order: `RoleRoute` wraps `Suspense`, never the reverse** — React only starts a lazy import when the component MOUNTS, so a role without access redirects at the guard and the chunk is never requested. Inverted, Suspense would mount first and fetch a chunk for a module the user is being redirected away from, which is exactly what this exists to prevent. Chunks are named per feature (`feature-grades-<hash>.js`) via a `chunkFileNames` function, purely so the claim is **verifiable in DevTools** rather than merely asserted. Measured: first load **~425 kB → ~247 kB gzip**; the single 702 kB app bundle became 36 on-demand chunks; `charts` (recharts, 110 kB gzip) no longer loads for screens without charts. `vite.config.ts` had promised this splitting in a comment since Phase 7 and never had it.
@@ -239,7 +383,7 @@ _Last updated: 2026-07-29 — **PERIOD SWITCHERS FIXED (student global year·sem
 
 > **Module 7.5 — Assessments: ✅ BACKEND + TESTS COMPLETE (2026-07-24).** `app/modules/assessments/{schemas,service,router}.py`; two routers mounted — `assessments_router` (/assessments/*) + `assessment_categories_router` (/classes/{id}/subjects/{cs}/categories). Endpoints: assessment list (scoped: P/S all, Teacher own, Student enrolled/non-draft) + `class-subjects` picker + detail (with stats) + create/patch/status/release/unrelease/delete + category list/create/patch/delete. **Writes are teacher-only + ownership** (`assert_teacher_owns_class_subject`); status lifecycle draft→published→grading→graded (rollbacks allowed, graded terminal); release toggles `is_released`. Guards: 409 year_archived, 409 category_subject_mismatch, 409 scores_exceed_new_max, 409 assessment_has_grades, 409 duplicate_category_name, 422 invalid_transition. Contract reconciled to frontend (ClassSubjectRef {section,subject,label}; list item carries category_id; release response {assessment_id,is_released,released_count}). `tests/test_assessments.py` = 24 tests green on MariaDB. Release/unrelease live here (not Grades) since they operate on the assessment row. Real frontend pending.
 
-> **⚙️ DB IS NOW SELF-HOSTED MariaDB 12.3 (`sims`), not Supabase Postgres.** The whole backend runs on MariaDB (`mysql+pymysql://…@127.0.0.1:3306/sims`); ORM re-targeted to portable types (Deliverable B). Schema is provisioned in HeidiSQL (base + `backend/db/mariadb/001_missing_fields.sql` … `003_*.sql`). Full demo dataset (Belize Adventist Junior College, ~4,381 rows) loads via `backend/db/mariadb/seed_demo.py` (also emits `010_seed_demo.sql`); all 19 logins share `SimsDemo2025!`. The **whole test suite runs green against live MariaDB.** Statements in older entries below that say "Dev/test DB = Supabase Postgres" are STALE — MariaDB is authoritative now.
+> **⚙️ DB IS NOW SELF-HOSTED MariaDB 12.3 (`sims`), not Supabase Postgres.** The whole backend runs on MariaDB (`mysql+pymysql://…@127.0.0.1:3306/sims`); ORM re-targeted to portable types (Deliverable B). Schema is provisioned in HeidiSQL (base + `backend/db/mariadb/001_missing_fields.sql` … `003_*.sql`). Full demo dataset (Belize Adventist Junior College) loads via `backend/db/mariadb/seed_demo.py`. **STALE from here:** the row count was ~4,381 and all 19 logins shared `SimsDemo2025!`; since D31 Phase 5 the dataset is 5,464 rows on the offering model, every account has its own generated password with `must_change_password = true`, and the emitted SQL goes to the untracked `db/mariadb/generated/`. The **whole test suite runs green against live MariaDB.** Statements in older entries below that say "Dev/test DB = Supabase Postgres" are STALE — MariaDB is authoritative now.
 >
 > **Module 7.4 — Classes: ✅ BACKEND + TESTS COMPLETE (2026-07-24).** `app/modules/classes/{schemas,service,router}.py`, mounted via `MODULE_ROUTERS`; 13 endpoints (sections CRUD, subject attach/detach, teacher assign, roster, enrollable-students picker, enroll/unenroll — transfer-aware). `tests/test_classes.py` = 34 hermetic tests, green on MariaDB. Contract reconciled to the frontend MSW handler (lead_teacher_id, enrollable-students). Real frontend (orval + screens) still pending.
 >

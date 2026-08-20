@@ -142,11 +142,11 @@ class TestEnforcement:
 
         # The student's enrolment is in Semester 1, so enrol them into the second term
         # too — otherwise the save fails on provenance rather than on the window.
-        from app.modules.classes.models import ClassEnrollment
+        from app.modules.offerings.models import ClassEnrollment
 
         db_session.add(
             ClassEnrollment(
-                class_id=graph.section.id, student_id=student.id, semester_id=other.id
+                offering_id=graph.section.id, student_id=student.id, semester_id=other.id
             )
         )
         db_session.flush()
@@ -183,7 +183,7 @@ class TestDeanBypass:
         because the arm is unreachable over HTTP by design.
 
         `PUT /assessments/{id}/grades` is `require_role(TEACHER)`, and
-        `assert_teacher_owns_class_subject` would 404 a Dean regardless, so no Dean can
+        `assert_teacher_owns_offering` would 404 a Dean regardless, so no Dean can
         enter a grade at all today. The intended post-deadline path is Phase 5's
         grade-revision workflow (§D7): the Dean APPROVES a Lecturer's request rather
         than typing the mark. The rule is tested here so it cannot rot before then.
@@ -220,7 +220,7 @@ class TestDeanBypass:
 class TestGradebookReportsTheWindow:
     def _book(self, client, graph, headers=None):
         return client.get(
-            f"{G}/class-subject/{graph.cs.id}", headers=headers or graph.H
+            f"{G}/offering/{graph.cs.id}", headers=headers or graph.H
         ).json()
 
     def test_open_window_reports_false_and_null(self, client, graph) -> None:

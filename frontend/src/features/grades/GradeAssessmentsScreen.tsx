@@ -21,77 +21,85 @@ import {
 } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { useClassSubjectOptions } from './hooks/useGrades';
-import { SubjectGradesScreen } from './SubjectGradesScreen';
-import type { ClassSubjectOption } from './types';
+import { strings } from '@i18n/strings';
+import { useOfferingOptions } from './hooks/useGrades';
+import { OfferingGradesScreen } from './OfferingGradesScreen';
+import type { OfferingOption } from './types';
 
-const CLASS_SUBJECT_PARAM = 'class_subject_id';
+const OFFERING_PARAM = 'offering_id';
 
 /**
- * Grades entry point — a GRID OF SUBJECT CARDS (mirrors the student "My Grades" pattern).
- * Click a subject to drill into its assessments + grading (SubjectGradesScreen). Teacher
- * sees the subjects they teach; P/S see all (read-only downstream). Students use My Grades.
- * Selection + year persist to the URL (`?class_subject_id=`, `?year=`).
+ * Grades entry point — a GRID OF OFFERING CARDS (mirrors the student "My Grades" pattern).
+ * Click one to drill into its assessments + grading (OfferingGradesScreen). A lecturer sees
+ * the offerings they teach; the Dean and Registrar see all (read-only downstream). Students
+ * use My Grades. Selection + year persist to the URL (`?offering_id=`, `?year=`).
+ *
+ * **D31 replaced the Form / Section filters with a Term filter.** Those two read
+ * `option.section.grade_level` and `option.section.section` — the homeroom's Form and its
+ * division letter, both dropped with the `classes` table. The term took their place because
+ * it is what now separates two otherwise identical cards: the same course legitimately has a
+ * gradebook in Semester 1 and another in Semester 2, and those are different books. A
+ * year-scoped picker could not express that at all.
  */
 export function GradeAssessmentsScreen() {
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
-  // P/S browse every offering school-wide; give them Teacher/Form/Section narrowing filters.
-  // Teachers see only their own subjects, so these would be noise for them.
-  const showClassFilters = user?.role === 'principal' || user?.role === 'secretary';
+  // The Dean and Registrar browse every offering school-wide, so they get Lecturer/Term
+  // narrowing. A lecturer sees only their own, where these would be noise.
+  const showBrowseFilters = user?.role === 'principal' || user?.role === 'secretary';
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get(CLASS_SUBJECT_PARAM);
+  const selectedId = searchParams.get(OFFERING_PARAM);
 
-  const optionsQuery = useClassSubjectOptions(yearId);
+  const optionsQuery = useOfferingOptions(yearId);
   const options = useMemo(() => optionsQuery.data?.items ?? [], [optionsQuery.data]);
   const selected = useMemo(
-    () => options.find((o) => o.id === selectedId) ?? null,
+    () => options.find((o) => o.offering.id === selectedId) ?? null,
     [options, selectedId],
   );
 
-  // ── Teacher / Form / Section filters (P/S only) ──────────────────────────────────
+  // ── Lecturer / Term filters (Dean + Registrar only) ──────────────────────────────
   const [teacherId, setTeacherId] = useState('');
-  const [form, setForm] = useState('');
-  const [sectionLetter, setSectionLetter] = useState('');
+  const [semesterId, setSemesterId] = useState('');
 
   // Distinct filter options derived from the offerings the caller can see.
-  const { teachers, forms, sectionLetters } = useMemo(() => {
+  const { teachers, semesters } = useMemo(() => {
     const teacherMap = new Map<string, string>();
-    const formSet = new Set<string>();
-    const letterSet = new Set<string>();
+    const semesterMap = new Map<string, { name: string; sequence: number }>();
     for (const o of options) {
       for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
-      if (o.section?.grade_level) formSet.add(o.section.grade_level);
-      if (o.section?.section) letterSet.add(o.section.section);
+      const sem = o.offering.semester;
+      if (sem) semesterMap.set(sem.id, { name: sem.name, sequence: sem.sequence });
     }
     return {
       teachers: [...teacherMap.entries()]
         .map(([id, name]) => ({ id, name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
-      forms: [...formSet].sort((a, b) => a.localeCompare(b)),
-      sectionLetters: [...letterSet].sort((a, b) => a.localeCompare(b)),
+      // Ordered by the term's own sequence, not by its name — "Semester 10" must not sort
+      // before "Semester 2".
+      semesters: [...semesterMap.entries()]
+        .map(([id, s]) => ({ id, ...s }))
+        .sort((a, b) => a.sequence - b.sequence),
     };
   }, [options]);
 
   const filteredOptions = useMemo(() => {
-    if (!showClassFilters) return options;
+    if (!showBrowseFilters) return options;
     return options.filter(
       (o) =>
         (!teacherId || o.teachers.some((t) => t.id === teacherId)) &&
-        (!form || o.section?.grade_level === form) &&
-        (!sectionLetter || o.section?.section === sectionLetter),
+        (!semesterId || o.offering.semester?.id === semesterId),
     );
-  }, [options, showClassFilters, teacherId, form, sectionLetter]);
+  }, [options, showBrowseFilters, teacherId, semesterId]);
 
-  // Drop a stale ?class_subject_id= that isn't in the current year's options.
+  // Drop a stale ?offering_id= that isn't in the current year's options.
   useEffect(() => {
-    if (selectedId && options.length > 0 && !options.some((o) => o.id === selectedId)) {
+    if (selectedId && options.length > 0 && !options.some((o) => o.offering.id === selectedId)) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.delete(CLASS_SUBJECT_PARAM);
+          next.delete(OFFERING_PARAM);
           return next;
         },
         { replace: true },
@@ -99,16 +107,16 @@ export function GradeAssessmentsScreen() {
     }
   }, [selectedId, options, setSearchParams]);
 
-  const openSubject = (id: string) =>
+  const openOffering = (id: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set(CLASS_SUBJECT_PARAM, id);
+      next.set(OFFERING_PARAM, id);
       return next;
     });
   const backToGrid = () =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.delete(CLASS_SUBJECT_PARAM);
+      next.delete(OFFERING_PARAM);
       return next;
     });
   const changeYear = (id: string) =>
@@ -116,7 +124,7 @@ export function GradeAssessmentsScreen() {
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', id);
-        next.delete(CLASS_SUBJECT_PARAM);
+        next.delete(OFFERING_PARAM);
         return next;
       },
       { replace: true },
@@ -125,19 +133,19 @@ export function GradeAssessmentsScreen() {
   // ── Drill-down ────────────────────────────────────────────────────────────────
   if (selectedId) {
     return (
-      <SubjectGradesScreen
+      <OfferingGradesScreen
         option={selected}
-        classSubjectId={selectedId}
+        offeringId={selectedId}
         canAuthor={Boolean(selected?.can_edit)}
         onBack={backToGrid}
       />
     );
   }
 
-  // ── Subject card grid ───────────────────────────────────────────────────────────
+  // ── Offering card grid ──────────────────────────────────────────────────────────
   const subtitle = isTeacher
-    ? 'Pick a subject to view its assessments and grade the class.'
-    : 'Browse subjects. Grade entry is done by the subject teacher.';
+    ? 'Pick a course to view its assessments and grade the class.'
+    : 'Browse course offerings. Grade entry is done by the offering’s lecturer.';
 
   return (
     <Box sx={{ pt: 3 }}>
@@ -156,18 +164,18 @@ export function GradeAssessmentsScreen() {
           isLoading={yearsLoading}
         />
 
-        {showClassFilters && (
+        {showBrowseFilters && (
           <>
             <TextField
               select
               size="small"
-              label="Lecturer"
+              label={strings.terms.lecturer}
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
               disabled={teachers.length === 0}
               sx={{ minWidth: 180 }}
             >
-              <MenuItem value="">All teachers</MenuItem>
+              <MenuItem value="">All lecturers</MenuItem>
               {teachers.map((t) => (
                 <MenuItem key={t.id} value={t.id}>
                   {t.name}
@@ -178,33 +186,16 @@ export function GradeAssessmentsScreen() {
             <TextField
               select
               size="small"
-              label="Form"
-              value={form}
-              onChange={(e) => setForm(e.target.value)}
-              disabled={forms.length === 0}
-              sx={{ minWidth: 140 }}
+              label="Term"
+              value={semesterId}
+              onChange={(e) => setSemesterId(e.target.value)}
+              disabled={semesters.length === 0}
+              sx={{ minWidth: 160 }}
             >
-              <MenuItem value="">All forms</MenuItem>
-              {forms.map((f) => (
-                <MenuItem key={f} value={f}>
-                  {f}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              select
-              size="small"
-              label="Section"
-              value={sectionLetter}
-              onChange={(e) => setSectionLetter(e.target.value)}
-              disabled={sectionLetters.length === 0}
-              sx={{ minWidth: 120 }}
-            >
-              <MenuItem value="">All sections</MenuItem>
-              {sectionLetters.map((l) => (
-                <MenuItem key={l} value={l}>
-                  {l}
+              <MenuItem value="">All terms</MenuItem>
+              {semesters.map((s) => (
+                <MenuItem key={s.id} value={s.id}>
+                  {s.name}
                 </MenuItem>
               ))}
             </TextField>
@@ -212,11 +203,13 @@ export function GradeAssessmentsScreen() {
         )}
       </Stack>
 
-      {optionsQuery.isLoading && <LoadingState variant="cards" rows={6} label="Loading subjects" />}
+      {optionsQuery.isLoading && (
+        <LoadingState variant="cards" rows={6} label="Loading course offerings" />
+      )}
 
       {optionsQuery.isError && (
         <ErrorState
-          message="We couldn't load your subjects."
+          message="We couldn't load your course offerings."
           onRetry={() => void optionsQuery.refetch()}
         />
       )}
@@ -224,11 +217,11 @@ export function GradeAssessmentsScreen() {
       {!optionsQuery.isLoading && !optionsQuery.isError && options.length === 0 && (
         <EmptyState
           variant="page"
-          title="No subjects"
+          title="No course offerings"
           description={
             isTeacher
-              ? 'You are not assigned to any subjects in this year.'
-              : 'No subjects were found for this year.'
+              ? 'You are not assigned to any offerings in this year.'
+              : 'No course offerings were found for this year.'
           }
         />
       )}
@@ -236,16 +229,16 @@ export function GradeAssessmentsScreen() {
       {options.length > 0 && filteredOptions.length === 0 && (
         <EmptyState
           variant="page"
-          title="No subjects match these filters"
-          description="Try clearing the teacher, form, or section filter."
+          title="No offerings match these filters"
+          description="Try clearing the lecturer or term filter."
         />
       )}
 
       {filteredOptions.length > 0 && (
         <Grid container spacing={2}>
-          {filteredOptions.map((cs) => (
-            <Grid item xs={12} sm={6} md={4} key={cs.id}>
-              <SubjectCard option={cs} onOpen={() => openSubject(cs.id)} />
+          {filteredOptions.map((o) => (
+            <Grid item xs={12} sm={6} md={4} key={o.offering.id}>
+              <OfferingCard option={o} onOpen={() => openOffering(o.offering.id)} />
             </Grid>
           ))}
         </Grid>
@@ -254,19 +247,25 @@ export function GradeAssessmentsScreen() {
   );
 }
 
-function SubjectCard({ option, onOpen }: { option: ClassSubjectOption; onOpen: () => void }) {
+function OfferingCard({ option, onOpen }: { option: OfferingOption; onOpen: () => void }) {
   const teacherName = option.teachers[0]?.full_name;
+  const { offering } = option;
   return (
     <Card sx={{ height: '100%' }}>
-      <CardActionArea onClick={onOpen} aria-label={`Open ${option.display_name}`} sx={{ height: '100%' }}>
+      <CardActionArea
+        onClick={onOpen}
+        aria-label={`Open ${offering.label}`}
+        sx={{ height: '100%' }}
+      >
         <CardContent>
           <Stack spacing={0.5}>
             <Typography variant="subtitle1" noWrap>
-              {option.subject?.name ?? 'Subject'}
+              {offering.course.name}
             </Typography>
             <Typography variant="body2" color="text.secondary" noWrap>
-              {option.section?.name ?? 'Class'}
-              {teacherName ? ` · ${teacherName}` : ''}
+              {/* Label + term + lecturer: the three facts that tell two cards for the same
+                  course apart. */}
+              {[offering.label, offering.semester?.name, teacherName].filter(Boolean).join(' · ')}
             </Typography>
             <Box sx={{ mt: 1 }}>
               <Chip

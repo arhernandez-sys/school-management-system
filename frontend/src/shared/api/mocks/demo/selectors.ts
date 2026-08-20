@@ -20,14 +20,13 @@ import type {
   DemoAcademicYear,
   DemoAssessment,
   DemoAssessmentGrade,
-  DemoClassSubject,
+  DemoCourse,
   DemoEnrollment,
   DemoEvent,
   DemoListParams,
+  DemoOffering,
   DemoPage,
-  DemoSection,
   DemoStudent,
-  DemoSubject,
   DemoTeacher,
 } from './types';
 
@@ -77,12 +76,48 @@ function textIncludes(haystack: string | null | undefined, needle: string): bool
 }
 
 // ── Lookups ─────────────────────────────────────────────────────────────────────
-export const getSubject = (id: string): DemoSubject | undefined => D.subjects.find((s) => s.id === id);
-export const getSection = (id: string): DemoSection | undefined => D.sections.find((s) => s.id === id);
+export const getCourse = (id: string): DemoCourse | undefined => D.courses.find((c) => c.id === id);
+export const getOffering = (id: string): DemoOffering | undefined =>
+  D.offerings.find((o) => o.id === id);
 export const getTeacher = (id: string): DemoTeacher | undefined => D.teachers.find((t) => t.id === id);
 export const getStudent = (id: string): DemoStudent | undefined => D.students.find((s) => s.id === id);
-export const getClassSubject = (id: string): DemoClassSubject | undefined =>
-  D.class_subjects.find((c) => c.id === id);
+export const getSemester = (id: string) => D.semesters.find((s) => s.id === id);
+
+/**
+ * The offering's LABEL — the ONE place the demo derives it, mirroring the server's
+ * `offerings/labels.offering_label`.
+ *
+ * `course_offerings` stores no name: the label is course code + section code, so it is
+ * computed. Deriving it here rather than storing it on the row is the whole reason a screen
+ * cannot show a different name than the API would — and it is why every handler returns
+ * `offeringRef(...)` instead of assembling its own string.
+ *
+ * ORDERING NOTE: never sort on this string. "MATH1110-2" sorts before "MATH1110-10". Sort on
+ * `course.code` then `section_code` — see `OFFERING_ORDER` below.
+ */
+export function offeringLabel(offering: DemoOffering | undefined): string {
+  if (!offering) return '';
+  const course = getCourse(offering.course_id);
+  const code = course?.code ?? '?';
+  return offering.section_code ? `${code}-${offering.section_code}` : code;
+}
+
+/** Comparator matching the server's `OFFERING_ORDER`: course code, then section code. */
+export function compareOfferings(a: DemoOffering, b: DemoOffering): number {
+  const ac = getCourse(a.course_id)?.code ?? '';
+  const bc = getCourse(b.course_id)?.code ?? '';
+  return (
+    ac.localeCompare(bc) ||
+    (a.section_code ?? '').localeCompare(b.section_code ?? '') ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+/** The academic year an offering belongs to — resolved THROUGH its semester (D31). */
+export function yearIdOfOffering(offeringId: string): string | undefined {
+  const offering = getOffering(offeringId);
+  return offering ? getSemester(offering.semester_id)?.academic_year_id : undefined;
+}
 
 export const getActiveSemester = () => D.semesters.find((s) => s.is_active);
 export const getActiveYear = () => D.academic_years.find((y) => y.status === 'active');
@@ -90,27 +125,33 @@ export const getActiveGradingScale = () =>
   D.grading_scales.find((g) => g.academic_year_id === DEMO_IDS.activeYearId);
 
 // ── Academic-year scoping (per-module year switcher) ────────────────────────────
-// Sections belong to exactly one academic year, so most section-keyed selectors are
-// automatically year-correct once roster/enrollment resolve the section's semester
-// (see rosterFor / activeEnrollmentFor below). These helpers filter the list
-// surfaces (students / teachers / classes / grades) by the selected year.
+// **D31 changed how a year is resolved.** A `classes` row carried `academic_year_id`, so the
+// year was one attribute access. An offering carries `semester_id` and nothing else, so the
+// year is a HOP through the semester — `offeringsForYear` below is the only place that hop
+// is spelled out, exactly as `offerings/queries.offerings_in_year` is on the server.
+//
+// The gain is what the hop buys: an offering can now say WHICH TERM it runs in, which is
+// what makes "the same course in Semester 1 and again in Semester 2" expressible at all.
 export const listAcademicYears = () =>
   [...D.academic_years].sort((a, b) => b.name.localeCompare(a.name));
-export function sectionsForYear(yearId: string): DemoSection[] {
-  return D.sections.filter((s) => s.academic_year_id === yearId);
+
+export function offeringsForYear(yearId: string): DemoOffering[] {
+  const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
+  return D.offerings.filter((o) => semIds.has(o.semester_id));
 }
 /** The Semester 1 id for a year (where the demo anchors that year's roster/grades). */
 export function primarySemesterIdForYear(yearId: string): string | undefined {
   return D.semesters.find((s) => s.academic_year_id === yearId && s.sequence === 1)?.id;
 }
-/** The semester a section's roster/attendance lives under (derived from its year). */
-export function semesterIdForSection(sectionId: string): string | undefined {
-  const sec = getSection(sectionId);
-  return sec ? primarySemesterIdForYear(sec.academic_year_id) : DEMO_IDS.activeSemesterId;
-}
-export function classSubjectsForYear(yearId: string): DemoClassSubject[] {
-  const secIds = new Set(sectionsForYear(yearId).map((s) => s.id));
-  return D.class_subjects.filter((c) => secIds.has(c.section_id));
+/**
+ * The semester an offering's roster/attendance lives under.
+ *
+ * This is now simply the offering's OWN semester. It used to resolve "the first semester of
+ * the section's year", which was a guess forced on it by a year-scoped row — and it was
+ * wrong for anything that actually happened in a second term.
+ */
+export function semesterIdForOffering(offeringId: string): string | undefined {
+  return getOffering(offeringId)?.semester_id ?? DEMO_IDS.activeSemesterId;
 }
 /** Students who have any enrollment in a section belonging to the given year. */
 export function studentIdsForYear(yearId: string): Set<string> {
@@ -120,7 +161,7 @@ export function studentIdsForYear(yearId: string): Set<string> {
 /** Teachers assigned to any offering in the given year. */
 export function teacherIdsForYear(yearId: string): Set<string> {
   const ids = new Set<string>();
-  for (const cs of classSubjectsForYear(yearId)) cs.teacher_ids.forEach((t) => ids.add(t));
+  for (const off of offeringsForYear(yearId)) off.teacher_ids.forEach((tid) => ids.add(tid));
   return ids;
 }
 /** The academic years a student has any enrollment in (newest first). */
@@ -136,75 +177,56 @@ export function yearsForStudent(studentId: string): DemoAcademicYear[] {
     .sort((a, b) => b.name.localeCompare(a.name));
 }
 /**
- * EVERY subject class a student was enrolled in for a given year, name-ordered.
- *
- * D29 — this replaced `sectionForStudentInYear`, which returned the first matching
- * enrollment on the premise that there was only ever one. A sixth-former sits several, and
- * returning the first would silently hide the rest of their record.
+ * EVERY offering a student was enrolled in for a given year, in course-code order.
  *
  * Ended enrollments (`unenrolled_at` set) still count: for a PAST year that is the normal
  * state, so filtering them out would empty every archived-year screen.
+ *
+ * A year now spans BOTH semesters' offerings, which is a real change in what this answers:
+ * a student who takes Algebra in Semester 1 and again in Semester 2 has TWO offerings here,
+ * not one row seen twice. That is the record, and collapsing them would hide a repeat.
  */
-export function sectionsForStudentInYear(studentId: string, yearId: string): DemoSection[] {
+export function offeringsForStudentInYear(studentId: string, yearId: string): DemoOffering[] {
   const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
-  const seen = new Map<string, DemoSection>();
+  const seen = new Map<string, DemoOffering>();
   for (const e of D.enrollments) {
     if (e.student_id !== studentId || !semIds.has(e.semester_id)) continue;
-    const sec = getSection(e.section_id);
-    // Same class across both semesters yields two rows; keep one.
-    if (sec && !seen.has(sec.id)) seen.set(sec.id, sec);
+    const off = getOffering(e.offering_id);
+    if (off && !seen.has(off.id)) seen.set(off.id, off);
   }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...seen.values()].sort(compareOfferings);
 }
 
-/**
- * The subject classes a student is ACTIVELY enrolled in right now (active semester).
- *
- * Replaces the old `DemoStudent.section_id` denormalization, which could only name one.
- */
-export function currentSectionsFor(studentId: string): DemoSection[] {
-  const seen = new Map<string, DemoSection>();
+/** The offerings a student is ACTIVELY enrolled in right now (the active semester). */
+export function currentOfferingsFor(studentId: string): DemoOffering[] {
+  const seen = new Map<string, DemoOffering>();
   for (const e of D.enrollments) {
     if (e.student_id !== studentId) continue;
     if (e.semester_id !== DEMO_IDS.activeSemesterId || e.unenrolled_at) continue;
-    const sec = getSection(e.section_id);
-    if (sec && !seen.has(sec.id)) seen.set(sec.id, sec);
+    const off = getOffering(e.offering_id);
+    if (off && !seen.has(off.id)) seen.set(off.id, off);
   }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * The offerings of a set of subject classes — the D29 replacement for
- * `classSubjectsForSection(theStudentsOneSection)`.
- *
- * Deliberately NOT filtered on `is_active`: a past year's offerings are ALL inactive by
- * design, so filtering would empty every archived-year screen. Membership in the classes
- * already scopes the rows to the right year.
- */
-export function classSubjectsForSections(sectionIds: string[]): DemoClassSubject[] {
-  const wanted = new Set(sectionIds);
-  return D.class_subjects.filter((cs) => wanted.has(cs.section_id));
+  return [...seen.values()].sort(compareOfferings);
 }
 
 /**
  * Every offering a student sits — in `yearId` if given, else their live load.
  *
- * The one place the "which classes, therefore which gradebooks" question is answered, so
+ * The one place the "which offerings, therefore which gradebooks" question is answered, so
  * the assessments tab, My Grades and the report card cannot disagree.
+ *
+ * **D31 removed a whole hop.** This used to resolve the student's SECTIONS and then map each
+ * to its offerings through `class_subjects`; one offering per enrollment makes that a direct
+ * read, and the intermediate `classSubjectsForSections` helper is gone with it.
  */
-export function classSubjectsForStudent(studentId: string, yearId?: string | null): DemoClassSubject[] {
-  const sections = yearId
-    ? sectionsForStudentInYear(studentId, yearId)
-    : currentSectionsFor(studentId);
-  return classSubjectsForSections(sections.map((s) => s.id));
+export function offeringsForStudent(studentId: string, yearId?: string | null): DemoOffering[] {
+  return yearId ? offeringsForStudentInYear(studentId, yearId) : currentOfferingsFor(studentId);
 }
 
-/** The weekly meetings of one subject class, in Mon→Fri / earliest-first order. */
-export function meetingsForSection(sectionId: string) {
-  const cs = D.class_subjects.find((c) => c.section_id === sectionId);
-  if (!cs) return [];
-  return D.class_meetings
-    .filter((m) => m.class_subject_id === cs.id)
+/** The weekly meetings of one offering, in Mon→Fri / earliest-first order. */
+export function meetingsForOffering(offeringId: string) {
+  return D.offering_meetings
+    .filter((m) => m.offering_id === offeringId)
     .sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time));
 }
 
@@ -221,7 +243,7 @@ export const DEMO_REPRESENTATIVE_USER_ID: Record<string, string> = {
   principal: DEMO_IDS.principalUserId,
   secretary: 'user-secretary',
   teacher: 'user-teach-1', // Maria Reyes — leads several offerings
-  student: 'user-stu-1', // Ana Lopez — active, Form 1A
+  student: 'user-stu-1', // Freddy Lopez — active, first-year, MATH1110-01
 };
 
 /** The seeded student a demo `student` login stands in for (undefined for other roles). */
@@ -239,11 +261,11 @@ export function currentDemoTeacher(role: string | null | undefined): DemoTeacher
 // ── Students ────────────────────────────────────────────────────────────────────
 export interface ListStudentsParams extends DemoListParams {
   status?: string | null;
-  section_id?: string | null;
-  grade_level?: string | null;
-  /** teacher scope: restrict to students in sections this teacher owns any subject of. */
+  /** Narrow to the roster of ONE offering (D31: was `section_id`). */
+  offering_id?: string | null;
+  /** teacher scope: restrict to students in an offering this lecturer teaches. */
   teacher_id?: string | null;
-  /** year scope: restrict to students enrolled in a section of this academic year. */
+  /** year scope: restrict to students enrolled in an offering of this academic year. */
   academic_year_id?: string | null;
 }
 export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStudent> {
@@ -255,18 +277,18 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
     rows = rows.filter((s) => ids.has(s.id));
   }
   if (params.teacher_id) {
-    // D29: a student is in scope if ANY of their classes is one this teacher owns.
-    const sectionIds = new Set(sectionsOwnedByTeacher(params.teacher_id).map((s) => s.id));
-    rows = rows.filter((s) => currentSectionsFor(s.id).some((sec) => sectionIds.has(sec.id)));
+    // A student is in scope if ANY of their offerings is one this lecturer teaches.
+    const ownedIds = new Set(offeringsOwnedByTeacher(params.teacher_id).map((o) => o.id));
+    rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => ownedIds.has(o.id)));
   }
   if (params.status) rows = rows.filter((s) => s.status === params.status);
-  if (params.section_id) {
-    const wanted = params.section_id;
-    rows = rows.filter((s) => currentSectionsFor(s.id).some((sec) => sec.id === wanted));
+  if (params.offering_id) {
+    const wanted = params.offering_id;
+    rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => o.id === wanted));
   }
-  // D29: the level filter reads the STUDENT's own year group, not a class's grade_level —
-  // those are different facts, and a student can sit a class labelled for another level.
-  if (params.year_group) rows = rows.filter((s) => s.year_group === params.year_group);
+  // The level filter reads the STUDENT's own `year_of_study`. There is nothing on an
+  // offering to confuse it with any more — `grade_level` went with the homeroom.
+  if (params.year_of_study) rows = rows.filter((s) => s.year_of_study === params.year_of_study);
   if (params.search) {
     const q = params.search;
     // Matches the backend (students/service.py): the display string AND the parts,
@@ -338,80 +360,76 @@ export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeac
   }) as unknown as DemoPage<DemoTeacher>;
 }
 
-// ── Subjects (catalog) ──────────────────────────────────────────────────────────
-export interface ListSubjectsParams extends DemoListParams {
+// ── Courses (catalog) ───────────────────────────────────────────────────────────
+export interface ListCoursesParams extends DemoListParams {
   is_active?: boolean | null;
 }
-export function listSubjects(params: ListSubjectsParams = {}): DemoPage<DemoSubject> {
-  let rows = D.subjects;
-  // Default is active-only (picker hides retired subjects) unless explicitly false.
+export function listCourses(params: ListCoursesParams = {}): DemoPage<DemoCourse> {
+  let rows = D.courses;
+  // Default is active-only (picker hides retired courses) unless explicitly false.
   const wantActive = params.is_active ?? true;
-  if (wantActive !== null) rows = rows.filter((s) => s.is_active === wantActive);
+  if (wantActive !== null) rows = rows.filter((c) => c.is_active === wantActive);
   if (params.search) {
     const q = params.search;
-    rows = rows.filter((s) => textIncludes(s.name, q) || textIncludes(s.code, q));
+    rows = rows.filter((c) => textIncludes(c.name, q) || textIncludes(c.code, q));
   }
   return paginate(rows as unknown as Array<Record<string, unknown>>, {
     ...params,
     sort: params.sort ?? 'name',
-  }) as unknown as DemoPage<DemoSubject>;
+  }) as unknown as DemoPage<DemoCourse>;
 }
 
-// ── Sections / ownership ────────────────────────────────────────────────────────
-export function classSubjectsForSection(sectionId: string): DemoClassSubject[] {
-  return D.class_subjects.filter((c) => c.section_id === sectionId);
-}
-export function sectionsOwnedByTeacher(teacherId: string): DemoSection[] {
-  const sectionIds = new Set(
-    D.class_subjects.filter((c) => c.teacher_ids.includes(teacherId)).map((c) => c.section_id),
-  );
-  return D.sections.filter((s) => sectionIds.has(s.id));
-}
-export function classSubjectsOwnedByTeacher(teacherId: string): DemoClassSubject[] {
-  return D.class_subjects.filter((c) => c.teacher_ids.includes(teacherId));
+// ── Offerings / ownership ───────────────────────────────────────────────────────
+export function offeringsOwnedByTeacher(teacherId: string): DemoOffering[] {
+  return D.offerings.filter((o) => o.teacher_ids.includes(teacherId));
 }
 
 /**
- * Roster (unenrolled_at IS NULL) of a section for that section's own semester.
- * Because a section belongs to exactly one academic year, resolving the semester
- * from the section makes this correct for BOTH the active and archived years.
+ * Roster (unenrolled_at IS NULL) of an offering, in the offering's OWN semester.
+ *
+ * The semester comes off the offering, so this is correct for the active year, an archived
+ * year, AND a second term of the current year — the case the previous version could not
+ * express, because it inferred "Semester 1 of the section's year".
  */
-export function rosterFor(sectionId: string): DemoStudent[] {
-  const semId = semesterIdForSection(sectionId);
+export function rosterFor(offeringId: string): DemoStudent[] {
+  const semId = semesterIdForOffering(offeringId);
   const ids = D.enrollments
-    .filter((e) => e.section_id === sectionId && e.semester_id === semId && !e.unenrolled_at)
+    .filter((e) => e.offering_id === offeringId && e.semester_id === semId && !e.unenrolled_at)
     .map((e) => e.student_id);
   return D.students.filter((s) => ids.includes(s.id));
 }
-export function activeEnrollmentFor(studentId: string, sectionId: string): DemoEnrollment | undefined {
-  const semId = semesterIdForSection(sectionId);
+export function activeEnrollmentFor(
+  studentId: string,
+  offeringId: string,
+): DemoEnrollment | undefined {
+  const semId = semesterIdForOffering(offeringId);
   return D.enrollments.find(
     (e) =>
       e.student_id === studentId &&
-      e.section_id === sectionId &&
+      e.offering_id === offeringId &&
       e.semester_id === semId &&
       !e.unenrolled_at,
   );
 }
-export function enrolledCount(sectionId: string): number {
-  return rosterFor(sectionId).length;
+export function enrolledCount(offeringId: string): number {
+  return rosterFor(offeringId).length;
 }
 
 // ── Assessments / grades ────────────────────────────────────────────────────────
-export function assessmentsForClassSubject(classSubjectId: string): DemoAssessment[] {
-  return D.assessments.filter((a) => a.class_subject_id === classSubjectId);
+export function assessmentsForOffering(offeringId: string): DemoAssessment[] {
+  return D.assessments.filter((a) => a.offering_id === offeringId);
 }
 export function gradesForAssessment(assessmentId: string): DemoAssessmentGrade[] {
   return D.assessment_grades.filter((g) => g.assessment_id === assessmentId);
 }
 
 /**
- * The gradebook read for a class_subject: roster (active enrollment) ∪ any student
- * who has a grade row for this offering (M3 — transferred students stay visible).
+ * The gradebook read for an offering: roster (active enrollment) ∪ any student who has a
+ * grade row for it (M3 — a student who switched sections stays visible).
  * Returns rows of { student, enrollment_id, is_active_member, cells[] }.
  */
-export function gradebookFor(classSubjectId: string): {
-  class_subject: DemoClassSubject | undefined;
+export function gradebookFor(offeringId: string): {
+  offering: DemoOffering | undefined;
   assessments: DemoAssessment[];
   rows: Array<{
     student: DemoStudent;
@@ -429,11 +447,11 @@ export function gradebookFor(classSubjectId: string): {
     term_letter: string | null;
   }>;
 } {
-  const cs = getClassSubject(classSubjectId);
-  const asmts = assessmentsForClassSubject(classSubjectId);
+  const offering = getOffering(offeringId);
+  const asmts = assessmentsForOffering(offeringId);
   const asmtIds = new Set(asmts.map((a) => a.id));
 
-  const activeStudents = cs ? rosterFor(cs.section_id) : [];
+  const activeStudents = offering ? rosterFor(offering.id) : [];
   const gradedStudentIds = new Set(
     D.assessment_grades.filter((g) => asmtIds.has(g.assessment_id)).map((g) => g.student_id),
   );
@@ -443,7 +461,7 @@ export function gradebookFor(classSubjectId: string): {
 
   const rows = allStudents.map((student) => {
     const isActive = activeIds.has(student.id);
-    const enr = cs ? activeEnrollmentFor(student.id, cs.section_id) : undefined;
+    const enr = offering ? activeEnrollmentFor(student.id, offering.id) : undefined;
     const cells = asmts.map((a) => {
       const g = D.assessment_grades.find(
         (row) => row.assessment_id === a.id && row.student_id === student.id,
@@ -460,7 +478,7 @@ export function gradebookFor(classSubjectId: string): {
           : {}),
       };
     });
-    const term = computeTermGrade(student.id, classSubjectId);
+    const term = computeTermGrade(student.id, offeringId);
     return {
       student,
       enrollment_id: enr?.id ?? null,
@@ -471,19 +489,22 @@ export function gradebookFor(classSubjectId: string): {
     };
   });
 
-  return { class_subject: cs, assessments: asmts, rows };
+  return { offering, assessments: asmts, rows };
 }
 
 /**
- * Weighted term grade for (student, class_subject) in the active semester +
- * derived letter. Weighted by each assessment's `weight`; only `graded` rows count
- * (pending/excused/exempt excluded, api-spec §8.3). Returns { numeric, letter }.
+ * Weighted term grade for (student, offering) + derived letter. Weighted by each
+ * assessment's `weight`; only `graded` rows count (pending/excused/exempt excluded,
+ * api-spec §8.3). Returns { numeric, letter }.
+ *
+ * There is no separate "in the active semester" qualifier any more: an offering IS a term,
+ * so the assessments it holds are that term's by construction.
  */
 export function computeTermGrade(
   studentId: string,
-  classSubjectId: string,
+  offeringId: string,
 ): { numeric: number | null; letter: string | null; weight_base_used: number } {
-  const asmts = assessmentsForClassSubject(classSubjectId).filter((a) => a.status === 'graded');
+  const asmts = assessmentsForOffering(offeringId).filter((a) => a.status === 'graded');
   let weightedSum = 0;
   let weightBase = 0;
   for (const a of asmts) {
@@ -584,12 +605,12 @@ export function passedCourseIds(studentId: string, excludeSemesterId: string): S
   for (const enr of D.enrollments) {
     if (enr.student_id !== studentId) continue;
     if (enr.semester_id === excludeSemesterId) continue;
-    for (const cs of D.class_subjects.filter((c) => c.section_id === enr.section_id)) {
-      const { numeric, letter } = computeTermGrade(studentId, cs.id);
-      if (numeric === null || !letter) continue;
-      const band = scale?.bands.find((b) => b.letter === letter);
-      if (band?.is_passing) passed.add(cs.subject_id);
-    }
+    const offering = getOffering(enr.offering_id);
+    if (!offering) continue;
+    const { numeric, letter } = computeTermGrade(studentId, offering.id);
+    if (numeric === null || !letter) continue;
+    const band = scale?.bands.find((b) => b.letter === letter);
+    if (band?.is_passing) passed.add(offering.course_id);
   }
   return passed;
 }
@@ -601,8 +622,8 @@ export function passedCourseIds(studentId: string, excludeSemesterId: string): S
  * a student legitimately did not choose are not missing requirements), and applies
  * only to students on that programme.
  *
- * Demo students carry no programme (that is Phase 4), so a programme-scoped rule
- * never fires here — which is correct, not a gap: the server behaves the same way.
+ * Every demo student now carries a programme (D30 §D12), so the programme-scoped rules —
+ * including the `ALL COURSES` Internship gate — do fire here rather than being theoretical.
  */
 export function unmetPrerequisites(
   studentId: string,
@@ -622,7 +643,7 @@ export function unmetPrerequisites(
 
   const record = (requiredId: string) => {
     if (passed.has(requiredId)) return;
-    const course = D.subjects.find((c) => c.id === requiredId);
+    const course = getCourse(requiredId);
     issues.push({
       code: course?.code ?? '?',
       reason: 'not passed',
@@ -647,19 +668,21 @@ export function unmetPrerequisites(
 }
 
 // ── Attendance ──────────────────────────────────────────────────────────────────
-/** All attendance records for a section on a given date. */
-export function attendanceFor(sectionId: string, date: string) {
-  return D.attendance_records.filter((a) => a.section_id === sectionId && a.attendance_date === date);
+/** All attendance records for an offering on a given date. */
+export function attendanceFor(offeringId: string, date: string) {
+  return D.attendance_records.filter(
+    (a) => a.offering_id === offeringId && a.attendance_date === date,
+  );
 }
-/** Attendance summary (present/absent/late/excused + pct_present) for a section. */
-export function attendanceSummaryForSection(sectionId: string): {
+/** Attendance summary (present/absent/late/excused + pct_present) for an offering. */
+export function attendanceSummaryForOffering(offeringId: string): {
   present: number;
   absent: number;
   late: number;
   excused: number;
   pct_present: number;
 } {
-  const rows = D.attendance_records.filter((a) => a.section_id === sectionId);
+  const rows = D.attendance_records.filter((a) => a.offering_id === offeringId);
   const counts = { present: 0, absent: 0, late: 0, excused: 0 };
   for (const r of rows) counts[r.status] += 1;
   const total = rows.length || 1;
@@ -668,9 +691,9 @@ export function attendanceSummaryForSection(sectionId: string): {
 /**
  * One student's OWN attendance rate (%) across every class they sit.
  *
- * D29: attendance is per subject class, so a student has records in several. This averages
- * over all of them — "my attendance" is the whole week, not one class's register. Late
- * counts as present, matching `schoolAttendanceRate`.
+ * Attendance is per offering, so a student has records in several. This averages over all
+ * of them — "my attendance" is the whole week, not one course's register. Late counts as
+ * present, matching `schoolAttendanceRate`.
  */
 export function attendanceRateForStudent(studentId: string): number {
   const rows = D.attendance_records.filter((r) => r.student_id === studentId);
@@ -681,8 +704,8 @@ export function attendanceRateForStudent(studentId: string): number {
 
 /** School-wide attendance rate (%) over the recent window — Principal dashboard. */
 export function schoolAttendanceRate(): number {
-  const activeSecIds = new Set(sectionsForYear(DEMO_IDS.activeYearId).map((s) => s.id));
-  const rows = D.attendance_records.filter((r) => activeSecIds.has(r.section_id));
+  const activeOfferingIds = new Set(offeringsForYear(DEMO_IDS.activeYearId).map((o) => o.id));
+  const rows = D.attendance_records.filter((r) => activeOfferingIds.has(r.offering_id));
   if (rows.length === 0) return 0;
   const present = rows.filter((r) => r.status === 'present' || r.status === 'late').length;
   return Math.round((present / rows.length) * 1000) / 10;
@@ -717,16 +740,15 @@ export function announcementsForUser(userId: string) {
   const adminUserIds = new Set(
     D.users.filter((u) => u.role === 'principal' || u.role === 'secretary').map((u) => u.id),
   );
-  // Resolve which sections this user is linked to (student via enrollment, teacher via ownership).
-  const linkedSectionIds = new Set<string>();
+  // Which offerings is this user linked to (student via enrollment, lecturer via teaching)?
+  const linkedOfferingIds = new Set<string>();
   if (user.role === 'student') {
+    // An offering-targeted announcement reaches the student if it targets ANY of theirs.
     const stu = D.students.find((s) => s.user_id === userId);
-    // D29: a class-targeted announcement reaches the student if it targets ANY of their
-    // classes — they belong to several.
-    if (stu) for (const sec of currentSectionsFor(stu.id)) linkedSectionIds.add(sec.id);
+    if (stu) for (const off of currentOfferingsFor(stu.id)) linkedOfferingIds.add(off.id);
   } else if (user.role === 'teacher') {
-    const teacher = D.teachers.find((t) => t.user_id === userId);
-    if (teacher) for (const sec of sectionsOwnedByTeacher(teacher.id)) linkedSectionIds.add(sec.id);
+    const teacher = D.teachers.find((tt) => tt.user_id === userId);
+    if (teacher) for (const off of offeringsOwnedByTeacher(teacher.id)) linkedOfferingIds.add(off.id);
   }
   return D.announcements
     .filter((a) => {
@@ -744,7 +766,10 @@ export function announcementsForUser(userId: string) {
       }
       if (a.audience === 'students') return user.role === 'student';
       if (a.audience === 'teachers') return user.role === 'teacher';
-      if (a.audience === 'class') return a.section_id ? linkedSectionIds.has(a.section_id) : false;
+      // The `'class'` audience VALUE is unchanged (it is a shared wire enum member); the
+      // target it names is an offering.
+      if (a.audience === 'class')
+        return a.offering_id ? linkedOfferingIds.has(a.offering_id) : false;
       return false;
     })
     .sort((x, y) => y.published_at.localeCompare(x.published_at));
@@ -769,27 +794,32 @@ export function dashboardFor(role: string, userId?: string) {
       stats: {
         total_students: D.students.filter((s) => s.status === 'active').length,
         total_teachers: D.teachers.filter((t) => t.status === 'active').length,
-        total_classes: sectionsForYear(DEMO_IDS.activeYearId).length,
+        total_classes: offeringsForYear(DEMO_IDS.activeYearId).length,
         attendance_rate: schoolAttendanceRate(),
       },
-      enrollment_by_grade: enrollmentByGrade(),
+      enrollment_by_year_of_study: enrollmentByYearOfStudy(),
       grade_distribution: gradeDistribution(),
     };
   }
   if (role === 'teacher') {
-    const teacher = userId ? D.teachers.find((t) => t.user_id === userId) : undefined;
-    const owned = teacher ? classSubjectsOwnedByTeacher(teacher.id).filter((c) => c.is_active) : [];
+    const teacher = userId ? D.teachers.find((tt) => tt.user_id === userId) : undefined;
+    const owned = teacher
+      ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived)
+      : [];
     return {
       role,
       semester,
       stats: {
-        my_classes: new Set(owned.map((c) => c.section_id)).size,
-        my_class_subjects: owned.length,
+        // ONE number, not two. It used to report `my_classes` (distinct sections) AND
+        // `my_class_subjects` (offerings) — which were the same count the moment a class
+        // taught one subject, so the dashboard showed the same figure twice under two names.
+        my_offerings: owned.length,
         ungraded_items: owned.reduce(
-          (n, cs) =>
+          (n, off) =>
             n +
-            assessmentsForClassSubject(cs.id).filter((a) => a.status === 'published' || a.status === 'grading')
-              .length,
+            assessmentsForOffering(off.id).filter(
+              (a) => a.status === 'published' || a.status === 'grading',
+            ).length,
           0,
         ),
       },
@@ -802,29 +832,29 @@ export function dashboardFor(role: string, userId?: string) {
     semester,
     stats: {
       term_average: null as number | null,
-      // D29: averaged across every class the student sits, since attendance is now taken
-      // per subject class — a single class's rate would not be "my attendance".
+      // Averaged across every offering the student sits, since attendance is taken per
+      // offering — a single course's rate would not be "my attendance".
       attendance_rate: stu ? attendanceRateForStudent(stu.id) : 0,
     },
   };
 }
 
 /**
- * Active students per YEAR GROUP.
+ * Active students per YEAR OF STUDY.
  *
- * D29: counts the student's own `year_group` rather than their homeroom's grade level. The
- * old version bucketed by class, which under a subject-class model would count one student
- * once per class they take.
+ * Counts the student's own `year_of_study`. Bucketing by offering would count one student
+ * once per course they take, and there is no level on an offering to bucket by anyway.
  */
-export function enrollmentByGrade(): Array<{ grade_level: string; count: number }> {
+export function enrollmentByYearOfStudy(): Array<{ year_of_study: string; count: number }> {
   const map = new Map<string, number>();
   for (const s of D.students) {
-    if (s.status !== 'active' || !s.year_group) continue;
-    map.set(s.year_group, (map.get(s.year_group) ?? 0) + 1);
+    if (s.status !== 'active' || !s.year_of_study) continue;
+    map.set(s.year_of_study, (map.get(s.year_of_study) ?? 0) + 1);
   }
+  // 'First' before 'Second' — progression order, which alphabetical happens to give.
   return [...map.entries()]
-    .map(([grade_level, count]) => ({ grade_level, count }))
-    .sort((a, b) => a.grade_level.localeCompare(b.grade_level));
+    .map(([year_of_study, count]) => ({ year_of_study, count }))
+    .sort((a, b) => a.year_of_study.localeCompare(b.year_of_study));
 }
 
 // ── Calendar events ──────────────────────────────────────────────────────────────
@@ -857,9 +887,9 @@ export function gradeDistribution(): Array<{ letter: string; count: number }> {
   const scale = getActiveGradingScale();
   const counts = new Map<string, number>();
   if (scale) for (const b of scale.bands) counts.set(b.letter, 0);
-  for (const cs of classSubjectsForYear(DEMO_IDS.activeYearId)) {
-    for (const stu of rosterFor(cs.section_id)) {
-      const { letter } = computeTermGrade(stu.id, cs.id);
+  for (const off of offeringsForYear(DEMO_IDS.activeYearId)) {
+    for (const stu of rosterFor(off.id)) {
+      const { letter } = computeTermGrade(stu.id, off.id);
       if (letter) counts.set(letter, (counts.get(letter) ?? 0) + 1);
     }
   }

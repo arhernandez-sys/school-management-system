@@ -2,7 +2,9 @@
 
 Write models set `extra="forbid"` (§1.4); wire is snake_case (§1.2). Read shapes
 are reconciled to the finished frontend MSW handler (which wins on divergence):
-  * class_subject ref = {class_subject_id, section:{id,name}, subject:{id,name,code}, label}
+  * offering ref     = the SHARED `common.schemas.OfferingRef`
+      {id, course:{id,name,code,credits}, semester?, section_code, label} (D31 — was a
+      module-local `{offering_id, section:{id,name}, subject:{...}, label}`)
   * list item carries category_id; detail adds semester_id + stats
   * release response = {assessment_id, is_released, released_count}
 """
@@ -15,29 +17,15 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.enums import AssessmentStatus, AssessmentType
+from app.common.schemas import OfferingRef
 
 
 # ── Refs (frontend shape) ──────────────────────────────────────────────────────
-class _SectionRef(BaseModel):
-    id: UUID
-    name: str
-
-
-class _SubjectRef(BaseModel):
-    id: UUID
-    name: str
-    code: str | None = None
-
-
-class ClassSubjectRef(BaseModel):
-    """Frontend class_subject ref (section + subject + display label)."""
-
-    class_subject_id: UUID
-    section: _SectionRef | None = None
-    subject: _SubjectRef | None = None
-    label: str | None = None
-
-
+# The offering ref is the SHARED `common.schemas.OfferingRef` (D31). This module used to
+# define its own — keyed `offering_id` where Grades keyed `id`, with a `_SectionRef` that
+# carried the homeroom's stored `name`. Both are gone: the label is derived now, and five
+# private derivations of one string is exactly the drift `offerings/labels.py` exists to
+# prevent.
 class AssessmentStats(BaseModel):
     grade_count: int = 0
     graded_count: int = 0
@@ -49,7 +37,7 @@ class AssessmentListItem(BaseModel):
     id: UUID
     title: str
     type: AssessmentType
-    class_subject: ClassSubjectRef | None = None
+    offering: OfferingRef | None = None
     category_id: UUID | None = None
     max_score: float
     weight: float
@@ -65,7 +53,7 @@ class AssessmentDetail(AssessmentListItem):
 
 class CategoryDetail(BaseModel):
     id: UUID
-    class_subject_id: UUID
+    offering_id: UUID
     name: str
     weight: float
     drop_lowest_count: int
@@ -75,10 +63,10 @@ class CategoryList(BaseModel):
     items: list[CategoryDetail] = Field(default_factory=list)
 
 
-class ClassSubjectPickerList(BaseModel):
-    """GET /assessments/class-subjects — picker feed for assessment authoring."""
+class OfferingPickerList(BaseModel):
+    """GET /assessments/offerings — picker feed for assessment authoring."""
 
-    items: list[ClassSubjectRef] = Field(default_factory=list)
+    items: list[OfferingRef] = Field(default_factory=list)
 
 
 class ReleaseResult(BaseModel):
@@ -128,7 +116,7 @@ class ReleaseRequest(BaseModel):
 # ── Write models ───────────────────────────────────────────────────────────────
 class AssessmentCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    class_subject_id: UUID
+    offering_id: UUID
     semester_id: UUID | None = None  # defaults to the active semester
     category_id: UUID | None = None
     title: str = Field(min_length=1, max_length=160)

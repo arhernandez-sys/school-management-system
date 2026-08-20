@@ -30,7 +30,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import utcnow
-from app.modules.classes.models import Class, ClassEnrollment, ClassSubject
+from app.modules.offerings.queries import offerings_in_year
+from app.modules.offerings.models import CourseOffering, ClassEnrollment, CourseOffering
 from app.modules.grades.models import TermGradeSnapshot
 from app.modules.reports.models import ReportCardSnapshot
 from app.modules.settings.models import AcademicYear, Semester
@@ -73,14 +74,14 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
 
     sections = list(
         db.scalars(
-            select(Class).where(
-                Class.academic_year_id == year.id, Class.deleted_at.is_(None)
+            select(CourseOffering).where(
+                offerings_in_year(year.id), CourseOffering.deleted_at.is_(None)
             )
         ).all()
     )
 
     existing_terms = {
-        (s.student_id, s.class_subject_id, s.semester_id): s
+        (s.student_id, s.offering_id, s.semester_id): s
         for s in db.scalars(
             select(TermGradeSnapshot).where(
                 TermGradeSnapshot.semester_id.in_([sem.id for sem in semesters])
@@ -100,8 +101,8 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
     # offering cannot change the grouping key of a historical transcript line (§10.6).
     subject_by_cs = dict(
         db.execute(
-            select(ClassSubject.id, ClassSubject.subject_id).where(
-                ClassSubject.class_id.in_([s.id for s in sections])
+            select(CourseOffering.id, CourseOffering.course_id).where(
+                CourseOffering.id.in_([s.id for s in sections])
             )
         ).all()
     ) if sections else {}
@@ -113,7 +114,7 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
                     select(StudentProfile)
                     .join(ClassEnrollment, ClassEnrollment.student_id == StudentProfile.id)
                     .where(
-                        ClassEnrollment.class_id == section.id,
+                        ClassEnrollment.offering_id == section.id,
                         ClassEnrollment.semester_id == semester.id,
                         ClassEnrollment.unenrolled_at.is_(None),
                         StudentProfile.deleted_at.is_(None),
@@ -148,7 +149,7 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
                     if row is None:
                         row = TermGradeSnapshot(
                             student_id=student.id,
-                            class_subject_id=r.cs_id,
+                            offering_id=r.cs_id,
                             semester_id=semester.id,
                             subject_id=subject_id,
                             numeric_grade=r.numeric,
@@ -223,7 +224,7 @@ def _policy_snapshot(db: Session, cs_id: uuid.UUID, year: AcademicYear) -> dict:
     # folded in — they vary within a subject and have no single value to record.
     category = db.scalar(
         select(AssessmentCategory)
-        .where(AssessmentCategory.class_subject_id == cs_id)
+        .where(AssessmentCategory.offering_id == cs_id)
         .limit(1)
     )
     return calc.resolve_policy(None, category, year, school).as_dict()

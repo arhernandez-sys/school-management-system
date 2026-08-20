@@ -210,9 +210,16 @@ export function GradeRevisionsScreen() {
                   </Stack>
 
                   <Typography variant="body2" color="text.secondary">
-                    {row.subject_code ? `${row.subject_code} · ` : ''}
-                    {row.subject_name}
-                    {row.section_name ? ` · ${row.section_name}` : ''} · {row.assessment_title}
+                    {/* D31: one derived offering label replaces the old
+                        subject_code · subject_name · section_name triple. */}
+                    {[
+                      row.offering?.label,
+                      row.offering?.course.name,
+                      row.offering?.semester?.name,
+                      row.assessment_title,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </Typography>
 
                   <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>

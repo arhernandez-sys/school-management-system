@@ -5,9 +5,9 @@ catalog entity already has a route, and giving the same entity two spellings is 
 than the one legacy name that decision #3 preserves anyway.
 
 Endpoints:
-  GET    /subjects/{id}/prerequisites               authenticated  -> PrerequisiteList
-  POST   /subjects/{id}/prerequisites               Dean (P)       -> PrerequisiteList (201)
-  DELETE /subjects/{id}/prerequisites/{prereq_id}    Dean (P)       -> PrerequisiteList
+  GET    /courses/{id}/prerequisites               authenticated  -> PrerequisiteList
+  POST   /courses/{id}/prerequisites               Dean (P)       -> PrerequisiteList (201)
+  DELETE /courses/{id}/prerequisites/{prereq_id}    Dean (P)       -> PrerequisiteList
 
 Both writes return the whole LIST rather than the touched row — the editor is a list,
 and a single row would force a re-fetch to render.
@@ -35,7 +35,7 @@ from app.modules.prerequisites.schemas import (
 )
 from app.modules.users.models import User
 
-router = APIRouter(prefix="/subjects", tags=["prerequisites"])
+router = APIRouter(prefix="/courses", tags=["prerequisites"])
 
 _ERR = {"model": ErrorResponse}
 _dean_only = require_role(Role.PRINCIPAL)

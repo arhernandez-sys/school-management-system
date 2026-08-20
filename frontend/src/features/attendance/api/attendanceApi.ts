@@ -8,35 +8,35 @@
 import { api } from '@shared/api/client';
 import type {
   AttendanceRegister,
-  AttendanceSectionsResponse,
+  AttendanceOfferingsResponse,
   AttendanceSummaryResponse,
   AttendanceUpsertRequest,
   AttendanceUpsertResponse,
   MyAttendanceResponse,
 } from '../types';
 
-/** GET /attendance/sections — sections the caller may view/record (year-scoped). */
-export async function getAttendanceSections(
+/** GET /attendance/offerings — offerings the caller may view/record (year-scoped). */
+export async function getAttendanceOfferings(
   academicYearId?: string,
   signal?: AbortSignal,
-): Promise<AttendanceSectionsResponse> {
-  const res = await api.get<AttendanceSectionsResponse>('/attendance/sections', {
+): Promise<AttendanceOfferingsResponse> {
+  const res = await api.get<AttendanceOfferingsResponse>('/attendance/offerings', {
     params: academicYearId ? { academic_year_id: academicYearId } : undefined,
     signal,
   });
   return res.data;
 }
 
-/** GET /attendance?section_id=&date= — the daily register. */
+/** GET /attendance?offering_id=&date= — the daily register. */
 export async function getAttendanceRegister(
-  params: { section_id: string; date: string },
+  params: { offering_id: string; date: string },
   signal?: AbortSignal,
 ): Promise<AttendanceRegister> {
   const res = await api.get<AttendanceRegister>('/attendance', { params, signal });
   return res.data;
 }
 
-/** PUT /attendance — bulk upsert the register for one (section, date). */
+/** PUT /attendance — bulk upsert the register for one (offering, date). */
 export async function putAttendanceRegister(
   body: AttendanceUpsertRequest,
 ): Promise<AttendanceUpsertResponse> {
@@ -44,13 +44,13 @@ export async function putAttendanceRegister(
   return res.data;
 }
 
-/** GET /attendance/summary?section_id= — per-section rate over the window. */
+/** GET /attendance/summary?offering_id= — per-offering rate over the window. */
 export async function getAttendanceSummary(
-  sectionId: string,
+  offeringId: string,
   signal?: AbortSignal,
 ): Promise<AttendanceSummaryResponse> {
   const res = await api.get<AttendanceSummaryResponse>('/attendance/summary', {
-    params: { section_id: sectionId },
+    params: { offering_id: offeringId },
     signal,
   });
   return res.data;

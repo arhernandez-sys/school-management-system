@@ -21,17 +21,18 @@ import { useMyTimetable } from './hooks/useTimetable';
  * "My Timetable" — the caller's own Mon–Fri week (FR-SCH-03/04).
  *
  * One page for both audiences because the data and the layout are identical; only the copy
- * and whether teacher names are shown differ. `GET /timetable/me` is role-aware server-side:
- * a student gets the classes they are enrolled in, a teacher the classes they teach.
+ * and whether lecturer names are shown differ. `GET /timetable/me` is role-aware
+ * server-side: a student gets the offerings they are enrolled in, a lecturer the offerings
+ * they teach.
  *
- * This is the screen that makes the D29 model legible to a student: a homeroom model has
+ * This is the screen that makes the offering model legible to a student: a homeroom model has
  * nothing to put on a Mon–Fri grid, because every lesson happens in the same room with the
- * same group. Here, Monday's Math and Tuesday's Biology are visibly different classes in
+ * same group. Here, Monday's Algebra and Tuesday's Biology are visibly different courses in
  * different rooms — and two students in the same year can hold different weeks.
  *
- * `unscheduled` is surfaced rather than dropped: a class with no meetings would otherwise be
- * invisible here while still appearing under My Classes, which reads as a bug to the user and
- * hides real missing data from the office.
+ * `unscheduled` is surfaced rather than dropped: an offering with no meetings would otherwise
+ * be invisible here while still appearing under My Courses, which reads as a bug to the user
+ * and hides real missing data from the office.
  */
 export function MyTimetablePage() {
   const { user } = useAuth();
@@ -53,20 +54,20 @@ export function MyTimetablePage() {
         title="My Timetable"
         subtitle={
           isTeacher
-            ? 'The classes you teach each week, with room and time.'
+            ? 'The courses you teach each week, with room and time.'
             : isPast
               ? `Your week in ${selectedPeriod?.yearName}.`
-              : 'Where you need to be each day. Each subject class has its own room and time.'
+              : 'Where you need to be each day. Each course has its own room and time.'
         }
         primaryAction={
           !isTeacher ? (
             <Button
               component={RouterLink}
-              to={ROUTES.classes}
+              to={ROUTES.offerings}
               variant="outlined"
               startIcon={<ClassOutlinedIcon />}
             >
-              My classes
+              My courses
             </Button>
           ) : undefined
         }
@@ -80,11 +81,11 @@ export function MyTimetablePage() {
           {totalEntries === 0 && view.unscheduled.length === 0 ? (
             <EmptyState
               variant="page"
-              title={isTeacher ? 'No classes scheduled' : 'Your timetable is empty'}
+              title={isTeacher ? 'Nothing scheduled yet' : 'Your timetable is empty'}
               description={
                 isTeacher
-                  ? 'Once your classes have meeting times, your week will appear here.'
-                  : "Once you're enrolled in classes with meeting times, your week will appear here."
+                  ? 'Once the courses you teach have meeting times, your week will appear here.'
+                  : "Once you're enrolled in courses with meeting times, your week will appear here."
               }
             />
           ) : (
@@ -110,7 +111,7 @@ export function MyTimetablePage() {
                   color="info"
                   helperText={
                     busiestDay && busiestDay.n > 0
-                      ? `${busiestDay.n} ${busiestDay.n === 1 ? 'class' : 'classes'}`
+                      ? `${busiestDay.n} ${busiestDay.n === 1 ? 'meeting' : 'meetings'}`
                       : undefined
                   }
                 />
@@ -120,13 +121,13 @@ export function MyTimetablePage() {
                 <Alert severity="info" sx={{ mb: 3 }}>
                   <AlertTitle>
                     {view.unscheduled.length === 1
-                      ? '1 class has no times yet'
-                      : `${view.unscheduled.length} classes have no times yet`}
+                      ? '1 course has no times yet'
+                      : `${view.unscheduled.length} courses have no times yet`}
                   </AlertTitle>
                   <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2 }}>
                     {view.unscheduled.map((u) => (
-                      <Typography key={u.class_id} component="li" variant="body2">
-                        {u.subject.name} · {u.class_name}
+                      <Typography key={u.offering.id} component="li" variant="body2">
+                        {u.offering.course.name} · {u.offering.label}
                       </Typography>
                     ))}
                   </Stack>
@@ -146,7 +147,7 @@ export function MyTimetablePage() {
                 days={view.days}
                 // A teacher's own week would repeat their name on every card.
                 showTeacher={!isTeacher}
-                emptyDayLabel={isTeacher ? 'No classes' : 'Free'}
+                emptyDayLabel={isTeacher ? 'Nothing scheduled' : 'Free'}
               />
             </>
           )}

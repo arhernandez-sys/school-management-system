@@ -22,7 +22,7 @@ from app.common.enums import (
     StudentStatus,
     YearOfStudy,
 )
-from app.common.schemas import AuditStamp, ClassRef, SubjectRef
+from app.common.schemas import AuditStamp, OfferingRef, CourseRef
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ from app.common.schemas import AuditStamp, ClassRef, SubjectRef
 class StudentListItem(BaseModel):
     """GET /students item (api-spec §5.3).
 
-    D29 replaced `current_section` (one homeroom) with `year_group` + `class_count`.
+    D29 replaced `current_section` (one homeroom) with `year_of_study` + `offering_count`.
     The list needs a scannable level and "how many subjects do they take"; the class
     NAMES belong on the detail page, and putting a variable-length list in a table cell
     was the alternative.
@@ -49,16 +49,16 @@ class StudentListItem(BaseModel):
     last_name: str
     status: StudentStatus
     #: The student's own level, e.g. "Lower 6" (D29). Was read off their homeroom.
-    year_group: str | None = None
+    year_of_study: str | None = None
     #: Active subject classes for the resolved semester.
-    class_count: int = 0
+    offering_count: int = 0
     guardian_name: str | None = None
 
 
 class StudentDetail(BaseModel):
     """GET /students/{id}, /students/me + POST/PATCH/status responses.
 
-    Mirrors `student_profiles` (schema §3.B) plus the derived `current_classes` (every
+    Mirrors `student_profiles` (schema §3.B) plus the derived `current_offerings` (every
     subject class the student actively sits, D29) and the audit stamp.
     """
 
@@ -72,7 +72,7 @@ class StudentDetail(BaseModel):
     last_name: str
     date_of_birth: date
     gender: str | None = None
-    year_group: str | None = None
+    year_of_study: str | None = None
     enrollment_date: date
     status: StudentStatus
     guardian_name: str | None = None
@@ -93,7 +93,7 @@ class StudentDetail(BaseModel):
     application_id: UUID | None = None
     district: District | None = None
     #: Every subject class the student is actively enrolled in, name-ordered.
-    current_classes: list[ClassRef] = Field(default_factory=list)
+    current_offerings: list[OfferingRef] = Field(default_factory=list)
     audit: AuditStamp | None = None
 
 
@@ -140,8 +140,8 @@ class StudentAssessmentGroup(BaseModel):
     recomputed here.
     """
 
-    class_subject_id: UUID
-    subject: SubjectRef | None = None
+    offering_id: UUID
+    subject: CourseRef | None = None
     term_grade: StudentTermGrade
     assessments: list[StudentAssessmentLine] = Field(default_factory=list)
 
@@ -188,9 +188,10 @@ class StudentCreateRequest(BaseModel):
     `status` is accepted here (defaults active). Lifecycle CHANGES after creation
     go through POST /students/{id}/status — not PATCH.
 
-    D29: `class_ids` replaces the old single `section_id` and enrols the student into
-    every listed subject class for the active semester in the same transaction, so the
-    office can register a sixth-former and their whole subject load in one action.
+    `offering_ids` (`class_ids` in D29, renamed by D31) replaces the old single
+    `section_id` and enrols the student into every listed offering for the active
+    semester in the same transaction, so the office can register a student and their
+    whole course load in one action.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -205,7 +206,7 @@ class StudentCreateRequest(BaseModel):
     last_name: str = Field(min_length=1, max_length=50)
     date_of_birth: date
     gender: str | None = Field(default=None, max_length=40)
-    year_group: str | None = Field(default=None, max_length=50)
+    year_of_study: str | None = Field(default=None, max_length=50)
     enrollment_date: date
     status: StudentStatus = StudentStatus.ACTIVE
     guardian_name: str | None = Field(default=None, max_length=160)
@@ -213,7 +214,7 @@ class StudentCreateRequest(BaseModel):
     guardian_email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=500)
     phone: str | None = Field(default=None, max_length=40)
-    class_ids: list[UUID] = Field(default_factory=list)
+    offering_ids: list[UUID] = Field(default_factory=list)
 
 
 class StudentUpdateRequest(BaseModel):
@@ -235,7 +236,7 @@ class StudentUpdateRequest(BaseModel):
     last_name: str | None = Field(default=None, min_length=1, max_length=50)
     date_of_birth: date | None = None
     gender: str | None = Field(default=None, max_length=40)
-    year_group: str | None = Field(default=None, max_length=50)
+    year_of_study: str | None = Field(default=None, max_length=50)
     enrollment_date: date | None = None
     guardian_name: str | None = Field(default=None, max_length=160)
     guardian_phone: str | None = Field(default=None, max_length=40)

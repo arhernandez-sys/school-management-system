@@ -1,11 +1,13 @@
+import type { OfferingRef } from '@shared/types/api';
 import type { TeacherStatus } from '@shared/types/enums';
 
+export type { OfferingRef };
+
 /**
- * Teachers feature wire types (api-spec §5 Module 4). The Teachers endpoints are not
- * in the served OpenAPI yet, so — unlike Subjects/Settings which use the orval-generated
- * models — this module hand-declares the response contracts it consumes. They match the
- * exact shapes the demo MSW handler (`handlers/teachers.ts`) returns, and the eventual
- * backend `TeacherListItem` / `TeacherDetail` shapes.
+ * Teachers feature wire types (api-spec §5 Module 4). The Teachers endpoints are not in the
+ * orval-covered surface (`orval.config.ts` generates auth / health / settings / courses), so
+ * this module hand-declares the response contracts it consumes. They match both the demo MSW
+ * handler (`handlers/teachers.ts`) and the backend `TeacherListItem` / `TeacherDetail`.
  */
 
 /** Row in the searchable directory (GET /teachers → Page[TeacherListItem]). */
@@ -16,31 +18,26 @@ export interface TeacherListItem {
   email: string;
   status: TeacherStatus;
   subject_specializations: string[];
-  /** Number of class_subjects this teacher is assigned to (directory convenience). */
+  /** Number of offerings this lecturer is assigned to (directory convenience). */
   assignment_count: number;
 }
 
-/** A section reference on a teacher's assignment. */
-export interface TeacherClassRef {
-  id: string;
-  name: string;
-  grade_level: string;
-}
-
-/** A subject reference on a teacher's assignment. */
-export interface TeacherSubjectRef {
-  id: string;
-  name: string;
-  code: string;
-}
-
-/** One class_subject a teacher is assigned to (Assignments tab). */
+/**
+ * One OFFERING a lecturer is assigned to (Assignments tab).
+ *
+ * **D31** — three fields collapsed into the shared `OfferingRef`. This carried
+ * `class_ref` (id + name + `grade_level`) beside a separate `subject` ref, because a
+ * homeroom and the subject taught in it were two rows; they are one row now, so a second
+ * ref could only ever restate the first. `is_active` went with `class_subjects.is_active`.
+ *
+ * The flat `offering_id` rides along beside the ref because the row LINKS to the gradebook,
+ * which is addressed by offering id — a link target should not have to reach into a nested
+ * object.
+ */
 export interface TeacherClassTaught {
-  class_subject_id: string;
-  class_ref: TeacherClassRef | null;
-  subject: TeacherSubjectRef | null;
+  offering_id: string;
+  offering: OfferingRef;
   is_lead: boolean;
-  is_active: boolean;
 }
 
 /** A rated area of subject expertise (0–100), rendered as a labelled progress bar. */

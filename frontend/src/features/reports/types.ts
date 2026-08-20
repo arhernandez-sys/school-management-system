@@ -8,9 +8,10 @@ export type GradeReportStatus = 'graded' | 'pending';
 /**
  * The student as printed on a report card / transcript / picker row.
  *
- * D29 replaced `section_id` / `section_name` / `grade_level` — all read off the
- * student's homeroom — with `year_group`, the student's own level. A sixth-former sits
- * many subject classes, so there is no single class whose name could head their card.
+ * D29 replaced `section_id` / `section_name` / `grade_level` — all read off the student's
+ * homeroom — with the student's own level, which **D30 renamed `year_of_study`** and
+ * narrowed to `enum('First','Second')`. A college student sits many courses, so there is no
+ * single class whose name could head their card.
  */
 export interface StudentRef {
   id: string;
@@ -18,7 +19,7 @@ export interface StudentRef {
   student_number: string;
   date_of_birth: string;
   status: string;
-  year_group: string | null;
+  year_of_study: string | null;
 }
 
 export interface SchoolIdentity {
@@ -74,16 +75,16 @@ export interface AttendanceSummary {
 export interface ReportCard {
   student: StudentRef;
   /**
-   * The student's level, e.g. "Lower 6". Replaced the old `section` block: the card
-   * covers every subject class they sit, so there is no one class to name (D29).
+   * The student's level — "First" or "Second". Replaced the old `section` block: the card
+   * covers every course they sit in the term, so there is no one class to name (D29).
    */
-  year_group: string | null;
+  year_of_study: string | null;
   semester: SemesterRef;
   school: SchoolIdentity;
   /**
    * The programme CODE, e.g. "BMAD" — the BAJC layout's `Program` label (D30 §D13).
-   * Null until a student is assigned a programme (Phase 4 §D12), so the document
-   * prints it blank today rather than inventing a value.
+   * Null only for a student with no programme registration; every seeded demo student
+   * carries one (§D12), so the document prints it.
    */
   program_code: string | null;
   /** `"<Term>, <Mon YYYY> - <Mon YYYY>"`, e.g. "Summer, July 2026 - August 2026". */

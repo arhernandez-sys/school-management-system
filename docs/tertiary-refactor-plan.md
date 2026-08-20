@@ -335,6 +335,16 @@ Wire values, routes, table and column names are untouched.
 
 ### D2. `courses` becomes the catalog — without orphaning anything (decision #2)
 
+> ⚠️ **SUPERSEDED IN PART BY D31 — read `docs/tertiary-offerings-refactor-plan.md` first.**
+> Everything below still describes how the catalog got here. What has since changed:
+> `class_subjects` **no longer exists** (it collapsed into `course_offerings`), so the
+> `subject_id` columns discussed in step 3 are gone with it — the offering carries
+> `course_id` directly. The `/subjects` route, the `Subject` ORM name and the three
+> `subject_*` error codes were renamed to `course*` in D31 as well, which means the
+> refinement note in step 3 ("the columns keep the name `subject_id`") no longer holds:
+> the cosmetic-gain argument stopped applying once the generated column and index it was
+> protecting were dropped anyway.
+
 `subjects.id` is already `uuid`, and `courses.id` will be. So:
 
 1. **Reshape `courses`** to the house style: `id uuid PK` (replacing the non-auto-increment
@@ -361,7 +371,23 @@ Result: `assessment_grades → assessments → class_subjects → courses.credit
 GPA possible. `classes` (the D29 subject class) becomes the **course offering/section**;
 `class_enrollments` is already the student↔offering link.
 
+> **D31 shortened that chain.** It is now
+> `assessment_grades → assessments → course_offerings → courses.credits`: the
+> `class_subjects` hop is gone, because "which course is this?" is a column on the offering
+> rather than a join. The last sentence above turned out to be the whole of D31 — `classes`
+> did become the course offering, but only by also becoming **semester-scoped**, which a
+> `classes` row (carrying `academic_year_id` and no `semester_id`) could not be.
+
 ### D3. Two term concepts
+
+> ⚠️ **D31 EXTENDED THIS — read `docs/tertiary-offerings-refactor-plan.md`.** The two
+> concepts below are still the right two, and keeping them apart is still the point. What
+> D31 added is that the **offering itself now names its calendar term**
+> (`course_offerings.semester_id`, replacing `classes.academic_year_id`). Until then the
+> calendar term was tracked on `class_enrollments`, `assessments` and
+> `term_grade_snapshots` — everywhere EXCEPT the thing being offered — so "Programming I,
+> Semester 1" and "Programming I, Semester 2" were two same-year rows distinguishable only
+> by their names.
 
 - **Calendar term** — the existing `semesters` table. Drop `CHECK (sequence IN (1,2))` and the
   2-per-year unique; add `term_type enum('summer','semester','spring')` and

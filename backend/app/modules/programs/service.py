@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import Conflict, NotFound
 from app.core.pagination import PageParams, paginate
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.programs.models import Program, ProgramCourse
 from app.modules.programs.schemas import (
     CourseRef,
@@ -131,9 +131,9 @@ def _curriculum_totals(
         select(
             ProgramCourse.program_id,
             func.count(ProgramCourse.id),
-            func.coalesce(func.sum(Subject.credits), 0),
+            func.coalesce(func.sum(Course.credits), 0),
         )
-        .join(Subject, Subject.id == ProgramCourse.course_id)
+        .join(Course, Course.id == ProgramCourse.course_id)
         .where(ProgramCourse.program_id.in_(program_ids))
         .group_by(ProgramCourse.program_id)
     ).all()
@@ -191,10 +191,10 @@ def _curriculum(db: Session, program_id: uuid.UUID) -> list[TermBlock]:
     print them, and it keeps the block stable as rows are added.
     """
     rows = db.execute(
-        select(ProgramCourse, Subject)
-        .join(Subject, Subject.id == ProgramCourse.course_id)
+        select(ProgramCourse, Course)
+        .join(Course, Course.id == ProgramCourse.course_id)
         .where(ProgramCourse.program_id == program_id)
-        .order_by(ProgramCourse.term_order.asc(), Subject.code.asc())
+        .order_by(ProgramCourse.term_order.asc(), Course.code.asc())
     ).all()
 
     blocks: list[TermBlock] = []
@@ -371,8 +371,8 @@ def add_program_course(
     program = _program_or_404(db, program_id)
 
     course = db.scalar(
-        select(Subject).where(
-            Subject.id == payload.course_id, Subject.deleted_at.is_(None)
+        select(Course).where(
+            Course.id == payload.course_id, Course.deleted_at.is_(None)
         )
     )
     if course is None:

@@ -61,7 +61,7 @@ export function useNotifications(): NotificationsState {
         out.push({
           id: `revision:${row.id}`,
           title: `Grade revision · ${row.student?.full_name ?? 'a student'}`,
-          preview: `${row.subject_code ?? row.subject_name} · ${row.original_score ?? '—'} → ${row.proposed_score} · asked by ${row.requested_by_name}`,
+          preview: `${row.offering?.label ?? row.offering?.course.name ?? 'a course'} · ${row.original_score ?? '—'} → ${row.proposed_score} · asked by ${row.requested_by_name}`,
         });
       }
     }

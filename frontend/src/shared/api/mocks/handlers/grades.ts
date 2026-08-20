@@ -3,20 +3,21 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
-  assessmentsForClassSubject,
-  classSubjectsForYear,
-  classSubjectsOwnedByTeacher,
+  assessmentsForOffering,
   computeTermGrade,
   getActiveSemester,
   getActiveYear,
-  getClassSubject,
-  getSection,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
-  classSubjectsForStudent,
-  getSubject,
   getTeacher,
   gradebookFor,
   letterFor,
+  offeringLabel,
+  offeringsForStudent,
+  offeringsForYear,
+  offeringsOwnedByTeacher,
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoAssessment, DemoAssessmentGrade } from '@shared/api/mocks/demo/dataset';
 import { errorResponse } from './_helpers';
@@ -32,12 +33,18 @@ import { NUDGE_COOLDOWN_SECONDS, nudgeRetryAfter, recordNudge } from './_nudges'
  * recomputes term grades (compute-on-read, architecture §7.1).
  *
  * Endpoints implemented:
- *  - GET  /grades/class-subjects       — the class_subject picker (role-scoped)
- *  - GET  /grades/class-subject/{id}    — the gradebook read (grid)
- *  - PUT  /assessments/{id}/grades      — bulk grade entry/update (the only write path)
+ *  - GET  /grades/offerings         — the gradebook picker (role-scoped)
+ *  - GET  /grades/offering/{id}     — the gradebook read (grid)
+ *  - PUT  /assessments/{id}/grades  — bulk grade entry/update (the only write path)
  *  - POST /assessments/{id}/release | /unrelease — release control
- *  - GET  /grades/term                  — computed-on-read term grade(s)
- *  - GET  /grades/me                    — the student's own released grades
+ *  - GET  /grades/term              — computed-on-read term grade(s)
+ *  - GET  /grades/me                — the student's own released grades
+ *
+ * **D31** — the two `/grades/class-subject…` paths named the `class_subjects` join table,
+ * which no longer exists, and the gradebook's ref lost its hand-built `display_name` in
+ * favour of the server-derived `offering.label`. One offering, one gradebook, one id: the
+ * ownership guard that used to be `assert_teacher_owns_class_subject` is now the same
+ * question as owning the offering, which is why the two server-side asserts merged.
  *
  * This file is owned by the Grades agent. Do NOT touch handlers/index.ts.
  */
@@ -46,8 +53,8 @@ const SESSION_COOKIE = 'sis_mock_session';
 
 // ── current-user resolution (mirrors auth.ts session-role cookie) ────────────────
 // The demo teacher login ("teacher") is Maria Reyes → teach-1; the demo student
-// login ("student") is Ana Lopez → stu-1. We resolve the acting profile from the
-// role cookie so ownership scoping (teacher sees own class_subjects) works offline.
+// login ("student") is Freddy Lopez → stu-1. We resolve the acting profile from the
+// role cookie so ownership scoping (a lecturer sees their own offerings) works offline.
 function sessionRole(cookies: Record<string, string>): string {
   return cookies[SESSION_COOKIE] ?? 'principal';
 }
@@ -62,24 +69,46 @@ function currentStudentId(role: string): string | null {
 }
 
 // ── response-shape refs (api-spec §4 lightweight refs) ───────────────────────────
-function classSubjectRef(classSubjectId: string) {
-  const cs = getClassSubject(classSubjectId);
-  if (!cs) return null;
-  const section = getSection(cs.section_id);
-  const subject = getSubject(cs.subject_id);
-  const teachers = cs.teacher_ids
+/**
+ * The Grades module's offering ref: the SHARED `OfferingRef` plus the staffing this module
+ * genuinely needs (the picker names its lecturer, and `can_edit` is judged against them).
+ *
+ * Its predecessor was a private `ClassSubjectRef` keyed `id`, carrying a "fat" section ref
+ * (`grade_level`, the division letter) and a `display_name` it assembled itself as
+ * `"${section.name} · ${subject.name}"`. That was one of the five private derivations of the
+ * offering label; there is now exactly one, `offeringLabel`.
+ *
+ * `teachers[].full_name` stays — grades names its lecturers rather than administering them,
+ * so it keeps the `{ id, full_name }` shape and omits the directory's `staff_number`.
+ */
+function offeringRef(offeringId: string) {
+  const offering = getOffering(offeringId);
+  if (!offering) return null;
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
+  const teachers = offering.teacher_ids
     .map((id) => getTeacher(id))
-    .filter((t): t is NonNullable<typeof t> => Boolean(t))
-    .map((t) => ({ id: t.id, full_name: t.full_name }));
+    .filter((tt): tt is NonNullable<typeof tt> => Boolean(tt))
+    .map((tt) => ({ id: tt.id, full_name: tt.full_name }));
   return {
-    id: cs.id,
-    section: section
-      ? { id: section.id, name: section.name, grade_level: section.grade_level, section: section.section }
-      : null,
-    subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
+    offering: {
+      id: offering.id,
+      course: course
+        ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+        : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+      semester: semester
+        ? {
+            id: semester.id,
+            name: semester.name,
+            sequence: semester.sequence,
+            is_active: semester.is_active,
+          }
+        : null,
+      section_code: offering.section_code,
+      label: offeringLabel(offering),
+    },
     teachers,
-    lead_teacher_id: cs.lead_teacher_id,
-    display_name: `${section?.name ?? 'Class'} · ${subject?.name ?? 'Subject'}`,
+    lead_teacher_id: offering.lead_teacher_id,
   };
 }
 
@@ -114,23 +143,33 @@ function assessmentSummary(a: DemoAssessment) {
   };
 }
 
-// The active-semester ref (single active term in the demo).
-function activeSemesterRef() {
-  const sem = D.semesters.find((s) => s.is_active);
+/**
+ * The term a gradebook is scoped to — the OFFERING's own semester, not "the active one".
+ *
+ * This used to return the school's active semester unconditionally, which was harmless while
+ * every offering lived in one year-scoped bucket. It is wrong now: opening the Semester-2
+ * offering of a course would have printed "Semester 1" above it.
+ *
+ * Shape is `{ id, name, sequence }` with no `is_active`: a gradebook is read for archived
+ * terms as readily as live ones, so "is this the current term" is not a fact about it.
+ */
+function semesterRefOf(offeringId: string) {
+  const offering = getOffering(offeringId);
+  const sem = offering ? getSemester(offering.semester_id) : undefined;
   return sem ? { id: sem.id, name: sem.name, sequence: sem.sequence } : null;
 }
 
 // ── the gradebook read payload ───────────────────────────────────────────────────
-function gradebookResponse(classSubjectId: string) {
-  const gb = gradebookFor(classSubjectId);
-  const csRef = classSubjectRef(classSubjectId);
+function gradebookResponse(offeringId: string) {
+  const gb = gradebookFor(offeringId);
+  const ref = offeringRef(offeringId);
   const categories = D.assessment_categories
-    .filter((c) => c.class_subject_id === classSubjectId)
+    .filter((c) => c.offering_id === offeringId)
     .map((c) => ({ id: c.id, name: c.name, weight: c.weight, drop_lowest_count: c.drop_lowest_count }));
-  const cs = getClassSubject(classSubjectId);
+  const offering = getOffering(offeringId);
   return {
-    class_subject: csRef,
-    semester: activeSemesterRef(),
+    offering: ref,
+    semester: semesterRefOf(offeringId),
     assessments: gb.assessments.map(assessmentSummary),
     categories,
     rows: gb.rows.map((row) => ({
@@ -141,7 +180,7 @@ function gradebookResponse(classSubjectId: string) {
       term_numeric: row.term_numeric,
       term_letter: row.term_letter,
     })),
-    drop_lowest_applied: (cs?.drop_lowest_count ?? 0) > 0,
+    drop_lowest_applied: (offering?.drop_lowest_count ?? 0) > 0,
   };
 }
 
@@ -171,53 +210,60 @@ interface GradeEntryBody {
 }
 
 export const gradesHandlers = [
-  // ── Class-subject picker (which gradebooks the caller may open) ────────────────
-  // Teacher → own offerings; Principal/Secretary → all active offerings.
-  http.get(`${API_BASE_URL}/grades/class-subjects`, ({ cookies, request }) => {
+  // ── Offering picker (which gradebooks the caller may open) ─────────────────────
+  // Lecturer → own offerings; Dean/Registrar → every live offering.
+  http.get(`${API_BASE_URL}/grades/offerings`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     const teacherId = currentTeacherId(role);
     // Per-module year switcher: scope the offerings to the chosen year (default active).
+    // The year resolves THROUGH each offering's semester — there is no year column.
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
-    const yearCsIds = yearId ? new Set(classSubjectsForYear(yearId).map((c) => c.id)) : null;
-    let offerings = teacherId
-      ? classSubjectsOwnedByTeacher(teacherId)
-      : yearId
-        ? classSubjectsForYear(yearId)
-        : D.class_subjects.filter((c) => c.is_active);
-    if (teacherId && yearCsIds) offerings = offerings.filter((c) => yearCsIds.has(c.id));
+    const inYear = yearId ? offeringsForYear(yearId) : D.offerings.filter((o) => !o.is_archived);
+    const offerings = teacherId
+      ? offeringsOwnedByTeacher(teacherId).filter((o) => inYear.some((y) => y.id === o.id))
+      : inYear;
     const items = offerings
-      .map((cs) => {
-        const ref = classSubjectRef(cs.id);
+      .map((offering) => {
+        const ref = offeringRef(offering.id);
         if (!ref) return null;
-        const asmts = assessmentsForClassSubject(cs.id);
         return {
           ...ref,
-          assessment_count: asmts.length,
-          // Whether the CURRENT caller may enter grades here (teacher owns it).
-          can_edit: role === 'teacher' && teacherId != null && cs.teacher_ids.includes(teacherId),
+          assessment_count: assessmentsForOffering(offering.id).length,
+          // Whether the CURRENT caller may enter grades here (they teach it).
+          can_edit:
+            role === 'teacher' && teacherId != null && offering.teacher_ids.includes(teacherId),
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x))
-      .sort((a, b) => a.display_name.localeCompare(b.display_name));
+      // Ordered by course code then section code, never by the formatted label:
+      // "MATH1110-2" would sort before "MATH1110-10".
+      .sort(
+        (a, b) =>
+          (a.offering.course.code ?? '').localeCompare(b.offering.course.code ?? '') ||
+          (a.offering.section_code ?? '').localeCompare(b.offering.section_code ?? ''),
+      );
     return HttpResponse.json({ items });
   }),
 
   // ── The gradebook read ─────────────────────────────────────────────────────────
-  http.get(`${API_BASE_URL}/grades/class-subject/:classSubjectId`, ({ params, cookies }) => {
-    const classSubjectId = String(params.classSubjectId);
-    const cs = getClassSubject(classSubjectId);
-    if (!cs) return errorResponse(404, 'not_found', 'Gradebook not found.');
+  http.get(`${API_BASE_URL}/grades/offering/:offeringId`, ({ params, cookies }) => {
+    const offeringId = String(params.offeringId);
+    const offering = getOffering(offeringId);
+    if (!offering) return errorResponse(404, 'not_found', 'Gradebook not found.');
 
     const role = sessionRole(cookies);
     const teacherId = currentTeacherId(role);
-    // Teachers may only open gradebooks they own (assert_teacher_owns_class_subject).
-    if (role === 'teacher' && teacherId != null && !cs.teacher_ids.includes(teacherId)) {
+    // A lecturer may only open gradebooks they teach (`assert_teacher_owns_offering`, which
+    // is the merge of the old owns-section and owns-class_subject asserts). 404, not 403 —
+    // an unowned-but-real gradebook must answer exactly like a nonexistent one.
+    if (role === 'teacher' && teacherId != null && !offering.teacher_ids.includes(teacherId)) {
       return errorResponse(404, 'not_found', 'Gradebook not found.');
     }
-    const body = gradebookResponse(classSubjectId);
-    // Expose whether THIS caller may write (drives read-only P/S view).
-    const canEdit = role === 'teacher' && teacherId != null && cs.teacher_ids.includes(teacherId);
+    const body = gradebookResponse(offeringId);
+    // Expose whether THIS caller may write (drives the read-only Dean/Registrar view).
+    const canEdit =
+      role === 'teacher' && teacherId != null && offering.teacher_ids.includes(teacherId);
     // Reported for EVERY viewer, not just writers: a Registrar asked why the lecturer
     // cannot enter grades needs to see the same closed window (D30 §D6).
     const window = gradeWindow();
@@ -236,16 +282,20 @@ export const gradesHandlers = [
     const asmt = D.assessments.find((a) => a.id === assessmentId);
     if (!asmt) return errorResponse(404, 'not_found', 'Assessment not found.');
 
-    const cs = getClassSubject(asmt.class_subject_id);
-    if (!cs) return errorResponse(404, 'not_found', 'Class subject not found.');
+    const offering = getOffering(asmt.offering_id);
+    if (!offering) return errorResponse(404, 'not_found', 'Offering not found.');
 
-    // A teacher may only write grades for offerings they are assigned to
-    // (assert_teacher_owns_class_subject) — mirrors the gradebook read guard so the
-    // new per-assessment grading page can't be used to write into an un-owned class.
+    // A lecturer may only write grades for offerings they teach (`assert_teacher_owns_
+    // offering`) — mirrors the gradebook read guard, so the per-assessment grading page
+    // cannot be used to write into an offering they do not teach.
     const writerRole = sessionRole(cookies);
     const writerTeacherId = currentTeacherId(writerRole);
-    if (writerRole === 'teacher' && writerTeacherId != null && !cs.teacher_ids.includes(writerTeacherId)) {
-      return errorResponse(403, 'forbidden', 'You are not assigned to this class.');
+    if (
+      writerRole === 'teacher' &&
+      writerTeacherId != null &&
+      !offering.teacher_ids.includes(writerTeacherId)
+    ) {
+      return errorResponse(403, 'forbidden', 'You do not teach this offering.');
     }
 
     // The grade-submission deadline (D30 §D6). Checked BEFORE any validation or mutation,
@@ -270,7 +320,7 @@ export const gradesHandlers = [
     // Active-member set: grade entry is allowed ONLY for actively enrolled students.
     const activeIds = new Set(
       D.enrollments
-        .filter((e) => e.section_id === cs.section_id && !e.unenrolled_at)
+        .filter((e) => e.offering_id === offering.id && !e.unenrolled_at)
         .map((e) => e.student_id),
     );
 
@@ -304,7 +354,7 @@ export const gradesHandlers = [
       return errorResponse(
         422,
         'student_not_enrolled',
-        'One or more students are not actively enrolled in this section.',
+        'One or more students are not actively enrolled in this offering.',
         { student_id: notEnrolled },
       );
     }
@@ -330,7 +380,10 @@ export const gradesHandlers = [
         existing.makeup_score = nextMakeup;
       } else {
         const enr = D.enrollments.find(
-          (e) => e.student_id === entry.student_id && e.section_id === cs.section_id && !e.unenrolled_at,
+          (e) =>
+            e.student_id === entry.student_id &&
+            e.offering_id === offering.id &&
+            !e.unenrolled_at,
         );
         D.assessment_grades.push({
           id: `grd-new-${assessmentId}-${entry.student_id}`,
@@ -385,16 +438,16 @@ export const gradesHandlers = [
     const asmt = D.assessments.find((a) => a.id === String(params.assessmentId));
     if (!asmt) return errorResponse(404, 'not_found', 'Assessment not found.');
 
-    const cs = getClassSubject(asmt.class_subject_id);
-    const teachers = (cs?.teacher_ids ?? [])
+    const nudgeOffering = getOffering(asmt.offering_id);
+    const teachers = (nudgeOffering?.teacher_ids ?? [])
       .map((id) => getTeacher(id))
-      .filter((t): t is NonNullable<typeof t> => Boolean(t))
-      .map((t) => ({ id: t.id, full_name: t.full_name }));
+      .filter((tt): tt is NonNullable<typeof tt> => Boolean(tt))
+      .map((tt) => ({ id: tt.id, full_name: tt.full_name }));
     if (teachers.length === 0) {
       return errorResponse(
         409,
         'no_assigned_teacher',
-        'This subject offering has no assigned teacher to remind.',
+        'This offering has no assigned lecturer to remind.',
       );
     }
 
@@ -444,20 +497,21 @@ export const gradesHandlers = [
     const url = new URL(request.url);
     const scope = url.searchParams.get('scope');
     const role = sessionRole(cookies);
-    const classSubjectId = url.searchParams.get('class_subject_id');
+    const offeringId = url.searchParams.get('offering_id');
 
-    // Student self-scope: term grade per subject in their section (released only).
+    // Student self-scope: one term grade per offering they take (released only).
     if (scope === 'me' || role === 'student') {
       const studentId = currentStudentId(role) ?? url.searchParams.get('student_id');
       if (!studentId) return errorResponse(404, 'not_found', 'Student not found.');
-      // D29: one term grade per subject class the student takes.
-      const offerings = classSubjectsForStudent(studentId).filter((c) => c.is_active);
-      const items = offerings.map((cs) => {
-        const term = computeTermGrade(studentId, cs.id);
+      const offerings = offeringsForStudent(studentId).filter((o) => !o.is_archived);
+      const items = offerings.map((offering) => {
+        const term = computeTermGrade(studentId, offering.id);
         return {
           student: studentRef(studentId),
-          class_subject: classSubjectRef(cs.id),
-          semester: activeSemesterRef(),
+          offering: offeringRef(offering.id),
+          // The OFFERING's term, not the school's active one — the row describes work done
+          // in a specific semester and may well be a past one.
+          semester: semesterRefOf(offering.id),
           numeric: term.numeric,
           letter: term.letter,
           weight_base_used: term.weight_base_used,
@@ -467,13 +521,13 @@ export const gradesHandlers = [
       return HttpResponse.json({ items });
     }
 
-    // Teacher / P/S: a single class_subject's term grades for the whole roster.
-    if (classSubjectId) {
-      const gb = gradebookFor(classSubjectId);
+    // Lecturer / Dean / Registrar: one offering's term grades for the whole roster.
+    if (offeringId) {
+      const gb = gradebookFor(offeringId);
       const items = gb.rows.map((row) => ({
         student: studentRef(row.student.id),
-        class_subject: classSubjectRef(classSubjectId),
-        semester: activeSemesterRef(),
+        offering: offeringRef(offeringId),
+        semester: semesterRefOf(offeringId),
         numeric: row.term_numeric,
         letter: row.term_letter,
         is_frozen: false,
@@ -489,23 +543,22 @@ export const gradesHandlers = [
     const role = sessionRole(cookies);
     const studentId = currentStudentId(role) ?? currentStudentId('student');
     if (!studentId) return errorResponse(404, 'not_found', 'Student profile not found.');
-    // Global student year switcher: resolve the CLASSES the student sat that year (D29 —
-    // there is no single section). Past-year offerings are inactive, so scope by class
-    // membership rather than is_active.
+    // Global student year switcher: resolve the OFFERINGS the student sat that year.
+    // Past-year offerings are archived, so scope by enrolment rather than by the flag.
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
     // Narrows within the year — the switcher now picks a year·semester pair, so both the
     // listed rows AND the term average below must come from the same semester (see the
     // note on computeReleasedTermGrade).
     const semesterId = url.searchParams.get('semester_id');
-    // No `is_active` filter — a past year's offerings are all inactive by design, and the
+    // No `is_archived` filter — a past year's offerings are all archived by design, and the
     // year switcher must still render them (the trap documented above).
-    const offerings = classSubjectsForStudent(studentId, yearId);
+    const offerings = offeringsForStudent(studentId, yearId);
 
-    const bySubject = offerings.map((cs) => {
-      const csRef = classSubjectRef(cs.id);
-      const lead = cs.lead_teacher_id ? getTeacher(cs.lead_teacher_id) : undefined;
-      const asmts = assessmentsForClassSubject(cs.id).filter(
+    const bySubject = offerings.map((offering) => {
+      const ref = offeringRef(offering.id);
+      const lead = offering.lead_teacher_id ? getTeacher(offering.lead_teacher_id) : undefined;
+      const asmts = assessmentsForOffering(offering.id).filter(
         (a) => !semesterId || a.semester_id === semesterId,
       );
       const assessments = asmts
@@ -536,9 +589,9 @@ export const gradesHandlers = [
       // Term numeric from released, graded assessments only (student-facing) — and from
       // the SAME semester as the rows above, so the average is derivable from what the
       // student can see rather than silently spanning the whole year.
-      const term = computeReleasedTermGrade(studentId, cs.id, semesterId);
+      const term = computeReleasedTermGrade(studentId, offering.id, semesterId);
       return {
-        class_subject: csRef,
+        offering: ref,
         teacher: lead ? { id: lead.id, full_name: lead.full_name } : null,
         assessments,
         term_numeric: term.numeric,
@@ -563,10 +616,10 @@ export const gradesHandlers = [
  */
 function computeReleasedTermGrade(
   studentId: string,
-  classSubjectId: string,
+  offeringId: string,
   semesterId?: string | null,
 ): { numeric: number | null; letter: string | null } {
-  const asmts = assessmentsForClassSubject(classSubjectId)
+  const asmts = assessmentsForOffering(offeringId)
     .filter((a) => a.status === 'graded')
     .filter((a) => !semesterId || a.semester_id === semesterId);
   let weightedSum = 0;

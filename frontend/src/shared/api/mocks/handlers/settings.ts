@@ -112,6 +112,10 @@ function userListItem(u: DemoUser) {
   };
 }
 
+/** Mirrors `settings/service._LOGO_ALLOWED_TYPES` / `_LOGO_MAX_BYTES` exactly. */
+const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
+
 export const settingsHandlers = [
   // ── School profile ────────────────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/settings/school`, () => HttpResponse.json(schoolProfileRead())),
@@ -127,6 +131,51 @@ export const settingsHandlers = [
     if (body.contact_email !== undefined) D.school_profile.email = body.contact_email ?? '';
     if (body.contact_phone !== undefined) D.school_profile.phone = body.contact_phone ?? '';
     return HttpResponse.json(schoolProfileRead());
+  }),
+
+  /**
+   * POST /settings/school/logo — multipart image upload (Dean only).
+   *
+   * **This handler was MISSING**, and the way it was missing is the point: with
+   * `onUnhandledRequest: 'bypass'` an unmatched request falls through to the NETWORK, so in
+   * demo mode the upload silently hit a server that is not there and failed with nothing on
+   * screen to say so. `scratchpad/check_msw_routes.mjs` is what found it, by diffing the
+   * registered routes against `openapi.json` — neither tsc nor eslint can see a missing
+   * route.
+   *
+   * The VALIDATION is real and mirrors `settings/service.validate_logo_upload`: 415 for a
+   * non-image, 413 past 2 MiB. Those two are the endpoint's live contract today.
+   *
+   * The STORAGE is not: object storage is unprovisioned (OQ-DB5), so the server validates,
+   * writes an audit row and returns `logo_url: null`. The mock returns the profile's
+   * CURRENT url unchanged for the same reason — echoing back a fake uploaded URL would
+   * certify a feature that does not exist, which is exactly the demo-vs-server divergence
+   * this project has already paid for twice.
+   */
+  http.post(`${API_BASE_URL}/settings/school/logo`, async ({ request, cookies }) => {
+    const role = cookies['sis_mock_session'] ?? 'principal';
+    if (role !== 'principal') {
+      return errorResponse(403, 'forbidden', 'Only the Dean can change the school logo.');
+    }
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!(file instanceof File)) {
+      return errorResponse(422, 'validation_error', 'An image file is required.', {
+        file: ['Field required'],
+      });
+    }
+    if (!LOGO_ALLOWED_TYPES.includes(file.type)) {
+      return errorResponse(
+        415,
+        'unsupported_media_type',
+        'Unsupported image type; use PNG, JPEG, WEBP, or SVG.',
+      );
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      return errorResponse(413, 'file_too_large', 'Logo file is too large (max 2 MiB).');
+    }
+    // Deliberately unchanged — see the storage note above.
+    return HttpResponse.json({ logo_url: D.school_profile.logo_url });
   }),
 
   // ── Active term ───────────────────────────────────────────────────────────────

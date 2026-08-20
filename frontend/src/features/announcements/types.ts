@@ -1,11 +1,14 @@
 /**
  * Announcements module wire types (api-spec §5 Module 9).
  *
- * There is no orval-generated client for Announcements yet, so these describe the
- * exact JSON the MSW handler (handlers/announcements.ts) returns. They mirror the
- * api-spec response models (AnnouncementListItem / AnnouncementDetail / UserRef /
- * ClassRef) in snake_case. When the backend endpoints land in the served OpenAPI
- * these will be replaced by generated types.
+ * There is no orval-generated client for Announcements (`orval.config.ts` covers the
+ * auth / health / settings / courses tags), so these describe the exact JSON the API and the
+ * MSW handler return, in snake_case.
+ *
+ * **D31** — a `class`-audience announcement targets an OFFERING. The audience VALUE stays
+ * `'class'`: it is an enum member shared by the ORM, the API and these handlers, and
+ * renaming an enum member is a migration rather than a relabel. What changed is what it
+ * points at — `class_ref` (a homeroom, with a `grade_level`) became `offering`.
  */
 import type { AnnouncementAudience, Role } from '@shared/types/enums';
 import type { Page } from '@shared/types/api';
@@ -19,11 +22,18 @@ export interface UserRef {
   role: Role;
 }
 
-/** Section reference for a `class`-audience announcement. */
-export interface ClassRef {
+/**
+ * Offering reference for a `class`-audience announcement.
+ *
+ * A NARROW ref, deliberately not the shared `OfferingRef`: a feed row prints the label and
+ * (on the compose picker) the course name, and nothing here reads the term or the credits.
+ * The predecessor carried `grade_level`, a column that no longer exists.
+ */
+export interface AnnouncementOfferingRef {
   id: string;
-  name: string;
-  grade_level: string;
+  /** Server-derived "MATH1110-01". Print it; never rebuild it. */
+  label: string;
+  course_name: string | null;
 }
 
 /** Feed row (GET /announcements). */
@@ -32,7 +42,7 @@ export interface AnnouncementListItem {
   title: string;
   body_preview: string;
   audience: AnnouncementAudience;
-  class_ref: ClassRef | null;
+  offering: AnnouncementOfferingRef | null;
   author: UserRef;
   published_at: string;
   expires_at: string | null;
@@ -45,7 +55,7 @@ export interface AnnouncementDetail {
   title: string;
   body: string;
   audience: AnnouncementAudience;
-  class_ref: ClassRef | null;
+  offering: AnnouncementOfferingRef | null;
   author: UserRef;
   published_at: string;
   expires_at: string | null;
@@ -67,16 +77,12 @@ export interface AnnouncementWritePayload {
   title: string;
   body: string;
   audience: AnnouncementAudience;
-  class_id?: string | null;
+  offering_id?: string | null;
   expires_at?: string | null;
 }
 
 /** The read-state filter surfaced in the feed toolbar. */
 export type ReadFilter = 'all' | 'unread';
 
-/** A section the caller may target (GET /announcements/target-classes). */
-export interface TargetClass {
-  id: string;
-  name: string;
-  grade_level: string;
-}
+/** An offering the caller may target (GET /announcements/target-offerings). */
+export type TargetOffering = AnnouncementOfferingRef;

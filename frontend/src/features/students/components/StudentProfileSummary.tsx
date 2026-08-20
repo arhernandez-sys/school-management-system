@@ -93,32 +93,32 @@ export interface StudentProfileSummaryProps {
  * empty, keeping the card compact for sparse profiles.
  */
 export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
-  const classCount = student.current_classes?.length ?? 0;
+  const offeringCount = student.current_offerings?.length ?? 0;
   const age = student.date_of_birth ? ageFrom(student.date_of_birth) : null;
 
-  // D29: the old Grade + Section tiles were read off the student's ONE homeroom. Year group
-  // is now the student's own field, and "how many subject classes" replaces the section
-  // letter — the classes themselves are listed by StudentEnrollmentPanel, so repeating their
-  // names here would just duplicate that card.
+  // D29: the old Grade + Section tiles were read off the student's ONE homeroom. The year
+  // of study is now the student's own field, and "how many courses" replaces the section
+  // letter — the offerings themselves are listed by StudentEnrollmentPanel, so repeating
+  // their names here would just duplicate that card.
   const stats: Array<{ label: string; value: ReactNode; color: StatCardColor; icon: ReactNode }> = [
     ...(age !== null
       ? [{ label: 'Age', value: age, color: 'primary' as StatCardColor, icon: <CakeOutlinedIcon fontSize="small" /> }]
       : []),
-    ...(student.year_group
+    ...(student.year_of_study
       ? [
           {
-            label: 'Year group',
-            value: student.year_group,
+            label: 'Year of study',
+            value: student.year_of_study,
             color: 'secondary' as StatCardColor,
             icon: <SchoolOutlinedIcon fontSize="small" />,
           },
         ]
       : []),
-    ...(classCount > 0
+    ...(offeringCount > 0
       ? [
           {
-            label: classCount === 1 ? 'Class' : 'Classes',
-            value: classCount,
+            label: offeringCount === 1 ? 'Course' : 'Courses',
+            value: offeringCount,
             color: 'info' as StatCardColor,
             icon: <ClassOutlinedIcon fontSize="small" />,
           },
@@ -170,7 +170,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
             />
             {/* D29: the header chip names the student's LEVEL, not a homeroom — they no
                 longer have one class that identifies them. */}
-            {student.year_group && <StatusBadge label={student.year_group} kind="info" />}
+            {student.year_of_study && <StatusBadge label={student.year_of_study} kind="info" />}
           </Stack>
         </Stack>
 

@@ -3,24 +3,19 @@ import type { RequestHandler } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
-  DEMO_IDS,
-  assessmentsForClassSubject,
-  classSubjectsForYear,
-  classSubjectsOwnedByTeacher,
+  assessmentsForOffering,
   currentDemoStudent,
   getActiveYear,
-  getClassSubject,
-  getSection,
-  getSubject,
+  getCourse,
+  getOffering,
+  getSemester,
   gradesForAssessment,
+  offeringLabel,
+  offeringsForStudent,
+  offeringsForYear,
   paginate,
-  classSubjectsForStudent,
 } from '@shared/api/mocks/demo/dataset';
-import type {
-  DemoAssessment,
-  DemoAssessmentCategory,
-  DemoClassSubject,
-} from '@shared/api/mocks/demo/dataset';
+import type { DemoAssessment, DemoOffering } from '@shared/api/mocks/demo/dataset';
 import type { AssessmentStatus, AssessmentType } from '@shared/types/enums';
 import { errorResponse, listParamsFrom } from './_helpers';
 
@@ -33,53 +28,69 @@ import { errorResponse, listParamsFrom } from './_helpers';
  *
  * 🎬 DEMO NOTE — TEACHER SCOPE: the demo teacher session carries the placeholder
  * `teacher_profile_id = "mock-teacher-profile"` (fixtures.ts), which is not one of the
- * seeded `teach-N` ids. So a teacher would otherwise own zero class_subjects. To keep
- * the teacher demo meaningful, `resolveTeacherId` maps that placeholder onto a real
- * seeded teacher (`teach-1`, Maria Reyes) who leads several offerings. P/S callers see
- * every class_subject; the demo does not receive the caller role on the wire, so the
- * picker feed (`GET /assessments/class-subjects`) accepts an explicit `scope`/`teacher`
- * hint from the screen (which knows the role) and defaults to view-all otherwise.
+ * seeded `teach-N` ids. So a lecturer would otherwise own zero offerings. To keep the
+ * lecturer demo meaningful, `resolveTeacherId` maps that placeholder onto a real seeded
+ * teacher (`teach-1`, Maria Reyes) who leads several offerings.
+ *
+ * **D31 — the picker no longer takes a `scope` / `teacher_profile_id` hint.** It used to,
+ * on the reasoning that "the demo does not receive the caller role on the wire". It does:
+ * the `sis_mock_session` cookie carries it, and every other handler in this directory
+ * already reads it. Accepting a caller-supplied profile id was a request to be trusted
+ * about whose offerings to return — the mock's version of the same soft trust the real
+ * server would never grant. Scope is now derived from the cookie alone.
+ *
+ * The list endpoint still reads `scope=me`, because that is a REAL query param on the
+ * server (`GET /assessments?scope=me`) rather than an identity claim.
  *
  * Endpoints (api-spec): GET /assessments, GET /assessments/{id}, POST /assessments,
  * PATCH /assessments/{id}, POST /assessments/{id}/status (M1), DELETE /assessments/{id},
- * categories GET + write-family under /classes/{id}/subjects/{csId}/categories.
- * Plus a demo-only picker feed: GET /assessments/class-subjects.
+ * plus the offering picker feed `GET /assessments/offerings`.
+ *
+ * **Categories moved out of this file** to `handlers/offerings.ts`, following the path:
+ * they were mounted under `/classes/{id}/subjects/{csId}/categories` and are now
+ * `/offerings/{id}/categories`, which is offerings-owned.
  */
 const D = DEMO_DATASET;
 
 /** The seeded teacher a demo teacher login stands in for (keeps the picker non-empty). */
 const DEMO_STANDIN_TEACHER_ID = 'teach-1';
 
-/**
- * Resolve a wire `teacher_profile_id` to a seeded demo teacher id. The demo fixture's
- * placeholder is remapped so the teacher scope has real owned offerings.
- */
-function resolveTeacherId(raw: string | null): string | null {
-  if (!raw) return null;
-  if (raw === 'mock-teacher-profile') return DEMO_STANDIN_TEACHER_ID;
-  return raw;
-}
-
 // ── Response shaping (api-spec §4.4 refs + list/detail models) ─────────────────────
-function classSubjectRef(cs: DemoClassSubject) {
-  const section = getSection(cs.section_id);
-  const subject = getSubject(cs.subject_id);
+/**
+ * The shared `OfferingRef`.
+ *
+ * Its predecessor built its own `label` as `"${section.name} · ${subject.name}"` — one of
+ * the five private derivations of that string D31 consolidated. The label is server-derived
+ * now, from `offeringLabel`, so the picker and the offerings list cannot disagree.
+ */
+function offeringRef(offering: DemoOffering) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
   return {
-    class_subject_id: cs.id,
-    section: section ? { id: section.id, name: section.name } : null,
-    subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
-    label:
-      section && subject ? `${section.name} · ${subject.name}` : (subject?.name ?? cs.id),
+    id: offering.id,
+    course: course
+      ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+      : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+    semester: semester
+      ? {
+          id: semester.id,
+          name: semester.name,
+          sequence: semester.sequence,
+          is_active: semester.is_active,
+        }
+      : null,
+    section_code: offering.section_code,
+    label: offeringLabel(offering),
   };
 }
 
 function assessmentListItem(a: DemoAssessment) {
-  const cs = getClassSubject(a.class_subject_id);
+  const offering = getOffering(a.offering_id);
   return {
     id: a.id,
     title: a.title,
     type: a.type,
-    class_subject: cs ? classSubjectRef(cs) : null,
+    offering: offering ? offeringRef(offering) : null,
     category_id: a.category_id,
     max_score: a.max_score,
     weight: a.weight,
@@ -103,16 +114,6 @@ function assessmentDetail(a: DemoAssessment) {
   };
 }
 
-function categoryDetail(c: DemoAssessmentCategory) {
-  return {
-    id: c.id,
-    class_subject_id: c.class_subject_id,
-    name: c.name,
-    weight: c.weight,
-    drop_lowest_count: c.drop_lowest_count,
-  };
-}
-
 // ── Status lifecycle (M1 / API-16) ─────────────────────────────────────────────────
 const LEGAL_TRANSITIONS: Record<AssessmentStatus, AssessmentStatus[]> = {
   draft: ['published'],
@@ -131,164 +132,67 @@ const VALID_STATUSES: readonly AssessmentStatus[] = ['draft', 'published', 'grad
 let newAssessmentSeq = 0;
 
 export const assessmentsHandlers: RequestHandler[] = [
-  // ── Picker feed (demo-only): caller-scoped class_subjects with labels ─────────────
-  // Query: `scope=me&teacher_profile_id=…` restricts to a teacher's owned offerings;
-  // otherwise (P/S) returns every offering. Sorted by label.
-  http.get(`${API_BASE_URL}/assessments/class-subjects`, ({ request, cookies }) => {
+  // ── Picker feed: caller-scoped offerings with derived labels ─────────────────────
+  //
+  // Scope comes from the SESSION COOKIE, not from the query string. The predecessor read
+  // `scope=me&teacher_profile_id=…` off the URL — i.e. it let the caller name whose
+  // offerings to return.
+  http.get(`${API_BASE_URL}/assessments/offerings`, ({ request, cookies }) => {
     const url = new URL(request.url);
     const role = cookies['sis_mock_session'] ?? 'principal';
-    const scope = url.searchParams.get('scope');
-    const teacherId = resolveTeacherId(url.searchParams.get('teacher_profile_id'));
-    // Per-module year switcher: scope offerings to the chosen year (default active).
+    // Per-module year switcher: scope offerings to the chosen year (default active). The
+    // year resolves THROUGH each offering's semester — an offering has no year column.
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
-    const yearCsIds = yearId ? new Set(classSubjectsForYear(yearId).map((c) => c.id)) : null;
 
-    let rows: DemoClassSubject[];
+    let rows: DemoOffering[];
     const student = currentDemoStudent(role);
     if (student) {
       /**
-       * Student scope: the subjects taught in the section they sat in THAT YEAR
-       * (FR-CLS-07). Two bugs lived in this branch and made the student's global
+       * Student scope: the offerings they sat in the SELECTED YEAR (FR-CLS-07).
+       *
+       * Two bugs lived in the ancestor of this branch and made the student's global
        * switcher look broken on "My Assessments":
        *
-       *  1. `yearCsIds` was computed above and then never applied here, and the section
-       *     came from `student.section_id` — a denormalisation of the ACTIVE-semester
-       *     section only. So the dropdown listed this year's subjects whichever year was
-       *     selected. Resolved via `sectionForStudentInYear` (enrollments) instead.
+       *  1. The year filter was computed and then never applied here, and the section came
+       *     from `student.section_id` — a denormalisation of the ACTIVE semester only. So
+       *     the dropdown listed this year's subjects whichever year was selected.
        *  2. `.filter(cs => cs.is_active)` emptied the dropdown for every archived year,
-       *     because a past year's offerings are all inactive by design. Section
-       *     membership already scopes the rows to the year, so the flag is redundant
-       *     here and actively harmful. `handlers/grades.ts` documents the same trap.
+       *     because a past year's offerings are all inactive by design. Enrolment already
+       *     scopes the rows to the year, so the flag was redundant and actively harmful.
+       *     `handlers/grades.ts` documents the same trap.
        */
-      // D29: every class the student sits, not the offerings of their one section.
-      rows = classSubjectsForStudent(student.id, yearId);
-    } else if (scope === 'me' && teacherId) {
-      rows = classSubjectsOwnedByTeacher(teacherId);
-      if (yearCsIds) rows = rows.filter((cs) => yearCsIds.has(cs.id));
+      rows = offeringsForStudent(student.id, yearId);
     } else {
-      rows = yearId ? classSubjectsForYear(yearId) : D.class_subjects.filter((cs) => cs.is_active);
+      const teacherId = role === 'teacher' ? DEMO_STANDIN_TEACHER_ID : null;
+      const inYear = yearId ? offeringsForYear(yearId) : D.offerings;
+      rows = teacherId
+        ? inYear.filter((o) => o.teacher_ids.includes(teacherId))
+        : inYear;
     }
 
+    // Ordered by course code then section code (`compareOfferings` semantics), never by
+    // the formatted label — "MATH1110-2" would sort before "MATH1110-10".
     const items = rows
-      .map(classSubjectRef)
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .slice()
+      .sort(
+        (a, b) =>
+          (getCourse(a.course_id)?.code ?? '').localeCompare(getCourse(b.course_id)?.code ?? '') ||
+          (a.section_code ?? '').localeCompare(b.section_code ?? ''),
+      )
+      .map(offeringRef);
     return HttpResponse.json({ items });
   }),
-
-  // ── Categories (weighting groups) — GET + write-family (api-spec §5.6) ────────────
-  http.get(
-    `${API_BASE_URL}/classes/:classId/subjects/:classSubjectId/categories`,
-    ({ params }) => {
-      const rows = D.assessment_categories.filter(
-        (c) => c.class_subject_id === params.classSubjectId,
-      );
-      return HttpResponse.json({ items: rows.map(categoryDetail) });
-    },
-  ),
-  http.post(
-    `${API_BASE_URL}/classes/:classId/subjects/:classSubjectId/categories`,
-    async ({ params, request }) => {
-      const csId = String(params.classSubjectId);
-      if (!getClassSubject(csId)) return errorResponse(404, 'not_found', 'Class subject not found.');
-      const body = (await request.json()) as {
-        name?: string;
-        weight?: number;
-        drop_lowest_count?: number;
-      };
-      const name = (body.name ?? '').trim();
-      if (!name) {
-        return errorResponse(422, 'validation_error', 'A category name is required.', {
-          name: ['Required.'],
-        });
-      }
-      if (
-        D.assessment_categories.some(
-          (c) => c.class_subject_id === csId && c.name.toLowerCase() === name.toLowerCase(),
-        )
-      ) {
-        return errorResponse(
-          409,
-          'duplicate_category_name',
-          'A category with this name already exists for this class subject.',
-        );
-      }
-      const created: DemoAssessmentCategory = {
-        id: `cat-new-${(newAssessmentSeq += 1)}`,
-        class_subject_id: csId,
-        name,
-        weight: typeof body.weight === 'number' && body.weight >= 0 ? body.weight : 1,
-        drop_lowest_count:
-          typeof body.drop_lowest_count === 'number' && body.drop_lowest_count >= 0
-            ? body.drop_lowest_count
-            : 0,
-      };
-      D.assessment_categories.push(created);
-      return HttpResponse.json(categoryDetail(created), { status: 201 });
-    },
-  ),
-  http.patch(
-    `${API_BASE_URL}/classes/:classId/subjects/:classSubjectId/categories/:categoryId`,
-    async ({ params, request }) => {
-      const cat = D.assessment_categories.find((c) => c.id === params.categoryId);
-      if (!cat) return errorResponse(404, 'not_found', 'Category not found.');
-      const body = (await request.json()) as {
-        name?: string;
-        weight?: number;
-        drop_lowest_count?: number;
-      };
-      if (body.name !== undefined) {
-        const name = body.name.trim();
-        if (!name) {
-          return errorResponse(422, 'validation_error', 'A category name is required.', {
-            name: ['Required.'],
-          });
-        }
-        if (
-          D.assessment_categories.some(
-            (c) =>
-              c.id !== cat.id &&
-              c.class_subject_id === cat.class_subject_id &&
-              c.name.toLowerCase() === name.toLowerCase(),
-          )
-        ) {
-          return errorResponse(
-            409,
-            'duplicate_category_name',
-            'A category with this name already exists for this class subject.',
-          );
-        }
-        cat.name = name;
-      }
-      if (typeof body.weight === 'number' && body.weight >= 0) cat.weight = body.weight;
-      if (typeof body.drop_lowest_count === 'number' && body.drop_lowest_count >= 0) {
-        cat.drop_lowest_count = body.drop_lowest_count;
-      }
-      return HttpResponse.json(categoryDetail(cat));
-    },
-  ),
-  http.delete(
-    `${API_BASE_URL}/classes/:classId/subjects/:classSubjectId/categories/:categoryId`,
-    ({ params }) => {
-      const cat = D.assessment_categories.find((c) => c.id === params.categoryId);
-      if (!cat) return errorResponse(404, 'not_found', 'Category not found.');
-      // FK SET NULL: referencing assessments lose their category.
-      for (const a of D.assessments) {
-        if (a.category_id === cat.id) a.category_id = null;
-      }
-      D.assessment_categories = D.assessment_categories.filter((c) => c.id !== cat.id);
-      return new HttpResponse(null, { status: 204 });
-    },
-  ),
 
   // ── Assessments list (Page[AssessmentListItem]) ───────────────────────────────────
   http.get(`${API_BASE_URL}/assessments`, ({ request, cookies }) => {
     const url = new URL(request.url);
     const role = cookies['sis_mock_session'] ?? 'principal';
-    const classSubjectId = url.searchParams.get('class_subject_id');
+    const offeringId = url.searchParams.get('offering_id');
     const type = url.searchParams.get('type');
     const status = url.searchParams.get('status');
+    // A REAL server-side param, unlike the retired `teacher_profile_id`: it says "restrict
+    // to mine", and the server decides who that is.
     const scope = url.searchParams.get('scope');
-    const teacherId = resolveTeacherId(url.searchParams.get('teacher_profile_id'));
 
     const semesterId = url.searchParams.get('semester_id');
 
@@ -296,43 +200,44 @@ export const assessmentsHandlers: RequestHandler[] = [
     const student = currentDemoStudent(role);
     if (student) {
       /**
-       * Student scope (server-enforced): only assessments taught in the section they sat
-       * in the SELECTED YEAR, and never unpublished drafts. A requested
-       * class_subject_id must be one of theirs.
+       * Student scope (server-enforced): only assessments on offerings they sat in the
+       * SELECTED YEAR, and never unpublished drafts. A requested `offering_id` must be one
+       * of theirs — asking for someone else's returns nothing rather than a 403, so the
+       * response does not confirm that the offering exists.
        *
-       * This branch previously ignored `academic_year_id` entirely and resolved the
+       * The ancestor of this branch ignored `academic_year_id` entirely and resolved the
        * section from `student.section_id` (the active-semester denormalisation), so the
-       * student's global year switcher had no effect on their own assessment list — the
-       * defect this whole change set is about. `is_active` is deliberately NOT filtered:
-       * a past year's offerings are all inactive, and section membership already scopes
-       * the rows to the year.
+       * student's global year switcher had no effect on their own assessment list.
+       * `is_archived` is deliberately NOT filtered: a past year's offerings are all
+       * archived, and enrolment already scopes the rows to the year.
        */
       const studentYearId =
         url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
-      const ownIds = new Set(
-        classSubjectsForStudent(student.id, studentYearId).map((cs) => cs.id),
-      );
+      const ownIds = new Set(offeringsForStudent(student.id, studentYearId).map((o) => o.id));
       const visibleIds =
-        classSubjectId && ownIds.has(classSubjectId)
-          ? new Set([classSubjectId])
-          : classSubjectId
-            ? new Set<string>() // asked for someone else's subject → nothing
+        offeringId && ownIds.has(offeringId)
+          ? new Set([offeringId])
+          : offeringId
+            ? new Set<string>() // asked for someone else's offering → nothing
             : ownIds;
       rows = D.assessments.filter(
-        (a) => visibleIds.has(a.class_subject_id) && a.status !== 'draft',
+        (a) => visibleIds.has(a.offering_id) && a.status !== 'draft',
       );
-    } else if (classSubjectId) {
-      rows = assessmentsForClassSubject(classSubjectId);
+    } else if (offeringId) {
+      rows = assessmentsForOffering(offeringId);
     } else {
-      // No specific offering chosen: scope to the selected year (default active), then
-      // to the teacher's own offerings when scope=me.
+      // No specific offering chosen: scope to the selected year (default active), then to
+      // the lecturer's own offerings when scope=me.
       const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
-      const yearCsIds = new Set((yearId ? classSubjectsForYear(yearId) : D.class_subjects).map((c) => c.id));
-      const visibleIds =
-        scope === 'me' && teacherId
-          ? new Set(classSubjectsOwnedByTeacher(teacherId).map((cs) => cs.id).filter((id) => yearCsIds.has(id)))
-          : yearCsIds;
-      rows = D.assessments.filter((a) => visibleIds.has(a.class_subject_id));
+      const inYear = yearId ? offeringsForYear(yearId) : D.offerings;
+      const teacherId = role === 'teacher' ? DEMO_STANDIN_TEACHER_ID : null;
+      const visibleIds = new Set(
+        (scope === 'me' && teacherId
+          ? inYear.filter((o) => o.teacher_ids.includes(teacherId))
+          : inYear
+        ).map((o) => o.id),
+      );
+      rows = D.assessments.filter((a) => visibleIds.has(a.offering_id));
     }
     // Narrows within the year — the student's year·semester switcher sends this so
     // "My Assessments" shows one term instead of the whole year. Applied after every
@@ -359,7 +264,7 @@ export const assessmentsHandlers: RequestHandler[] = [
   // ── Create (POST /assessments) — status draft, is_released false (§5.6) ────────────
   http.post(`${API_BASE_URL}/assessments`, async ({ request }) => {
     const body = (await request.json()) as {
-      class_subject_id?: string;
+      offering_id?: string;
       semester_id?: string;
       category_id?: string | null;
       title?: string;
@@ -387,25 +292,29 @@ export const assessmentsHandlers: RequestHandler[] = [
       return errorResponse(422, 'validation_error', 'Please correct the highlighted fields.', fields);
     }
 
-    const cs = body.class_subject_id ? getClassSubject(body.class_subject_id) : undefined;
-    if (!cs) {
-      return errorResponse(404, 'class_subject_not_found', 'Class subject not found or not owned.');
+    const offering = body.offering_id ? getOffering(body.offering_id) : undefined;
+    if (!offering) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found or not owned.');
     }
     if (body.category_id) {
       const cat = D.assessment_categories.find((c) => c.id === body.category_id);
-      if (!cat || cat.class_subject_id !== cs.id) {
+      if (!cat || cat.offering_id !== offering.id) {
         return errorResponse(
           409,
-          'category_subject_mismatch',
-          'The chosen category does not belong to this class subject.',
+          'category_offering_mismatch',
+          'The chosen category does not belong to this offering.',
         );
       }
     }
 
     const created: DemoAssessment = {
       id: `asmt-new-${(newAssessmentSeq += 1)}`,
-      class_subject_id: cs.id,
-      semester_id: body.semester_id ?? DEMO_IDS.activeSemesterId,
+      offering_id: offering.id,
+      // The OFFERING's term wins over anything the body asks for: an offering belongs to
+      // one term, so an assessment on it cannot sit in another. `DEMO_IDS.activeSemesterId`
+      // was the previous fallback, which would have filed a Semester-2 offering's first
+      // assessment under Semester 1.
+      semester_id: offering.semester_id,
       category_id: body.category_id ?? null,
       title,
       type: body.type as AssessmentType,
@@ -469,11 +378,11 @@ export const assessmentsHandlers: RequestHandler[] = [
     if (body.category_id !== undefined) {
       if (body.category_id) {
         const cat = D.assessment_categories.find((c) => c.id === body.category_id);
-        if (!cat || cat.class_subject_id !== a.class_subject_id) {
+        if (!cat || cat.offering_id !== a.offering_id) {
           return errorResponse(
             409,
-            'category_subject_mismatch',
-            'The chosen category does not belong to this class subject.',
+            'category_offering_mismatch',
+            'The chosen category does not belong to this offering.',
           );
         }
       }

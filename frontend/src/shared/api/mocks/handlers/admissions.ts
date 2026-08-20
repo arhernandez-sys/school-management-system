@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
-import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, getSubject } from '@shared/api/mocks/demo/dataset';
+import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, getCourse } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoApplication,
   DemoApplicationDocument,
@@ -77,7 +77,7 @@ function programRef(programId: string | null) {
 }
 
 function courseRef(courseId: string) {
-  const course = getSubject(courseId);
+  const course = getCourse(courseId);
   return course
     ? { id: course.id, code: course.code, name: course.name, credits: course.credits }
     : null;
@@ -645,9 +645,9 @@ export const admissionsHandlers = [
       gender: app.gender === 'female' ? 'female' : 'male',
       enrollment_date: acceptedOn,
       status: 'active',
-      // The declared year doubles as the level, so the report card and the student list
-      // have something to print from day one.
-      year_group: app.year_of_study ?? 'First',
+      // The declared year IS the level — the application and the profile now speak the same
+      // `enum('First','Second')`, so this is a straight carry rather than a coercion.
+      year_of_study: app.year_of_study ?? 'First',
       program_id: app.program_id,
       // These are non-null on `DemoStudent`; an application may legitimately omit them, so
       // they degrade to an empty string rather than widening the demo type.
@@ -683,7 +683,7 @@ export const admissionsHandlers = [
 
     const transferred = D.credit_transfer_requests
       .filter((t) => t.application_id === app.id && t.status === 'approved')
-      .map((t) => getSubject(t.target_course_id)?.code)
+      .map((t) => getCourse(t.target_course_id)?.code)
       .filter((code): code is string => Boolean(code))
       .sort();
 
@@ -831,7 +831,7 @@ export const admissionsHandlers = [
     }
     const body = (await request.json()) as Record<string, unknown>;
     const targetCourseId = String(body.target_course_id ?? '');
-    if (!getSubject(targetCourseId)) {
+    if (!getCourse(targetCourseId)) {
       return errorResponse(422, 'validation_error', 'Target course not found.', {
         target_course_id: ['Unknown course.'],
       });
@@ -900,7 +900,7 @@ export const admissionsHandlers = [
     }
     const body = (await request.json()) as Record<string, unknown>;
     if ('target_course_id' in body && body.target_course_id) {
-      if (!getSubject(String(body.target_course_id))) {
+      if (!getCourse(String(body.target_course_id))) {
         return errorResponse(422, 'validation_error', 'Target course not found.', {
           target_course_id: ['Unknown course.'],
         });

@@ -65,11 +65,17 @@ export interface TeacherProfileSummaryProps {
  * alone — status carries a label, every stat/section carries text).
  */
 export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
-  const classCount = new Set(
-    teacher.classes_taught.map((c) => c.class_ref?.id).filter(Boolean),
-  ).size;
+  /**
+   * Offerings taught, and how many DISTINCT COURSES they cover.
+   *
+   * These two were `class_ref?.id` (distinct homerooms) and `subject?.id` (distinct
+   * subjects). D31 makes the first meaningless — one offering per row, so counting distinct
+   * offerings is just the row count — while the second stays a real, different number: a
+   * lecturer teaching three sections of Algebra covers ONE course.
+   */
+  const classCount = teacher.classes_taught.length;
   const subjectCount = new Set(
-    teacher.classes_taught.map((c) => c.subject?.id).filter(Boolean),
+    teacher.classes_taught.map((c) => c.offering.course.id),
   ).size;
 
   const personalRows: Array<{ label: string; value: ReactNode }> = [

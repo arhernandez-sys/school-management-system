@@ -47,8 +47,8 @@ const { nav, navGroups } = strings;
 
 /**
  * Full nav definition, grouped per design-system §3.2. Labels are resolved per
- * role at build time (e.g. Student sees "My Classes"). The actual visible set is
- * computed by filtering on the permission map.
+ * role at build time (e.g. a student sees "My Courses" where staff see "Course
+ * Offerings"). The actual visible set is computed by filtering on the permission map.
  */
 function buildSections(role: Role): NavSection[] {
   const isStudent = role === 'student';
@@ -79,14 +79,14 @@ function buildSections(role: Role): NavSection[] {
       heading: role === 'teacher' ? navGroups.myTeaching : navGroups.academics,
       items: [
         {
-          module: 'classes',
-          label: isStudent ? nav.myClasses : nav.classes,
-          path: ROUTES.classes,
+          module: 'offerings',
+          label: isStudent ? nav.myCourses : nav.offerings,
+          path: ROUTES.offerings,
           icon: <ClassIcon />,
         },
         {
-          // Directly after Classes: the two answer "what do I take / teach" and "when and
-          // where is it", and are the pair a student uses most (D29).
+          // Directly after Course Offerings: the two answer "what do I take / teach" and
+          // "when and where is it", and are the pair a student uses most.
           module: 'timetable',
           label: nav.myTimetable,
           path: ROUTES.timetable,

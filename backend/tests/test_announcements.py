@@ -25,12 +25,11 @@ from sqlalchemy import select
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.core.timeutil import utcnow
 from app.modules.announcements.models import Announcement, AnnouncementRead
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
@@ -71,23 +70,31 @@ class _Graph:
             start_date=date(2025, 9, 1), end_date=date(2026, 1, 31), is_active=True,
         )
         db_session.add(self.sem)
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"AAA Sec {tag}", grade_level="Form 1", section="A",
-        )
-        self.other_section = Class(
-            academic_year_id=self.year.id, name=f"ZZZ Other {tag}", grade_level="Form 2", section="B",
-        )
-        db_session.add_all([self.section, self.other_section])
-        self.subject = Subject(name=f"Subj {tag}", code=tag.upper())
-        db_session.add(self.subject)
+        # D31: the catalog course comes FIRST now, because an offering cannot exist
+        # without one — `course_offerings.course_id` is NOT NULL. Under the old model a
+        # `classes` row stood alone and a subject was attached to it afterwards.
+        self.subject = Course(name=f"Subj {tag}", code=tag.upper())
+        self.other_subject = Course(name=f"Other {tag}", code=f"O{tag.upper()[:6]}")
+        db_session.add_all([self.subject, self.other_subject])
         db_session.flush()
 
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
-        self.other_cs = ClassSubject(
-            class_id=self.other_section.id, subject_id=self.subject.id, is_active=True
+        # Two offerings in the same term. They teach DIFFERENT courses rather than the
+        # same course in two sections, because `uq_course_offering_active` is
+        # (course_id, semester_id, section_code) and the old fixture's two rows only
+        # differed by a homeroom name that no longer exists.
+        self.section = CourseOffering(
+            course_id=self.subject.id, semester_id=self.sem.id, section_code="A",
         )
-        db_session.add_all([self.cs, self.other_cs])
+        self.other_section = CourseOffering(
+            course_id=self.other_subject.id, semester_id=self.sem.id, section_code="B",
+        )
+        db_session.add_all([self.section, self.other_section])
         db_session.flush()
+
+        # The offering IS the gradebook unit — `section` and `cs` were two rows before
+        # D31 and are one now. Aliased so the assertions below keep reading naturally.
+        self.cs = self.section
+        self.other_cs = self.other_section
 
         self.principal_user = make_user(role=Role.PRINCIPAL, full_name="The Principal")
         self.secretary_user = make_user(role=Role.SECRETARY, full_name="Front Office")
@@ -98,7 +105,7 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
 
         # A teacher who owns the OTHER section only.
         self.other_teacher_user = make_user(role=Role.TEACHER, full_name="Other Teacher")
@@ -109,7 +116,7 @@ class _Graph:
         db_session.add(self.other_teacher)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=self.other_cs.id, teacher_id=self.other_teacher.id)
+            ClassTeacher(offering_id=self.other_cs.id, teacher_id=self.other_teacher.id)
         )
 
         # A student enrolled in `section`.
@@ -121,7 +128,7 @@ class _Graph:
         db_session.add(self.student)
         db_session.flush()
         db_session.add(ClassEnrollment(
-            class_id=self.section.id, student_id=self.student.id, semester_id=self.sem.id
+            offering_id=self.section.id, student_id=self.student.id, semester_id=self.sem.id
         ))
         db_session.flush()
 
@@ -132,7 +139,7 @@ class _Graph:
         self.U = auth_headers(user_id=self.student_user.id, role=Role.STUDENT)
 
     def announcement(
-        self, *, audience="all", class_id=None, author=None, title=None, body=None,
+        self, *, audience="all", offering_id=None, author=None, title=None, body=None,
         published_at=None, expires_at=None, deleted=False,
     ) -> Announcement:
         row = Announcement(
@@ -140,7 +147,7 @@ class _Graph:
             title=title or f"Notice {uuid.uuid4().hex[:5]}",
             body=body or "Body text for the announcement.",
             audience=audience,
-            class_id=class_id,
+            offering_id=offering_id,
             published_at=published_at or (utcnow() - timedelta(hours=1)),
             expires_at=expires_at,
             deleted_at=utcnow() if deleted else None,
@@ -158,7 +165,7 @@ class _Graph:
             "title": f"New Notice {uuid.uuid4().hex[:5]}",
             "body": "Something everyone should know.",
             "audience": "all",
-            "class_id": None,
+            "offering_id": None,
             "expires_at": None,
         }
         body.update(overrides)
@@ -183,8 +190,8 @@ class TestAuthGate:
     def test_unread_count_requires_auth(self, client) -> None:
         assert client.get(f"{AN}/unread-count").status_code == 401
 
-    def test_target_classes_requires_auth(self, client) -> None:
-        assert client.get(f"{AN}/target-classes").status_code == 401
+    def test_target_offerings_requires_auth(self, client) -> None:
+        assert client.get(f"{AN}/target-offerings").status_code == 401
 
     def test_detail_requires_auth(self, client) -> None:
         assert client.get(f"{AN}/{uuid.uuid4()}").status_code == 401
@@ -214,8 +221,8 @@ class TestRouteOrdering:
         assert r.status_code == 200
         assert "unread_count" in r.json()
 
-    def test_target_classes_is_not_swallowed_by_the_uuid_param(self, client, graph) -> None:
-        r = client.get(f"{AN}/target-classes", headers=graph.P)
+    def test_target_offerings_is_not_swallowed_by_the_uuid_param(self, client, graph) -> None:
+        r = client.get(f"{AN}/target-offerings", headers=graph.P)
         assert r.status_code == 200
         assert "items" in r.json()
 
@@ -252,15 +259,15 @@ class TestAudienceTargeting:
         assert str(row.id) not in _feed_ids(client, graph.S)
 
     def test_class_audience_reaches_the_enrolled_student(self, client, graph) -> None:
-        row = graph.announcement(audience="class", class_id=graph.section.id)
+        row = graph.announcement(audience="class", offering_id=graph.section.id)
         assert str(row.id) in _feed_ids(client, graph.U)
 
     def test_class_audience_reaches_the_owning_teacher(self, client, graph) -> None:
-        row = graph.announcement(audience="class", class_id=graph.section.id)
+        row = graph.announcement(audience="class", offering_id=graph.section.id)
         assert str(row.id) in _feed_ids(client, graph.T)
 
     def test_class_audience_misses_a_teacher_of_another_section(self, client, graph) -> None:
-        row = graph.announcement(audience="class", class_id=graph.section.id)
+        row = graph.announcement(audience="class", offering_id=graph.section.id)
         assert str(row.id) not in _feed_ids(client, graph.T2)
 
     def test_admins_do_not_see_a_teacher_authored_class_notice(self, client, graph) -> None:
@@ -270,7 +277,7 @@ class TestAudienceTargeting:
         see teacher-authored notices" is the whole of that rule.
         """
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.teacher_user
+            audience="class", offering_id=graph.section.id, author=graph.teacher_user
         )
         assert str(row.id) not in _feed_ids(client, graph.P)
         assert str(row.id) not in _feed_ids(client, graph.S)
@@ -278,21 +285,21 @@ class TestAudienceTargeting:
     def test_admins_see_an_admin_authored_class_notice(self, client, graph) -> None:
         """P/S are equivalent — either sees the other's class notices."""
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.secretary_user
+            audience="class", offering_id=graph.section.id, author=graph.secretary_user
         )
         assert str(row.id) in _feed_ids(client, graph.P)
         assert str(row.id) in _feed_ids(client, graph.S)
 
     def test_admin_sees_their_own_class_notice(self, client, graph) -> None:
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.principal_user
+            audience="class", offering_id=graph.section.id, author=graph.principal_user
         )
         assert str(row.id) in _feed_ids(client, graph.P)
 
     def test_admin_authored_class_notice_still_reaches_the_class(self, client, graph) -> None:
         """The class it names must receive it regardless of who wrote it."""
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.principal_user
+            audience="class", offering_id=graph.section.id, author=graph.principal_user
         )
         assert str(row.id) in _feed_ids(client, graph.U)
         assert str(row.id) in _feed_ids(client, graph.T)
@@ -302,7 +309,7 @@ class TestAudienceTargeting:
         assert str(row.id) in _feed_ids(client, graph.P)
 
     def test_unenrolled_student_loses_the_class_notice(self, client, graph, db_session) -> None:
-        row = graph.announcement(audience="class", class_id=graph.section.id)
+        row = graph.announcement(audience="class", offering_id=graph.section.id)
         enr = db_session.scalar(
             select(ClassEnrollment).where(ClassEnrollment.student_id == graph.student.id)
         )
@@ -364,28 +371,33 @@ class TestFeedVisibility:
 # ════════════════════════════════════════════════════════════════════════════
 class TestFeedItemShape:
     def test_list_item_keys(self, client, graph) -> None:
-        graph.announcement(audience="class", class_id=graph.section.id)
+        graph.announcement(audience="class", offering_id=graph.section.id)
         item = client.get(AN, headers=graph.U).json()["items"][0]
         assert set(item.keys()) == {
-            "id", "title", "body_preview", "audience", "class_ref",
+            "id", "title", "body_preview", "audience", "offering",
             "author", "published_at", "expires_at", "is_read",
         }
 
-    def test_class_ref_shape_and_key_name(self, client, graph) -> None:
-        """The key is `class_ref`, not `class` or `class_id`."""
-        graph.announcement(audience="class", class_id=graph.section.id)
+    def test_offering_ref_shape_and_key_name(self, client, graph) -> None:
+        """The key is `offering`, not `class`, `class_ref` or `class_id` (D31).
+
+        The payload changed with it: a homeroom sent `name` + `grade_level`; an offering
+        sends the derived `label` ("MATH1110-01") and the course title. Neither of the old
+        fields has a tertiary meaning.
+        """
+        graph.announcement(audience="class", offering_id=graph.section.id)
         item = client.get(AN, headers=graph.U).json()["items"][0]
-        assert item["class_ref"] == {
+        assert item["offering"] == {
             "id": str(graph.section.id),
-            "name": graph.section.name,
-            "grade_level": "Form 1",
+            "label": f"{graph.subject.code}-A",
+            "course_name": graph.subject.name,
         }
 
-    def test_class_ref_is_null_for_a_broadcast(self, client, graph) -> None:
+    def test_offering_is_null_for_a_broadcast(self, client, graph) -> None:
         graph.announcement(audience="all")
         item = next(i for i in client.get(AN, headers=graph.P).json()["items"]
                     if i["audience"] == "all")
-        assert item["class_ref"] is None
+        assert item["offering"] is None
 
     def test_author_carries_role(self, client, graph) -> None:
         graph.announcement(author=graph.principal_user)
@@ -476,32 +488,32 @@ class TestUnreadCount:
 # ════════════════════════════════════════════════════════════════════════════
 class TestTargetClasses:
     def test_principal_sees_all_live_sections(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{AN}/target-classes", headers=graph.P).json()["items"]}
+        ids = {i["id"] for i in client.get(f"{AN}/target-offerings", headers=graph.P).json()["items"]}
         assert {str(graph.section.id), str(graph.other_section.id)} <= ids
 
     def test_secretary_sees_all_live_sections(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{AN}/target-classes", headers=graph.S).json()["items"]}
+        ids = {i["id"] for i in client.get(f"{AN}/target-offerings", headers=graph.S).json()["items"]}
         assert str(graph.section.id) in ids
 
     def test_teacher_sees_only_owned_sections(self, client, graph) -> None:
-        ids = {i["id"] for i in client.get(f"{AN}/target-classes", headers=graph.T).json()["items"]}
+        ids = {i["id"] for i in client.get(f"{AN}/target-offerings", headers=graph.T).json()["items"]}
         assert ids == {str(graph.section.id)}
 
     def test_archived_sections_excluded(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
         db_session.flush()
-        ids = {i["id"] for i in client.get(f"{AN}/target-classes", headers=graph.P).json()["items"]}
+        ids = {i["id"] for i in client.get(f"{AN}/target-offerings", headers=graph.P).json()["items"]}
         assert str(graph.section.id) not in ids
 
     def test_student_gets_an_empty_list_not_a_403(self, client, graph) -> None:
         """It's a picker source and the compose UI is already hidden from students."""
-        r = client.get(f"{AN}/target-classes", headers=graph.U)
+        r = client.get(f"{AN}/target-offerings", headers=graph.U)
         assert r.status_code == 200
         assert r.json()["items"] == []
 
     def test_item_shape(self, client, graph) -> None:
-        item = client.get(f"{AN}/target-classes", headers=graph.T).json()["items"][0]
-        assert set(item.keys()) == {"id", "name", "grade_level"}
+        item = client.get(f"{AN}/target-offerings", headers=graph.T).json()["items"][0]
+        assert set(item.keys()) == {"id", "label", "course_name"}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -528,7 +540,7 @@ class TestDetail:
     def test_author_can_always_read_their_own(self, client, graph) -> None:
         """A teacher's own class notice stays readable even outside the audience."""
         row = graph.announcement(
-            audience="class", class_id=graph.other_section.id, author=graph.teacher_user
+            audience="class", offering_id=graph.other_section.id, author=graph.teacher_user
         )
         assert client.get(f"{AN}/{row.id}", headers=graph.T).status_code == 200
 
@@ -544,7 +556,7 @@ class TestDetail:
     def test_principal_cannot_read_a_teacher_notice_by_id(self, client, graph) -> None:
         """No by-id backdoor: the visibility rule has to hold on detail too."""
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.teacher_user
+            audience="class", offering_id=graph.section.id, author=graph.teacher_user
         )
         r = client.get(f"{AN}/{row.id}", headers=graph.P)
         assert r.status_code == 404
@@ -552,13 +564,13 @@ class TestDetail:
 
     def test_secretary_cannot_read_a_teacher_notice_by_id(self, client, graph) -> None:
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.teacher_user
+            audience="class", offering_id=graph.section.id, author=graph.teacher_user
         )
         assert client.get(f"{AN}/{row.id}", headers=graph.S).status_code == 404
 
     def test_principal_can_read_a_secretary_class_notice(self, client, graph) -> None:
         row = graph.announcement(
-            audience="class", class_id=graph.section.id, author=graph.secretary_user
+            audience="class", offering_id=graph.section.id, author=graph.secretary_user
         )
         assert client.get(f"{AN}/{row.id}", headers=graph.P).status_code == 200
 
@@ -586,41 +598,41 @@ class TestCreate:
     def test_teacher_can_post_to_an_owned_section(self, client, graph) -> None:
         r = client.post(
             AN,
-            json=graph.payload(audience="class", class_id=str(graph.section.id)),
+            json=graph.payload(audience="class", offering_id=str(graph.section.id)),
             headers=graph.T,
         )
         assert r.status_code == 201
-        assert r.json()["class_ref"]["id"] == str(graph.section.id)
+        assert r.json()["offering"]["id"] == str(graph.section.id)
 
     def test_teacher_cannot_post_to_an_unowned_section(self, client, graph) -> None:
         r = client.post(
             AN,
-            json=graph.payload(audience="class", class_id=str(graph.other_section.id)),
+            json=graph.payload(audience="class", offering_id=str(graph.other_section.id)),
             headers=graph.T,
         )
         assert r.status_code == 403
         _assert_envelope(r.json(), code="teacher_cannot_broadcast")
 
     def test_class_audience_without_class_id_422(self, client, graph) -> None:
-        r = client.post(AN, json=graph.payload(audience="class", class_id=None), headers=graph.P)
+        r = client.post(AN, json=graph.payload(audience="class", offering_id=None), headers=graph.P)
         assert r.status_code == 422
-        err = _assert_envelope(r.json(), code="class_audience_requires_class_id")
-        assert "class_id" in err["fields"]
+        err = _assert_envelope(r.json(), code="class_audience_requires_offering_id")
+        assert "offering_id" in err["fields"]
 
     def test_unknown_class_id_422(self, client, graph) -> None:
         r = client.post(
-            AN, json=graph.payload(audience="class", class_id=str(uuid.uuid4())), headers=graph.P
+            AN, json=graph.payload(audience="class", offering_id=str(uuid.uuid4())), headers=graph.P
         )
         assert r.status_code == 422
-        _assert_envelope(r.json(), code="class_audience_requires_class_id")
+        _assert_envelope(r.json(), code="class_audience_requires_offering_id")
 
     def test_non_class_audience_clears_class_id(self, client, graph) -> None:
         body = client.post(
             AN,
-            json=graph.payload(audience="all", class_id=str(graph.section.id)),
+            json=graph.payload(audience="all", offering_id=str(graph.section.id)),
             headers=graph.P,
         ).json()
-        assert body["class_ref"] is None
+        assert body["offering"] is None
 
     def test_empty_title_rejected(self, client, graph) -> None:
         assert client.post(AN, json=graph.payload(title=""), headers=graph.P).status_code == 422
@@ -674,7 +686,7 @@ class TestCreate:
         db_session.flush()
         r = client.post(
             AN,
-            json=graph.payload(audience="class", class_id=str(graph.section.id)),
+            json=graph.payload(audience="class", offering_id=str(graph.section.id)),
             headers=graph.P,
         )
         assert r.status_code == 201
@@ -706,14 +718,14 @@ class TestUpdate:
         announcement would be incoherent. NOTE the operational consequence: there is
         no admin override for a teacher's post; only that teacher can withdraw it."""
         row = graph.announcement(
-            author=graph.teacher_user, audience="class", class_id=graph.section.id
+            author=graph.teacher_user, audience="class", offering_id=graph.section.id
         )
         r = client.patch(f"{AN}/{row.id}", json={"title": "Moderated"}, headers=graph.P)
         assert r.status_code == 403
         _assert_envelope(r.json(), code="forbidden")
 
     def test_other_teacher_cannot_edit(self, client, graph) -> None:
-        row = graph.announcement(author=graph.teacher_user, audience="class", class_id=graph.section.id)
+        row = graph.announcement(author=graph.teacher_user, audience="class", offering_id=graph.section.id)
         assert client.patch(f"{AN}/{row.id}", json={"title": "Nope"}, headers=graph.T2).status_code == 403
 
     def test_unknown_id_404(self, client, graph) -> None:
@@ -722,7 +734,7 @@ class TestUpdate:
     def test_teacher_cannot_escalate_to_a_broadcast_by_editing(self, client, graph) -> None:
         """Targeting is re-checked against the MERGED audience."""
         row = graph.announcement(
-            author=graph.teacher_user, audience="class", class_id=graph.section.id
+            author=graph.teacher_user, audience="class", offering_id=graph.section.id
         )
         r = client.patch(f"{AN}/{row.id}", json={"audience": "all"}, headers=graph.T)
         assert r.status_code == 403
@@ -730,26 +742,26 @@ class TestUpdate:
 
     def test_teacher_cannot_move_a_notice_to_an_unowned_section(self, client, graph) -> None:
         row = graph.announcement(
-            author=graph.teacher_user, audience="class", class_id=graph.section.id
+            author=graph.teacher_user, audience="class", offering_id=graph.section.id
         )
         r = client.patch(
             f"{AN}/{row.id}",
-            json={"audience": "class", "class_id": str(graph.other_section.id)},
+            json={"audience": "class", "offering_id": str(graph.other_section.id)},
             headers=graph.T,
         )
         assert r.status_code == 403
 
-    def test_switching_to_a_broadcast_clears_class_ref(self, client, graph) -> None:
-        row = graph.announcement(audience="class", class_id=graph.section.id)
+    def test_switching_to_a_broadcast_clears_the_offering(self, client, graph) -> None:
+        row = graph.announcement(audience="class", offering_id=graph.section.id)
         body = client.patch(f"{AN}/{row.id}", json={"audience": "all"}, headers=graph.P).json()
         assert body["audience"] == "all"
-        assert body["class_ref"] is None
+        assert body["offering"] is None
 
     def test_switching_to_class_without_a_class_id_422(self, client, graph) -> None:
         row = graph.announcement(audience="all")
         r = client.patch(f"{AN}/{row.id}", json={"audience": "class"}, headers=graph.P)
         assert r.status_code == 422
-        _assert_envelope(r.json(), code="class_audience_requires_class_id")
+        _assert_envelope(r.json(), code="class_audience_requires_offering_id")
 
     def test_expiry_can_be_cleared(self, client, graph) -> None:
         row = graph.announcement(expires_at=utcnow() + timedelta(days=5))
@@ -801,14 +813,14 @@ class TestDelete:
 
     def test_principal_cannot_delete_a_teacher_notice(self, client, graph) -> None:
         row = graph.announcement(
-            author=graph.teacher_user, audience="class", class_id=graph.section.id
+            author=graph.teacher_user, audience="class", offering_id=graph.section.id
         )
         assert client.delete(f"{AN}/{row.id}", headers=graph.P).status_code == 403
 
     def test_teacher_can_withdraw_their_own(self, client, graph) -> None:
         """The only route to removing a teacher's post, given no admin override."""
         row = graph.announcement(
-            author=graph.teacher_user, audience="class", class_id=graph.section.id
+            author=graph.teacher_user, audience="class", offering_id=graph.section.id
         )
         assert client.delete(f"{AN}/{row.id}", headers=graph.T).status_code == 204
 

@@ -21,7 +21,7 @@ export function usePrerequisites(courseId: string | undefined) {
   return useQuery({
     queryKey: prerequisiteKeys.forCourse(courseId ?? ''),
     queryFn: async ({ signal }) => {
-      const res = await api.get<PrerequisiteList>(`/subjects/${courseId}/prerequisites`, {
+      const res = await api.get<PrerequisiteList>(`/courses/${courseId}/prerequisites`, {
         signal,
       });
       return res.data;
@@ -41,7 +41,7 @@ export function useAddPrerequisite(courseId: string) {
   return useMutation({
     mutationFn: async (body: PrerequisiteCreatePayload) => {
       const res = await api.post<PrerequisiteList>(
-        `/subjects/${courseId}/prerequisites`,
+        `/courses/${courseId}/prerequisites`,
         body,
       );
       return res.data;
@@ -55,7 +55,7 @@ export function useRemovePrerequisite(courseId: string) {
   return useMutation({
     mutationFn: async (prerequisiteId: string) => {
       const res = await api.delete<PrerequisiteList>(
-        `/subjects/${courseId}/prerequisites/${prerequisiteId}`,
+        `/courses/${courseId}/prerequisites/${prerequisiteId}`,
       );
       return res.data;
     },

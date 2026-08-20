@@ -99,8 +99,8 @@ class TestRequesting:
         assert body["student"]["student_number"] == student.student_number
         assert body["assessment_title"] == assessment.title
         assert body["max_score"] == 100.0
-        assert body["subject_name"] == graph.subject.name
-        assert body["section_name"] == graph.section.name
+        assert body["offering"]["course"]["name"] == graph.subject.name
+        assert body["offering"]["id"] == str(graph.cs.id)
         assert body["requested_by_name"] == "Owner Teacher"
         assert body["created_at"] is not None
 
@@ -386,14 +386,14 @@ class TestAnApprovedRevisionMovesTheGrade:
 
     def test_the_term_grade_follows_the_approval(self, client, graph, marked) -> None:
         assessment, student, _grade = marked
-        before = client.get(f"{G}/class-subject/{graph.cs.id}", headers=graph.H).json()
+        before = client.get(f"{G}/offering/{graph.cs.id}", headers=graph.H).json()
         row_before = next(r for r in before["rows"] if r["student"]["id"] == str(student.id))
         assert row_before["term_numeric"] == 60.0
 
         revision_id = _request(client, graph, assessment, student).json()["id"]
         client.post(f"{R}/{revision_id}/decision", headers=graph.P, json={"status": "approved"})
 
-        after = client.get(f"{G}/class-subject/{graph.cs.id}", headers=graph.H).json()
+        after = client.get(f"{G}/offering/{graph.cs.id}", headers=graph.H).json()
         row_after = next(r for r in after["rows"] if r["student"]["id"] == str(student.id))
         assert row_after["term_numeric"] == 91.0
 
@@ -401,7 +401,7 @@ class TestAnApprovedRevisionMovesTheGrade:
         assessment, student, _grade = marked
         revision_id = _request(client, graph, assessment, student).json()["id"]
         client.post(f"{R}/{revision_id}/decision", headers=graph.P, json={"status": "denied"})
-        after = client.get(f"{G}/class-subject/{graph.cs.id}", headers=graph.H).json()
+        after = client.get(f"{G}/offering/{graph.cs.id}", headers=graph.H).json()
         row = next(r for r in after["rows"] if r["student"]["id"] == str(student.id))
         assert row["term_numeric"] == 60.0
 
@@ -411,7 +411,7 @@ class TestAnApprovedRevisionMovesTheGrade:
         assessment, student, _grade = marked
         revision_id = _request(client, graph, assessment, student, proposed_score=30).json()["id"]
         client.post(f"{R}/{revision_id}/decision", headers=graph.P, json={"status": "approved"})
-        after = client.get(f"{G}/class-subject/{graph.cs.id}", headers=graph.H).json()
+        after = client.get(f"{G}/offering/{graph.cs.id}", headers=graph.H).json()
         row = next(r for r in after["rows"] if r["student"]["id"] == str(student.id))
         assert row["term_numeric"] == 30.0
 
@@ -515,9 +515,9 @@ class TestTheQueue:
     def test_filter_by_offering(self, client, graph, marked) -> None:
         assessment, student, _grade = marked
         revision_id = _request(client, graph, assessment, student).json()["id"]
-        body = client.get(f"{R}?class_subject_id={graph.cs.id}", headers=graph.P).json()
+        body = client.get(f"{R}?offering_id={graph.cs.id}", headers=graph.P).json()
         assert revision_id in {row["id"] for row in body["items"]}
-        other = client.get(f"{R}?class_subject_id={graph.other_cs.id}", headers=graph.P).json()
+        other = client.get(f"{R}?offering_id={graph.other_cs.id}", headers=graph.P).json()
         assert revision_id not in {row["id"] for row in other["items"]}
 
     def _three_requests(self, client, graph) -> list[str]:

@@ -3,23 +3,26 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
-  attendanceSummaryForSection,
-  classSubjectsForStudent,
+  attendanceSummaryForOffering,
+  offeringsForStudent,
   rosterFor,
   computeTermGrade,
   getActiveSemester,
   getActiveYear,
-  getSection,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
-  getSubject,
   getTeacher,
   gpaFor,
   letterFor,
   listStudents,
+  offeringLabel,
+  offeringsForYear,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAssessment,
-  DemoClassSubject,
+  DemoOffering,
   DemoSemester,
   DemoStudent,
 } from '@shared/api/mocks/demo/dataset';
@@ -30,7 +33,7 @@ import { errorResponse, listParamsFrom } from './_helpers';
  *
  * Read-only aggregators backed by the shared demo dataset so every figure reconciles
  * with the gradebook, attendance and dashboard screens (all derive from the same
- * `computeTermGrade` / `attendanceSummaryForSection` selectors). Export is browser
+ * `computeTermGrade` / `attendanceSummaryForOffering` selectors). Export is browser
  * print of the rendered page (D27 / Q8) — there is no server-PDF endpoint.
  *
  * Endpoints:
@@ -40,9 +43,14 @@ import { errorResponse, listParamsFrom } from './_helpers';
  *  - GET /reports/report-card/me    — the caller's own ReportCard (student role).
  *  - GET /reports/transcript        — multi-year Transcript for ?student_id. Teacher /
  *                                     student callers → 403 (D26 — P/S only).
- *  - GET /reports/class-grades      — per-offering subject grade summary + distribution.
- *  - GET /reports/attendance        — per-section attendance summary.
+ *  - GET /reports/offering-grades   — per-offering grade summary + distribution.
+ *  - GET /reports/attendance        — per-offering attendance summary.
  *  - GET /reports/enrollment        — headcount / enrollment report.
+ *
+ * **D31** — `/reports/class-grades` became `/reports/offering-grades`, and the enrolment
+ * report buckets by PROGRAMME rather than by Form. `classes.grade_level` (`Form 1`..`Form 4`)
+ * was a homeroom column and a K-12 axis a junior college does not have; the same programme
+ * query backs the Dean's dashboard tile, so the two screens cannot disagree.
  *
  * The mock session role is the non-HttpOnly `sis_mock_session` cookie (see auth.ts);
  * the transcript uses it to enforce the D26 P/S-only role gate server-side.
@@ -59,7 +67,7 @@ function sessionRole(cookies: Record<string, string>): string | null {
 /**
  * Resolve the demo student a "self" (`/me`) student caller maps to. The mock token's
  * `student_profile_id` is a placeholder, not a real dataset id, so for the demo we
- * pick the first active student that has a linked login (stu-1 = Ana Lopez).
+ * pick the first active student that has a linked login (stu-1 = Freddy Lopez).
  */
 function selfStudent(): DemoStudent | undefined {
   return D.students.find((s) => s.status === 'active' && s.user_id) ?? D.students[0];
@@ -70,9 +78,9 @@ function selfStudent(): DemoStudent | undefined {
 /**
  * The student as printed on a report card / transcript / picker row.
  *
- * D29: `section_id` / `section_name` / `grade_level` are gone — all three were read off the
- * student's homeroom, and a sixth-former has no single class to head their card with.
- * `year_group` (their own level) replaces them.
+ * D29 dropped `section_id` / `section_name` / `grade_level` — all three were read off the
+ * student's homeroom, and a college student has no single class to head their card with.
+ * `year_of_study` (their own level, D30's rename of `year_group`) replaces them.
  */
 function studentRef(s: DemoStudent) {
   return {
@@ -81,7 +89,29 @@ function studentRef(s: DemoStudent) {
     student_number: s.student_number,
     date_of_birth: s.date_of_birth,
     status: s.status,
-    year_group: s.year_group,
+    year_of_study: s.year_of_study,
+  };
+}
+
+/** The shared `OfferingRef` — printed on the offering-grades and attendance reports. */
+function offeringRef(offering: DemoOffering) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
+  return {
+    id: offering.id,
+    course: course
+      ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+      : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+    semester: semester
+      ? {
+          id: semester.id,
+          name: semester.name,
+          sequence: semester.sequence,
+          is_active: semester.is_active,
+        }
+      : null,
+    section_code: offering.section_code,
+    label: offeringLabel(offering),
   };
 }
 
@@ -116,16 +146,16 @@ function periodFor(sem: DemoSemester): string {
   return `${sem.name}, ${month(sem.start_date)} - ${month(sem.end_date)}`;
 }
 
-/** Lead teacher's display name for an offering, if any. */
-function leadTeacherName(cs: DemoClassSubject): string | null {
-  const id = cs.lead_teacher_id ?? cs.teacher_ids[0] ?? null;
+/** Lead lecturer's display name for an offering, if any. */
+function leadTeacherName(offering: DemoOffering): string | null {
+  const id = offering.lead_teacher_id ?? offering.teacher_ids[0] ?? null;
   return id ? (getTeacher(id)?.full_name ?? null) : null;
 }
 
 /** Is every graded assessment counted toward this offering's term grade released? */
-function offeringFullyReleased(cs: DemoClassSubject): boolean {
+function offeringFullyReleased(offering: DemoOffering): boolean {
   const graded = D.assessments.filter(
-    (a: DemoAssessment) => a.class_subject_id === cs.id && a.status === 'graded',
+    (a: DemoAssessment) => a.offering_id === offering.id && a.status === 'graded',
   );
   if (graded.length === 0) return true;
   return graded.every((a) => a.is_released);
@@ -137,19 +167,24 @@ function offeringFullyReleased(cs: DemoClassSubject): boolean {
  * `status:"pending"` with no numeric (AC 5.5) — P/S/teacher always see the computed value.
  */
 function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFilter: boolean) {
-  // D29: one row per subject class the student sits, not per subject of one homeroom.
-  const offerings = classSubjectsForStudent(student.id).filter((cs) => cs.is_active);
+  // One row per OFFERING the student sits, scoped to the card's own semester — a card is a
+  // TERM record, and a year-wide list would print last term's courses on this term's card.
+  const offerings = offeringsForStudent(student.id).filter(
+    (o) => !o.is_archived && o.semester_id === semester.id,
+  );
 
   const subjects = offerings
-    .map((cs) => {
-      const subject = getSubject(cs.subject_id);
-      const term = computeTermGrade(student.id, cs.id);
-      const released = offeringFullyReleased(cs);
+    .map((offering) => {
+      const course = getCourse(offering.course_id);
+      const term = computeTermGrade(student.id, offering.id);
+      const released = offeringFullyReleased(offering);
       const pending = releaseFilter && !released;
       return {
-        subject: { id: cs.subject_id, name: subject?.name ?? '', code: subject?.code ?? '' },
-        teacher: leadTeacherName(cs),
-        credits: subject?.credits ?? null,
+        // The wire key stays `subject` (the server still spells the catalog entry that way
+        // on report-card rows); it carries the COURSE.
+        subject: { id: offering.course_id, name: course?.name ?? '', code: course?.code ?? '' },
+        teacher: leadTeacherName(offering),
+        credits: course?.credits ?? null,
         numeric: pending ? null : term.numeric,
         letter: pending ? null : term.letter,
         status: pending ? ('pending' as const) : ('graded' as const),
@@ -170,9 +205,11 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
   // backend gives it, and the reason the figure cannot be used to back out a hidden mark.
   const gpa = gpaFor(subjects.map((s) => ({ credits: s.credits, letter: s.letter })));
 
-  // D29: the student's own attendance across every class they sit, matching the backend
-  // (which scopes by student + semester, never by one class).
-  const attRows = D.attendance_records.filter((r) => r.student_id === student.id);
+  // The student's own attendance across every offering they sit, matching the backend
+  // (which scopes by student + semester, never by one offering).
+  const attRows = D.attendance_records.filter(
+    (r) => r.student_id === student.id && r.semester_id === semester.id,
+  );
   const attCounts = { present: 0, absent: 0, late: 0, excused: 0 };
   for (const r of attRows) attCounts[r.status] += 1;
   const att = {
@@ -184,14 +221,13 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
 
   return {
     student: studentRef(student),
-    // The `section` block is gone (D29) — the card spans every class the student sits, so
-    // there is no one class to name. The header shows their level instead.
-    year_group: student.year_group,
+    // The `section` block is gone (D29) — the card spans every offering the student sits,
+    // so there is no one class to name. The header shows their level instead.
+    year_of_study: student.year_of_study,
     semester: semesterRef(semester),
     school: schoolIdentity(),
-    // Null until Phase 4 assigns students to programmes (§D12) — demo students carry no
-    // programme either, so this matches the backend rather than papering over it.
-    program_code: null,
+    // Every demo student is registered on a real BAJC programme (§D12), so this prints.
+    program_code: D.programs.find((pr) => pr.id === student.program_id)?.code ?? null,
     period: periodFor(semester),
     // Meaning unconfirmed with BAJC (plan §G item 3); the sample prints `-`.
     block: null,
@@ -217,7 +253,26 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
  */
 function buildTranscript(student: DemoStudent) {
   const activeSemester = getActiveSemester();
-  const offerings = classSubjectsForStudent(student.id).filter((cs) => cs.is_active);
+  /**
+   * EVERY offering the student ever sat, archived ones included — a transcript is the
+   * historical record, so filtering on `is_archived` would erase every past year from it.
+   * Grouped by the offering's OWN semester below.
+   *
+   * D31 is what makes this correct rather than approximate: the old version resolved one
+   * flat list of "current" offerings and then only populated the ACTIVE semester with it,
+   * because a year-scoped class row could not say which term it belonged to. A transcript
+   * built that way showed real grades in one term and empty rows in every other.
+   */
+  const allOfferings = offeringsForStudent(student.id, null);
+  const historic = new Map<string, DemoOffering[]>();
+  for (const e of D.enrollments.filter((x) => x.student_id === student.id)) {
+    const offering = getOffering(e.offering_id);
+    if (!offering) continue;
+    const list = historic.get(offering.semester_id) ?? [];
+    if (!list.some((o) => o.id === offering.id)) list.push(offering);
+    historic.set(offering.semester_id, list);
+  }
+  void allOfferings;
 
   const years = [...D.academic_years]
     .sort((a, b) => b.name.localeCompare(a.name))
@@ -226,27 +281,25 @@ function buildTranscript(student: DemoStudent) {
         .filter((s) => s.academic_year_id === year.id)
         .sort((a, b) => a.sequence - b.sequence)
         .map((sem) => {
-          // Demo: only the active semester of the student's section has computed grades.
-          const hasData = activeSemester?.id === sem.id && offerings.length > 0;
-          const subjects = hasData
-            ? offerings
-                .map((cs) => {
-                  const subject = getSubject(cs.subject_id);
-                  const term = computeTermGrade(student.id, cs.id);
-                  return {
-                    subject: {
-                      id: cs.subject_id,
-                      name: subject?.name ?? '',
-                      code: subject?.code ?? '',
-                    },
-                    teacher: leadTeacherName(cs),
-                    credits: subject?.credits ?? null,
-                    numeric: term.numeric,
-                    letter: term.letter ?? '',
-                  };
-                })
-                .sort((a, b) => a.subject.name.localeCompare(b.subject.name))
-            : [];
+          // The offerings the student actually sat IN THIS TERM.
+          const termOfferings = historic.get(sem.id) ?? [];
+          const subjects = termOfferings
+            .map((offering) => {
+              const course = getCourse(offering.course_id);
+              const term = computeTermGrade(student.id, offering.id);
+              return {
+                subject: {
+                  id: offering.course_id,
+                  name: course?.name ?? '',
+                  code: course?.code ?? '',
+                },
+                teacher: leadTeacherName(offering),
+                credits: course?.credits ?? null,
+                numeric: term.numeric,
+                letter: term.letter ?? '',
+              };
+            })
+            .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
           // The GPA is built from ALL enrolled rows and the LISTING is filtered after,
           // matching the backend: a transcript prints graded lines only, but the GPA
           // denominator is every enrolled credit (decision #4). Filtering first would
@@ -376,21 +429,20 @@ export const reportsHandlers = [
     return HttpResponse.json(buildTranscript(student));
   }),
 
-  // ── Class grade summary (per offering) ───────────────────────────────────────────
-  http.get(`${API_BASE_URL}/reports/class-grades`, ({ request, cookies }) => {
+  // ── Offering grade summary ───────────────────────────────────────────────────────
+  http.get(`${API_BASE_URL}/reports/offering-grades`, ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (!role) return errorResponse(401, 'unauthenticated', 'Not signed in.');
     const url = new URL(request.url);
-    const classSubjectId = url.searchParams.get('class_subject_id');
-    if (!classSubjectId) return errorResponse(422, 'validation_error', 'class_subject_id is required.');
-    const cs = D.class_subjects.find((c) => c.id === classSubjectId);
-    if (!cs) return errorResponse(404, 'not_found', 'Class subject not found.');
-    const subject = getSubject(cs.subject_id);
-    // The roster of THIS class — read from enrollments now that a student has many.
-    const students = rosterFor(cs.section_id);
+    const offeringId = url.searchParams.get('offering_id');
+    if (!offeringId) return errorResponse(422, 'validation_error', 'offering_id is required.');
+    const offering = getOffering(offeringId);
+    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    // The roster of THIS offering, in its own term.
+    const students = rosterFor(offering.id);
     const rows = students
       .map((s) => {
-        const term = computeTermGrade(s.id, cs.id);
+        const term = computeTermGrade(s.id, offering.id);
         return {
           student: { id: s.id, full_name: s.full_name, student_number: s.student_number },
           numeric: term.numeric,
@@ -408,33 +460,35 @@ export const reportsHandlers = [
       letter: b.letter,
       count: rows.filter((r) => r.letter === b.letter).length,
     }));
+    const reportSem = getSemester(offering.semester_id);
     return HttpResponse.json({
-      class_subject: {
-        id: cs.id,
-        section_id: cs.section_id,
-        section_name: getSection(cs.section_id)?.name ?? '',
-        subject_name: subject?.name ?? '',
-      },
-      semester: getActiveSemester() ? semesterRef(getActiveSemester()!) : null,
+      // One shared ref replaces the flat `id` + `section_id` + `section_name` +
+      // `subject_name` quartet — four fields describing what `offering.label` says once.
+      offering: offeringRef(offering),
+      // The OFFERING's term, not the school's active one: this report is read for archived
+      // terms too, where "the active semester" would name the wrong period.
+      semester: reportSem ? semesterRef(reportSem) : null,
       students: rows,
       class_average: classAverage,
       distribution,
     });
   }),
 
-  // ── Attendance summary (per section) ─────────────────────────────────────────────
+  // ── Attendance summary (per offering) ────────────────────────────────────────────
   http.get(`${API_BASE_URL}/reports/attendance`, ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (!role) return errorResponse(401, 'unauthenticated', 'Not signed in.');
     const url = new URL(request.url);
-    const sectionId = url.searchParams.get('class_id') ?? url.searchParams.get('section_id');
-    if (!sectionId) return errorResponse(422, 'validation_error', 'class_id is required.');
-    const section = getSection(sectionId);
-    if (!section) return errorResponse(404, 'not_found', 'Section not found.');
-    const summary = attendanceSummaryForSection(sectionId);
+    const offeringId = url.searchParams.get('offering_id');
+    if (!offeringId) return errorResponse(422, 'validation_error', 'offering_id is required.');
+    const offering = getOffering(offeringId);
+    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    const summary = attendanceSummaryForOffering(offering.id);
+    const sem = getSemester(offering.semester_id);
     return HttpResponse.json({
-      class: { id: section.id, name: section.name, grade_level: section.grade_level },
-      semester: getActiveSemester() ? semesterRef(getActiveSemester()!) : null,
+      offering: offeringRef(offering),
+      // The OFFERING's term, not the school's active one.
+      semester: sem ? semesterRef(sem) : null,
       summary,
     });
   }),
@@ -447,25 +501,39 @@ export const reportsHandlers = [
       return errorResponse(403, 'forbidden', 'Enrollment reports are restricted to principals and secretaries.');
     }
     const activeStudents = D.students.filter((s) => s.status === 'active');
-    // D29: bucket by the student's OWN year group. Bucketing by their classes would count
-    // one student once per class they take.
-    const byGradeMap = new Map<string, number>();
+    /**
+     * Bucketed by PROGRAMME (D31), not by Form.
+     *
+     * `classes.grade_level` was a homeroom column and a K-12 axis a junior college does not
+     * have. Programme is the tertiary equivalent, and the SAME breakdown backs the Dean's
+     * dashboard tile — so the report and the tile cannot disagree, which was the point of
+     * moving both at once.
+     *
+     * Bucketing by the student rather than by their offerings is still load-bearing: by
+     * offering, one student would be counted once per course they take.
+     */
+    const byProgrammeMap = new Map<string, number>();
     for (const s of activeStudents) {
-      if (!s.year_group) continue;
-      byGradeMap.set(s.year_group, (byGradeMap.get(s.year_group) ?? 0) + 1);
+      const programme = D.programs.find((pr) => pr.id === s.program_id)?.name;
+      if (!programme) continue;
+      byProgrammeMap.set(programme, (byProgrammeMap.get(programme) ?? 0) + 1);
     }
-    const byGrade = [...byGradeMap.entries()]
-      .map(([grade_level, count]) => ({ grade_level, count }))
-      .sort((a, b) => a.grade_level.localeCompare(b.grade_level));
-    const byClass = D.sections.map((sec) => ({
-      class_ref: { id: sec.id, name: sec.name, grade_level: sec.grade_level },
-      enrolled: rosterFor(sec.id).length,
-      capacity: sec.capacity,
+    const byProgramme = [...byProgrammeMap.entries()]
+      .map(([programme, count]) => ({ programme, count }))
+      .sort((a, b) => a.programme.localeCompare(b.programme));
+
+    const liveOfferings = offeringsForYear(getActiveYear()?.id ?? '').filter(
+      (o) => !o.is_archived,
+    );
+    const byOffering = liveOfferings.map((offering) => ({
+      offering: offeringRef(offering),
+      enrolled: rosterFor(offering.id).length,
+      capacity: offering.capacity,
     }));
     return HttpResponse.json({
-      totals: { students: activeStudents.length, classes: D.sections.length },
-      by_grade: byGrade,
-      by_class: byClass,
+      totals: { students: activeStudents.length, offerings: liveOfferings.length },
+      by_programme: byProgramme,
+      by_offering: byOffering,
     });
   }),
 ];

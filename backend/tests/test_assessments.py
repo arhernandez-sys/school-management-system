@@ -19,12 +19,11 @@ import pytest
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.modules.assessments.models import Assessment, AssessmentCategory
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
@@ -42,8 +41,10 @@ def _assert_envelope(body: dict, *, code: str) -> dict:
     return body["error"]
 
 
-def _cat_path(class_id, cs_id, cat_id=None) -> str:
-    base = f"/api/v1/classes/{class_id}/subjects/{cs_id}/categories"
+def _cat_path(offering_id, cat_id=None) -> str:
+    # D31: categories hang off the OFFERING. The old path threaded a homeroom id AND a
+    # class_subject id to reach one gradebook.
+    base = f"/api/v1/offerings/{offering_id}/categories"
     return f"{base}/{cat_id}" if cat_id else base
 
 
@@ -64,16 +65,17 @@ class _Graph:
             start_date=date(2025, 9, 1), end_date=date(2026, 1, 31), is_active=True,
         )
         db_session.add(self.sem)
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"Sec {tag}", grade_level="Form 1",
-        )
-        db_session.add(self.section)
-        self.subject = Subject(name=f"Subj {tag}", code=tag.upper())
+        self.subject = Course(name=f"Subj {tag}", code=tag.upper())
         db_session.add(self.subject)
         db_session.flush()
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
+        self.cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=self.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(self.cs)
         db_session.flush()
+        self.section = self.cs
         # owning teacher
         self.teacher_user = make_user(role=Role.TEACHER)
         self.teacher = TeacherProfile(
@@ -82,14 +84,14 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
         db_session.flush()
         self.H = auth_headers(user_id=self.teacher_user.id, role=Role.TEACHER)
         self._db = db_session
 
     def assessment(self, *, status="draft", max_score="20", is_released=False, category_id=None) -> Assessment:
         a = Assessment(
-            class_subject_id=self.cs.id, semester_id=self.sem.id, category_id=category_id,
+            offering_id=self.cs.id, semester_id=self.sem.id, category_id=category_id,
             title=f"A {uuid.uuid4().hex[:5]}", type="quiz", max_score=Decimal(max_score),
             weight=Decimal("1.00"), status=status, is_released=is_released,
         )
@@ -99,7 +101,7 @@ class _Graph:
 
     def category(self, *, name=None, weight="0.5", drop=0) -> AssessmentCategory:
         c = AssessmentCategory(
-            class_subject_id=self.cs.id, name=name or f"Cat {uuid.uuid4().hex[:5]}",
+            offering_id=self.cs.id, name=name or f"Cat {uuid.uuid4().hex[:5]}",
             weight=Decimal(weight), drop_lowest_count=drop,
         )
         self._db.add(c)
@@ -113,7 +115,7 @@ class _Graph:
         )
         self._db.add(s)
         self._db.flush()
-        enr = ClassEnrollment(class_id=self.section.id, student_id=s.id, semester_id=self.sem.id)
+        enr = ClassEnrollment(offering_id=self.section.id, student_id=s.id, semester_id=self.sem.id)
         self._db.add(enr)
         self._db.flush()
         return s, enr
@@ -142,7 +144,7 @@ class TestAuthGate:
     def test_principal_cannot_create(self, client, graph, make_user, auth_headers) -> None:
         p = make_user(role=Role.PRINCIPAL)
         r = client.post(A, headers=auth_headers(user_id=p.id, role=Role.PRINCIPAL),
-                        json={"class_subject_id": str(graph.cs.id), "title": "X",
+                        json={"offering_id": str(graph.cs.id), "title": "X",
                               "type": "quiz", "max_score": 10})
         assert r.status_code == 403
 
@@ -150,18 +152,18 @@ class TestAuthGate:
 class TestCreate:
     def test_create_ok_forces_draft(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
-            "class_subject_id": str(graph.cs.id), "title": "Quiz 1", "type": "quiz",
+            "offering_id": str(graph.cs.id), "title": "Quiz 1", "type": "quiz",
             "max_score": 25, "weight": 1})
         assert r.status_code == 201, r.text
         b = r.json()
         assert b["status"] == "draft" and b["is_released"] is False
-        assert b["class_subject"]["label"] and b["semester_id"]
+        assert b["offering"]["label"] and b["semester_id"]
 
     def test_create_unknown_cs_404(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
-            "class_subject_id": str(uuid.uuid4()), "title": "X", "type": "quiz", "max_score": 10})
+            "offering_id": str(uuid.uuid4()), "title": "X", "type": "quiz", "max_score": 10})
         assert r.status_code == 404
-        _assert_envelope(r.json(), code="class_subject_not_found")
+        _assert_envelope(r.json(), code="offering_not_found")
 
     def test_create_non_owner_teacher_404(self, client, graph, make_user, auth_headers, db_session) -> None:
         other_user = make_user(role=Role.TEACHER)
@@ -169,37 +171,41 @@ class TestCreate:
                                       full_name="Other", status=TeacherStatus.ACTIVE))
         db_session.flush()
         r = client.post(A, headers=auth_headers(user_id=other_user.id, role=Role.TEACHER),
-                        json={"class_subject_id": str(graph.cs.id), "title": "X",
+                        json={"offering_id": str(graph.cs.id), "title": "X",
                               "type": "quiz", "max_score": 10})
         assert r.status_code == 404
 
     def test_create_category_mismatch_409(self, client, graph, db_session) -> None:
         # a category on a DIFFERENT class_subject (second subject + offering)
-        subj2 = Subject(name=f"S {uuid.uuid4().hex[:5]}", code=uuid.uuid4().hex[:5].upper())
+        subj2 = Course(name=f"S {uuid.uuid4().hex[:5]}", code=uuid.uuid4().hex[:5].upper())
         db_session.add(subj2)
         db_session.flush()
-        cs2 = ClassSubject(class_id=graph.section.id, subject_id=subj2.id, is_active=True)
+        cs2 = CourseOffering(
+            course_id=subj2.id,
+            semester_id=graph.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
         db_session.add(cs2)
         db_session.flush()
-        foreign_cat = AssessmentCategory(class_subject_id=cs2.id, name="Foreign", weight=Decimal("1"))
+        foreign_cat = AssessmentCategory(offering_id=cs2.id, name="Foreign", weight=Decimal("1"))
         db_session.add(foreign_cat)
         db_session.flush()
         r = client.post(A, headers=graph.H, json={
-            "class_subject_id": str(graph.cs.id), "category_id": str(foreign_cat.id),
+            "offering_id": str(graph.cs.id), "category_id": str(foreign_cat.id),
             "title": "X", "type": "quiz", "max_score": 10})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="category_subject_mismatch")
 
     def test_create_bad_type_422(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
-            "class_subject_id": str(graph.cs.id), "title": "X", "type": "essay", "max_score": 10})
+            "offering_id": str(graph.cs.id), "title": "X", "type": "essay", "max_score": 10})
         assert r.status_code == 422
 
     def test_create_in_archived_year_409(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
         db_session.flush()
         r = client.post(A, headers=graph.H, json={
-            "class_subject_id": str(graph.cs.id), "title": "X", "type": "quiz", "max_score": 10})
+            "offering_id": str(graph.cs.id), "title": "X", "type": "quiz", "max_score": 10})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="year_archived")
 
@@ -208,17 +214,21 @@ class TestReadScope:
     def test_teacher_sees_only_owned(self, client, graph, db_session, make_user, auth_headers) -> None:
         graph.assessment(status="published")
         # a second, unowned cs + assessment
-        subj2 = Subject(name=f"S {uuid.uuid4().hex[:5]}", code=uuid.uuid4().hex[:5].upper())
+        subj2 = Course(name=f"S {uuid.uuid4().hex[:5]}", code=uuid.uuid4().hex[:5].upper())
         db_session.add(subj2); db_session.flush()
-        cs2 = ClassSubject(class_id=graph.section.id, subject_id=subj2.id, is_active=True)
+        cs2 = CourseOffering(
+            course_id=subj2.id,
+            semester_id=graph.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
         db_session.add(cs2); db_session.flush()
-        db_session.add(Assessment(class_subject_id=cs2.id, semester_id=graph.sem.id,
+        db_session.add(Assessment(offering_id=cs2.id, semester_id=graph.sem.id,
                                   title="Foreign", type="quiz", max_score=Decimal("10"),
                                   weight=Decimal("1"), status="published"))
         db_session.flush()
         r = client.get(f"{A}?page_size=200", headers=graph.H)
         assert r.status_code == 200
-        cs_ids = {i["class_subject"]["class_subject_id"] for i in r.json()["items"]}
+        cs_ids = {i["offering"]["id"] for i in r.json()["items"]}
         assert str(graph.cs.id) in cs_ids and str(cs2.id) not in cs_ids
 
     def test_student_sees_nondraft_in_own_section(self, client, graph, make_user, auth_headers) -> None:
@@ -249,9 +259,9 @@ class TestReadScope:
         assert r.status_code == 404
 
     def test_picker_feed_lists_owned(self, client, graph) -> None:
-        r = client.get(f"{A}/class-subjects", headers=graph.H)
+        r = client.get(f"{A}/offerings", headers=graph.H)
         assert r.status_code == 200
-        ids = {i["class_subject_id"] for i in r.json()["items"]}
+        ids = {i["id"] for i in r.json()["items"]}
         assert str(graph.cs.id) in ids
 
 
@@ -307,27 +317,27 @@ class TestUpdateStatusDelete:
 
 class TestCategories:
     def test_list_create_dup(self, client, graph) -> None:
-        r = client.get(_cat_path(graph.section.id, graph.cs.id), headers=graph.H)
+        r = client.get(_cat_path(graph.cs.id), headers=graph.H)
         assert r.status_code == 200 and "items" in r.json()
-        r = client.post(_cat_path(graph.section.id, graph.cs.id), headers=graph.H,
+        r = client.post(_cat_path(graph.cs.id), headers=graph.H,
                         json={"name": "Quizzes", "weight": 0.4, "drop_lowest_count": 1})
         assert r.status_code == 201, r.text
         assert r.json()["name"] == "Quizzes" and r.json()["drop_lowest_count"] == 1
-        dup = client.post(_cat_path(graph.section.id, graph.cs.id), headers=graph.H,
+        dup = client.post(_cat_path(graph.cs.id), headers=graph.H,
                           json={"name": "quizzes"})
         assert dup.status_code == 409
         _assert_envelope(dup.json(), code="duplicate_category_name")
 
     def test_patch_category(self, client, graph) -> None:
         c = graph.category(name="Tests")
-        r = client.patch(_cat_path(graph.section.id, graph.cs.id, c.id), headers=graph.H,
+        r = client.patch(_cat_path(graph.cs.id, c.id), headers=graph.H,
                          json={"weight": 0.7, "drop_lowest_count": 2})
         assert r.status_code == 200 and r.json()["weight"] == 0.7 and r.json()["drop_lowest_count"] == 2
 
     def test_delete_category_detaches_assessments(self, client, graph) -> None:
         c = graph.category()
         a = graph.assessment(category_id=c.id)
-        assert client.delete(_cat_path(graph.section.id, graph.cs.id, c.id), headers=graph.H).status_code == 204
+        assert client.delete(_cat_path(graph.cs.id, c.id), headers=graph.H).status_code == 204
         # assessment survives, category detached
         r = client.get(f"{A}/{a.id}", headers=graph.H)
         assert r.status_code == 200 and r.json()["category_id"] is None
@@ -337,7 +347,7 @@ class TestCategories:
         db_session.add(TeacherProfile(user_id=ou.id, staff_number=f"T-{uuid.uuid4().hex[:6]}",
                                       full_name="Other", status=TeacherStatus.ACTIVE))
         db_session.flush()
-        r = client.post(_cat_path(graph.section.id, graph.cs.id),
+        r = client.post(_cat_path(graph.cs.id),
                         headers=auth_headers(user_id=ou.id, role=Role.TEACHER),
                         json={"name": "X"})
         assert r.status_code == 404
@@ -489,7 +499,7 @@ class TestNudgeReleaseHappyPath:
         assert row.summary["awaiting_release_count"] == 1
         assert row.summary["teacher_ids"] == [str(graph.teacher.id)]
         assert row.summary["teacher_names"] == ["Owner Teacher"]
-        assert row.summary["class_subject_id"] == str(graph.cs.id)
+        assert row.summary["offering_id"] == str(graph.cs.id)
 
     def test_stored_timestamp_is_utc_and_matches_the_response(
         self, client, awaiting, make_user, auth_headers, db_session
@@ -520,7 +530,7 @@ class TestNudgeReleaseHappyPath:
         db_session.add(co_profile)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=graph.cs.id, teacher_id=co_profile.id, is_lead=False)
+            ClassTeacher(offering_id=graph.cs.id, teacher_id=co_profile.id, is_lead=False)
         )
         db_session.flush()
         p = make_user(role=Role.PRINCIPAL)
@@ -612,7 +622,7 @@ class TestNudgeReleaseRefusals:
 
         a = awaiting()
         db_session.execute(
-            delete(ClassTeacher).where(ClassTeacher.class_subject_id == graph.cs.id)
+            delete(ClassTeacher).where(ClassTeacher.offering_id == graph.cs.id)
         )
         db_session.flush()
         p = make_user(role=Role.PRINCIPAL)

@@ -23,12 +23,11 @@ from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.modules.assessments.models import Assessment
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.reports.models import ReportCardSnapshot
@@ -72,19 +71,18 @@ class _TinyYear:
             academic_year_id=self.year.id, name="Semester 1", sequence=1,
             start_date=date(2025, 9, 1), end_date=date(2026, 1, 31), is_active=True,
         )
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"FSec {tag}", grade_level="Form 1",
-            section="A",
-        )
-        self.subject = Subject(name=f"FSubj {tag}", code=f"FZ{tag[:3].upper()}")
-        db_session.add_all([self.semester, self.section, self.subject])
+        self.subject = Course(name=f"FSubj {tag}", code=f"FZ{tag[:3].upper()}")
+        db_session.add_all([self.semester, self.subject])
         db_session.flush()
 
-        self.cs = ClassSubject(
-            class_id=self.section.id, subject_id=self.subject.id, is_active=True
-        )
+        self.cs = CourseOffering(
+                course_id=self.subject.id,
+                semester_id=self.semester.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(self.cs)
         db_session.flush()
+        self.section = self.cs
 
         teacher_user = make_user(role=Role.TEACHER, full_name="Freeze Teacher")
         teacher = TeacherProfile(
@@ -94,7 +92,7 @@ class _TinyYear:
         db_session.add(teacher)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=self.cs.id, teacher_id=teacher.id, is_lead=True)
+            ClassTeacher(offering_id=self.cs.id, teacher_id=teacher.id, is_lead=True)
         )
 
         self.student = StudentProfile(
@@ -105,14 +103,14 @@ class _TinyYear:
         db_session.add(self.student)
         db_session.flush()
         self.enrollment = ClassEnrollment(
-            class_id=self.section.id, student_id=self.student.id,
+            offering_id=self.section.id, student_id=self.student.id,
             semester_id=self.semester.id,
         )
         db_session.add(self.enrollment)
         db_session.flush()
 
         self.assessment = Assessment(
-            class_subject_id=self.cs.id, semester_id=self.semester.id,
+            offering_id=self.cs.id, semester_id=self.semester.id,
             title=f"Final {tag}", type="exam", max_score=Decimal("100"),
             weight=Decimal("1"), status="graded", is_released=True,
         )
@@ -213,11 +211,15 @@ class TestFreezeWrites:
     def test_ungraded_subjects_are_not_frozen(self, client, tiny, principal_headers, db_session) -> None:
         """A subject with no resolvable grade has nothing to freeze."""
         g = tiny()
-        empty = Subject(name=f"Empty {g.tag}", code=f"EM{g.tag[:3].upper()}")
+        empty = Course(name=f"Empty {g.tag}", code=f"EM{g.tag[:3].upper()}")
         db_session.add(empty)
         db_session.flush()
         db_session.add(
-            ClassSubject(class_id=g.section.id, subject_id=empty.id, is_active=True)
+            CourseOffering(
+                course_id=empty.id,
+                semester_id=g.semester.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         )
         db_session.flush()
 
@@ -376,7 +378,7 @@ class TestFreezeOrdering:
             select(GradingScale).where(GradingScale.academic_year_id == g.year.id)
         )
         assert scale.is_frozen is True
-        section = db_session.get(Class, g.section.id)
+        section = db_session.get(CourseOffering, g.section.id)
         assert section.is_archived is True
         active_semesters = db_session.scalar(
             select(func.count()).select_from(Semester).where(
@@ -398,7 +400,7 @@ class TestFreezeIdempotency:
         """
         g = tiny(score="90")
         db_session.add(TermGradeSnapshot(
-            student_id=g.student.id, class_subject_id=g.cs.id,
+            student_id=g.student.id, offering_id=g.cs.id,
             semester_id=g.semester.id, subject_id=g.subject.id,
             numeric_grade=Decimal("11.00"), letter_grade="F", effective_policy={},
         ))
@@ -410,7 +412,7 @@ class TestFreezeIdempotency:
         rows = list(db_session.scalars(
             select(TermGradeSnapshot).where(
                 TermGradeSnapshot.student_id == g.student.id,
-                TermGradeSnapshot.class_subject_id == g.cs.id,
+                TermGradeSnapshot.offering_id == g.cs.id,
                 TermGradeSnapshot.semester_id == g.semester.id,
             )
         ).all())
@@ -500,7 +502,7 @@ class TestFrozenReadsAfterArchival:
         client.post(_archive_path(g.year.id), headers=principal_headers)
 
         body = client.get(
-            f"/api/v1/grades/term?class_subject_id={g.cs.id}", headers=principal_headers
+            f"/api/v1/grades/term?offering_id={g.cs.id}", headers=principal_headers
         ).json()
         item = next(i for i in body["items"] if i["student"]["id"] == str(g.student.id))
         assert item["is_frozen"] is True

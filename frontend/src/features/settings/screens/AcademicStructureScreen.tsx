@@ -262,12 +262,14 @@ export function AcademicStructureScreen() {
     };
     if (termDialogTerm) {
       updateTermMut.mutate(
-        { semesterId: termDialogTerm.id, body: values },
+        { semesterId: termDialogTerm.id, data: values },
         { onSuccess: closeTermDialog, onError },
       );
     } else if (termDialogYear) {
       createTermMut.mutate(
-        { ...values, academic_year_id: termDialogYear.id },
+        // The generated mutation wraps the request body in `data` (D31: these two calls
+        // moved from hand-written wrappers to the generated operations).
+        { data: { ...values, academic_year_id: termDialogYear.id } },
         { onSuccess: closeTermDialog, onError },
       );
     }

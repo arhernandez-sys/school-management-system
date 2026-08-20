@@ -4,14 +4,15 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@shared/api/client';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
   useListAcademicYearsApiV1SettingsAcademicYearsGet,
   useCreateAcademicYearApiV1SettingsAcademicYearsPost,
   useActivateSemesterApiV1SettingsSemestersSemesterIdActivatePatch,
+  useCreateSemesterApiV1SettingsSemestersPost,
+  useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch,
   useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost,
   useGetGradingScaleApiV1SettingsGradingScaleGet,
   useUpdateGradingScaleApiV1SettingsGradingScalePut,
@@ -35,9 +36,6 @@ import { useResetUserPasswordApiV1AuthUsersUserIdResetPasswordPost } from '@shar
 import type {
   ListUsersApiV1SettingsUsersGetParams,
   GetGradingScaleApiV1SettingsGradingScaleGetParams,
-  SemesterDetail,
-  SemesterUpdateRequest,
-  StandaloneSemesterCreateRequest,
 } from '@shared/api/generated/model';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
@@ -106,34 +104,26 @@ export function useArchiveAcademicYear() {
 /**
  * D30 §D3 — add / correct ONE calendar term.
  *
- * Hand-written rather than generated: `POST /settings/semesters` and
- * `PATCH /settings/semesters/{id}` are new in D30 and are not in the served
- * `openapi.json`, and `npm run generate:api` is forbidden (it covers 4 of 14 modules,
- * so regenerating would delete far more than it restored). Same arrangement as the
- * Students and Programmes features.
+ * These two were hand-written because `POST /settings/semesters` and
+ * `PATCH /settings/semesters/{id}` were new in D30 and absent from the committed
+ * `openapi.json`, which was a stale 21-path snapshot at the time.
+ *
+ * **D31 switched them to the generated operations.** Refreshing the spec to the real
+ * 101-path surface brought both into `generated/settings/settings.ts`, and the config's own
+ * rule is that a generated copy must never sit beside a hand-authored one to drift — the
+ * hand-written versions were now a second declaration of the same two calls. Regenerating
+ * is also no longer the all-or-nothing hazard that note described: `orval.transformer.cjs`
+ * prunes the spec to the four generated tags, so codegen touches nothing else.
  */
 export function useCreateSemester() {
   const invalidate = useInvalidateAcademicStructure();
-  return useMutation({
-    mutationFn: async (body: StandaloneSemesterCreateRequest) => {
-      const res = await api.post<SemesterDetail>('/settings/semesters', body);
-      return res.data;
-    },
-    onSuccess: invalidate,
-  });
+  return useCreateSemesterApiV1SettingsSemestersPost({ mutation: { onSuccess: invalidate } });
 }
 
 export function useUpdateSemester() {
   const invalidate = useInvalidateAcademicStructure();
-  return useMutation({
-    mutationFn: async (vars: { semesterId: string; body: SemesterUpdateRequest }) => {
-      const res = await api.patch<SemesterDetail>(
-        `/settings/semesters/${vars.semesterId}`,
-        vars.body,
-      );
-      return res.data;
-    },
-    onSuccess: invalidate,
+  return useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch({
+    mutation: { onSuccess: invalidate },
   });
 }
 

@@ -81,10 +81,10 @@ class TermGradeSnapshot(Base, TimestampMixin):
         ForeignKey("student_profiles.id", ondelete="RESTRICT", name="fk_term_snapshot_student"),
         nullable=False,
     )
-    class_subject_id: Mapped[uuid.UUID] = mapped_column(
+    offering_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey(
-            "class_subjects.id", ondelete="RESTRICT", name="fk_term_snapshot_class_subject"
+            "course_offerings.id", ondelete="RESTRICT", name="fk_term_snapshot_offering"
         ),
         nullable=False,
     )
@@ -130,7 +130,7 @@ class TermGradeSnapshot(Base, TimestampMixin):
         Index(
             "uq_term_snapshot",
             "student_id",
-            "class_subject_id",
+            "offering_id",
             "semester_id",
             unique=True,
         ),

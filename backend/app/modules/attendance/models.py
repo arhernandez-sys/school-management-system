@@ -1,7 +1,7 @@
 """Attendance model (database-schema.md §3.E).
 
 Per-day, per-SECTION (homeroom), per-student record. Upsert on
-(class_id, student_id, attendance_date). No-future-date is service-enforced.
+(offering_id, student_id, attendance_date). No-future-date is service-enforced.
 """
 
 from __future__ import annotations
@@ -21,9 +21,14 @@ class AttendanceRecord(Base, TimestampMixin, AuditMixin):
     __tablename__ = "attendance_records"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    class_id: Mapped[uuid.UUID] = mapped_column(
+    #: FK -> course_offerings (D31; was class_id -> classes, a HOMEROOM). Attendance is
+    #: taken per OFFERING now: a register for "Form 1A" covered seven courses at once,
+    #: which is not a thing a lecturer can mark.
+    offering_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
-        ForeignKey("classes.id", ondelete="RESTRICT", name="fk_attendance_class"),
+        ForeignKey(
+            "course_offerings.id", ondelete="RESTRICT", name="fk_attendance_offering"
+        ),
         nullable=False,
     )
     student_id: Mapped[uuid.UUID] = mapped_column(
@@ -50,12 +55,12 @@ class AttendanceRecord(Base, TimestampMixin, AuditMixin):
 
     __table_args__ = (
         Index(
-            "uq_attendance_class_student_date",
-            "class_id",
+            "uq_attendance_offering_student_date",
+            "offering_id",
             "student_id",
             "attendance_date",
             unique=True,
         ),
-        Index("ix_attendance_class_date", "class_id", "attendance_date"),
+        Index("ix_attendance_offering_date", "offering_id", "attendance_date"),
         Index("ix_attendance_student_semester", "student_id", "semester_id"),
     )

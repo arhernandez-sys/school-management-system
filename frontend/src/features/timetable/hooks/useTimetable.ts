@@ -1,11 +1,11 @@
 /**
  * Timetable data hooks (D29, FR-SCH-03..05). Thin TanStack Query wrappers over the shared
- * axios client, like the Classes hooks — the Timetable endpoints are not orval-generated.
+ * axios client, like the Offerings hooks — the Timetable endpoints are not orval-generated.
  *
  * The `['timetable']` key prefix is deliberately shallow: `useReplaceMeetings` and
- * `useEnrollStudents` (features/classes) invalidate the whole prefix, because retiming a
- * class or changing its roster changes the week of everyone attached to it and there is no
- * cheap way to know which cached weeks those are.
+ * `useEnrollStudents` (features/offerings) invalidate the whole prefix, because retiming an
+ * offering or changing its roster changes the week of everyone attached to it and there is
+ * no cheap way to know which cached weeks those are.
  */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@shared/api/client';
@@ -21,8 +21,8 @@ export const timetableKeys = {
 /**
  * GET /timetable/me — the caller's own Mon–Fri week.
  *
- * Role-aware server-side: a student gets the classes they are enrolled in, a teacher the
- * classes they teach. Principal/secretary get an empty week rather than a 403 (they have no
+ * Role-aware server-side: a student gets the offerings they are enrolled in, a lecturer the
+ * offerings they teach. Dean/Registrar get an empty week rather than a 403 (they have no
  * personal timetable and the nav never offers them this screen).
  */
 export function useMyTimetable(academicYearId?: string) {
@@ -41,7 +41,7 @@ export function useMyTimetable(academicYearId?: string) {
 /**
  * GET /timetable/students/{id} — any student's week (P/S only).
  *
- * For the office to check a student's week before enrolling them into one more class,
+ * For the office to check a student's week before enrolling them into one more course,
  * which is the cheapest moment to catch a clash.
  */
 export function useStudentTimetable(

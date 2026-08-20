@@ -4,7 +4,7 @@ import { Box, Tab, Tabs } from '@mui/material';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
-import { SubjectsPage } from './SubjectsPage';
+import { CoursesPage } from './CoursesPage';
 import { ProgramsScreen } from '@features/programs/ProgramsScreen';
 import { ProgramCurriculumScreen } from '@features/programs/ProgramCurriculumScreen';
 import { SchoolProfileScreen } from './screens/SchoolProfileScreen';
@@ -45,7 +45,7 @@ export function SettingsPage() {
         ? [
             { label: 'School', path: 'school' },
             { label: 'Academic structure', path: 'academic' },
-            { label: 'Courses', path: 'subjects' },
+            { label: 'Courses', path: 'courses' },
             // D30 §D3 — the studies and the course sequence each one requires. Sits
             // next to Courses because a programme is built OUT of catalog courses.
             { label: 'Programmes', path: 'programs' },
@@ -88,7 +88,7 @@ export function SettingsPage() {
             <>
               <Route path="school" element={<SchoolProfileScreen />} />
               <Route path="academic" element={<AcademicStructureScreen />} />
-              <Route path="subjects" element={<SubjectsPage />} />
+              <Route path="courses" element={<CoursesPage />} />
               <Route path="programs" element={<ProgramsScreen />} />
               {/* The curriculum builder is a nested route rather than a dialog: a
                   programme's plan is a page-sized thing, and a Dean part-way through

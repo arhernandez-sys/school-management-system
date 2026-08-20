@@ -64,7 +64,7 @@ from app.modules.admissions.schemas import (
     EducationRow,
     ProgramRef,
 )
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.programs.models import Program
 from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.students.models import StudentProfile, StudentProgramHistory
@@ -153,7 +153,7 @@ def _program_ref(db: Session, program_id: uuid.UUID | None) -> ProgramRef | None
 def _course_ref(db: Session, course_id: uuid.UUID | None) -> CourseRef | None:
     if course_id is None:
         return None
-    course = db.get(Subject, course_id)
+    course = db.get(Course, course_id)
     if course is None:  # pragma: no cover
         return None
     return CourseRef(
@@ -836,9 +836,6 @@ def accept_application(
         # NOT NULL on `student_profiles`, and guaranteed present by `submission_issues`.
         date_of_birth=row.date_of_birth,
         gender=row.gender,
-        #: The applicant's declared year doubles as their level, so the report-card
-        #: header and the student list have something to print from day one.
-        year_group=row.year_of_study.value if row.year_of_study else None,
         enrollment_date=accepted_on,
         status=StudentStatus.ACTIVE,
         phone=row.phone,
@@ -906,8 +903,8 @@ def accept_application(
     row.updated_by = actor.id
 
     transferred = db.execute(
-        select(Subject.code)
-        .join(CreditTransferRequest, CreditTransferRequest.target_course_id == Subject.id)
+        select(Course.code)
+        .join(CreditTransferRequest, CreditTransferRequest.target_course_id == Course.id)
         .where(
             CreditTransferRequest.application_id == row.id,
             CreditTransferRequest.status == CreditTransferStatus.APPROVED,
@@ -1077,7 +1074,7 @@ def _assert_transfer_docs_belong(
 
 def _assert_target_course(db: Session, course_id: uuid.UUID) -> None:
     exists = db.scalar(
-        select(Subject.id).where(Subject.id == course_id, Subject.deleted_at.is_(None))
+        select(Course.id).where(Course.id == course_id, Course.deleted_at.is_(None))
     )
     if exists is None:
         raise ValidationError(

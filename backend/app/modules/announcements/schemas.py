@@ -2,7 +2,7 @@
 
 Read shapes mirror the finished frontend (`features/announcements/types.ts` +
 `handlers/announcements.ts`), which WINS on divergence. Two names are easy to get
-wrong: the class reference is **`class_ref`** (not `class` or `class_id`), and the
+wrong: the offering reference is **`offering`** (`class_ref` before D31), and the
 feed row carries **`body_preview`**, not the full `body`.
 
 Write models set `extra="forbid"` (§1.4); wire is snake_case (§1.2).
@@ -39,11 +39,18 @@ class AnnouncementAuthorRef(BaseModel):
     role: Role
 
 
-class AnnouncementClassRef(BaseModel):
+class AnnouncementOfferingRef(BaseModel):
+    """The offering a `class`-audience announcement targets (D31).
+
+    Was `AnnouncementClassRef(id, name, grade_level)` - a homeroom and its Form. An
+    offering has no Form and no stored name, so it carries the derived `label`
+    ("MATH1110-01") plus the course title, which is what a compose picker needs to show.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: UUID
-    name: str
-    grade_level: str
+    label: str
+    course_name: str | None = None
 
 
 class AnnouncementListItem(BaseModel):
@@ -53,7 +60,7 @@ class AnnouncementListItem(BaseModel):
     title: str
     body_preview: str
     audience: AnnouncementAudience
-    class_ref: AnnouncementClassRef | None = None
+    offering: AnnouncementOfferingRef | None = None
     author: AnnouncementAuthorRef | None = None
     published_at: datetime
     expires_at: datetime | None = None
@@ -67,7 +74,7 @@ class AnnouncementDetail(BaseModel):
     title: str
     body: str
     audience: AnnouncementAudience
-    class_ref: AnnouncementClassRef | None = None
+    offering: AnnouncementOfferingRef | None = None
     author: AnnouncementAuthorRef | None = None
     published_at: datetime
     expires_at: datetime | None = None
@@ -96,10 +103,10 @@ class UnreadCountResponse(BaseModel):
     pending_grade_revisions: int = 0
 
 
-class TargetClassesResponse(BaseModel):
+class TargetOfferingsResponse(BaseModel):
     """Sections the caller may aim a `class` announcement at (compose picker)."""
 
-    items: list[AnnouncementClassRef] = Field(default_factory=list)
+    items: list[AnnouncementOfferingRef] = Field(default_factory=list)
 
 
 class AnnouncementCreateRequest(BaseModel):
@@ -107,7 +114,7 @@ class AnnouncementCreateRequest(BaseModel):
     title: AnnouncementTitle
     body: AnnouncementBody
     audience: AnnouncementAudience = AnnouncementAudience.ALL
-    class_id: UUID | None = None
+    offering_id: UUID | None = None
     published_at: datetime | None = None
     expires_at: datetime | None = None
 
@@ -121,6 +128,6 @@ class AnnouncementUpdateRequest(BaseModel):
     title: AnnouncementTitle | None = None
     body: AnnouncementBody | None = None
     audience: AnnouncementAudience | None = None
-    class_id: UUID | None = None
+    offering_id: UUID | None = None
     published_at: datetime | None = None
     expires_at: datetime | None = None

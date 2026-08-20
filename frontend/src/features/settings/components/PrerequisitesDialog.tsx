@@ -24,19 +24,19 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { LoadingState } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { useSubjectsList } from '../hooks/useSubjects';
+import { useCoursesList } from '../hooks/useCourses';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import {
   useAddPrerequisite,
   usePrerequisites,
   useRemovePrerequisite,
 } from '../hooks/usePrerequisites';
-import type { SubjectListItem } from '@shared/api/generated/model';
+import type { CourseListItem } from '@shared/api/generated/model';
 import type { PrerequisiteType } from '../types.prerequisites';
 
 export interface PrerequisitesDialogProps {
   open: boolean;
-  course: SubjectListItem | null;
+  course: CourseListItem | null;
   /** False for the Registrar — the list renders read-only. */
   canManage: boolean;
   onClose: () => void;
@@ -72,7 +72,7 @@ export function PrerequisitesDialog({
   const addMut = useAddPrerequisite(courseId ?? '');
   const removeMut = useRemovePrerequisite(courseId ?? '');
 
-  const catalog = useSubjectsList({ page: 1, page_size: 100, sort: 'code', is_active: true });
+  const catalog = useCoursesList({ page: 1, page_size: 100, sort: 'code', is_active: true });
   const programs = useProgramsList({ page: 1, page_size: 100, sort: 'code' });
 
   const [kind, setKind] = useState<PrerequisiteType>('course');

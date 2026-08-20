@@ -231,7 +231,16 @@ Setup: `RUNBOOK.md` §2 (two terminals — backend on `:8000`, `npm run dev` on 
 you are on live data, not mocks: live requests appear in the **uvicorn log**. If the UI shows
 data while uvicorn logs nothing, MSW is intercepting and you are testing the demo.
 
-All seeded logins share `SimsDemo2025!`. The login field takes an **email address**.
+Each seeded login has its OWN generated password, listed in
+`backend/db/mariadb/generated/demo-credentials.txt` (written by the seed run, untracked).
+The login field takes an **email address**.
+
+**Every seeded account starts with `must_change_password = true` and the server enforces
+it** (D31 Phase 5): the first thing each role must do is set a new password, and until then
+the API answers 403 `password_change_required` on everything except `GET /auth/me`,
+`PATCH /auth/me/password` and `POST /auth/logout`. Treat that forced change as step 0 of
+every role's script rather than a defect — and note it is now itself worth testing: a
+flagged account must be redirected, not shown a dashboard full of errors.
 
 Record for each step: pass / fail / observation. A failed step gets an entry in the defect log
 (§7) before the run continues.

@@ -41,7 +41,7 @@ from app.modules.grades.schemas import (
     GradeRevisionDecisionRequest,
     GradeRevisionList,
     GradeRevisionRead,
-    ClassSubjectOptionsResponse,
+    OfferingOptionsResponse,
     Gradebook,
     GradeEntryRequest,
     GradeEntryResponse,
@@ -64,31 +64,31 @@ _dean = require_role(Role.PRINCIPAL)
 
 
 @router.get(
-    "/class-subjects",
-    response_model=ClassSubjectOptionsResponse,
+    "/offerings",
+    response_model=OfferingOptionsResponse,
     summary="Gradebook picker — offerings the caller may grade or view",
     responses={401: _ERR, 403: _ERR, 422: _ERR},
 )
-def list_class_subjects(
+def list_offerings(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
-) -> ClassSubjectOptionsResponse:
+) -> OfferingOptionsResponse:
     """Teacher → offerings they own; P/S → all offerings of the year. Students have
     no gradebook access (they use `/grades/me`) → 403."""
-    return service.list_class_subject_options(
+    return service.list_offering_options(
         db, actor=actor, academic_year_id=academic_year_id
     )
 
 
 @router.get(
-    "/class-subject/{class_subject_id}",
+    "/offering/{offering_id}",
     response_model=Gradebook,
     summary="The gradebook grid for one subject offering",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def get_gradebook(
-    class_subject_id: uuid.UUID,
+    offering_id: uuid.UUID,
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
@@ -96,21 +96,20 @@ def get_gradebook(
     """404 for a teacher who doesn't own the offering (no existence leak).
     P/S read with `can_edit=false`."""
     return service.get_gradebook(
-        db, actor=actor, class_subject_id=class_subject_id, semester_id=semester_id
+        db, actor=actor, offering_id=offering_id, semester_id=semester_id
     )
 
 
 @router.get(
     "/term",
     response_model=TermGradeList,
-    summary="Term grades for a student, offering, or section",
+    summary="Term grades for a student or an offering",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def list_term_grades(
     scope: Annotated[str | None, Query(pattern="^me$")] = None,
     student_id: Annotated[uuid.UUID | None, Query()] = None,
-    class_subject_id: Annotated[uuid.UUID | None, Query()] = None,
-    class_id: Annotated[uuid.UUID | None, Query()] = None,
+    offering_id: Annotated[uuid.UUID | None, Query()] = None,
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_any_role),
@@ -122,8 +121,7 @@ def list_term_grades(
         actor=actor,
         scope=scope,
         student_id=student_id,
-        class_subject_id=class_subject_id,
-        class_id=class_id,
+        offering_id=offering_id,
         semester_id=semester_id,
     )
 
@@ -213,7 +211,7 @@ def create_grade_revision(
 )
 def list_grade_revisions(
     status: Annotated[GradeRevisionStatus | None, Query()] = None,
-    class_subject_id: Annotated[uuid.UUID | None, Query()] = None,
+    offering_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
 ) -> GradeRevisionList:
@@ -224,7 +222,7 @@ def list_grade_revisions(
     the Dean; that is what makes it safe to drive a notification badge from.
     """
     return revisions_service.list_revisions(
-        db, actor=actor, status=status, class_subject_id=class_subject_id
+        db, actor=actor, status=status, offering_id=offering_id
     )
 
 

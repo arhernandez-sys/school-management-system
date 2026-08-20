@@ -47,7 +47,7 @@ export default defineConfig({
        * leave a generated copy sitting alongside a hand-authored one to drift.
        */
       filters: {
-        tags: ['auth', 'health', 'settings', 'subjects'],
+        tags: ['auth', 'health', 'settings', 'courses'],
       },
       override: {
         // Strip the `/api/v1` prefix from every path so generated operations are

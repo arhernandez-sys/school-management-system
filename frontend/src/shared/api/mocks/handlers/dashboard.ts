@@ -5,29 +5,29 @@ import {
   DEMO_IDS,
   DEMO_TODAY,
   announcementsForUser,
-  assessmentsForClassSubject,
+  assessmentsForOffering,
   attendanceFor,
-  classSubjectsOwnedByTeacher,
+  attendanceRateForStudent,
   computeTermGrade,
-  enrollmentByGrade,
+  currentOfferingsFor,
   getActiveSemester,
   getActiveYear,
-  getSection,
-  currentSectionsFor,
-  attendanceRateForStudent,
-  classSubjectsForStudent,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
-  getSubject,
   getTeacher,
-  gradeDistribution,
-  rosterFor,
   gpaFor,
+  gradeDistribution,
   letterFor,
+  offeringLabel,
+  offeringsForStudent,
+  offeringsOwnedByTeacher,
+  rosterFor,
   schoolAttendanceRate,
-  sectionsOwnedByTeacher,
   unreadCountForUser,
 } from '@shared/api/mocks/demo/dataset';
-import type { DemoAnnouncement, DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoAnnouncement, DemoOffering, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse } from './_helpers';
 
 /**
@@ -53,8 +53,8 @@ const D = DEMO_DATASET;
 const REPRESENTATIVE_USER_ID: Record<string, string> = {
   principal: DEMO_IDS.principalUserId,
   secretary: 'user-secretary',
-  teacher: 'user-teach-1', // Maria Reyes (MATH/PHYS) — owns many class_subjects
-  student: 'user-stu-1', // Ana Lopez — active, Form 1A
+  teacher: 'user-teach-1', // Maria Reyes — leads several Algebra offerings
+  student: 'user-stu-1', // Freddy Lopez — active, first-year, MATH1110-01
 };
 
 function resolveUser(role: string): DemoUser {
@@ -73,6 +73,34 @@ function announcementView(a: DemoAnnouncement, userId: string) {
   };
 }
 
+/**
+ * The shared `OfferingRef`.
+ *
+ * Every dashboard row that used to carry `subject_name` + `section_name` — two strings the
+ * server assembled for these cards alone — carries this instead. The label is derived once
+ * (`offeringLabel`), so a card and the offerings list cannot name the same thing differently.
+ */
+function offeringRef(offering: DemoOffering) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
+  return {
+    id: offering.id,
+    course: course
+      ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+      : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+    semester: semester
+      ? {
+          id: semester.id,
+          name: semester.name,
+          sequence: semester.sequence,
+          is_active: semester.is_active,
+        }
+      : null,
+    section_code: offering.section_code,
+    label: offeringLabel(offering),
+  };
+}
+
 function termHeader() {
   const year = getActiveYear();
   const semester = getActiveSemester();
@@ -85,19 +113,20 @@ function termHeader() {
 // ── Admin (principal) — school-wide ─────────────────────────────────────────────
 function adminPayload(user: DemoUser) {
   const activeStudents = D.students.filter((s) => s.status === 'active');
-  const activeSections = D.sections.filter((s) => !s.is_archived);
+  const liveOfferings = D.offerings.filter((o) => !o.is_archived);
   const active_students = activeStudents.length;
 
-  // Seats denominator for the "students" progress bar: sum of section capacities.
-  const student_capacity = activeSections.reduce((sum, s) => sum + (s.capacity ?? 0), 0);
+  // Seats denominator for the "students" progress bar: the sum of offering capacities. A
+  // NULL capacity means "no limit" and contributes nothing, so the bar describes only the
+  // offerings that actually declare one.
+  const student_capacity = liveOfferings.reduce((sum, o) => sum + (o.capacity ?? 0), 0);
 
-  // New intake = the entry-year cohort. D29: read from the student's own `year_group`
-  // ("Lower 6" is the intake year for a sixth form) rather than from a homeroom's grade
-  // level. Reconciles with the Lower 6 bar in enrollment_by_grade, which counts the same way.
-  const new_students_term = activeStudents.filter((s) => s.year_group === 'Lower 6').length;
+  // New intake = the entry-year cohort, read from the student's own `year_of_study` rather
+  // than from a homeroom's grade level. Reconciles with the First-year figure elsewhere.
+  const new_students_term = activeStudents.filter((s) => s.year_of_study === 'First').length;
 
-  // Active subject classes.
-  const total_courses = D.class_subjects.filter((cs) => cs.is_active).length;
+  // Live course offerings.
+  const total_courses = liveOfferings.length;
 
   // Enrollment trend (demo series): six terms of believable growth, anchored so the
   // final point equals the LIVE active_students count and reconciles with the KPI card.
@@ -120,13 +149,13 @@ function adminPayload(user: DemoUser) {
     }));
 
   const recent_students = activeStudents
-    .filter((s) => currentSectionsFor(s.id).length > 0)
+    .filter((s) => currentOfferingsFor(s.id).length > 0)
     .slice(0, 6)
     .map((s) => ({
       id: s.id,
       name: s.full_name,
-      // D29: a student has no single class to name here, so the row shows their level.
-      secondary: s.year_group ?? '—',
+      // A student has no single class to name here, so the row shows their level.
+      secondary: s.year_of_study ?? '—',
       status: { label: 'Active', kind: 'success' as const },
     }));
 
@@ -137,14 +166,39 @@ function adminPayload(user: DemoUser) {
     stats: {
       active_students,
       active_teachers: D.teachers.filter((t) => t.status === 'active').length,
-      total_sections: activeSections.length,
+      total_sections: liveOfferings.length,
       attendance_rate: schoolAttendanceRate(),
       unread_announcements: unreadCountForUser(user.id),
       new_students_term,
       total_courses,
       student_capacity,
     },
-    enrollment_by_grade: enrollmentByGrade(),
+    /**
+     * Bucketed by PROGRAMME (D31), not by Form. `classes.grade_level` was a homeroom column
+     * and a K-12 axis a junior college does not have; the SAME breakdown backs the
+     * enrolment report, so the tile and the report cannot disagree.
+     *
+     * Counted per STUDENT, not per offering: by offering, one student would be counted once
+     * per course they take.
+     */
+    enrollment_by_programme: (() => {
+      const byId = new Map<string, number>();
+      for (const s of activeStudents) {
+        if (!s.program_id) continue;
+        byId.set(s.program_id, (byId.get(s.program_id) ?? 0) + 1);
+      }
+      return [...byId.entries()]
+        .map(([programme_id, count]) => {
+          const programme = D.programs.find((pr) => pr.id === programme_id);
+          return {
+            programme_id,
+            programme_code: programme?.code ?? '?',
+            programme_name: programme?.name ?? 'Unknown programme',
+            count,
+          };
+        })
+        .sort((a, b) => b.count - a.count || a.programme_code.localeCompare(b.programme_code));
+    })(),
     grade_distribution: gradeDistribution(),
     enrollment_trend,
     recent_teachers,
@@ -157,12 +211,11 @@ function adminPayload(user: DemoUser) {
 
 // ── Secretary — records clerk: quick actions + setup tasks (FR-DASH-03) ──────────
 function secretaryPayload(user: DemoUser) {
-  const sections = D.sections.filter((s) => !s.is_archived);
-  const unstaffed_subjects = D.class_subjects.filter(
-    (cs) => cs.is_active && cs.teacher_ids.length === 0,
-  ).length;
-  const over_capacity_sections = sections.filter(
-    (s) => s.capacity > 0 && rosterFor(s.id).length > s.capacity,
+  const offerings = D.offerings.filter((o) => !o.is_archived);
+  const unstaffed_subjects = offerings.filter((o) => o.teacher_ids.length === 0).length;
+  // A NULL capacity can never be over — "no limit" is not "limit zero".
+  const over_capacity_sections = offerings.filter(
+    (o) => o.capacity != null && o.capacity > 0 && rosterFor(o.id).length > o.capacity,
   ).length;
 
   // Most-recent active enrollments (newest first). Ties break on id so it's stable.
@@ -176,7 +229,7 @@ function secretaryPayload(user: DemoUser) {
     .map((e) => ({
       enrollment_id: e.id,
       student_name: getStudent(e.student_id)?.full_name ?? 'Unknown student',
-      section_name: getSection(e.section_id)?.name ?? 'Unknown section',
+      offering_label: offeringLabel(getOffering(e.offering_id)) || 'Unknown offering',
       enrolled_at: e.enrolled_at,
     }));
 
@@ -187,7 +240,7 @@ function secretaryPayload(user: DemoUser) {
     stats: {
       active_students: D.students.filter((s) => s.status === 'active').length,
       active_teachers: D.teachers.filter((t) => t.status === 'active').length,
-      total_sections: sections.length,
+      total_sections: offerings.length,
       unstaffed_subjects,
       over_capacity_sections,
       unread_announcements: unreadCountForUser(user.id),
@@ -204,49 +257,42 @@ function teacherPayload(user: DemoUser) {
   const teacher = getTeacher(
     D.teachers.find((t) => t.user_id === user.id)?.id ?? '',
   );
-  const owned = teacher ? classSubjectsOwnedByTeacher(teacher.id) : [];
-  const sections = teacher ? sectionsOwnedByTeacher(teacher.id) : [];
+  const owned = teacher ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived) : [];
 
-  // Today's classes: one row per owned section, with whether attendance is recorded
-  // for DEMO_TODAY. De-duplicate by section (a teacher may teach several subjects in
-  // the same homeroom, but attendance is per-section-per-day).
-  const today_classes = sections.map((sec) => {
-    const cs = owned.find((c) => c.section_id === sec.id);
-    const subject = cs ? getSubject(cs.subject_id) : undefined;
-    return {
-      class_subject_id: cs?.id ?? '',
-      section_id: sec.id,
-      section_name: sec.name,
-      subject_name: subject?.name ?? '',
-      attendance_recorded: attendanceFor(sec.id, DEMO_TODAY).length > 0,
-    };
-  });
+  /**
+   * Today's offerings, with whether attendance is recorded for DEMO_TODAY.
+   *
+   * One row per OFFERING, and no de-duplication needed. The predecessor iterated SECTIONS
+   * and then picked one of their class_subjects, with a comment explaining that a teacher
+   * may teach several subjects in the same homeroom "but attendance is per-section-per-day"
+   * — a de-duplication that silently DROPPED offerings. Attendance is per offering now, so
+   * every row the lecturer owes is listed.
+   */
+  const today_classes = owned.map((offering) => ({
+    offering: offeringRef(offering),
+    attendance_recorded: attendanceFor(offering.id, DEMO_TODAY).length > 0,
+  }));
 
   // Recent/upcoming assessments across owned offerings that still need action.
   const recent_assessments = owned
-    .flatMap((cs) =>
-      assessmentsForClassSubject(cs.id)
+    .flatMap((offering) =>
+      assessmentsForOffering(offering.id)
         .filter((a) => a.status === 'published' || a.status === 'grading')
-        .map((a) => {
-          const sec = getSection(cs.section_id);
-          const subject = getSubject(cs.subject_id);
-          return {
-            id: a.id,
-            title: a.title,
-            subject_name: subject?.name ?? '',
-            section_name: sec?.name ?? '',
-            assessment_date: a.assessment_date,
-            status: a.status,
-          };
-        }),
+        .map((a) => ({
+          id: a.id,
+          title: a.title,
+          offering: offeringRef(offering),
+          assessment_date: a.assessment_date,
+          status: a.status,
+        })),
     )
     .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''))
     .slice(0, 6);
 
   const ungraded_items = owned.reduce(
-    (n, cs) =>
+    (n, offering) =>
       n +
-      assessmentsForClassSubject(cs.id).filter(
+      assessmentsForOffering(offering.id).filter(
         (a) => a.status === 'published' || a.status === 'grading',
       ).length,
     0,
@@ -257,10 +303,8 @@ function teacherPayload(user: DemoUser) {
   // which is correct: it has two outstanding actions. Same predicate as the
   // backend's graded_unreleased_clause().
   const awaiting_release = owned
-    .flatMap((cs) => {
-      const sec = getSection(cs.section_id);
-      const subject = getSubject(cs.subject_id);
-      return assessmentsForClassSubject(cs.id)
+    .flatMap((offering) =>
+      assessmentsForOffering(offering.id)
         .map((a) => {
           const graded_unreleased_count = D.assessment_grades.filter(
             (g) =>
@@ -271,16 +315,18 @@ function teacherPayload(user: DemoUser) {
           return {
             id: a.id,
             title: a.title,
-            subject_name: subject?.name ?? '',
-            section_name: sec?.name ?? '',
+            offering: offeringRef(offering),
             assessment_date: a.assessment_date,
             status: a.status,
-            class_subject_id: cs.id,
+            // The flat id as well as the ref: the row LINKS to the gradebook, which is
+            // addressed by offering id, and a link target should not have to reach into a
+            // nested object.
+            offering_id: offering.id,
             graded_unreleased_count,
           };
         })
-        .filter((row) => row.graded_unreleased_count > 0);
-    })
+        .filter((row) => row.graded_unreleased_count > 0),
+    )
     .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''));
 
   return {
@@ -288,8 +334,10 @@ function teacherPayload(user: DemoUser) {
     user_full_name: user.full_name,
     ...termHeader(),
     stats: {
-      my_sections: sections.length,
-      my_class_subjects: owned.length,
+      // ONE count. It used to report `my_sections` (distinct homerooms) AND
+      // `my_class_subjects` (offerings), which were the same number the moment a class
+      // taught one subject — the card showed the same figure twice under two names.
+      my_offerings: owned.length,
       attendance_due_today: today_classes.filter((c) => !c.attendance_recorded).length,
       ungraded_items,
       awaiting_release_items: awaiting_release.length,
@@ -306,17 +354,15 @@ function teacherPayload(user: DemoUser) {
 // ── Student — own data (released grades only) ───────────────────────────────────
 function studentPayload(user: DemoUser) {
   const student = D.students.find((s) => s.user_id === user.id);
-  // D29: every subject class the student takes, not the offerings of one homeroom.
-  const classSubjects = student
-    ? classSubjectsForStudent(student.id).filter((c) => c.is_active)
+  // Every offering the student takes this term.
+  const offerings = student
+    ? offeringsForStudent(student.id).filter((o) => !o.is_archived)
     : [];
 
-  const my_classes = classSubjects.map((cs) => {
-    const subject = getSubject(cs.subject_id);
-    const lead = cs.lead_teacher_id ? getTeacher(cs.lead_teacher_id) : undefined;
+  const my_classes = offerings.map((offering) => {
+    const lead = offering.lead_teacher_id ? getTeacher(offering.lead_teacher_id) : undefined;
     return {
-      class_subject_id: cs.id,
-      subject_name: subject?.name ?? '',
+      offering: offeringRef(offering),
       teacher_name: lead?.full_name ?? 'Unassigned',
     };
   });
@@ -324,8 +370,8 @@ function studentPayload(user: DemoUser) {
   // Term average across the student's class_subjects (weighted per-subject, then
   // simple-averaged for a single headline figure); letter derived from the same scale.
   const perSubject = student
-    ? classSubjects
-        .map((cs) => computeTermGrade(student.id, cs.id).numeric)
+    ? offerings
+        .map((offering) => computeTermGrade(student.id, offering.id).numeric)
         .filter((n): n is number => n != null)
     : [];
   const term_average =
@@ -340,19 +386,18 @@ function studentPayload(user: DemoUser) {
   // quality points (decision #4).
   const termGpa = student
     ? gpaFor(
-        classSubjects.map((cs) => ({
-          credits: getSubject(cs.subject_id)?.credits ?? null,
-          letter: computeTermGrade(student.id, cs.id).letter,
+        offerings.map((offering) => ({
+          credits: getCourse(offering.course_id)?.credits ?? null,
+          letter: computeTermGrade(student.id, offering.id).letter,
         })),
       )
     : { gpa: null, total_credits: 0 };
 
   // Recent RELEASED grades only (unreleased is never sent — architecture §3.2/§8.5).
   const recent_grades = student
-    ? classSubjects
-        .flatMap((cs) => {
-          const subject = getSubject(cs.subject_id);
-          return assessmentsForClassSubject(cs.id)
+    ? offerings
+        .flatMap((offering) =>
+          assessmentsForOffering(offering.id)
             .filter((a) => a.status === 'graded' && a.is_released)
             .map((a) => {
               const g = D.assessment_grades.find(
@@ -363,14 +408,14 @@ function studentPayload(user: DemoUser) {
               return {
                 assessment_id: a.id,
                 title: a.title,
-                subject_name: subject?.name ?? '',
+                offering: offeringRef(offering),
                 score: g.score,
                 max_score: a.max_score,
                 letter: letterFor((g.score / a.max_score) * 100),
                 _date: a.assessment_date ?? '',
               };
-            });
-        })
+            }),
+        )
         .filter((r): r is NonNullable<typeof r> => r != null)
         .sort((x, y) => y._date.localeCompare(x._date))
         .slice(0, 6)
@@ -378,23 +423,22 @@ function studentPayload(user: DemoUser) {
     : [];
 
   // Upcoming assessments (dated after DEMO_TODAY), soonest first.
-  const upcoming_assessments = classSubjects
-    .flatMap((cs) => {
-      const subject = getSubject(cs.subject_id);
-      return assessmentsForClassSubject(cs.id)
+  const upcoming_assessments = offerings
+    .flatMap((offering) =>
+      assessmentsForOffering(offering.id)
         .filter((a) => a.assessment_date != null && a.assessment_date > DEMO_TODAY)
         .map((a) => ({
           id: a.id,
           title: a.title,
-          subject_name: subject?.name ?? '',
+          offering: offeringRef(offering),
           assessment_date: a.assessment_date,
-        }));
-    })
+        })),
+    )
     .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''))
     .slice(0, 5);
 
-  // D29: the student's OWN rate across every class they sit — attendance is per subject
-  // class now, so one class's register is not "my attendance".
+  // The student's OWN rate across every offering they sit — attendance is per offering, so
+  // one course's register is not "my attendance".
   const attendance_rate = student ? attendanceRateForStudent(student.id) : 0;
 
   return {

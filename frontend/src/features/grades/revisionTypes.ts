@@ -1,8 +1,8 @@
 /**
  * Grade revision / second opportunity wire types (D30 §D7, brief §20).
  *
- * Hand-written, like the rest of the D30 surface — `npm run generate:api` is forbidden
- * while `openapi.json` covers 4 of 14 modules.
+ * Hand-written, like the rest of the D30/D31 surface: `orval.config.ts` generates only the
+ * auth / health / settings / courses tags, so every other module owns its wire types here.
  *
  * **The original score is never overwritten.** `original_score` is what the student had
  * when the request was filed and `proposed_score` is what the Lecturer asked for; on
@@ -10,6 +10,8 @@
  * the grade row untouched. Both are on this shape so a queue row can read "60 → 91 of 100"
  * without a second call.
  */
+
+import type { OfferingRef } from '@shared/types/api';
 
 export type GradeRevisionStatus = 'pending' | 'approved' | 'denied';
 
@@ -39,10 +41,15 @@ export interface GradeRevision {
   assessment_id: string | null;
   assessment_title: string;
   max_score: number | null;
-  class_subject_id: string | null;
-  subject_name: string;
-  subject_code: string | null;
-  section_name: string;
+  /**
+   * The offering the disputed grade belongs to.
+   *
+   * **D31** — replaces four flat fields: `class_subject_id`, `subject_name`,
+   * `subject_code` and `section_name`. Three of those existed only to render the queue
+   * row's label, and the label is derived server-side now. Nullable for a revision whose
+   * offering was since deleted; a queue row must still be readable after that.
+   */
+  offering: OfferingRef | null;
   requested_by_user_id: string;
   requested_by_name: string;
   decided_by_user_id: string | null;

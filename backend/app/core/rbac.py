@@ -1,14 +1,25 @@
 """Ownership/scope authorization helpers (architecture.md §3.2, schema §9, D23).
 
 The coarse role gate (`require_role`) lives in deps.py; this module holds the FINE
-ownership checks. All three helpers are implemented and in use:
+ownership checks:
 
-  * `assert_teacher_owns_class_subject` — Grades, Assessments, the gradebook.
-  * `assert_teacher_owns_section`       — the attendance register.
-  * `teacher_section_ids`               — Announcements targeting + compose picker.
+  * `assert_teacher_owns_offering` — Grades, Assessments, the gradebook, the attendance
+    register, offering-scoped Announcements.
+  * `teacher_offering_ids`         — Announcements targeting + compose picker.
 
-Denial raises `NotFound`, never `Forbidden`: confirming that a resource exists but
-is off-limits leaks its existence (api-spec §3.3).
+Denial raises `NotFound`, never `Forbidden`: confirming that a resource exists but is
+off-limits leaks its existence (api-spec §3.3).
+
+D31 MERGED TWO HELPERS INTO ONE. There used to be
+`assert_teacher_owns_class_subject` ("may this lecturer touch this gradebook?") and
+`assert_teacher_owns_section` ("may this lecturer touch this homeroom's register?"). Those
+were different questions only while a `classes` row was a HOMEROOM teaching ~7 subjects, so
+that owning one subject of it granted access to the whole section's register. With
+`course_offerings` there is exactly one course per offering, so both questions reduce to the
+same lookup, and keeping two names for it would imply a distinction that no longer exists.
+`teacher_section_ids` became `teacher_offering_ids` for the same reason.
+
+Co-teachers pass identically (D-Q9): ownership is any `class_teachers` row, lead or not.
 """
 
 from __future__ import annotations
@@ -19,14 +30,14 @@ from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import Forbidden, NotFound
-from app.modules.classes.models import ClassSubject, ClassTeacher
+from app.modules.offerings.models import ClassTeacher
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
 
 def _teacher_profile_id(db: Session, user: User) -> uuid.UUID:
-    """Resolve the authenticated teacher's profile id from the principal (never
-    from the request — architecture §3.2 hard rule)."""
+    """Resolve the authenticated lecturer's profile id from the principal (never from
+    the request — architecture §3.2 hard rule)."""
     tid = db.scalar(
         select(TeacherProfile.id).where(
             TeacherProfile.user_id == user.id,
@@ -34,78 +45,54 @@ def _teacher_profile_id(db: Session, user: User) -> uuid.UUID:
         )
     )
     if tid is None:
-        # A teacher user with no profile cannot own anything → treat as not-found
-        # on the scoped resource (404-vs-403 discipline, api-spec §3.3).
+        # A lecturer user with no profile cannot own anything → treat as not-found on
+        # the scoped resource (404-vs-403 discipline, api-spec §3.3).
         raise NotFound("Resource not found.")
     return tid
 
 
-def assert_teacher_owns_class_subject(
-    db: Session, user: User, class_subject_id: uuid.UUID
+def assert_teacher_owns_offering(
+    db: Session, user: User, offering_id: uuid.UUID, *, message: str = "Resource not found."
 ) -> None:
-    """Pass iff a class_teachers row exists for (class_subject_id, user→teacher).
+    """Pass iff a `class_teachers` row exists for (offering_id, user→lecturer).
 
-    Used by Grades, Assessments, the gradebook, class-subject-scoped Announcements.
-    Co-teachers pass identically (D-Q9). Denial raises NotFound (avoid leaking
-    existence of a class_subject the caller doesn't own — api-spec §3.3).
+    Used by Grades, Assessments, the gradebook, the attendance register and
+    offering-scoped Announcements. Denial raises NotFound, not Forbidden — a 403 would
+    confirm that an offering the caller does not teach exists.
 
-    NOTE: implemented eagerly because it is a pure, well-defined indexed lookup and
-    several later modules depend on it; if the orchestrator prefers it deferred,
-    it can be re-stubbed. Kept here as the single source of truth.
+    `message` exists because the 404 body has to MATCH the caller's ordinary
+    not-found body. A generic "Resource not found." next to a module's "Offering not
+    found." tells an attacker which of the two happened, which is the leak the 404 was
+    chosen to close. Callers that have their own wording pass it in.
     """
     teacher_id = _teacher_profile_id(db, user)
     owns = db.scalar(
         select(
             exists().where(
-                ClassTeacher.class_subject_id == class_subject_id,
+                ClassTeacher.offering_id == offering_id,
                 ClassTeacher.teacher_id == teacher_id,
             )
         )
     )
     if not owns:
-        raise NotFound("Resource not found.")
+        raise NotFound(message)
 
 
-def assert_teacher_owns_section(db: Session, user: User, class_id: uuid.UUID) -> None:
-    """Pass iff the teacher owns ANY class_subject of the section (class_id).
+def teacher_offering_ids(db: Session, user: User) -> list[uuid.UUID]:
+    """Every offering the lecturer is assigned to.
 
-    Used by the per-section daily attendance register and class-scoped
-    announcements (any subject teacher of the homeroom). Joins
-    class_teachers → class_subjects on the section.
-    """
-    teacher_id = _teacher_profile_id(db, user)
-    # Build the join on a real Select, then wrap it in EXISTS. `exists().join(...)`
-    # is invalid — Exists has no `.join()` (SQLAlchemy proxies only where/select_from/
-    # correlate onto it), so the join must live on the underlying select.
-    owns = db.scalar(
-        select(
-            select(ClassTeacher.teacher_id)
-            .join(ClassSubject, ClassTeacher.class_subject_id == ClassSubject.id)
-            .where(
-                ClassSubject.class_id == class_id,
-                ClassSubject.deleted_at.is_(None),
-                ClassTeacher.teacher_id == teacher_id,
-            )
-            .exists()
-        )
-    )
-    if not owns:
-        raise NotFound("Resource not found.")
+    The set form of `assert_teacher_owns_offering`: that helper answers "may this lecturer
+    touch THIS offering?", which suits a register or gradebook addressed by id.
+    Announcements need the inverse — "which offerings may this lecturer aim at?" — to
+    build the compose picker and the feed's offering-audience clause, and answering that by
+    looping the assert over every offering in the college would be one query each.
 
+    Returns `[]` for a lecturer with no profile rather than raising, because the callers
+    are list/filter paths where "owns nothing" is a legitimate empty result, not a 404 on a
+    specific resource.
 
-def teacher_section_ids(db: Session, user: User) -> list[uuid.UUID]:
-    """Every section (class_id) the teacher owns at least one subject offering in.
-
-    The set form of `assert_teacher_owns_section`: that helper answers "may this
-    teacher touch THIS section?", which suits a register or a gradebook addressed by
-    id. Announcements need the inverse — "which sections may this teacher aim at?" —
-    to build the compose picker and the feed's class-audience clause, and answering
-    that by looping `assert_teacher_owns_section` over every section in the school
-    would be one query per section.
-
-    Returns `[]` for a teacher with no profile rather than raising, because the
-    callers here are list/filter paths where "owns nothing" is a legitimate empty
-    result, not a 404 on a specific resource.
+    No join since D31: ownership rows point straight at the offering, where they used to
+    reach the section through `class_subjects`.
     """
     try:
         teacher_id = _teacher_profile_id(db, user)
@@ -113,12 +100,8 @@ def teacher_section_ids(db: Session, user: User) -> list[uuid.UUID]:
         return []
     return list(
         db.scalars(
-            select(ClassSubject.class_id)
-            .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
-            .where(
-                ClassTeacher.teacher_id == teacher_id,
-                ClassSubject.deleted_at.is_(None),
-            )
+            select(ClassTeacher.offering_id)
+            .where(ClassTeacher.teacher_id == teacher_id)
             .distinct()
         ).all()
     )

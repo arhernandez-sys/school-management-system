@@ -17,7 +17,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { EmptyState, FormDialog, StatusBadge } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { useSubjectsList } from '@features/settings/hooks/useSubjects';
+import { useCoursesList } from '@features/settings/hooks/useCourses';
 import {
   useCreateCreditTransfer,
   useDecideCreditTransfer,
@@ -62,7 +62,7 @@ export function CreditTransferPanel({ application, isDean, canEdit }: CreditTran
   const [decide, setDecide] = useState<{ transfer: CreditTransfer; approve: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const coursesQuery = useSubjectsList({ page: 1, page_size: 200 });
+  const coursesQuery = useCoursesList({ page: 1, page_size: 200 });
   const createMut = useCreateCreditTransfer();
   const decideMut = useDecideCreditTransfer();
   const deleteMut = useDeleteCreditTransfer();

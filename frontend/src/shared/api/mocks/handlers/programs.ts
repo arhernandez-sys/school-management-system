@@ -38,7 +38,7 @@ function curriculumRows(programId: string): DemoProgramCourse[] {
 function totals(programId: string) {
   const rows = curriculumRows(programId);
   const credits = rows.reduce((sum, pc) => {
-    const course = D.subjects.find((s) => s.id === pc.course_id);
+    const course = D.courses.find((c) => c.id === pc.course_id);
     return sum + (course?.credits ?? 0);
   }, 0);
   return { course_count: rows.length, curriculum_credits: credits };
@@ -73,13 +73,13 @@ function detail(p: DemoProgram) {
 
   const rows = [...curriculumRows(p.id)].sort((a, b) => {
     if (a.term_order !== b.term_order) return a.term_order - b.term_order;
-    const ca = D.subjects.find((s) => s.id === a.course_id)?.code ?? '';
-    const cb = D.subjects.find((s) => s.id === b.course_id)?.code ?? '';
+    const ca = D.courses.find((c) => c.id === a.course_id)?.code ?? '';
+    const cb = D.courses.find((c) => c.id === b.course_id)?.code ?? '';
     return ca.localeCompare(cb);
   });
 
   for (const pc of rows) {
-    const course = D.subjects.find((s) => s.id === pc.course_id);
+    const course = D.courses.find((c) => c.id === pc.course_id);
     if (!course) continue;
     let block = blocks.get(pc.term_order);
     if (!block) {
@@ -226,7 +226,7 @@ export const programsHandlers = [
       term_order: number;
       is_required?: boolean;
     };
-    const course = D.subjects.find((s) => s.id === body.course_id);
+    const course = D.courses.find((c) => c.id === body.course_id);
     if (!course) return errorResponse(404, 'course_not_found', 'Course not found.');
     if (!course.is_active) {
       return errorResponse(409, 'course_retired', 'That course is retired.');

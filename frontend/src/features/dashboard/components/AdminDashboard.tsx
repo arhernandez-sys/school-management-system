@@ -31,8 +31,11 @@ export interface AdminDashboardProps {
 export function AdminDashboard({ data }: AdminDashboardProps) {
   const { stats } = data;
 
-  const enrollmentData = data.enrollment_by_grade.map((d) => ({
-    name: d.grade_level,
+  // D31: bucketed by PROGRAMME, not by Form. The bar label is the programme CODE
+  // ("BMAD") — a chart axis has no room for "Business Administration", and the code is
+  // what BAJC prints on a report card anyway.
+  const enrollmentData = data.enrollment_by_programme.map((d) => ({
+    name: d.programme_code,
     value: d.count,
   }));
   const gradeData = data.grade_distribution.map((d) => ({ name: d.letter, value: d.count }));
@@ -78,7 +81,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
           icon={<ClassIcon />}
           color="secondary"
           helperText={`Across ${stats.total_sections} sections`}
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
@@ -96,7 +99,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
       {/* Analytics row */}
       <Grid item xs={12} lg={4}>
         <ChartWithTable
-          title="Enrollment by grade"
+          title="Enrollment by programme"
           type="bar"
           data={enrollmentData}
           categoryLabel="Grade"

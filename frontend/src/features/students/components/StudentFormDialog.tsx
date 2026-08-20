@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Autocomplete, MenuItem, Stack, TextField } from '@mui/material';
 import { FormDialog } from '@shared/components';
 import { schoolToday } from '@shared/utils/schoolDate';
+import { strings } from '@i18n/strings';
 import type { StudentDetail, StudentWritePayload } from '../types';
-import { useClassOptions } from '../hooks/useSections';
+import { useOfferingOptions, YEAR_OF_STUDY_OPTIONS } from '../hooks/useOfferingOptions';
 
 export interface StudentFormDialogProps {
   open: boolean;
@@ -23,13 +24,17 @@ export interface StudentFormDialogProps {
  * entered in parts (surname / given / middle) because that is how it is stored and
  * sorted (§D10), and the STUDENT ID IS OPTIONAL — left blank, the server issues the
  * next `YYYYMM###` for the month (§D9). It is only typed in to import a student who
- * already carries an ID. **D29**: `year_group` (the student's own level) is a field
- * here, and MANY subject classes can be picked to enrol into on create — it used to be
- * a single "Section" select, which cannot express a tertiary student's subject load.
+ * already carries an ID. **D29**: the student's own level is a field here, and MANY
+ * offerings can be picked to enrol into on create — it used to be a single "Section"
+ * select, which cannot express a college student's course load.
  *
- * On edit, class enrollment is NOT changed here: the API rejects it on PATCH, because with
- * many enrolments "set them from here" is ambiguous about removals. Enrollment moves live
- * under Classes → Roster. Year group IS editable, since it is a plain profile field.
+ * **D31**: the level is a SELECT, not a text field. `year_of_study` is
+ * `enum('First','Second')` server-side (D30 renamed it from the free-text `year_group`), so
+ * a typed "Lower 6" was silently truncated on write. Two radio-like options cannot be typo'd.
+ *
+ * On edit, enrollment is NOT changed here: the API rejects `offering_ids` on PATCH, because
+ * with many enrolments "set them from here" is ambiguous about removals. Enrollment moves
+ * live under Course Offerings → Roster. The level IS editable, being a plain profile field.
  *
  * A 409 duplicate_student_number is surfaced by the parent.
  */
@@ -43,9 +48,9 @@ export function StudentFormDialog({
   onClose,
 }: StudentFormDialogProps) {
   const editing = Boolean(student);
-  // Only needed by the create form's class picker.
-  const classesQuery = useClassOptions(open && !editing);
-  const classOptions = useMemo(() => classesQuery.data ?? [], [classesQuery.data]);
+  // Only needed by the create form's enrolment picker.
+  const offeringsQuery = useOfferingOptions(open && !editing);
+  const offeringOptions = useMemo(() => offeringsQuery.data ?? [], [offeringsQuery.data]);
 
   const [studentNumber, setStudentNumber] = useState('');
   const [firstName, setFirstName] = useState('');
@@ -56,8 +61,8 @@ export function StudentFormDialog({
   // New enrollments default to the actual school-local today, not the demo dataset's
   // fixed date — otherwise every student created in production is stamped 2025-10-15.
   const [enrollmentDate, setEnrollmentDate] = useState(schoolToday());
-  const [yearGroup, setYearGroup] = useState('');
-  const [classIds, setClassIds] = useState<string[]>([]);
+  const [yearOfStudy, setYearOfStudy] = useState('');
+  const [offeringIds, setOfferingIds] = useState<string[]>([]);
   const [guardianName, setGuardianName] = useState('');
   const [guardianPhone, setGuardianPhone] = useState('');
   const [guardianEmail, setGuardianEmail] = useState('');
@@ -73,8 +78,8 @@ export function StudentFormDialog({
       setDateOfBirth(student?.date_of_birth ?? '');
       setGender(student?.gender ?? 'female');
       setEnrollmentDate(student?.enrollment_date ?? schoolToday());
-      setYearGroup(student?.year_group ?? '');
-      setClassIds([]);
+      setYearOfStudy(student?.year_of_study ?? '');
+      setOfferingIds([]);
       setGuardianName(student?.guardian_name ?? '');
       setGuardianPhone(student?.guardian_phone ?? '');
       setGuardianEmail(student?.guardian_email ?? '');
@@ -118,9 +123,9 @@ export function StudentFormDialog({
           guardian_email: guardianEmail.trim(),
           address: address.trim(),
           phone: phone.trim(),
-          year_group: yearGroup.trim() || null,
-          // Enrollment only applies on create — the API rejects class_ids on PATCH.
-          class_ids: editing ? undefined : classIds,
+          year_of_study: (yearOfStudy || null) as StudentWritePayload['year_of_study'],
+          // Enrollment only applies on create — the API rejects offering_ids on PATCH.
+          offering_ids: editing ? undefined : offeringIds,
         })
       }
     >
@@ -206,35 +211,46 @@ export function StudentFormDialog({
             helperText={fieldErrors?.enrollment_date?.join(' ')}
           />
           <TextField
-            label="Year group"
-            value={yearGroup}
-            onChange={(e) => setYearGroup(e.target.value)}
+            select
+            label="Year of study"
+            value={yearOfStudy}
+            onChange={(e) => setYearOfStudy(e.target.value)}
             fullWidth
-            placeholder="Lower 6"
-            error={Boolean(fieldErrors?.year_group)}
+            error={Boolean(fieldErrors?.year_of_study)}
             helperText={
-              fieldErrors?.year_group?.join(' ') ?? "The student's own level."
+              fieldErrors?.year_of_study?.join(' ') ?? "The student's own level."
             }
-          />
+          >
+            <MenuItem value="">Not set</MenuItem>
+            {YEAR_OF_STUDY_OPTIONS.map((y) => (
+              <MenuItem key={y} value={y}>
+                {y}
+              </MenuItem>
+            ))}
+          </TextField>
         </Stack>
         {!editing && (
           <Autocomplete
             multiple
-            options={classOptions}
-            value={classOptions.filter((c) => classIds.includes(c.id))}
-            onChange={(_e, next) => setClassIds(next.map((c) => c.id))}
-            getOptionLabel={(c) => (c.subject_name ? `${c.name} — ${c.subject_name}` : c.name)}
+            options={offeringOptions}
+            value={offeringOptions.filter((o) => offeringIds.includes(o.id))}
+            onChange={(_e, next) => setOfferingIds(next.map((o) => o.id))}
+            getOptionLabel={(o) => (o.course_name ? `${o.label} — ${o.course_name}` : o.label)}
             isOptionEqualToValue={(a, b) => a.id === b.id}
-            loading={classesQuery.isLoading}
+            loading={offeringsQuery.isLoading}
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Course offerings (optional)"
-                placeholder={classIds.length === 0 ? 'Enrol now, or later under Classes' : undefined}
-                error={Boolean(fieldErrors?.class_ids)}
+                label={`${strings.terms.courseOfferings} (optional)`}
+                placeholder={
+                  offeringIds.length === 0
+                    ? 'Enrol now, or later from an offering roster'
+                    : undefined
+                }
+                error={Boolean(fieldErrors?.offering_ids)}
                 helperText={
-                  fieldErrors?.class_ids?.join(' ') ??
-                  'Pick every class this student will take. You can change this later from a class roster.'
+                  fieldErrors?.offering_ids?.join(' ') ??
+                  'Pick every course this student will take this term. You can change this later from an offering roster.'
                 }
               />
             )}

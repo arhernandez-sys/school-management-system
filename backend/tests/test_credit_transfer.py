@@ -26,7 +26,7 @@ from sqlalchemy import select, text
 
 from app.common.enums import Role
 from app.modules.admissions.models import CreditTransferRequest
-from app.modules.classes.models import Subject
+from app.modules.offerings.models import Course
 from app.modules.programs.models import Program
 from app.modules.students.models import StudentProfile
 
@@ -64,10 +64,10 @@ class _Graph:
             total_credits=60,
         )
         # A course of its own, so the suite does not depend on the BAJC catalog seed.
-        self.course = Subject(
+        self.course = Course(
             name=f"Transfer Target {self.tag}", code=f"CTT{self.tag[:4].upper()}", credits=3
         )
-        self.other_course = Subject(
+        self.other_course = Course(
             name=f"Transfer Other {self.tag}", code=f"CTO{self.tag[:4].upper()}", credits=3
         )
         db_session.add_all([self.program, self.course, self.other_course])

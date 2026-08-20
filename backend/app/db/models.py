@@ -18,13 +18,12 @@ from app.modules.students.models import StudentDocument, StudentProfile  # noqa:
 from app.modules.teachers.models import TeacherProfile  # noqa: F401
 
 # Academic structure
-from app.modules.classes.models import (  # noqa: F401
-    Class,
+from app.modules.offerings.models import (  # noqa: F401
     ClassEnrollment,
     ClassMeeting,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
+    CourseOffering,
 )
 from app.modules.settings.models import (  # noqa: F401
     AcademicYear,

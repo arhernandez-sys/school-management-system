@@ -11,10 +11,14 @@
  * `roles` below.
  *
  * ⚠️ DISPLAY LABELS ONLY. The wire values stay `principal | secretary | teacher |
- * student` and the API/table identifiers keep their current names (`teacher_profiles`,
- * `class_subject_id`, `/teachers`, …). Renaming those would invalidate the generated
+ * student` and the remaining API/table identifiers keep their current names
+ * (`teacher_profiles`, `/teachers`, …). Renaming those would invalidate the generated
  * API client and a large share of the test suite for no functional gain. Decision #3
  * in docs/tertiary-refactor-plan.md.
+ *
+ * D31 narrowed that exemption: the OFFERING identifiers were renamed after all, because
+ * `class_subject_id` named a join table that no longer exists. `/offerings`,
+ * `offering_id` and `/courses` are the wire names now.
  */
 
 export const strings = {
@@ -39,9 +43,9 @@ export const strings = {
     course: 'Course',
     courses: 'Courses',
     /**
-     * A scheduled instance of a course in a term — what the schema calls a `class`
-     * (D29's "subject class", e.g. "Math-1"): one course, its own lecturer, room and
-     * weekly times.
+     * A scheduled instance of a course in a term — `course_offerings` in the schema
+     * since D31 (it was `classes`, a homeroom, before): one course, one semester, an
+     * optional section code, its own lecturer(s) and weekly times.
      *
      * Kept distinct from `course` on purpose. BAJC has two real concepts and the old
      * app only had one: the CATALOG entry (code, name, credits, prerequisites — what
@@ -86,8 +90,8 @@ export const strings = {
     // D30 §D11 — the applicant side of the student lifecycle.
     admissions: 'Admissions',
     teachers: 'Lecturers',
-    // Staff see the offerings they schedule; a student sees `myClasses` below.
-    classes: 'Course Offerings',
+    // Staff see the offerings they schedule; a student sees `myCourses` below.
+    offerings: 'Course Offerings',
     assessments: 'Assessments',
     grades: 'Grades',
     attendance: 'Attendance',
@@ -96,10 +100,11 @@ export const strings = {
     reports: 'Reports',
     settings: 'Settings',
     myProfile: 'My Profile',
-    // Student possessive labels (design-system §3.2)
-    myClasses: 'My Courses',
+    // Student possessive labels (design-system §3.2). A student never sees the word
+    // "offering" — for them, the offerings they take simply ARE their courses.
+    myCourses: 'My Courses',
     // Same label for a student and a lecturer: both mean "my own week". The page differs
-    // only in whose courses it lists, which the server decides.
+    // only in whose offerings it lists, which the server decides.
     myTimetable: 'My Timetable',
     myGrades: 'My Grades',
     myAttendance: 'My Attendance',

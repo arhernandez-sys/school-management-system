@@ -7,16 +7,19 @@ import {
   attendanceFor,
   rosterFor,
   getActiveYear,
-  getSection,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
   getTeacher,
   activeEnrollmentFor,
-  sectionsOwnedByTeacher,
-  classSubjectsForSection,
+  offeringLabel,
+  offeringsOwnedByTeacher,
+  yearIdOfOffering,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAttendanceRecord,
-  DemoSection,
+  DemoOffering,
   DemoStudent,
 } from '@shared/api/mocks/demo/dataset';
 import type { AttendanceStatus } from '@shared/types/enums';
@@ -25,26 +28,31 @@ import { errorResponse } from './_helpers';
 /**
  * MSW handlers for the ATTENDANCE module (api-spec §5 Module 8) — DEMO.
  *
- * Attendance is per-section, per-day (D-Q4): for a (section, date) each actively
+ * Attendance is per-OFFERING, per-day (D-Q4): for an (offering, date) each actively
  * enrolled student is present/absent/late/excused. These handlers back the tablet-first
- * daily register, the per-section 2-week summary, and the student's own read.
+ * daily register, the per-offering 2-week summary, and the student's own read.
  *
  * Reads/writes go through the shared demo dataset so numbers reconcile with every other
  * screen. `PUT /attendance` MUTATES `DEMO_DATASET.attendance_records` (single-session
  * demo — intended). All wire fields are snake_case.
  *
- * Endpoints (demo-shaped, section+date query form):
- *  - GET  /attendance/sections      → sections the caller may view/record (picker)
- *  - GET  /attendance?section_id=&date=  → the daily register (roster + each status)
- *  - PUT  /attendance               → bulk upsert the register for one (section, date)
- *  - GET  /attendance/summary?section_id=  → per-section rate over the seeded window
- *  - GET  /attendance/me            → the signed-in student's own summary + history
+ * Endpoints (offering+date query form):
+ *  - GET  /attendance/offerings      → offerings the caller may view/record (picker)
+ *  - GET  /attendance?offering_id=&date= → the daily register (roster + each status)
+ *  - PUT  /attendance                → bulk upsert the register for one (offering, date)
+ *  - GET  /attendance/summary?offering_id= → per-offering rate over the seeded window
+ *  - GET  /attendance/me             → the signed-in student's own summary + history
+ *
+ * **D31** — `section_id` became `offering_id` everywhere, and the picker's ref lost its four
+ * homeroom fields (`name`, `grade_level`, the division letter, `homeroom_label`) in favour of
+ * the shared `OfferingRef`. `teachers[]` stays local and stays keyed `name`, matching the
+ * backend: it is this picker's own filter feed, not the directory's teacher shape.
  *
  * DEMO caller resolution: the mock login (fixtures.ts) issues placeholder profile ids
  * that do not map to dataset rows, so we resolve the acting teacher/student from the
  * `sis_mock_session` role cookie — the same approach settings.ts uses. A teacher maps to
  * the canonical demo teacher `teach-1` (Maria Reyes, who owns sections and recorded the
- * seeded register); a student maps to `stu-1` (Ana Lopez). P/S may view any section.
+ * seeded register); a student maps to `stu-1` (Freddy Lopez). P/S may view any offering.
  *
  * ⚠️ Do NOT touch handlers/index.ts — `attendanceHandlers` is already wired.
  */
@@ -64,47 +72,69 @@ function actingTeacherId(): string {
   return getTeacher('teach-1')?.id ?? D.teachers.find((t) => t.status === 'active')!.id;
 }
 
-/** The student the demo acts as for `/attendance/me` (canonical: stu-1 = Ana Lopez). */
+/** The student the demo acts as for `/attendance/me` (canonical: stu-1 = Freddy Lopez). */
 function actingStudentId(): string {
   return getStudent('stu-1')?.id ?? D.students.find((s) => s.status === 'active')!.id;
 }
 
 /**
- * Sections the caller may view/record for, scoped to an academic year.
- * Teacher → owned; P/S → all. With a `yearId` we restrict to that year's sections
- * (past years included); without one we default to the current (non-archived) sections.
+ * Offerings the caller may view/record for, scoped to an academic year.
+ * Lecturer → own; Dean/Registrar → all. With a `yearId` we restrict to that year (past
+ * years included); without one we default to the live (non-archived) offerings.
+ *
+ * The year is resolved THROUGH the offering's semester — an offering has no year column.
  */
-function sectionsForRole(role: string, yearId?: string | null): DemoSection[] {
-  let secs = role === 'teacher' ? sectionsOwnedByTeacher(actingTeacherId()) : D.sections;
-  secs = yearId ? secs.filter((s) => s.academic_year_id === yearId) : secs.filter((s) => !s.is_archived);
-  return secs;
+function offeringsForRole(role: string, yearId?: string | null): DemoOffering[] {
+  const all = role === 'teacher' ? offeringsOwnedByTeacher(actingTeacherId()) : D.offerings;
+  return yearId
+    ? all.filter((o) => yearIdOfOffering(o.id) === yearId)
+    : all.filter((o) => !o.is_archived);
 }
 
-/** Can the caller access this section at all? (P/S: any section; Teacher: owned only) */
-function canAccessSection(role: string, sectionId: string): boolean {
-  if (role !== 'teacher') return Boolean(getSection(sectionId));
-  return sectionsOwnedByTeacher(actingTeacherId()).some((s) => s.id === sectionId);
+/** Can the caller access this offering at all? (Dean/Registrar: any; Lecturer: own only) */
+function canAccessOffering(role: string, offeringId: string): boolean {
+  if (role !== 'teacher') return Boolean(getOffering(offeringId));
+  return offeringsOwnedByTeacher(actingTeacherId()).some((o) => o.id === offeringId);
 }
 
 // ── Wire shapes ────────────────────────────────────────────────────────────────
-/** Distinct teachers who teach any subject in a section (drives the P/S teacher filter). */
-function teachersForSection(sectionId: string): Array<{ id: string; name: string }> {
-  const ids = [...new Set(classSubjectsForSection(sectionId).flatMap((cs) => cs.teacher_ids))];
-  return ids
+/**
+ * The lecturers who teach an offering (drives the Dean/Registrar lecturer filter).
+ *
+ * Keyed `name`, not `full_name` — the attendance module's own shape, matching the backend.
+ * This used to have to gather ids across every `class_subject` of a section, because a
+ * homeroom's "teachers" were the union of its subjects' teachers; an offering names its own.
+ */
+function teachersForOffering(offering: DemoOffering): Array<{ id: string; name: string }> {
+  return offering.teacher_ids
     .map((id) => getTeacher(id))
     .filter((t): t is NonNullable<typeof t> => Boolean(t))
     .map((t) => ({ id: t.id, name: t.full_name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function sectionRef(sec: DemoSection) {
+/** The shared `OfferingRef`, nested beside the local `teachers[]`. */
+function offeringRef(offering: DemoOffering) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
   return {
-    id: sec.id,
-    name: sec.name,
-    grade_level: sec.grade_level,
-    section: sec.section,
-    homeroom_label: sec.homeroom_label,
-    teachers: teachersForSection(sec.id),
+    offering: {
+      id: offering.id,
+      course: course
+        ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+        : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+      semester: semester
+        ? {
+            id: semester.id,
+            name: semester.name,
+            sequence: semester.sequence,
+            is_active: semester.is_active,
+          }
+        : null,
+      section_code: offering.section_code,
+      label: offeringLabel(offering),
+    },
+    teachers: teachersForOffering(offering),
   };
 }
 function studentRef(stu: DemoStudent) {
@@ -122,43 +152,43 @@ function summarize(records: Array<{ status: AttendanceStatus }>) {
 }
 
 export const attendanceHandlers: RequestHandler[] = [
-  // ── Section picker ──────────────────────────────────────────────────────────────
-  // GET /attendance/sections — the sections the caller may pick (teacher: own; P/S: all).
-  http.get(`${API_BASE_URL}/attendance/sections`, ({ cookies, request }) => {
+  // ── Offering picker ─────────────────────────────────────────────────────────────
+  // GET /attendance/offerings — what the caller may pick (lecturer: own; Dean/Registrar: all).
+  http.get(`${API_BASE_URL}/attendance/offerings`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     const canRecord = role === 'teacher';
     const url = new URL(request.url);
     const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
     return HttpResponse.json({
-      items: sectionsForRole(role, yearId).map((s) => ({
-        ...sectionRef(s),
-        enrolled_count: rosterFor(s.id).length,
+      items: offeringsForRole(role, yearId).map((o) => ({
+        ...offeringRef(o),
+        enrolled_count: rosterFor(o.id).length,
       })),
       can_record: canRecord,
     });
   }),
 
   // ── Daily register read ───────────────────────────────────────────────────────
-  // GET /attendance?section_id=&date= — roster ∪ any recorded status for the day.
+  // GET /attendance?offering_id=&date= — roster ∪ any recorded status for the day.
   http.get(`${API_BASE_URL}/attendance`, ({ request, cookies }) => {
     const url = new URL(request.url);
-    const sectionId = url.searchParams.get('section_id');
+    const offeringId = url.searchParams.get('offering_id');
     const date = url.searchParams.get('date') ?? DEMO_TODAY;
     const role = sessionRole(cookies);
 
-    if (!sectionId) return errorResponse(422, 'validation_error', 'section_id is required.');
-    const section = getSection(sectionId);
-    if (!section || !canAccessSection(role, sectionId)) {
-      return errorResponse(404, 'not_found', 'Section not found.');
+    if (!offeringId) return errorResponse(422, 'validation_error', 'offering_id is required.');
+    const offering = getOffering(offeringId);
+    if (!offering || !canAccessOffering(role, offeringId)) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found.');
     }
 
-    const recorded = attendanceFor(sectionId, date);
+    const recorded = attendanceFor(offeringId, date);
     const byStudent = new Map(recorded.map((r) => [r.student_id, r]));
-    const roster = rosterFor(sectionId);
+    const roster = rosterFor(offeringId);
 
     const entries = roster.map((stu) => {
       const rec = byStudent.get(stu.id);
-      const enr = activeEnrollmentFor(stu.id, sectionId);
+      const enr = activeEnrollmentFor(stu.id, offeringId);
       return {
         student: studentRef(stu),
         enrollment_id: enr?.id ?? null,
@@ -176,7 +206,7 @@ export const attendanceHandlers: RequestHandler[] = [
     const lastUser = lastRec ? D.users.find((u) => u.id === lastRec.recorded_by_user_id) : undefined;
 
     return HttpResponse.json({
-      section: sectionRef(section),
+      offering: offeringRef(offering),
       date,
       can_record: role === 'teacher',
       entries,
@@ -187,7 +217,7 @@ export const attendanceHandlers: RequestHandler[] = [
   }),
 
   // ── Bulk upsert the register ────────────────────────────────────────────────────
-  // PUT /attendance — upsert on (section_id, student_id, date). Blocks future dates.
+  // PUT /attendance — upsert on (offering_id, student_id, date). Blocks future dates.
   http.put(`${API_BASE_URL}/attendance`, async ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== 'teacher') {
@@ -195,39 +225,42 @@ export const attendanceHandlers: RequestHandler[] = [
     }
 
     const body = (await request.json()) as {
-      section_id?: string;
+      offering_id?: string;
       date?: string;
       entries?: Array<{ student_id?: string; status?: string }>;
     };
-    const sectionId = body.section_id;
+    const offeringId = body.offering_id;
     const date = body.date;
 
-    if (!sectionId || !date) {
-      return errorResponse(422, 'validation_error', 'section_id and date are required.');
+    if (!offeringId || !date) {
+      return errorResponse(422, 'validation_error', 'offering_id and date are required.');
     }
-    const section = getSection(sectionId);
-    if (!section || !canAccessSection(role, sectionId)) {
-      return errorResponse(404, 'not_found', 'Section not found.');
+    const offering = getOffering(offeringId);
+    if (!offering || !canAccessOffering(role, offeringId)) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found.');
     }
     // FR-ATT-05: no future dates (server clock == DEMO_TODAY in the demo).
     if (date > DEMO_TODAY) {
       return errorResponse(422, 'future_date_not_allowed', "You can't record attendance for a future date.");
     }
 
-    const rosterIds = new Set(rosterFor(sectionId).map((s) => s.id));
+    const rosterIds = new Set(rosterFor(offeringId).map((s) => s.id));
     const recordedBy = getTeacher(actingTeacherId())?.user_id ?? DEMO_IDS.principalUserId;
     const recordedAt = `${date}T08:15:00Z`;
 
     let upserted = 0;
     for (const entry of body.entries ?? []) {
       if (!entry.student_id || !isAttendanceStatus(entry.status)) continue;
-      // Each student must be actively enrolled in the section for the semester.
+      // Each student must be actively enrolled in the offering for its own term.
       if (!rosterIds.has(entry.student_id)) continue;
-      const enr = activeEnrollmentFor(entry.student_id, sectionId);
+      const enr = activeEnrollmentFor(entry.student_id, offeringId);
       if (!enr) continue;
 
       const existing = D.attendance_records.find(
-        (r) => r.section_id === sectionId && r.student_id === entry.student_id && r.attendance_date === date,
+        (r) =>
+          r.offering_id === offeringId &&
+          r.student_id === entry.student_id &&
+          r.attendance_date === date,
       );
       if (existing) {
         existing.status = entry.status;
@@ -236,10 +269,12 @@ export const attendanceHandlers: RequestHandler[] = [
       } else {
         const created: DemoAttendanceRecord = {
           id: `att-new-${D.attendance_records.length + 1}`,
-          section_id: sectionId,
+          offering_id: offeringId,
           student_id: entry.student_id,
           enrollment_id: enr.id,
-          semester_id: DEMO_IDS.activeSemesterId,
+          // The OFFERING's term, not "the active one" — a register for a Semester-2
+          // offering belongs to Semester 2 even while Semester 1 is the live term.
+          semester_id: offering.semester_id,
           attendance_date: date,
           status: entry.status,
           recorded_by_user_id: recordedBy,
@@ -250,33 +285,33 @@ export const attendanceHandlers: RequestHandler[] = [
       upserted += 1;
     }
 
-    const dayRecords = attendanceFor(sectionId, date);
+    const dayRecords = attendanceFor(offeringId, date);
     return HttpResponse.json({ upserted, summary: summarize(dayRecords) });
   }),
 
-  // ── Per-section summary (history/trend over the seeded window) ──────────────────
-  // GET /attendance/summary?section_id= — daily rate points + overall counts.
+  // ── Per-offering summary (history/trend over the seeded window) ─────────────────
+  // GET /attendance/summary?offering_id= — daily rate points + overall counts.
   http.get(`${API_BASE_URL}/attendance/summary`, ({ request, cookies }) => {
     const url = new URL(request.url);
-    const sectionId = url.searchParams.get('section_id');
+    const offeringId = url.searchParams.get('offering_id');
     const role = sessionRole(cookies);
 
-    if (!sectionId) return errorResponse(422, 'validation_error', 'section_id is required.');
-    const section = getSection(sectionId);
-    if (!section || !canAccessSection(role, sectionId)) {
-      return errorResponse(404, 'not_found', 'Section not found.');
+    if (!offeringId) return errorResponse(422, 'validation_error', 'offering_id is required.');
+    const offering = getOffering(offeringId);
+    if (!offering || !canAccessOffering(role, offeringId)) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found.');
     }
 
-    const rows = D.attendance_records.filter((r) => r.section_id === sectionId);
+    const rows = D.attendance_records.filter((r) => r.offering_id === offeringId);
     const dates = [...new Set(rows.map((r) => r.attendance_date))].sort();
     const by_date = dates.map((date) => {
       const dayRows = rows.filter((r) => r.attendance_date === date);
       return { date, ...summarize(dayRows) };
     });
 
-    // Per-student tallies: every actively enrolled student in the section, with their
+    // Per-student tallies: every actively enrolled student in the offering, with their
     // present/absent/late/excused counts over the window (0s for students with no records).
-    const by_student = rosterFor(sectionId)
+    const by_student = rosterFor(offeringId)
       .map((stu) => ({
         student: studentRef(stu),
         ...summarize(rows.filter((r) => r.student_id === stu.id)),
@@ -284,7 +319,7 @@ export const attendanceHandlers: RequestHandler[] = [
       .sort((a, b) => a.student.full_name.localeCompare(b.student.full_name));
 
     return HttpResponse.json({
-      section: sectionRef(section),
+      offering: offeringRef(offering),
       overall: summarize(rows),
       by_date,
       by_student,

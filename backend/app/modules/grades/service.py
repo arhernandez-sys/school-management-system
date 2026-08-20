@@ -27,23 +27,24 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import AssessmentStatus, AssessmentType, GradeStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
-from app.core.rbac import _teacher_profile_id, assert_teacher_owns_class_subject
+from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
 from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments import release_nudge
 from app.modules.assessments.models import Assessment, AssessmentCategory
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
+from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades import calc
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.grades.schemas import (
-    ClassSubjectOption,
-    ClassSubjectOptionsResponse,
-    ClassSubjectRef,
+    OfferingOption,
+    OfferingOptionsResponse,
+    GradesOfferingRef,
     Gradebook,
     GradebookAssessment,
     GradebookCategory,
@@ -55,10 +56,8 @@ from app.modules.grades.schemas import (
     MyGradeAssessment,
     MyGrades,
     MyGradeSubject,
-    SectionRef,
     SemesterRef,
     StudentRef,
-    SubjectRef,
     TeacherRef,
     TermGradeItem,
     TermGradeList,
@@ -102,10 +101,10 @@ def _f(value) -> float | None:  # noqa: ANN001
 # ──────────────────────────────────────────────────────────────────────────────
 # Lookups
 # ──────────────────────────────────────────────────────────────────────────────
-def _cs_or_404(db: Session, class_subject_id: uuid.UUID) -> ClassSubject:
+def _cs_or_404(db: Session, offering_id: uuid.UUID) -> CourseOffering:
     cs = db.scalar(
-        select(ClassSubject).where(
-            ClassSubject.id == class_subject_id, ClassSubject.deleted_at.is_(None)
+        select(CourseOffering).where(
+            CourseOffering.id == offering_id, CourseOffering.deleted_at.is_(None)
         )
     )
     if cs is None:
@@ -124,12 +123,12 @@ def _assessment_or_404(db: Session, assessment_id: uuid.UUID) -> Assessment:
     return a
 
 
-def _assert_year_writable(db: Session, cs: ClassSubject) -> None:
-    section = db.get(Class, cs.class_id)
+def _assert_year_writable(db: Session, cs: CourseOffering) -> None:
+    section = cs  # D31: the offering IS the section
     if section is not None and section.is_archived:
         raise Conflict("The academic year is archived.", code="year_archived")
     if section is not None:
-        year = db.get(AcademicYear, section.academic_year_id)
+        year = year_of_offering(db, section)
         if year is not None and year.archived_at is not None:
             raise Conflict("The academic year is archived.", code="year_archived")
 
@@ -163,7 +162,7 @@ def _assert_grade_window_open(db: Session, assessment: Assessment, actor: User) 
     the freeze, the seeds and any future writer outside the rule.
 
     **The Dean is exempt.** Note this arm is currently unreachable: the route is
-    `require_role(Role.TEACHER)` and `assert_teacher_owns_class_subject` would 404 a
+    `require_role(Role.TEACHER)` and `assert_teacher_owns_offering` would 404 a
     Dean anyway, so no Dean can enter a grade at all today. It is written because the
     rule belongs with the check rather than in a comment somewhere, and because the
     intended post-deadline path is Phase 5's grade-revision workflow (§D7) — the Dean
@@ -182,16 +181,16 @@ def _assert_grade_window_open(db: Session, assessment: Assessment, actor: User) 
         )
 
 
-def _assert_readable(db: Session, actor: User, cs: ClassSubject) -> bool:
+def _assert_readable(db: Session, actor: User, cs: CourseOffering) -> bool:
     """Authorize a gradebook read. Returns whether the caller may WRITE it.
 
     A teacher who doesn't own the offering gets 404 from
-    `assert_teacher_owns_class_subject`, matching the discipline used for the
+    `assert_teacher_owns_offering`, matching the discipline used for the
     write path — the mock returns 403 on writes, but a consistent 404 everywhere
     avoids confirming that an offering they can't see exists.
     """
     if actor.role == Role.TEACHER:
-        assert_teacher_owns_class_subject(db, actor, cs.id)
+        assert_teacher_owns_offering(db, actor, cs.id)
         return True
     return False
 
@@ -205,38 +204,36 @@ def _active_year(db: Session) -> AcademicYear | None:
 
 
 def _semester_for_section(
-    db: Session, section: Class, semester_id: uuid.UUID | None
+    db: Session, section: CourseOffering, semester_id: uuid.UUID | None
 ) -> Semester | None:
-    """Resolve which term's gradebook to show.
+    """Resolve which term's gradebook to show: the explicit param, else THE OFFERING'S OWN.
 
-    Explicit param → the active semester **only if it belongs to this section's
-    academic year** → else that year's `sequence=1` term.
+    **D31 turned this from a resolution into a lookup.** It used to reason from the
+    offering's academic YEAR — take that year's active semester, else its `sequence=1`
+    term — because `classes` carried `academic_year_id` and no semester, so the term
+    genuinely had to be guessed. `course_offerings.semester_id` makes that guess both
+    unnecessary and WRONG: an offering belongs to exactly one term, and asking the year
+    which term to show can name a different one.
 
-    The year check is the load-bearing part: a principal browsing an archived year
-    through the global year switcher would otherwise be handed the *current*
-    year's active semester, match no assessments, and see an empty gradebook.
+    That is not hypothetical. It is how the D31 demo seed's Semester-2 offerings rendered
+    an EMPTY gradebook: `BIOL1102-01` in Semester 2 of 2025-2026 resolved to that year's
+    active term (Semester 1), and then `_assessments_for` filtered
+    `Assessment.semester_id == Semester 1` — so the offering's own 2 assessments and its
+    23-student roster both matched nothing, with no error anywhere. The old docstring
+    worried about exactly this shape one level up (an archived year being handed the
+    current year's active term) and mitigated it with a year check; reading the term off
+    the offering makes it impossible instead of mitigated.
+
+    The explicit param is still honoured, so the wire contract is unchanged — but a caller
+    passing a semester the offering does not run in is asking a contradictory question and
+    still gets an empty gradebook. Rejecting that outright would be a contract change.
     """
     if semester_id is not None:
         return db.get(Semester, semester_id)
-
-    active = db.scalar(
-        select(Semester).where(
-            Semester.is_active.is_(True),
-            Semester.academic_year_id == section.academic_year_id,
-        )
-    )
-    if active is not None:
-        return active
-
-    return db.scalar(
-        select(Semester)
-        .where(Semester.academic_year_id == section.academic_year_id)
-        .order_by(Semester.sequence.asc())
-        .limit(1)
-    )
+    return db.get(Semester, section.semester_id)
 
 
-def _bands_for_section(db: Session, section: Class) -> tuple[list[calc.BandInput], Decimal | None]:
+def _bands_for_section(db: Session, section: CourseOffering) -> tuple[list[calc.BandInput], Decimal | None]:
     """Grading bands + pass mark for the SECTION's academic year.
 
     Not the active year's: an archived year keeps the scale that was in force then
@@ -245,7 +242,7 @@ def _bands_for_section(db: Session, section: Class) -> tuple[list[calc.BandInput
     test-created year, typically).
     """
     scale = db.scalar(
-        select(GradingScale).where(GradingScale.academic_year_id == section.academic_year_id)
+        select(GradingScale).where(GradingScale.academic_year_id == year_id_of_offering(db, section))
     )
     if scale is None:
         active = _active_year(db)
@@ -280,28 +277,14 @@ def _school_policy(db: Session) -> AssessmentPolicy | None:
 # ──────────────────────────────────────────────────────────────────────────────
 # Refs
 # ──────────────────────────────────────────────────────────────────────────────
-def _section_ref(section: Class) -> SectionRef:
-    return SectionRef(
-        id=section.id,
-        name=section.name,
-        grade_level=section.grade_level,
-        # Nullable in the ORM, non-nullable `string` in the frontend type.
-        section=section.section or "",
-    )
-
-
-def _subject_ref(subject: Subject) -> SubjectRef:
-    return SubjectRef(id=subject.id, name=subject.name, code=subject.code)
-
-
 def _teacher_rows(db: Session, cs_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[tuple]]:
     """Batch-load (teacher, is_lead) per class_subject — avoids an N+1 in the picker."""
     if not cs_ids:
         return {}
     rows = db.execute(
-        select(ClassTeacher.class_subject_id, TeacherProfile, ClassTeacher.is_lead)
+        select(ClassTeacher.offering_id, TeacherProfile, ClassTeacher.is_lead)
         .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
-        .where(ClassTeacher.class_subject_id.in_(cs_ids))
+        .where(ClassTeacher.offering_id.in_(cs_ids))
     ).all()
     out: dict[uuid.UUID, list[tuple]] = defaultdict(list)
     for cs_id, teacher, is_lead in rows:
@@ -312,20 +295,18 @@ def _teacher_rows(db: Session, cs_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[
     return out
 
 
-def _cs_ref(
-    cs: ClassSubject,
-    section: Class,
-    subject: Subject,
+def _offering_ref(
+    offering: CourseOffering,
+    course: Course,
     teachers: list[tuple],
-) -> ClassSubjectRef:
+) -> GradesOfferingRef:
+    """D31: one row, not two. This took `cs` AND `section` because a gradebook lived at
+    the intersection of a homeroom and a subject; an offering IS the gradebook."""
     lead = next((t for t, is_lead in teachers if is_lead), None)
-    return ClassSubjectRef(
-        id=cs.id,
-        section=_section_ref(section),
-        subject=_subject_ref(subject),
+    return GradesOfferingRef(
+        offering=offering_ref(offering, course),
         teachers=[TeacherRef(id=t.id, full_name=t.full_name) for t, _ in teachers],
         lead_teacher_id=lead.id if lead is not None else None,
-        display_name=f"{section.name} · {subject.name}",
     )
 
 
@@ -333,7 +314,7 @@ def _owned_cs_ids(db: Session, actor: User) -> list[uuid.UUID]:
     teacher_id = _teacher_profile_id(db, actor)
     return list(
         db.scalars(
-            select(ClassTeacher.class_subject_id).where(ClassTeacher.teacher_id == teacher_id)
+            select(ClassTeacher.offering_id).where(ClassTeacher.teacher_id == teacher_id)
         ).all()
     )
 
@@ -341,9 +322,9 @@ def _owned_cs_ids(db: Session, actor: User) -> list[uuid.UUID]:
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /grades/class-subjects
 # ──────────────────────────────────────────────────────────────────────────────
-def list_class_subject_options(
+def list_offering_options(
     db: Session, *, actor: User, academic_year_id: uuid.UUID | None
-) -> ClassSubjectOptionsResponse:
+) -> OfferingOptionsResponse:
     """The gradebook picker. Teacher → owned offerings; P/S → every offering."""
     year_id = academic_year_id
     if year_id is None:
@@ -351,49 +332,49 @@ def list_class_subject_options(
         year_id = active.id if active is not None else None
 
     stmt = (
-        select(ClassSubject, Class, Subject)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        # NOTE: `is_active` is deliberately NOT filtered here. Offerings of a past
-        # year are inactive, and the year switcher must still list them.
-        .where(ClassSubject.deleted_at.is_(None), Class.deleted_at.is_(None))
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        # NOTE: `is_archived` is deliberately NOT filtered here. Offerings of a past
+        # year are archived, and the year switcher must still list them.
+        .where(CourseOffering.deleted_at.is_(None))
+        .order_by(*OFFERING_ORDER)
     )
     if year_id is not None:
-        stmt = stmt.where(Class.academic_year_id == year_id)
+        stmt = stmt.where(offerings_in_year(year_id))
 
     is_teacher = actor.role == Role.TEACHER
     if is_teacher:
         owned = _owned_cs_ids(db, actor)
         if not owned:
-            return ClassSubjectOptionsResponse(items=[])
-        stmt = stmt.where(ClassSubject.id.in_(owned))
+            return OfferingOptionsResponse(items=[])
+        stmt = stmt.where(CourseOffering.id.in_(owned))
 
     rows = db.execute(stmt).all()
-    cs_ids = [cs.id for cs, _, _ in rows]
+    cs_ids = [cs.id for cs, _ in rows]
     teachers_by_cs = _teacher_rows(db, cs_ids)
 
     counts: dict[uuid.UUID, int] = {}
     if cs_ids:
         for cs_id, total in db.execute(
-            select(Assessment.class_subject_id, func.count())
+            select(Assessment.offering_id, func.count())
             .where(
-                Assessment.class_subject_id.in_(cs_ids),
+                Assessment.offering_id.in_(cs_ids),
                 Assessment.deleted_at.is_(None),
             )
-            .group_by(Assessment.class_subject_id)
+            .group_by(Assessment.offering_id)
         ).all():
             counts[cs_id] = total
 
     items = [
-        ClassSubjectOption(
-            **_cs_ref(cs, section, subject, teachers_by_cs.get(cs.id, [])).model_dump(),
+        OfferingOption(
+            **_offering_ref(cs, subject, teachers_by_cs.get(cs.id, [])).model_dump(),
             assessment_count=counts.get(cs.id, 0),
             can_edit=is_teacher,
         )
-        for cs, section, subject in rows
+        for cs, subject in rows
     ]
-    items.sort(key=lambda i: i.display_name)
-    return ClassSubjectOptionsResponse(items=items)
+
+    return OfferingOptionsResponse(items=items)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -413,7 +394,7 @@ def _resolved_categories(
     """
     rows = list(
         db.scalars(
-            select(AssessmentCategory).where(AssessmentCategory.class_subject_id == cs_id)
+            select(AssessmentCategory).where(AssessmentCategory.offering_id == cs_id)
         ).all()
     )
 
@@ -490,7 +471,7 @@ def _assessments_for_many(
     if not cs_ids:
         return {}
     stmt = select(Assessment).where(
-        Assessment.class_subject_id.in_(cs_ids), Assessment.deleted_at.is_(None)
+        Assessment.offering_id.in_(cs_ids), Assessment.deleted_at.is_(None)
     )
     if semester_id is not None:
         stmt = stmt.where(Assessment.semester_id == semester_id)
@@ -499,7 +480,7 @@ def _assessments_for_many(
 
     out: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in db.scalars(stmt).all():
-        out[a.class_subject_id].append(a)
+        out[a.offering_id].append(a)
     # Portable "NULLs last" ordering — this codebase avoids dialect-specific
     # NULLS LAST (it broke on the Postgres→MariaDB move).
     for rows in out.values():
@@ -518,19 +499,19 @@ def get_gradebook(
     db: Session,
     *,
     actor: User,
-    class_subject_id: uuid.UUID,
+    offering_id: uuid.UUID,
     semester_id: uuid.UUID | None,
 ) -> Gradebook:
-    cs = _cs_or_404(db, class_subject_id)
+    cs = _cs_or_404(db, offering_id)
     can_edit = _assert_readable(db, actor, cs)
 
-    section = db.get(Class, cs.class_id)
-    subject = db.get(Subject, cs.subject_id)
-    if section is None or subject is None:  # pragma: no cover - FK guarantees these
+    section = cs  # D31: the offering IS the section
+    subject = db.get(Course, cs.course_id)
+    if subject is None:  # pragma: no cover - the FK guarantees this
         raise NotFound("Gradebook not found.", code="not_found")
 
     semester = _semester_for_section(db, section, semester_id)
-    year = db.get(AcademicYear, section.academic_year_id)
+    year = year_of_offering(db, section)
     school = _school_policy(db)
     bands, _pass_mark = _bands_for_section(db, section)
 
@@ -562,7 +543,7 @@ def get_gradebook(
             select(ClassEnrollment, StudentProfile)
             .join(StudentProfile, ClassEnrollment.student_id == StudentProfile.id)
             .where(
-                ClassEnrollment.class_id == section.id,
+                ClassEnrollment.offering_id == section.id,
                 ClassEnrollment.semester_id == semester.id,
                 ClassEnrollment.unenrolled_at.is_(None),
             )
@@ -650,7 +631,7 @@ def get_gradebook(
     )
 
     return Gradebook(
-        class_subject=_cs_ref(cs, section, subject, _teacher_rows(db, [cs.id]).get(cs.id, [])),
+        offering=_offering_ref(cs, subject, _teacher_rows(db, [cs.id]).get(cs.id, [])),
         semester=(
             SemesterRef(id=semester.id, name=semester.name, sequence=semester.sequence)
             if semester is not None
@@ -711,8 +692,8 @@ def upsert_grades(
     gradebook exactly as it was rather than half-saved.
     """
     assessment = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_class_subject(db, actor, assessment.class_subject_id)
-    cs = db.get(ClassSubject, assessment.class_subject_id)
+    assert_teacher_owns_offering(db, actor, assessment.offering_id)
+    cs = db.get(CourseOffering, assessment.offering_id)
     _assert_year_writable(db, cs)
     _assert_grade_window_open(db, assessment, actor)
 
@@ -739,7 +720,7 @@ def upsert_grades(
             e.student_id: e
             for e in db.scalars(
                 select(ClassEnrollment).where(
-                    ClassEnrollment.class_id == cs.class_id,
+                    ClassEnrollment.offering_id == cs.id,
                     ClassEnrollment.semester_id == assessment.semester_id,
                     ClassEnrollment.unenrolled_at.is_(None),
                     ClassEnrollment.student_id.in_(list(seen)),
@@ -766,8 +747,8 @@ def upsert_grades(
         if assessment.category_id
         else None
     )
-    section = db.get(Class, cs.class_id)
-    year = db.get(AcademicYear, section.academic_year_id) if section else None
+    section = cs  # D31: the offering IS the section
+    year = year_of_offering(db, section) if section else None
     policy = calc.resolve_policy(assessment, category, year, _school_policy(db))
 
     for entry in entries:
@@ -919,11 +900,11 @@ def get_my_grades(
 
     # Resolve the section this student sat in for the selected year, via their
     # enrollments joined to that year's semesters.
-    section: Class | None = None
+    section: CourseOffering | None = None
     if year_id is not None:
         section = db.scalar(
-            select(Class)
-            .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+            select(CourseOffering)
+            .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
             .join(Semester, ClassEnrollment.semester_id == Semester.id)
             .where(
                 ClassEnrollment.student_id == student.id,
@@ -953,8 +934,8 @@ def get_my_grades(
     # keeps the two student year-switcher surfaces consistent with each other.
     if section is None and academic_year_id is None:
         section = db.scalar(
-            select(Class)
-            .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
+            select(CourseOffering)
+            .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
             .where(
                 ClassEnrollment.student_id == student.id,
                 ClassEnrollment.unenrolled_at.is_(None),
@@ -969,15 +950,15 @@ def get_my_grades(
     if section is None:
         return MyGrades(student=student_ref, by_subject=[])
 
-    year = db.get(AcademicYear, section.academic_year_id)
+    year = year_of_offering(db, section)
     school = _school_policy(db)
     bands, _pass_mark = _bands_for_section(db, section)
 
     offerings = db.execute(
-        select(ClassSubject, Subject)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
         # As in the picker: no `is_active` filter, so a past year still lists.
-        .where(ClassSubject.class_id == section.id, ClassSubject.deleted_at.is_(None))
+        .where(CourseOffering.id == section.id, CourseOffering.deleted_at.is_(None))
     ).all()
     teachers_by_cs = _teacher_rows(db, [cs.id for cs, _ in offerings])
 
@@ -1041,7 +1022,7 @@ def get_my_grades(
         lead = next((t for t, is_lead in teachers if is_lead), None)
         by_subject.append(
             MyGradeSubject(
-                class_subject=_cs_ref(cs, section, subject, teachers),
+                offering=_offering_ref(cs, subject, teachers),
                 teacher=(
                     TeacherRef(id=lead.id, full_name=lead.full_name)
                     if lead is not None
@@ -1053,7 +1034,7 @@ def get_my_grades(
             )
         )
 
-    by_subject.sort(key=lambda s: s.class_subject.display_name if s.class_subject else "")
+    by_subject.sort(key=lambda s: s.offering.offering.label if s.offering else "")
     return MyGrades(student=student_ref, by_subject=by_subject)
 
 
@@ -1090,7 +1071,7 @@ class StudentAssessmentLineData:
 class StudentSubjectAssessmentsData:
     """One offering's assessments plus the student's term grade for it."""
 
-    class_subject_id: uuid.UUID
+    offering_id: uuid.UUID
     subject_id: uuid.UUID
     subject_name: str
     subject_code: str | None
@@ -1100,7 +1081,7 @@ class StudentSubjectAssessmentsData:
 
 
 def student_assessment_groups(
-    db: Session, *, student_id: uuid.UUID, sections: list[Class]
+    db: Session, *, student_id: uuid.UUID, sections: list[CourseOffering]
 ) -> list[StudentSubjectAssessmentsData]:
     """One student's assessments + term grades across `sections`, grouped by offering.
 
@@ -1113,7 +1094,7 @@ def student_assessment_groups(
     Authorization is the CALLER's job — this function trusts `student_id`.
 
     D29: `sections` is a LIST — every subject class the student sits in the year being
-    viewed, resolved by `students.service.classes_in_year`. It used to be one homeroom,
+    viewed, resolved by `students.service.student_offerings_in_year`. It used to be one homeroom,
     which under a sixth-form model would have shown one subject and hidden the rest.
     Which-classes-in-which-year is an enrollment question, and keeping it in one place
     there is what stops the profile header and this tab from disagreeing. `[]` → no
@@ -1144,20 +1125,20 @@ def student_assessment_groups(
     # applying one year's bands to another's grades would silently mislabel letters.
     sections_by_id = {s.id: s for s in sections}
     years = {
-        s.id: db.get(AcademicYear, s.academic_year_id) for s in sections_by_id.values()
+        s.id: year_of_offering(db, s) for s in sections_by_id.values()
     }
     bands_by_section = {
         s.id: _bands_for_section(db, s)[0] for s in sections_by_id.values()
     }
 
     offerings = db.execute(
-        select(ClassSubject, Subject)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
-            ClassSubject.class_id.in_(list(sections_by_id)),
-            ClassSubject.deleted_at.is_(None),
+            CourseOffering.id.in_(list(sections_by_id)),
+            CourseOffering.deleted_at.is_(None),
         )
-        .order_by(Subject.name.asc(), ClassSubject.id.asc())
+        .order_by(Course.name.asc(), CourseOffering.id.asc())
     ).all()
     if not offerings:
         return []
@@ -1187,8 +1168,8 @@ def student_assessment_groups(
 
     groups: list[StudentSubjectAssessmentsData] = []
     for cs, subject in offerings:
-        year = years.get(cs.class_id)
-        bands = bands_by_section.get(cs.class_id, [])
+        year = years.get(cs.id)
+        bands = bands_by_section.get(cs.id, [])
         assessments = assessments_by_cs.get(cs.id, [])
         student_grades = {
             a.id: grades_by_assessment[a.id]
@@ -1231,7 +1212,7 @@ def student_assessment_groups(
         )
         groups.append(
             StudentSubjectAssessmentsData(
-                class_subject_id=cs.id,
+                offering_id=cs.id,
                 subject_id=subject.id,
                 subject_name=subject.name,
                 subject_code=subject.code,
@@ -1296,7 +1277,7 @@ def completed_course_results(
 
     # ── Live: every section the student sits/sat, outside the excluded term ──────
     enrol_stmt = (
-        select(ClassEnrollment.class_id)
+        select(ClassEnrollment.offering_id)
         .where(ClassEnrollment.student_id == student_id)
         .distinct()
     )
@@ -1307,8 +1288,8 @@ def completed_course_results(
     if section_ids:
         sections = list(
             db.scalars(
-                select(Class).where(
-                    Class.id.in_(section_ids), Class.deleted_at.is_(None)
+                select(CourseOffering).where(
+                    CourseOffering.id.in_(section_ids), CourseOffering.deleted_at.is_(None)
                 )
             ).all()
         )
@@ -1326,7 +1307,7 @@ def completed_course_results(
                 course_id=group.subject_id,
                 numeric=numeric,
                 letter=group.term_letter,
-                bands=_bands_for_offering(db, group.class_subject_id),
+                bands=_bands_for_offering(db, group.offering_id),
                 is_frozen=False,
             )
 
@@ -1351,7 +1332,7 @@ def completed_course_results(
             course_id=snap.subject_id,
             numeric=numeric,
             letter=snap.letter_grade,
-            bands=_bands_for_offering(db, snap.class_subject_id),
+            bands=_bands_for_offering(db, snap.offering_id),
             is_frozen=True,
         )
 
@@ -1359,7 +1340,7 @@ def completed_course_results(
 
 
 def _bands_for_offering(
-    db: Session, class_subject_id: uuid.UUID
+    db: Session, offering_id: uuid.UUID
 ) -> list[calc.BandInput]:
     """The grading bands in force for the YEAR an offering belongs to.
 
@@ -1369,9 +1350,8 @@ def _bands_for_offering(
     here, silently change whether a prerequisite is satisfied.
     """
     section = db.scalar(
-        select(Class)
-        .join(ClassSubject, ClassSubject.class_id == Class.id)
-        .where(ClassSubject.id == class_subject_id)
+        select(CourseOffering)
+        .where(CourseOffering.id == offering_id)
     )
     if section is None:
         return []
@@ -1387,8 +1367,7 @@ def list_term_grades(
     actor: User,
     scope: str | None,
     student_id: uuid.UUID | None,
-    class_subject_id: uuid.UUID | None,
-    class_id: uuid.UUID | None,
+    offering_id: uuid.UUID | None,
     semester_id: uuid.UUID | None,
 ) -> TermGradeList:
     """Term grades for a flexible selection.
@@ -1418,53 +1397,52 @@ def list_term_grades(
 
     # Which offerings are in scope?
     cs_stmt = (
-        select(ClassSubject, Class, Subject)
-        .join(Class, ClassSubject.class_id == Class.id)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
-        .where(ClassSubject.deleted_at.is_(None))
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(CourseOffering.deleted_at.is_(None))
+        .order_by(*OFFERING_ORDER)
     )
-    if class_subject_id is not None:
-        cs_stmt = cs_stmt.where(ClassSubject.id == class_subject_id)
-    if class_id is not None:
-        cs_stmt = cs_stmt.where(ClassSubject.class_id == class_id)
+    if offering_id is not None:
+        cs_stmt = cs_stmt.where(CourseOffering.id == offering_id)
 
     if actor.role == Role.TEACHER:
         owned = _owned_cs_ids(db, actor)
-        if class_subject_id is not None and class_subject_id not in owned:
+        if offering_id is not None and offering_id not in owned:
             raise NotFound("Gradebook not found.", code="not_found")
         if not owned:
             return TermGradeList(items=[])
-        cs_stmt = cs_stmt.where(ClassSubject.id.in_(owned))
+        cs_stmt = cs_stmt.where(CourseOffering.id.in_(owned))
 
     if target_student is not None:
         # Restrict to offerings of sections the student is/was enrolled in.
         section_ids = list(
             db.scalars(
-                select(ClassEnrollment.class_id).where(
+                select(ClassEnrollment.offering_id).where(
                     ClassEnrollment.student_id == target_student.id
                 )
             ).all()
         )
         if not section_ids:
             return TermGradeList(items=[])
-        cs_stmt = cs_stmt.where(ClassSubject.class_id.in_(section_ids))
+        cs_stmt = cs_stmt.where(CourseOffering.id.in_(section_ids))
 
     offerings = db.execute(cs_stmt).all()
     if not offerings:
         return TermGradeList(items=[])
 
-    teachers_by_cs = _teacher_rows(db, [cs.id for cs, _, _ in offerings])
+    teachers_by_cs = _teacher_rows(db, [cs.id for cs, _ in offerings])
     school = _school_policy(db)
     items: list[TermGradeItem] = []
 
-    for cs, section, subject in offerings:
+    for cs, subject in offerings:
+        section = cs
         semester = _semester_for_section(db, section, semester_id)
         if semester is None:
             continue
-        year = db.get(AcademicYear, section.academic_year_id)
+        year = year_of_offering(db, section)
         frozen = year is not None and year.archived_at is not None
         bands, _pass_mark = _bands_for_section(db, section)
-        cs_ref = _cs_ref(cs, section, subject, teachers_by_cs.get(cs.id, []))
+        cs_ref = _offering_ref(cs, subject, teachers_by_cs.get(cs.id, []))
         sem_ref = SemesterRef(id=semester.id, name=semester.name, sequence=semester.sequence)
 
         # Which students? The named one, else the section's active roster.
@@ -1476,7 +1454,7 @@ def list_term_grades(
                     select(StudentProfile)
                     .join(ClassEnrollment, ClassEnrollment.student_id == StudentProfile.id)
                     .where(
-                        ClassEnrollment.class_id == section.id,
+                        ClassEnrollment.offering_id == section.id,
                         ClassEnrollment.semester_id == semester.id,
                         ClassEnrollment.unenrolled_at.is_(None),
                     )
@@ -1489,7 +1467,7 @@ def list_term_grades(
                 s.student_id: s
                 for s in db.scalars(
                     select(TermGradeSnapshot).where(
-                        TermGradeSnapshot.class_subject_id == cs.id,
+                        TermGradeSnapshot.offering_id == cs.id,
                         TermGradeSnapshot.semester_id == semester.id,
                     )
                 ).all()
@@ -1505,7 +1483,7 @@ def list_term_grades(
                             full_name=student.full_name,
                             student_number=student.student_number,
                         ),
-                        class_subject=cs_ref,
+                        offering=cs_ref,
                         semester=sem_ref,
                         numeric=_f(snap.numeric_grade),
                         letter=snap.letter_grade,
@@ -1557,7 +1535,7 @@ def list_term_grades(
                         full_name=student.full_name,
                         student_number=student.student_number,
                     ),
-                    class_subject=cs_ref,
+                    offering=cs_ref,
                     semester=sem_ref,
                     numeric=_f(term.numeric),
                     letter=term.letter,

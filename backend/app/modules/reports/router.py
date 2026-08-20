@@ -7,7 +7,7 @@ Endpoints:
   GET /reports/report-card       P/S/Teacher -> ReportCard        (?student_id=&semester_id=)
   GET /reports/report-card/me    Student     -> ReportCard        (?semester_id=)
   GET /reports/transcript        P/S ONLY    -> Transcript        (?student_id=)  [D26]
-  GET /reports/class-grades      P/S/Teacher -> ClassGradesReport (?class_subject_id=)
+  GET /reports/offering-grades   P/S/Teacher -> OfferingGradesReport (?offering_id=)
   GET /reports/attendance        P/S/Teacher -> AttendanceReport  (?section_id=)
   GET /reports/enrollment        P/S ONLY    -> EnrollmentReport
 
@@ -36,7 +36,7 @@ from app.core.pagination import PageParams, page_params
 from app.modules.reports import service
 from app.modules.reports.schemas import (
     AttendanceReport,
-    ClassGradesReport,
+    OfferingGradesReport,
     EnrollmentReport,
     ReportCard,
     StudentPickerPage,
@@ -119,20 +119,20 @@ def get_transcript(
 
 
 @router.get(
-    "/class-grades",
-    response_model=ClassGradesReport,
+    "/offering-grades",
+    response_model=OfferingGradesReport,
     summary="Per-offering grade summary + letter distribution",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
-def get_class_grades(
-    class_subject_id: Annotated[uuid.UUID, Query()],
+def get_offering_grades(
+    offering_id: Annotated[uuid.UUID, Query()],
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
-) -> ClassGradesReport:
+) -> OfferingGradesReport:
     """No frontend caller today — FR-RPT-02 is served by the real gradebook."""
-    return service.get_class_grades(
-        db, actor=actor, class_subject_id=class_subject_id, semester_id=semester_id
+    return service.get_offering_grades(
+        db, actor=actor, offering_id=offering_id, semester_id=semester_id
     )
 
 

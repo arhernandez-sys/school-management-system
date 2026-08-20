@@ -3,7 +3,7 @@
 Scope: the 8 student endpoints (GET list / GET me / GET {id} / GET {id}/assessments
 / POST / PATCH / POST status / DELETE) + their negative / edge / security paths,
 plus a compile+execution-level regression test for the fixed rbac helper
-`app.core.rbac.assert_teacher_owns_section`.
+`app.core.rbac.assert_teacher_owns_offering`.
 
 Oracle: api-specification.md §5 Module 3 (authoritative status/error codes), §3.2/§3.3
 (server-derived scope + 404-vs-403 no-existence-leak discipline), §3.4 permission
@@ -40,12 +40,11 @@ from app.common.enums import (
     StudentStatus,
 )
 from app.modules.assessments.models import Assessment
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
@@ -111,21 +110,44 @@ def _make_student(
 
 
 def _make_section(db_session, *, name=None, grade_level="Form 1", is_archived=False,
-                  academic_year_id=None) -> Class:  # noqa: ANN001
-    section = Class(
-        academic_year_id=academic_year_id or _active_year_id(db_session),
-        name=name or f"Section {uuid.uuid4().hex[:8]}",
-        grade_level=grade_level,
+                  academic_year_id=None, capacity=None) -> CourseOffering:  # noqa: ANN001
+    """One offering, standing in for what used to be a homeroom section.
+
+    D31: an offering is scoped to a SEMESTER and teaches exactly one course, so this
+    creates a course of its own and resolves the year's first term. `name` and
+    `grade_level` are accepted and ignored — both were homeroom columns `008` dropped —
+    so the ~40 call sites that pass them keep reading as they did.
+    """
+    from sqlalchemy import select as _select
+
+    from app.modules.settings.models import Semester
+
+    year_id = academic_year_id or _active_year_id(db_session)
+    semester_id = db_session.scalar(
+        _select(Semester.id)
+        .where(Semester.academic_year_id == year_id)
+        .order_by(Semester.sequence.asc())
+        .limit(1)
+    )
+    section = CourseOffering(
+        # NOT named from `name`: two sections may share one, and `courses.name` is
+        # unique. The offering's identity is its course + section code anyway.
+        course_id=_make_subject(db_session).id,
+        semester_id=semester_id,
+        section_code=uuid.uuid4().hex[:6],
         is_archived=is_archived,
+        capacity=capacity,
     )
     db_session.add(section)
     db_session.flush()
+    #: Sibling offerings created against this one by `_make_class_subject`. See `_enroll`.
+    section._siblings = []
     return section
 
 
-def _make_subject(db_session, *, name=None) -> Subject:  # noqa: ANN001
+def _make_subject(db_session, *, name=None) -> Course:  # noqa: ANN001
     # D30: `courses.code` is NOT NULL, so every course fixture carries one.
-    subj = Subject(
+    subj = Course(
         name=name or f"Subject {uuid.uuid4().hex[:8]}",
         code=uuid.uuid4().hex[:8].upper(),
     )
@@ -134,12 +156,28 @@ def _make_subject(db_session, *, name=None) -> Subject:  # noqa: ANN001
     return subj
 
 
-def _make_class_subject(db_session, *, section, subject=None) -> ClassSubject:  # noqa: ANN001
-    subject = subject or _make_subject(db_session)
-    cs = ClassSubject(class_id=section.id, subject_id=subject.id, is_active=True)
-    db_session.add(cs)
+def _make_class_subject(db_session, *, section, subject=None) -> CourseOffering:  # noqa: ANN001
+    """The offering that teaches `subject` alongside `section`.
+
+    D31 collapsed "a section, then a subject attached to it" into one row, so with no
+    `subject` named this IS `section` — there is nothing to attach. Naming a subject
+    still means "another course taught to the same group", which is now a SIBLING
+    offering in the same term rather than a second row hanging off one homeroom.
+
+    Siblings are recorded on `section` so `_enroll` can reach them; see there for why.
+    """
+    if subject is None:
+        return section
+    sibling = CourseOffering(
+        course_id=subject.id,
+        semester_id=section.semester_id,
+        section_code=uuid.uuid4().hex[:6],
+    )
+    db_session.add(sibling)
     db_session.flush()
-    return cs
+    sibling._siblings = []
+    section._siblings.append(sibling)
+    return sibling
 
 
 def _make_teacher_profile(db_session, *, user_id=None, staff_number=None) -> TeacherProfile:  # noqa: ANN001
@@ -154,22 +192,35 @@ def _make_teacher_profile(db_session, *, user_id=None, staff_number=None) -> Tea
 
 
 def _assign_teacher(db_session, *, class_subject, teacher) -> ClassTeacher:  # noqa: ANN001
-    ct = ClassTeacher(class_subject_id=class_subject.id, teacher_id=teacher.id)
+    ct = ClassTeacher(offering_id=class_subject.id, teacher_id=teacher.id)
     db_session.add(ct)
     db_session.flush()
     return ct
 
 
 def _enroll(db_session, *, student, section, semester_id=None, unenrolled_at=None) -> ClassEnrollment:  # noqa: ANN001
-    enr = ClassEnrollment(
-        class_id=section.id,
-        student_id=student.id,
-        semester_id=semester_id or _active_semester_id(db_session),
-        unenrolled_at=unenrolled_at,
-    )
-    db_session.add(enr)
+    """Enrol `student` in `section` AND every sibling offering built against it.
+
+    One `class_enrollments` row used to point at a homeroom and thereby cover every
+    subject that homeroom taught. An offering teaches one course, so reproducing that
+    reach takes one row per offering — otherwise a test that creates two courses "for the
+    same group" and enrols once would find the student sitting only the first.
+
+    Returns the row for `section` itself, which is what every call site threads onward.
+    """
+    sem_id = semester_id or _active_semester_id(db_session)
+    rows = [
+        ClassEnrollment(
+            offering_id=offering.id,
+            student_id=student.id,
+            semester_id=sem_id,
+            unenrolled_at=unenrolled_at,
+        )
+        for offering in (section, *getattr(section, "_siblings", ()))
+    ]
+    db_session.add_all(rows)
     db_session.flush()
-    return enr
+    return rows[0]
 
 
 def _make_year(  # noqa: ANN001
@@ -218,7 +269,7 @@ def _make_assessment(  # noqa: ANN001
     assessment_date=None,
 ) -> Assessment:
     a = Assessment(
-        class_subject_id=class_subject.id,
+        offering_id=class_subject.id,
         semester_id=semester_id or _active_semester_id(db_session),
         title=title or f"Assessment {uuid.uuid4().hex[:6]}",
         type=type_,
@@ -282,7 +333,7 @@ class TestListStudents:
         if body["items"]:
             item = body["items"][0]
             assert {"id", "student_number", "full_name", "status"} <= set(item.keys())
-            assert "year_group" in item and "class_count" in item and "guardian_name" in item
+            assert "year_of_study" in item and "offering_count" in item and "guardian_name" in item
 
     def test_list_secretary_allowed(self, client, make_user, auth_headers) -> None:
         secretary = make_user(role=Role.SECRETARY)
@@ -447,7 +498,7 @@ class TestGetStudent:
         body = resp.json()
         assert body["id"] == str(student.id)
         assert "audit" in body
-        assert [c["id"] for c in body["current_classes"]] == [str(section.id)]
+        assert [c["id"] for c in body["current_offerings"]] == [str(section.id)]
 
     def test_get_unknown_404(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)
@@ -524,7 +575,7 @@ class TestCreateStudent:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         assert body["status"] == "active"
-        assert body["current_classes"] == []  # no class_ids given
+        assert body["current_offerings"] == []  # no class_ids given
         n_audit = db_session.scalar(
             select(func.count()).select_from(AuditLog).where(
                 AuditLog.action == "student.create",
@@ -625,22 +676,22 @@ class TestCreateStudent:
         self, client, make_user, auth_headers, db_session
     ) -> None:
         """FR-STU-05: class_ids enrols into the active semester in the same txn;
-        current_classes is populated on the response."""
+        current_offerings is populated on the response."""
         section = _make_section(db_session)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(class_ids=[str(section.id)]),
+            json=self._payload(offering_ids=[str(section.id)]),
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert [c["id"] for c in body["current_classes"]] == [str(section.id)]
+        assert [c["id"] for c in body["current_offerings"]] == [str(section.id)]
         # An enrollment row was created for the active semester.
         n_enr = db_session.scalar(
             select(func.count()).select_from(ClassEnrollment).where(
                 ClassEnrollment.student_id == uuid.UUID(body["id"]),
-                ClassEnrollment.class_id == section.id,
+                ClassEnrollment.offering_id == section.id,
                 ClassEnrollment.unenrolled_at.is_(None),
             )
         )
@@ -651,7 +702,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(class_ids=[str(uuid.uuid4())]),
+            json=self._payload(offering_ids=[str(uuid.uuid4())]),
         )
         assert resp.status_code == 404, resp.text
         _assert_envelope(resp.json(), code="section_not_found")
@@ -666,7 +717,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(class_ids=[str(archived_section.id)]),
+            json=self._payload(offering_ids=[str(archived_section.id)]),
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="section_archived")
@@ -684,7 +735,11 @@ class TestCreateStudent:
         from datetime import datetime, timezone
 
         section = _make_section(db_session, is_archived=False)
-        year = db_session.get(AcademicYear, section.academic_year_id)
+        # An offering stores no year (D31) — it reaches one through its semester.
+        year = db_session.get(
+            AcademicYear,
+            db_session.get(Semester, section.semester_id).academic_year_id,
+        )
         year.status = AcademicYearStatus.ARCHIVED
         year.archived_at = datetime.now(tz=timezone.utc)
         db_session.flush()
@@ -692,7 +747,7 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(class_ids=[str(section.id)]),
+            json=self._payload(offering_ids=[str(section.id)]),
         )
         assert resp.status_code == 409, resp.text
         _assert_envelope(resp.json(), code="section_archived")
@@ -935,7 +990,7 @@ class TestDeleteStudent:
         student = _make_student(db_session)
         enr = _enroll(db_session, student=student, section=section)
         assessment = Assessment(
-            class_subject_id=cs.id,
+            offering_id=cs.id,
             semester_id=_active_semester_id(db_session),
             title="Quiz 1",
             type=AssessmentType.QUIZ,
@@ -971,7 +1026,7 @@ class TestDeleteStudent:
         student = _make_student(db_session)
         enr = _enroll(db_session, student=student, section=section)
         db_session.add(AttendanceRecord(
-            class_id=section.id,
+            offering_id=section.id,
             student_id=student.id,
             enrollment_id=enr.id,
             semester_id=_active_semester_id(db_session),
@@ -1050,12 +1105,12 @@ class TestStudentAssessments:
             "items",
             "nudge_cooldown_seconds",
         }, "must be an {items:[...]} envelope, not a bare array"
-        groups = {g["class_subject_id"]: g for g in body["items"]}
+        groups = {g["offering_id"]: g for g in body["items"]}
         assert {str(cs_a.id), str(cs_z.id)} <= set(groups)
 
         group = groups[str(cs_a.id)]
         assert set(group.keys()) == {
-            "class_subject_id", "subject", "term_grade", "assessments",
+            "offering_id", "subject", "term_grade", "assessments",
         }
         assert group["subject"]["name"] == f"AAA {tag}"
         assert set(group["term_grade"].keys()) == {"numeric", "letter"}
@@ -1073,7 +1128,7 @@ class TestStudentAssessments:
             "last_nudged_at",
         }
         # Ordered by subject name.
-        ordered = [g["class_subject_id"] for g in body["items"]]
+        ordered = [g["offering_id"] for g in body["items"]]
         assert ordered.index(str(cs_a.id)) < ordered.index(str(cs_z.id))
 
     def test_assessments_drafts_excluded(
@@ -1337,7 +1392,7 @@ class TestYearScoping:
       * detail — with a year, the classes sat that year (strictly, `[]` if none);
         without, the current classes.
       * list — a PAST year FILTERS the student set; the active year / no year lists
-        the whole directory. Row `class_count` is never rescoped — it describes the
+        the whole directory. Row `offering_count` is never rescoped — it describes the
         student's live load.
     """
 
@@ -1375,13 +1430,13 @@ class TestYearScoping:
             headers=headers,
         )
         assert past.status_code == 200, past.text
-        past_ids = [c["id"] for c in past.json()["current_classes"]]
+        past_ids = [c["id"] for c in past.json()["current_offerings"]]
         assert past_ids == [str(past_section.id)]
         assert str(current_section.id) not in past_ids, (
             "the year switcher must not fall through to the live classes"
         )
 
-    def test_detail_no_year_param_returns_current_classes(
+    def test_detail_no_year_param_returns_current_offerings(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         student, _, past_section, current_section = self._two_year_student(db_session)
@@ -1391,7 +1446,7 @@ class TestYearScoping:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
         )
         assert resp.status_code == 200, resp.text
-        ids = [c["id"] for c in resp.json()["current_classes"]]
+        ids = [c["id"] for c in resp.json()["current_offerings"]]
         assert ids == [str(current_section.id)]
         assert str(past_section.id) not in ids
 
@@ -1409,7 +1464,7 @@ class TestYearScoping:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["current_classes"] == []
+        assert resp.json()["current_offerings"] == []
 
     def test_detail_and_assessments_agree_on_the_same_year(
         self, client, make_user, auth_headers, db_session
@@ -1435,8 +1490,8 @@ class TestYearScoping:
             f"{STUDENTS}/{student.id}/assessments", params=params, headers=headers
         )
         assert detail.status_code == 200 and asmts.status_code == 200
-        assert [c["id"] for c in detail.json()["current_classes"]] == [str(past_section.id)]
-        assert {g["class_subject_id"] for g in asmts.json()["items"]} == {str(past_cs.id)}
+        assert [c["id"] for c in detail.json()["current_offerings"]] == [str(past_section.id)]
+        assert {g["offering_id"] for g in asmts.json()["items"]} == {str(past_cs.id)}
 
     def test_detail_year_param_does_not_widen_teacher_scope(
         self, client, make_user, auth_headers, db_session
@@ -1479,10 +1534,10 @@ class TestYearScoping:
         assert str(sat.id) in ids
         assert str(never.id) not in ids, "past year must exclude students not enrolled then"
 
-    def test_list_past_year_keeps_rows_current_class_count(
+    def test_list_past_year_keeps_rows_current_offering_count(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        """Rows are NOT rescoped — `class_count` describes the student's LIVE load, so
+        """Rows are NOT rescoped — `offering_count` describes the student's LIVE load, so
         selecting a past year filters WHICH students appear without changing the count
         shown for each."""
         tag = uuid.uuid4().hex[:6]
@@ -1503,7 +1558,7 @@ class TestYearScoping:
         row = next(i for i in resp.json()["items"] if i["id"] == str(student.id))
         # The student sits exactly one live class (`current_section`), so the live
         # count is 1 regardless of the past year being selected.
-        assert row["class_count"] == 1
+        assert row["offering_count"] == 1
 
     def test_list_active_year_does_not_filter_the_directory(
         self, client, make_user, auth_headers, db_session
@@ -1832,7 +1887,7 @@ class TestStudentYears:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# FLAGGED CASE 4 — rbac.assert_teacher_owns_section execution-level regression
+# FLAGGED CASE 4 — rbac.assert_teacher_owns_offering execution-level regression
 # ════════════════════════════════════════════════════════════════════════════
 class TestRbacAssertTeacherOwnsSection:
     """The helper was fixed from an invalid `exists().join()` (AttributeError at
@@ -1841,45 +1896,45 @@ class TestRbacAssertTeacherOwnsSection:
     AttributeError, and (b) it correctly returns owns/not-owns."""
 
     def test_owns_section_passes_silently(self, make_user, db_session) -> None:
-        from app.core.rbac import assert_teacher_owns_section
+        from app.core.rbac import assert_teacher_owns_offering
 
         teacher_user = make_user(role=Role.TEACHER)
         _, section, _ = _make_owned_student(db_session, teacher_user)
         # Owns a class_subject of the section → must NOT raise.
-        assert assert_teacher_owns_section(db_session, teacher_user, section.id) is None
+        assert assert_teacher_owns_offering(db_session, teacher_user, section.id) is None
 
     def test_not_owning_section_raises_notfound(self, make_user, db_session) -> None:
         from app.core.errors import NotFound
-        from app.core.rbac import assert_teacher_owns_section
+        from app.core.rbac import assert_teacher_owns_offering
 
         teacher_user = make_user(role=Role.TEACHER)
         _make_teacher_profile(db_session, user_id=teacher_user.id)  # owns nothing
         section = _make_section(db_session)
         _make_class_subject(db_session, section=section)  # a subject, but no ClassTeacher
         with pytest.raises(NotFound):
-            assert_teacher_owns_section(db_session, teacher_user, section.id)
+            assert_teacher_owns_offering(db_session, teacher_user, section.id)
 
     def test_teacher_with_no_profile_raises_notfound(self, make_user, db_session) -> None:
         from app.core.errors import NotFound
-        from app.core.rbac import assert_teacher_owns_section
+        from app.core.rbac import assert_teacher_owns_offering
 
         teacher_user = make_user(role=Role.TEACHER)  # no TeacherProfile
         section = _make_section(db_session)
         with pytest.raises(NotFound):
-            assert_teacher_owns_section(db_session, teacher_user, section.id)
+            assert_teacher_owns_offering(db_session, teacher_user, section.id)
 
     def test_assert_teacher_owns_class_subject_executes(self, make_user, db_session) -> None:
         """Sibling helper — same fixed pattern family; prove owns + not-owns."""
         from app.core.errors import NotFound
-        from app.core.rbac import assert_teacher_owns_class_subject
+        from app.core.rbac import assert_teacher_owns_offering
 
         teacher_user = make_user(role=Role.TEACHER)
         teacher = _make_teacher_profile(db_session, user_id=teacher_user.id)
         section = _make_section(db_session)
         cs = _make_class_subject(db_session, section=section)
         _assign_teacher(db_session, class_subject=cs, teacher=teacher)
-        assert assert_teacher_owns_class_subject(db_session, teacher_user, cs.id) is None
+        assert assert_teacher_owns_offering(db_session, teacher_user, cs.id) is None
         # A different class_subject the teacher does not own.
         other_cs = _make_class_subject(db_session, section=_make_section(db_session))
         with pytest.raises(NotFound):
-            assert_teacher_owns_class_subject(db_session, teacher_user, other_cs.id)
+            assert_teacher_owns_offering(db_session, teacher_user, other_cs.id)

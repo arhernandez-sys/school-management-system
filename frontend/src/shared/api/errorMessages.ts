@@ -5,16 +5,35 @@ import { ApiError } from './client';
  * human, actionable copy. The server is the authority on WHICH code applies; this
  * only translates known codes into UX strings.
  *
- * Lives in shared/api because the code vocabulary is global (spans Settings, Subjects,
- * and future modules). Unknown codes fall back to the server-provided message (already
- * carried on `ApiError.message`), then a generic default — so we never show a raw code.
+ * Lives in shared/api because the code vocabulary is global (spans Settings, the course
+ * catalog, offerings, and every other module). Unknown codes fall back to the
+ * server-provided message (already carried on `ApiError.message`), then a generic default
+ * — so we never show a raw code.
+ *
+ * ⚠️ A key here must match a code the server actually emits. A stale key is invisible: the
+ * lookup misses, the server's own sentence is shown instead, and nothing warns. That is
+ * why D31's `duplicate_subject_* → duplicate_course_*` rename had to land in both files at
+ * once.
  */
 const ERROR_COPY: Record<string, string> = {
-  // Subjects (api-spec §5b)
-  duplicate_subject_name: 'A subject with this name already exists. Choose a different name.',
-  duplicate_subject_code: 'A subject with this code already exists. Choose a different code.',
-  subject_in_use:
-    'This subject is used by one or more classes and cannot be deleted. Retire it instead.',
+  // Course catalog (api-spec §5b). D31 renamed these three with the `/subjects` →
+  // `/courses` path; a course is the CATALOG entry, an offering is a scheduled instance.
+  duplicate_course_name: 'A course with this name already exists. Choose a different name.',
+  duplicate_course_code: 'A course with this code already exists. Choose a different code.',
+  course_in_use:
+    'This course is scheduled by one or more offerings and cannot be deleted. Retire it instead.',
+  // Offerings (api-spec §5). The identity is (course, term, section_code), so a clash
+  // means that exact combination exists — not that the course is taken. Leaving the
+  // section blank counts as a section, which is why a second blank one also collides.
+  duplicate_offering:
+    'This course is already offered in that term with the same section code. Use a different section code.',
+  offering_not_found: 'That course offering no longer exists, or you do not have access to it.',
+  offering_has_history:
+    'This offering already has assessments or attendance recorded. Archive it instead of deleting it.',
+  course_not_found: 'That course is no longer in the catalog. Pick another one.',
+  semester_not_found: 'That term no longer exists. Pick another one.',
+  year_archived: 'That academic year is archived and cannot be changed.',
+  semester_mismatch: 'That offering runs in a different term from the enrolment you are making.',
   // Academic structure
   active_year_exists: 'An active academic year already exists. Archive it before creating a new one.',
   year_already_archived: 'This academic year is already archived.',

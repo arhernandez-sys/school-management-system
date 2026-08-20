@@ -5,14 +5,14 @@ Thin transport; the service owns DB + transactions. Mounts under `/api/v1`.
 Endpoints:
   GET    /announcements                authenticated -> Page[AnnouncementListItem]
   GET    /announcements/unread-count   authenticated -> {unread_count}
-  GET    /announcements/target-classes authenticated -> {items:[ClassRef]}
+  GET    /announcements/target-offerings authenticated -> {items:[AnnouncementOfferingRef]}
   GET    /announcements/{id}           authenticated -> AnnouncementDetail
   POST   /announcements                P/S/Teacher   -> AnnouncementDetail (201)
   PATCH  /announcements/{id}            author or P   -> AnnouncementDetail
   DELETE /announcements/{id}            author or P   -> 204
   POST   /announcements/{id}/read       authenticated -> 204 (idempotent)
 
-Route order matters here: `/unread-count` and `/target-classes` are literals that
+Route order matters here: `/unread-count` and `/target-offerings` are literals that
 MUST be declared before `/{announcement_id}`, or the UUID path param would swallow
 them and return a 422 on a valid request.
 
@@ -38,7 +38,7 @@ from app.modules.announcements.schemas import (
     AnnouncementDetail,
     AnnouncementListItem,
     AnnouncementUpdateRequest,
-    TargetClassesResponse,
+    TargetOfferingsResponse,
     UnreadCountResponse,
 )
 from app.modules.users.models import User
@@ -83,18 +83,18 @@ def unread_count(
 
 
 @router.get(
-    "/target-classes",
-    response_model=TargetClassesResponse,
+    "/target-offerings",
+    response_model=TargetOfferingsResponse,
     summary="Sections the caller may target with a class announcement",
     responses={401: _ERR},
 )
-def target_classes(
+def target_offerings(
     db: Session = Depends(get_db),
     actor: User = Depends(get_current_user),
-) -> TargetClassesResponse:
+) -> TargetOfferingsResponse:
     """P/S → all live sections; teacher → only sections they own a subject in;
     student → empty (the compose UI is hidden from them anyway)."""
-    return service.target_classes(db, actor=actor)
+    return service.target_offerings(db, actor=actor)
 
 
 @router.get(
@@ -126,7 +126,7 @@ def create_announcement(
     actor: User = Depends(_authors),
 ) -> AnnouncementDetail:
     """403 teacher_cannot_broadcast if a teacher aims anywhere but a section they own.
-    422 class_audience_requires_class_id when a `class` audience has no class."""
+    422 class_audience_requires_offering_id when a `class` audience names no offering."""
     return service.create_announcement(db, actor=actor, payload=payload)
 
 

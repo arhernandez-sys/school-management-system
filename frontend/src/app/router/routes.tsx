@@ -53,7 +53,7 @@ const DashboardPage = lazy(() => import('@features/dashboard'));
 const StudentsPage = lazy(() => import('@features/students'));
 const AdmissionsPage = lazy(() => import('@features/admissions'));
 const TeachersPage = lazy(() => import('@features/teachers'));
-const ClassesPage = lazy(() => import('@features/classes'));
+const OfferingsPage = lazy(() => import('@features/offerings'));
 const MyTimetablePage = lazy(() => import('@features/timetable/MyTimetablePage'));
 const AssessmentsPage = lazy(() => import('@features/assessments'));
 const GradesPage = lazy(() => import('@features/grades'));
@@ -141,7 +141,7 @@ export const router = createBrowserRouter([
         element: lazyGuarded('applications', AdmissionsPage),
       },
       { path: `${ROUTES.teachers}/*`, element: lazyGuarded('teachers', TeachersPage) },
-      { path: `${ROUTES.classes}/*`, element: lazyGuarded('classes', ClassesPage) },
+      { path: `${ROUTES.offerings}/*`, element: lazyGuarded('offerings', OfferingsPage) },
       { path: ROUTES.timetable, element: lazyGuarded('timetable', MyTimetablePage) },
       { path: `${ROUTES.assessments}/*`, element: lazyGuarded('assessments', AssessmentsPage) },
       { path: `${ROUTES.grades}/*`, element: lazyGuarded('grades', GradesPage) },

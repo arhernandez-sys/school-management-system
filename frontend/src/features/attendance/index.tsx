@@ -9,8 +9,8 @@ import { MyAttendanceScreen } from './screens/MyAttendanceScreen';
 
 /**
  * Attendance module (Phase 7, D-Q4) — a tabbed, nested-routed container mounted at
- * `/attendance/*` (mirrors features/settings/index.tsx). Attendance is per-section,
- * per-day: for a (section, date) each enrolled student is present/absent/late/excused.
+ * `/attendance/*` (mirrors features/settings/index.tsx). Attendance is per-OFFERING,
+ * per-day: for an (offering, date) each enrolled student is present/absent/late/excused.
  *
  * Sub-navigation is role-aware (UX only; the server is authoritative on every call):
  *  - Teacher: Record (tablet-first daily register, own classes) + Summary.

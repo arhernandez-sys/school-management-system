@@ -24,20 +24,23 @@ import { useSelectedYear } from '@app/providers/YearContext';
 import { useMyGrades } from './hooks/useGrades';
 import type { MyGradeSubject } from './types';
 import { formatNumeric, letterKind } from './components/gradeDisplay';
-import { SubjectGradesTable } from './components/SubjectGradesTable';
+import { OfferingGradesTable } from './components/OfferingGradesTable';
 
 /**
  * "My Grades" (§7.7, student scope) — the student's own released grades. Read-only; the
  * server applies the release filter, so unreleased assessments are never in the payload.
  *
- * Two views over the SAME cached query, selected by the `?subject=<class_subject_id>`
- * search param (same URL-selection convention as GradebookScreen's `?class_subject_id`):
- *  - Grid view (no param): one clickable card per subject with its term average.
- *  - Detail view (param matches a subject): that subject's assessment breakdown only.
+ * Two views over the SAME cached query, selected by the `?subject=<offering_id>` search
+ * param (the same URL-selection convention as the staff grid's `?offering_id=`):
+ *  - Grid view (no param): one clickable card per course with its term average.
+ *  - Detail view (param matches a course): that course's assessment breakdown only.
  * Deep-linkable and reload-safe; a stale/invalid param falls back to the grid.
+ *
+ * The param name stays `?subject=` because a STUDENT's bookmarks are user-facing state and
+ * "subject" is the word they see — the wire key underneath it is `offering_id` (D31).
  */
 function subjectKey(subject: MyGradeSubject): string {
-  return subject.class_subject?.id ?? subject.class_subject?.subject?.id ?? 'unknown';
+  return subject.offering?.offering.id ?? subject.offering?.offering.course.id ?? 'unknown';
 }
 
 export function MyGradesScreen() {
@@ -49,7 +52,8 @@ export function MyGradesScreen() {
   const subjects = useMemo(() => query.data?.by_subject ?? [], [query.data]);
 
   const selectedSubject = useMemo(
-    () => (selectedId ? subjects.find((s) => s.class_subject?.id === selectedId) ?? null : null),
+    () =>
+      selectedId ? (subjects.find((s) => s.offering?.offering.id === selectedId) ?? null) : null,
     [subjects, selectedId],
   );
 
@@ -72,8 +76,8 @@ export function MyGradesScreen() {
         // browsing an archived year read a present-tense claim about past marks.
         subtitle={
           selectedPeriod
-            ? `Your released grades for ${selectedPeriod.label}, by subject.`
-            : 'Your released grades, by subject.'
+            ? `Your released grades for ${selectedPeriod.label}, by course.`
+            : 'Your released grades, by course.'
         }
       />
 
@@ -87,7 +91,7 @@ export function MyGradesScreen() {
         <EmptyState
           variant="page"
           title="No grades yet"
-          description="Once your teachers release grades, they'll appear here."
+          description="Once your lecturers release grades, they'll appear here."
         />
       )}
 
@@ -111,8 +115,8 @@ function SubjectGrid({ subjects, onOpen }: SubjectGridProps) {
   return (
     <Grid container spacing={2}>
       {subjects.map((subject) => {
-        const id = subject.class_subject?.id ?? null;
-        const name = subject.class_subject?.subject?.name ?? 'Subject';
+        const id = subject.offering?.offering.id ?? null;
+        const name = subject.offering?.offering.course.name ?? 'Course';
         const count = subject.assessments.length;
         const caption = count > 0 ? `${count} ${count === 1 ? 'assessment' : 'assessments'}` : 'No released grades yet';
 
@@ -123,11 +127,13 @@ function SubjectGrid({ subjects, onOpen }: SubjectGridProps) {
                 <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }}>
                   {name}
                 </Typography>
-                {subject.teacher && (
-                  <Typography variant="body2" color="text.secondary">
-                    {subject.teacher.full_name}
-                  </Typography>
-                )}
+                {/* The offering label (course code + section) and the lecturer. The label
+                    is what tells one section of a course from another. */}
+                <Typography variant="body2" color="text.secondary">
+                  {[subject.offering?.offering.label, subject.teacher?.full_name]
+                    .filter(Boolean)
+                    .join(' · ') || '—'}
+                </Typography>
               </Box>
               <Stack direction="row" spacing={1} alignItems="center">
                 <Typography variant="h4" component="p">
@@ -171,14 +177,15 @@ interface SubjectDetailProps {
   onBack: () => void;
 }
 
-/** Single-subject drill-down: back affordance, header block, and the grades table. */
+/** Single-course drill-down: back affordance, header block, and the grades table. */
 function SubjectDetail({ subject, onBack }: SubjectDetailProps) {
-  const name = subject.class_subject?.subject?.name ?? 'Subject';
+  const name = subject.offering?.offering.course.name ?? 'Course';
+  const label = subject.offering?.offering.label;
 
   return (
     <Box>
       <Button startIcon={<ArrowBackIcon />} onClick={onBack} sx={{ mb: 2 }}>
-        All subjects
+        All courses
       </Button>
 
       <Stack
@@ -190,13 +197,11 @@ function SubjectDetail({ subject, onBack }: SubjectDetailProps) {
           <Typography variant="h4" component="h2">
             {name}
           </Typography>
-          {subject.teacher && (
-            // Students do not have access to teacher profiles — show the name as plain
-            // text (the Teachers module is hidden from students).
-            <Typography variant="body2" color="text.secondary">
-              {subject.teacher.full_name}
-            </Typography>
-          )}
+          {/* Students do not have access to lecturer profiles — the name is plain text
+              (the Lecturers module is hidden from students). */}
+          <Typography variant="body2" color="text.secondary">
+            {[label, subject.teacher?.full_name].filter(Boolean).join(' · ') || '—'}
+          </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography variant="h4" component="p">
@@ -210,7 +215,7 @@ function SubjectDetail({ subject, onBack }: SubjectDetailProps) {
 
       <Divider sx={{ mb: 1 }} />
 
-      <SubjectGradesTable subject={subject} />
+      <OfferingGradesTable subject={subject} />
     </Box>
   );
 }

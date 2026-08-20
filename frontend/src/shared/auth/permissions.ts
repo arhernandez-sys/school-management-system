@@ -15,10 +15,11 @@ export type ModuleKey =
   | 'dashboard'
   | 'students'
   | 'teachers'
-  | 'classes'
+  /** Scheduled COURSE OFFERINGS (D31, was `classes`) — see `courses` below. */
+  | 'offerings'
   /**
    * The COURSE CATALOG (D30) — course code, name, credits, component, prerequisites.
-   * Distinct from `classes`, which is a scheduled OFFERING of a course.
+   * Distinct from `offerings`, which is a scheduled offering OF a catalog course.
    *
    * Dean-only to write, per brief §6: "Only the Dean should have permission to create,
    * edit, or delete academic courses." The Registrar still schedules offerings and
@@ -76,13 +77,14 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     dashboard: 'view-all',
     students: 'full',
     teachers: 'full',
-    classes: 'full',
+    offerings: 'full',
     courses: 'full', // the Dean owns the catalog…
     programs: 'full', //  …and the studies (D30 §D14)
     applications: 'full', // the Dean may admit too, and decides every credit transfer
-    // No PERSONAL timetable for staff: they neither take nor teach classes, and
-    // `GET /timetable/me` correctly answers an empty week for them. Class times are
-    // managed per class (Classes → Schedule tab), which `classes: 'full'` already covers.
+    // No PERSONAL timetable for staff: they neither take nor teach a course, and
+    // `GET /timetable/me` correctly answers an empty week for them. Meeting times are
+    // managed per offering (Course Offerings → Schedule tab), which `offerings: 'full'`
+    // already covers.
     timetable: 'none',
     // Product decision (2026-07): Assessments are folded into Grades (subject cards →
     // drill-down). Staff manage assessments there, so the standalone nav is hidden.
@@ -99,7 +101,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     dashboard: 'view-all',
     students: 'full',
     teachers: 'create-edit',
-    classes: 'create-edit', // Registrar schedules offerings…
+    offerings: 'create-edit', // Registrar schedules offerings…
     courses: 'view-all', //  …but cannot edit the catalog (D30, brief §6)
     programs: 'view-all', //  …nor define what a programme requires
     applications: 'full', // the Registrar owns admissions (D30 §D14)
@@ -119,7 +121,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // Product decision (2026-07): teachers do NOT browse the staff directory. This
     // intentionally tightens requirements.md §2 (which allowed read-only View-all).
     teachers: 'none',
-    classes: 'view-own',
+    offerings: 'view-own',
     // The catalog tab lives under Settings, which a lecturer cannot open. Course
     // details reach them through their own offerings instead.
     courses: 'none',
@@ -129,7 +131,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // No admissions access: an application is another person's PII, and neither a
     // Lecturer nor a student has any reason to read one (D30 §D11).
     applications: 'none',
-    timetable: 'view-own', // the classes they teach, Mon-Fri
+    timetable: 'view-own', // the offerings they teach, Mon-Fri
     assessments: 'none', // folded into Grades — teachers author inside the Grades drill-down
     grades: 'create-edit',
     attendance: 'create-edit',
@@ -141,7 +143,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     settings: 'view-own', // account only
     // 'view-own' surfaces the teacher "My Profile" (/me → own TeacherProfileView).
     // Ownership (a teacher may only reach their OWN profile) and the student
-    // subject-scoping rule are enforced CLIENT-SIDE for UX only — the server remains
+    // course-scoping rule are enforced CLIENT-SIDE for UX only — the server remains
     // authoritative on every /teachers/{id} call (NFR-SEC-01).
     profile: 'view-own',
   },
@@ -149,14 +151,14 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     dashboard: 'view-own',
     students: 'none', // own profile via "My Profile" instead
     teachers: 'none',
-    classes: 'view-own',
+    offerings: 'view-own',
     courses: 'none',
     // A student may read their own programme's plan — it is the prospectus.
     programs: 'view-all',
     // No admissions access: an application is another person's PII, and neither a
     // Lecturer nor a student has any reason to read one (D30 §D11).
     applications: 'none',
-    timetable: 'view-own', // the classes they are enrolled in, Mon-Fri
+    timetable: 'view-own', // the offerings they are enrolled in, Mon-Fri
     assessments: 'view-own',
     grades: 'view-own',
     attendance: 'view-own',

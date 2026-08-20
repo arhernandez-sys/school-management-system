@@ -16,6 +16,14 @@ __pycache__/
 build/
 dist/
 
+# ── Generated demo-seed artifacts (D31 Phase 5) ──────────────────────────────
+# `db/mariadb/seed_demo.py` writes both of these on every run. NEITHER may be
+# tracked: one holds the plaintext logins, the other the per-account Argon2 hashes
+# of those same passwords. The pre-D31 `010_seed_demo.sql` WAS tracked and carried
+# one hardcoded password shared by 19 accounts, so rotating the constant in the
+# script never fixed the checked-in file. Re-generate; never copy.
+db/mariadb/generated/
+
 # ── OS / editor ──────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

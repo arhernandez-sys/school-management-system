@@ -2,27 +2,28 @@ import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
-  DEMO_IDS,
   DEMO_TODAY,
   computeTermGrade,
   getActiveGradingScale,
   getActiveSemester,
   gpaFor,
   gradePointFor,
-  getSection,
+  getCourse,
+  getOffering,
+  getSemester,
   getStudent,
-  getSubject,
   listStudents,
-  sectionsForStudentInYear,
-  currentSectionsFor,
-  classSubjectsForStudent,
-  sectionsOwnedByTeacher,
+  offeringLabel,
+  offeringsForStudentInYear,
+  offeringsForStudent,
+  currentOfferingsFor,
+  offeringsOwnedByTeacher,
   yearsForStudent,
 } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoAssessment,
   DemoEnrollment,
-  DemoSection,
+  DemoOffering,
   DemoStudent,
 } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
@@ -41,7 +42,7 @@ import { NUDGE_COOLDOWN_SECONDS, lastNudgedAt } from './_nudges';
  * (user-teach-1 / user-stu-1) and derive scope from that.
  *
  *  - principal / secretary → full access to all students.
- *  - teacher → auto-restricted to students in a section they own a subject of
+ *  - teacher → auto-restricted to students enrolled in an offering they teach
  *    (FR-STU-08); addressing a student OUTSIDE their scope returns 404 (§3.3), never a
  *    leaky 403.
  *  - student → the `/students/{id}` path is rejected (403 → "use /students/me"); the
@@ -57,7 +58,7 @@ const SESSION_COOKIE = 'sis_mock_session';
 
 // ── current-user resolution (mirrors auth.ts session-role cookie) ────────────────
 // The demo teacher login ("teacher") is Maria Reyes → teach-1; the demo student login
-// ("student") is Ana Lopez → stu-1. We resolve the acting profile from the role cookie
+// ("student") is Freddy Lopez → stu-1. We resolve the acting profile from the role cookie
 // so scope + ownership (teacher sees own students; student sees self) work offline.
 function sessionRole(cookies: Record<string, string>): string {
   return cookies[SESSION_COOKIE] ?? 'principal';
@@ -72,25 +73,38 @@ function currentStudentId(role: string): string | null {
 }
 
 // ── response-shape mappers (api-spec §4.4 refs + §5.3 models) ─────────────────────
-/** ClassRef for the student's current (active-semester) section. */
-function sectionRef(section: DemoSection | undefined) {
-  if (!section) return null;
+/**
+ * The shared `OfferingRef`. It replaced a local ref carrying `name`, `grade_level` and the
+ * division letter — three homeroom columns, none of which exist now.
+ */
+function offeringRef(offering: DemoOffering | undefined) {
+  if (!offering) return null;
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
   return {
-    id: section.id,
-    name: section.name,
-    grade_level: section.grade_level,
-    section: section.section,
+    id: offering.id,
+    course: course
+      ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+      : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+    semester: semester
+      ? {
+          id: semester.id,
+          name: semester.name,
+          sequence: semester.sequence,
+          is_active: semester.is_active,
+        }
+      : null,
+    section_code: offering.section_code,
+    label: offeringLabel(offering),
   };
 }
 
 /**
- * The subject classes that scope a detail-style read. With a `yearId` these are the classes
- * the student sat that year (historical view); without one, their live load.
- *
- * D29: a LIST. It used to be one section, on the premise that a student had exactly one.
+ * The offerings that scope a detail-style read. With a `yearId` these are the offerings the
+ * student sat that year (historical view); without one, their live load.
  */
-function scopedSectionsFor(student: DemoStudent, yearId?: string | null) {
-  return yearId ? sectionsForStudentInYear(student.id, yearId) : currentSectionsFor(student.id);
+function scopedOfferingsFor(student: DemoStudent, yearId?: string | null) {
+  return yearId ? offeringsForStudentInYear(student.id, yearId) : currentOfferingsFor(student.id);
 }
 
 /**
@@ -137,17 +151,17 @@ function studentListItem(s: DemoStudent) {
     middle_name: s.middle_name,
     last_name: s.last_name,
     status: s.status,
-    // D29: the row shows the student's own level + how many classes they take. Their class
-    // NAMES are a variable-length list that belongs on the detail page, not a table cell.
-    year_group: s.year_group,
-    class_count: currentSectionsFor(s.id).length,
+    // The row shows the student's own level + how many courses they take. The course names
+    // are a variable-length list that belongs on the detail page, not in a table cell.
+    year_of_study: s.year_of_study,
+    offering_count: currentOfferingsFor(s.id).length,
     guardian_name: s.guardian_name || null,
   };
 }
 
 /**
  * StudentDetail (GET /students/{id}, /me, POST, PATCH, status). With `yearId` the
- * `current_classes` reflect the classes the student sat that year.
+ * `current_offerings` reflect the offerings the student sat that year.
  */
 function studentDetail(s: DemoStudent, yearId?: string | null) {
   return {
@@ -159,7 +173,7 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     last_name: s.last_name,
     date_of_birth: s.date_of_birth,
     gender: s.gender,
-    year_group: s.year_group,
+    year_of_study: s.year_of_study,
     enrollment_date: s.enrollment_date,
     status: s.status,
     guardian_name: s.guardian_name,
@@ -167,27 +181,32 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     guardian_email: s.guardian_email,
     address: s.address,
     phone: s.phone,
-    current_classes: scopedSectionsFor(s, yearId).map(sectionRef).filter(Boolean),
+    current_offerings: scopedOfferingsFor(s, yearId).map(offeringRef).filter(Boolean),
   };
 }
 
 /**
- * AssessmentSummary[] grouped by class_subject for the student's section
- * (GET /students/{id}/assessments). Each group carries the subject label + the
- * student's computed term grade for that offering, and the per-assessment lines.
+ * AssessmentSummary[] grouped by OFFERING (GET /students/{id}/assessments). Each group
+ * carries the course ref + the student's computed term grade for that offering, and the
+ * per-assessment lines.
+ *
+ * The group key is `offering_id` (D31: was `class_subject_id`). The `subject` field keeps its
+ * wire name and carries a course ref — one of the few places the server still spells the
+ * catalog entry "subject", so the handler matches it rather than inventing a better name.
  */
 function assessmentsForStudent(student: DemoStudent, yearId?: string | null) {
-  // D29: spans every class the student sits, not the subjects of one homeroom.
-  const offerings = classSubjectsForStudent(student.id, yearId).filter((cs) => cs.is_active);
-  return offerings.map((cs) => {
-    const subject = getSubject(cs.subject_id);
-    const term = computeTermGrade(student.id, cs.id);
+  const offerings = offeringsForStudent(student.id, yearId).filter((o) => !o.is_archived);
+  return offerings.map((offering) => {
+    const course = getCourse(offering.course_id);
+    const term = computeTermGrade(student.id, offering.id);
     const assessments = D.assessments
-      .filter((a) => a.class_subject_id === cs.id)
+      .filter((a) => a.offering_id === offering.id)
       .map((a) => assessmentLine(a, student.id));
     return {
-      class_subject_id: cs.id,
-      subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
+      offering_id: offering.id,
+      subject: course
+        ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+        : null,
       term_grade: { numeric: term.numeric, letter: term.letter },
       assessments,
     };
@@ -219,16 +238,16 @@ function assessmentLine(a: DemoAssessment, studentId: string) {
 }
 
 // ── scope helpers ────────────────────────────────────────────────────────────────
-/** Sections the acting teacher owns any subject of (their student scope). */
-function teacherSectionIds(teacherId: string): Set<string> {
-  return new Set(sectionsOwnedByTeacher(teacherId).map((s) => s.id));
+/** Offerings the acting lecturer teaches (their student scope). */
+function teacherOfferingIds(teacherId: string): Set<string> {
+  return new Set(offeringsOwnedByTeacher(teacherId).map((o) => o.id));
 }
 
 /**
  * Resolve a student for a detail-style read, applying role scope. Returns either the
  * student or an error Response so callers can early-return.
  *  - principal/secretary: any live student, else 404.
- *  - teacher: must be in one of their sections, else 404 (no leaky 403).
+ *  - teacher: must be in one of their offerings, else 404 (no leaky 403).
  *  - student: 403 (must use /students/me).
  */
 function resolveScopedStudent(
@@ -242,9 +261,9 @@ function resolveScopedStudent(
   if (!student) return { error: errorResponse(404, 'not_found', 'Student not found.') };
   if (role === 'teacher') {
     const teacherId = currentTeacherId(role);
-    const scope = teacherId ? teacherSectionIds(teacherId) : new Set<string>();
-    // D29: reachable if ANY of the student's classes is one this teacher owns.
-    const shared = currentSectionsFor(student.id).some((sec) => scope.has(sec.id));
+    const scope = teacherId ? teacherOfferingIds(teacherId) : new Set<string>();
+    // Reachable if ANY of the student's offerings is one this lecturer teaches.
+    const shared = currentOfferingsFor(student.id).some((o) => scope.has(o.id));
     if (!shared) {
       return { error: errorResponse(404, 'not_found', 'Student not found.') };
     }
@@ -276,9 +295,10 @@ interface StudentWriteBody {
   guardian_email?: string;
   address?: string;
   phone?: string;
-  year_group?: string | null;
-  /** D29: many subject classes to enrol into on CREATE (replaced the single section_id). */
-  class_ids?: string[];
+  year_of_study?: DemoStudent['year_of_study'];
+  /** Many offerings to enrol into on CREATE (D29 replaced the single section_id; D31
+   *  renamed `class_ids` → `offering_ids`). */
+  offering_ids?: string[];
 }
 
 const LIVE_STATUSES: DemoStudent['status'][] = ['active', 'inactive', 'transferred'];
@@ -292,24 +312,32 @@ function isDuplicateNumber(num: string, exceptId?: string): boolean {
   );
 }
 
-/** Create an active-semester enrollment linking a student to a section (demo write). */
-function enrollStudent(student: DemoStudent, sectionId: string): void {
-  // D29: ADDITIVE. This used to stamp every prior active enrollment closed ("transfer
-  // semantics"), which under a subject-class model would drop the student from Math the
-  // moment they were added to Biology.
+/**
+ * Create an enrollment linking a student to an offering (demo write).
+ *
+ * ADDITIVE. This used to stamp every prior active enrollment closed ("transfer semantics"),
+ * which would drop the student from Algebra the moment they were added to Biology.
+ *
+ * The term comes off the OFFERING, not from the school's active semester: an offering belongs
+ * to one term, so hardcoding the live one would file a Semester-2 enrolment under Semester 1
+ * and make the roster unreachable from every screen that scopes by term.
+ */
+function enrollStudent(student: DemoStudent, offeringId: string): void {
+  const offering = getOffering(offeringId);
+  if (!offering) return;
   const already = D.enrollments.some(
     (e) =>
       e.student_id === student.id &&
-      e.section_id === sectionId &&
-      e.semester_id === DEMO_IDS.activeSemesterId &&
+      e.offering_id === offering.id &&
+      e.semester_id === offering.semester_id &&
       !e.unenrolled_at,
   );
   if (already) return;
   const enrollment: DemoEnrollment = {
     id: `enr-new-${D.enrollments.length + 1}`,
     student_id: student.id,
-    section_id: sectionId,
-    semester_id: DEMO_IDS.activeSemesterId,
+    offering_id: offering.id,
+    semester_id: offering.semester_id,
     enrolled_at: new Date().toISOString(),
     unenrolled_at: null,
   };
@@ -328,10 +356,9 @@ export const studentsHandlers = [
     const page = listStudents({
       ...params,
       status: url.searchParams.get('status'),
-      // The list accepts `class_id` per api-spec; map to the selector's section filter.
-      section_id: url.searchParams.get('class_id') ?? url.searchParams.get('section_id'),
-      grade_level: url.searchParams.get('grade_level'),
-      // Teacher scope: restrict to students in sections the teacher owns.
+      offering_id: url.searchParams.get('offering_id'),
+      year_of_study: url.searchParams.get('year_of_study'),
+      // Lecturer scope: restrict to students in offerings the lecturer teaches.
       teacher_id: role === 'teacher' ? currentTeacherId(role) : null,
       // Per-module year switcher: restrict to students enrolled in the chosen year.
       academic_year_id: url.searchParams.get('academic_year_id'),
@@ -429,11 +456,14 @@ export const studentsHandlers = [
         student_number: ['Already in use by a live student.'],
       });
     }
-    // D29: `class_ids` (many) replaced the single `section_id`.
-    for (const classId of body.class_ids ?? []) {
-      const section = getSection(classId);
-      if (section?.is_archived) {
-        return errorResponse(409, 'section_archived', 'That class is archived.');
+    // `offering_ids` (many) replaced the single `section_id` in D29 and was renamed in D31.
+    for (const offeringId of body.offering_ids ?? []) {
+      const offering = getOffering(offeringId);
+      if (!offering) {
+        return errorResponse(404, 'offering_not_found', 'Offering not found.');
+      }
+      if (offering.is_archived) {
+        return errorResponse(409, 'year_archived', 'That offering is archived.');
       }
     }
     const created: DemoStudent = {
@@ -453,12 +483,12 @@ export const studentsHandlers = [
       guardian_email: body.guardian_email ?? '',
       address: body.address ?? '',
       phone: body.phone ?? '',
-      year_group: body.year_group ?? null,
-      // Phase 4 (§D12) is what assigns a programme; a student created here has none.
+      year_of_study: body.year_of_study ?? null,
+      // A programme is assigned separately (§D12); a student created here has none.
       program_id: null,
     };
     D.students.push(created);
-    for (const classId of body.class_ids ?? []) enrollStudent(created, classId);
+    for (const offeringId of body.offering_ids ?? []) enrollStudent(created, offeringId);
     return HttpResponse.json(studentDetail(created), { status: 201 });
   }),
 
@@ -490,8 +520,8 @@ export const studentsHandlers = [
     if (body.guardian_email !== undefined) student.guardian_email = body.guardian_email ?? '';
     if (body.address !== undefined) student.address = body.address ?? '';
     if (body.phone !== undefined) student.phone = body.phone ?? '';
-    if (body.year_group !== undefined) student.year_group = body.year_group ?? null;
-    // Enrollment is NOT a PATCH field (D29) — it moves under Classes → Roster.
+    if (body.year_of_study !== undefined) student.year_of_study = body.year_of_study ?? null;
+    // Enrollment is NOT a PATCH field — it moves under Course Offerings → Roster.
     return HttpResponse.json(studentDetail(student));
   }),
 
@@ -575,9 +605,8 @@ export const studentsHandlers = [
     // course, and the same one may have been taken in two terms.
     const enrolled = new Map<string, string>();
     for (const enr of D.enrollments.filter((e) => e.student_id === student.id)) {
-      for (const cs of D.class_subjects.filter((c) => c.section_id === enr.section_id)) {
-        enrolled.set(cs.subject_id, enr.semester_id);
-      }
+      const offering = getOffering(enr.offering_id);
+      if (offering) enrolled.set(offering.course_id, enr.semester_id);
     }
 
     const scale = getActiveGradingScale();
@@ -593,7 +622,7 @@ export const studentsHandlers = [
     const courses: Record<string, unknown>[] = [];
 
     for (const courseId of courseIds) {
-      const course = getSubject(courseId);
+      const course = getCourse(courseId);
       if (!course) continue;
       const pc = planByCourse.get(courseId) ?? null;
       const credits = course.credits ?? 0;
@@ -601,8 +630,10 @@ export const studentsHandlers = [
       // The student's result in this course, from whichever offering they sat.
       let letter: string | null = null;
       let numeric: number | null = null;
-      for (const cs of D.class_subjects.filter((c) => c.subject_id === courseId)) {
-        const term = computeTermGrade(student.id, cs.id);
+      // Best result across every OFFERING of the course the student sat — including the
+      // same course in two different terms, which is the case D31 made expressible.
+      for (const offering of D.offerings.filter((o) => o.course_id === courseId)) {
+        const term = computeTermGrade(student.id, offering.id);
         if (term.numeric != null && (numeric == null || term.numeric > numeric)) {
           numeric = term.numeric;
           letter = term.letter;
@@ -664,7 +695,7 @@ export const studentsHandlers = [
 
     const requiredCredits = plan
       .filter((pc) => pc.is_required)
-      .reduce((sum, pc) => sum + (getSubject(pc.course_id)?.credits ?? 0), 0);
+      .reduce((sum, pc) => sum + (getCourse(pc.course_id)?.credits ?? 0), 0);
     const earnedRequired = courses
       .filter(
         (row) =>
@@ -679,7 +710,8 @@ export const studentsHandlers = [
       full_name: student.full_name,
       student_number: student.student_number,
       program: program ? { id: program.id, code: program.code, name: program.name } : null,
-      year_of_study: student.year_group === 'Second' ? 'Second' : student.year_group === 'First' ? 'First' : null,
+      // A straight read now: `year_of_study` IS the enum, so there is nothing to coerce.
+      year_of_study: student.year_of_study,
       enrollment_load: null,
       program_total_credits: program?.total_credits ?? null,
       curriculum_required_credits: requiredCredits,
@@ -722,7 +754,8 @@ export const studentsHandlers = [
       program_id?: string;
       effective_from?: string | null;
       reason?: string | null;
-      year_of_study?: string | null;
+      // The two BAJC years, matching the column's enum — not free text.
+      year_of_study?: DemoStudent['year_of_study'];
       enrollment_load?: string | null;
     };
     const program = D.programs.find((p) => p.id === body.program_id);
@@ -766,7 +799,7 @@ export const studentsHandlers = [
       reason: body.reason ?? null,
     });
     student.program_id = program.id;
-    if (body.year_of_study) student.year_group = body.year_of_study;
+    if (body.year_of_study) student.year_of_study = body.year_of_study;
 
     return HttpResponse.json({
       student_id: student.id,

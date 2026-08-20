@@ -30,12 +30,11 @@ from app.core.timeutil import school_today, utcnow
 from app.modules.announcements.models import Announcement
 from app.modules.assessments.models import Assessment
 from app.modules.attendance.models import AttendanceRecord
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.grades.models import AssessmentGrade
 from app.modules.settings.models import AcademicYear, Semester
@@ -81,25 +80,28 @@ class _Graph:
         )
         db_session.add(self.sem)
 
-        self.section = Class(
-            academic_year_id=self.year.id, name=f"AAA Sec {tag}", grade_level="Form 1",
-            section="A", capacity=30,
-        )
-        self.other_section = Class(
-            academic_year_id=self.year.id, name=f"ZZZ Other {tag}", grade_level="Form 2",
-            section="B", capacity=25,
-        )
-        db_session.add_all([self.section, self.other_section])
-        self.subject = Subject(name=f"AAA Subj {tag}", code=tag.upper())
+        self.subject = Course(name=f"AAA Subj {tag}", code=tag.upper())
         db_session.add(self.subject)
         db_session.flush()
 
-        self.cs = ClassSubject(class_id=self.section.id, subject_id=self.subject.id, is_active=True)
-        self.other_cs = ClassSubject(
-            class_id=self.other_section.id, subject_id=self.subject.id, is_active=True
+        # Capacity moved from `classes` to `course_offerings` (D31) and the tile still
+        # sums it — 30 + 25 is what `test_total_sections_and_capacity` reads.
+        self.cs = CourseOffering(
+            course_id=self.subject.id,
+            semester_id=self.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+            capacity=30,
+        )
+        self.other_cs = CourseOffering(
+            course_id=self.subject.id,
+            semester_id=self.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+            capacity=25,
         )
         db_session.add_all([self.cs, self.other_cs])
         db_session.flush()
+        self.other_section = self.other_cs
+        self.section = self.cs
 
         self.principal_user = make_user(role=Role.PRINCIPAL, full_name="The Principal")
         self.secretary_user = make_user(role=Role.SECRETARY, full_name="Front Office")
@@ -110,7 +112,7 @@ class _Graph:
         )
         db_session.add(self.teacher)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
+        db_session.add(ClassTeacher(offering_id=self.cs.id, teacher_id=self.teacher.id, is_lead=True))
 
         # Owns the other section only.
         self.other_teacher_user = make_user(role=Role.TEACHER, full_name="Other Teacher")
@@ -121,7 +123,7 @@ class _Graph:
         db_session.add(self.other_teacher)
         db_session.flush()
         db_session.add(
-            ClassTeacher(class_subject_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
+            ClassTeacher(offering_id=self.other_cs.id, teacher_id=self.other_teacher.id, is_lead=True)
         )
         db_session.flush()
 
@@ -150,7 +152,7 @@ class _Graph:
         enr = None
         if enroll:
             enr = ClassEnrollment(
-                class_id=(section or self.section).id, student_id=s.id, semester_id=self.sem.id
+                offering_id=(section or self.section).id, student_id=s.id, semester_id=self.sem.id
             )
             self._db.add(enr)
             self._db.flush()
@@ -159,7 +161,7 @@ class _Graph:
     def assessment(self, *, status="graded", max_score="100", weight="1",
                    is_released=False, cs_id=None, assessment_date=None, title=None):
         a = Assessment(
-            class_subject_id=cs_id or self.cs.id,
+            offering_id=cs_id or self.cs.id,
             semester_id=self.sem.id,
             title=title or f"A {uuid.uuid4().hex[:5]}",
             type="quiz",
@@ -186,7 +188,7 @@ class _Graph:
 
     def attendance(self, student, enrollment, *, status="present", on=None, section=None):
         r = AttendanceRecord(
-            class_id=(section or self.section).id, student_id=student.id,
+            offering_id=(section or self.section).id, student_id=student.id,
             enrollment_id=enrollment.id, semester_id=self.sem.id,
             attendance_date=on or date(2025, 10, 15), status=status,
         )
@@ -254,7 +256,7 @@ class TestPrincipalVariant:
         body = client.get(DB, headers=graph.P).json()
         assert set(body.keys()) == {
             "role", "user_full_name", "academic_year_name", "semester_name", "stats",
-            "enrollment_by_grade", "grade_distribution", "enrollment_trend",
+            "enrollment_by_programme", "grade_distribution", "enrollment_trend",
             "recent_teachers", "recent_students", "recent_announcements",
         }
 
@@ -288,15 +290,24 @@ class TestPrincipalVariant:
         after = client.get(DB, headers=graph.P).json()["stats"]["new_students_term"]
         assert after == before + 1
 
-    def test_enrollment_by_grade_groups_and_counts(self, client, graph) -> None:
+    def test_enrollment_by_programme_groups_and_counts(self, client, graph) -> None:
+        """D31 replaced the by-FORM breakdown.
+
+        `classes.grade_level` held `Form 1`..`Form 4` and `008` dropped it; a junior
+        college has no Form axis. Programme is the tertiary equivalent, and the same
+        query backs `GET /reports/enrollment` so the two screens cannot disagree.
+
+        Students with no programme land in one "Not assigned" row rather than being
+        dropped — which, until the Phase 5 seed, is where this graph's students are.
+        """
         graph.add_student()
         graph.add_student(section=graph.other_section)
         rows = {
-            r["grade_level"]: r["count"]
-            for r in client.get(DB, headers=graph.P).json()["enrollment_by_grade"]
+            r["programme_name"]: r["count"]
+            for r in client.get(DB, headers=graph.P).json()["enrollment_by_programme"]
         }
-        assert rows.get("Form 1", 0) >= 2  # Ana + the new one
-        assert rows.get("Form 2", 0) >= 1
+        assert rows, "the tile must never come back empty while students are enrolled"
+        assert rows.get("Not assigned", 0) >= 2
 
     def test_enrollment_trend_is_derived_and_ascending(self, client, graph) -> None:
         """Deliberate divergence: the mock fabricates six synthetic points."""
@@ -367,11 +378,15 @@ class TestSecretaryVariant:
 
     def test_unstaffed_subjects_counts_offerings_with_no_teacher(self, client, graph, db_session) -> None:
         before = client.get(DB, headers=graph.S).json()["stats"]["unstaffed_subjects"]
-        orphan_subject = Subject(name=f"Orphan {graph.tag}", code=f"OR{graph.tag[:2].upper()}")
+        orphan_subject = Course(name=f"Orphan {graph.tag}", code=f"OR{graph.tag[:2].upper()}")
         db_session.add(orphan_subject)
         db_session.flush()
         db_session.add(
-            ClassSubject(class_id=graph.section.id, subject_id=orphan_subject.id, is_active=True)
+            CourseOffering(
+                course_id=orphan_subject.id,
+                semester_id=graph.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         )
         db_session.flush()
         after = client.get(DB, headers=graph.S).json()["stats"]["unstaffed_subjects"]
@@ -389,7 +404,7 @@ class TestSecretaryVariant:
         rows = client.get(DB, headers=graph.S).json()["recent_enrollments"]
         assert rows
         assert set(rows[0].keys()) == {
-            "enrollment_id", "student_name", "section_name", "enrolled_at"
+            "enrollment_id", "student_name", "offering_label", "enrolled_at"
         }
         stamps = [r["enrolled_at"] for r in rows]
         assert stamps == sorted(stamps, reverse=True)
@@ -413,16 +428,16 @@ class TestTeacherVariant:
     def test_stats_keys(self, client, graph) -> None:
         stats = client.get(DB, headers=graph.T).json()["stats"]
         assert set(stats.keys()) == {
-            "my_sections", "my_class_subjects", "attendance_due_today",
+            "my_offerings", "attendance_due_today",
             "ungraded_items", "awaiting_release_items",
         }
 
     def test_scoped_to_own_sections_only(self, client, graph) -> None:
         body = client.get(DB, headers=graph.T).json()
-        section_ids = {c["section_id"] for c in body["today_classes"]}
+        section_ids = {c["offering"]["id"] for c in body["today_classes"]}
         assert section_ids == {str(graph.section.id)}
         assert str(graph.other_section.id) not in section_ids
-        assert body["stats"]["my_sections"] == 1
+        assert body["stats"]["my_offerings"] == 1
 
     def test_teacher_with_no_classes_gets_empty_lists(self, client, graph, make_user, auth_headers, db_session) -> None:
         user = make_user(role=Role.TEACHER, full_name="Idle Teacher")
@@ -433,22 +448,30 @@ class TestTeacherVariant:
         db_session.flush()
         body = client.get(DB, headers=auth_headers(user_id=user.id, role=Role.TEACHER)).json()
         assert body["today_classes"] == []
-        assert body["stats"]["my_sections"] == 0
+        assert body["stats"]["my_offerings"] == 0
 
-    def test_one_row_per_section_not_per_offering(self, client, graph, db_session) -> None:
+    def test_one_row_per_offering(self, client, graph, db_session) -> None:
         """Attendance is per-section-per-day, so teaching two subjects in one homeroom
         must not produce two register rows."""
-        second = Subject(name=f"Second {graph.tag}", code=f"SC{graph.tag[:2].upper()}")
+        second = Course(name=f"Second {graph.tag}", code=f"SC{graph.tag[:2].upper()}")
         db_session.add(second)
         db_session.flush()
-        cs2 = ClassSubject(class_id=graph.section.id, subject_id=second.id, is_active=True)
+        cs2 = CourseOffering(
+                course_id=second.id,
+                semester_id=graph.sem.id,
+                section_code=uuid.uuid4().hex[:6],
+            )
         db_session.add(cs2)
         db_session.flush()
-        db_session.add(ClassTeacher(class_subject_id=cs2.id, teacher_id=graph.teacher.id))
+        db_session.add(ClassTeacher(offering_id=cs2.id, teacher_id=graph.teacher.id))
         db_session.flush()
         body = client.get(DB, headers=graph.T).json()
-        assert len(body["today_classes"]) == 1
-        assert body["stats"]["my_class_subjects"] == 2  # two offerings, one section
+        # D31: TWO rows, not one. This test used to assert the opposite — a homeroom was
+        # marked present once a day however many subjects it taught, so the tile collapsed
+        # a teacher's offerings down to their section. An offering IS the register now,
+        # so two offerings are two registers and two rows is the correct answer.
+        assert len(body["today_classes"]) == 2
+        assert body["stats"]["my_offerings"] == 2
 
     def test_attendance_due_today_reflects_todays_records(self, client, graph) -> None:
         before = client.get(DB, headers=graph.T).json()
@@ -482,7 +505,7 @@ class TestTeacherVariant:
         assert str(mine.id) in ids
         assert str(theirs.id) not in ids
         assert set(rows[0].keys()) == {
-            "id", "title", "subject_name", "section_name", "assessment_date", "status"
+            "id", "title", "offering", "assessment_date", "status"
         }
 
     def test_recent_assessments_capped_at_six(self, client, graph) -> None:
@@ -586,12 +609,12 @@ class TestTeacherAwaitingRelease:
         graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
         row = self._awaiting(client, graph)["awaiting_release"][0]
         assert set(row.keys()) == {
-            "id", "title", "subject_name", "section_name", "assessment_date", "status",
-            "class_subject_id", "graded_unreleased_count",
+            "id", "title", "offering", "assessment_date", "status",
+            "offering_id", "graded_unreleased_count",
         }
         # The tile deep-links by OFFERING, so this id must be present and correct.
-        assert row["class_subject_id"] == str(graph.cs.id)
-        assert row["section_name"] == graph.section.name
+        assert row["offering_id"] == str(graph.cs.id)
+        assert row["offering"]["id"] == str(graph.cs.id)
 
     def test_list_capped_but_count_is_not(self, client, graph) -> None:
         for i in range(8):
@@ -646,14 +669,30 @@ class TestStudentVariant:
     def test_my_classes_shape(self, client, graph) -> None:
         rows = client.get(DB, headers=graph.U).json()["my_classes"]
         assert rows
-        assert set(rows[0].keys()) == {"class_subject_id", "subject_name", "teacher_name"}
+        assert set(rows[0].keys()) == {"offering", "teacher_name"}
         assert rows[0]["teacher_name"] == "Maria Reyes"
 
     def test_unassigned_offering_reports_unassigned(self, client, graph, db_session) -> None:
-        orphan = Subject(name=f"ZZZ Orphan {graph.tag}", code=f"ZO{graph.tag[:2].upper()}")
+        orphan = Course(name=f"ZZZ Orphan {graph.tag}", code=f"ZO{graph.tag[:2].upper()}")
         db_session.add(orphan)
         db_session.flush()
-        db_session.add(ClassSubject(class_id=graph.section.id, subject_id=orphan.id, is_active=True))
+        unstaffed = CourseOffering(
+            course_id=orphan.id,
+            semester_id=graph.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
+        db_session.add(unstaffed)
+        db_session.flush()
+        # The student must be ENROLLED in it now. Pre-D31 `my_classes` came from the
+        # homeroom's offerings, so merely creating one put it on the student's list; an
+        # enrolment points at a single offering, so it has to be created explicitly.
+        db_session.add(
+            ClassEnrollment(
+                offering_id=unstaffed.id,
+                student_id=graph.student.id,
+                semester_id=graph.sem.id,
+            )
+        )
         db_session.flush()
         rows = client.get(DB, headers=graph.U).json()["my_classes"]
         assert any(r["teacher_name"] == "Unassigned" for r in rows)
@@ -690,7 +729,7 @@ class TestStudentVariant:
         graph.grade(a, graph.student, graph.enrollment, score="40")
         row = client.get(DB, headers=graph.U).json()["recent_grades"][0]
         assert set(row.keys()) == {
-            "assessment_id", "title", "subject_name", "score", "max_score", "letter"
+            "assessment_id", "title", "offering", "score", "max_score", "letter"
         }
         assert row["max_score"] == 50.0
         assert row["letter"] == "B"  # 80%

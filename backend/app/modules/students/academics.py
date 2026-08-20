@@ -36,7 +36,7 @@ from app.common.enums import CreditTransferStatus
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.timeutil import school_today
 from app.modules.admissions.models import CreditTransferRequest
-from app.modules.classes.models import ClassEnrollment, ClassSubject, Subject
+from app.modules.offerings.models import ClassEnrollment, CourseOffering, Course
 from app.modules.grades import calc
 from app.modules.grades import service as grades_service
 from app.modules.programs.models import Program, ProgramCourse
@@ -261,11 +261,11 @@ def _enrolled_course_ids(db: Session, student_id: uuid.UUID) -> dict[uuid.UUID, 
     is a question about the course, and the same course may have been sat in two terms.
     """
     rows = db.execute(
-        select(ClassSubject.subject_id, ClassEnrollment.semester_id)
-        .join(ClassEnrollment, ClassEnrollment.class_id == ClassSubject.class_id)
+        select(CourseOffering.course_id, ClassEnrollment.semester_id)
+        .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
         .where(
             ClassEnrollment.student_id == student_id,
-            ClassSubject.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
     ).all()
     out: dict[uuid.UUID, uuid.UUID] = {}
@@ -326,7 +326,7 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
     course_ids = set(plan) | set(results) | set(transferred) | set(enrolled)
     courses = {
         c.id: c
-        for c in db.scalars(select(Subject).where(Subject.id.in_(course_ids))).all()
+        for c in db.scalars(select(Course).where(Course.id.in_(course_ids))).all()
     } if course_ids else {}
 
     active_semester_id = db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))

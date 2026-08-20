@@ -57,7 +57,7 @@ export function MyStudentProfilePage() {
         yearName={periods.length > 1 ? selectedPeriod?.yearName : undefined}
         // A student cannot open a class's detail page (it exposes the roster), so the class
         // chips are plain text here rather than dead links.
-        linkClasses={false}
+        linkOfferings={false}
       />
     </ProfileLayout>
   );

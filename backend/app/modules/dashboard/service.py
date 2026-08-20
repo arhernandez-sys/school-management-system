@@ -33,7 +33,7 @@ from app.common.enums import (
     TeacherStatus,
 )
 from app.core.errors import Conflict
-from app.core.rbac import teacher_section_ids
+from app.core.rbac import teacher_offering_ids
 from app.core.timeutil import school_today
 from app.modules.announcements import service as announcements_service
 from app.modules.announcements.models import Announcement, AnnouncementRead
@@ -41,12 +41,14 @@ from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.assessments.release_nudge import graded_unreleased_clause
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.service import _summarize
-from app.modules.classes.models import (
-    Class,
+from app.modules.offerings.labels import OFFERING_ORDER, offering_label, offering_ref
+from app.modules.offerings.queries import offerings_in_year
+from app.modules.programs.queries import enrollment_by_programme
+from app.modules.offerings.models import (
+    CourseOffering,
     ClassEnrollment,
-    ClassSubject,
     ClassTeacher,
-    Subject,
+    Course,
 )
 from app.modules.dashboard.schemas import (
     AdminDashboard,
@@ -54,14 +56,14 @@ from app.modules.dashboard.schemas import (
     DashboardAnnouncement,
     DashboardPerson,
     DashboardResponse,
-    EnrollmentByGradeItem,
+    EnrollmentByProgrammeItem,
     EnrollmentTrendItem,
     GradeDistributionItem,
     PersonStatus,
     SecretaryDashboard,
     SecretaryEnrollmentItem,
     SecretaryStats,
-    StudentClassItem,
+    StudentOfferingItem,
     StudentDashboard,
     StudentGradeItem,
     StudentStats,
@@ -70,10 +72,11 @@ from app.modules.dashboard.schemas import (
     TeacherAwaitingReleaseItem,
     TeacherDashboard,
     TeacherStats,
-    TeacherTodayClass,
+    TeacherTodayOffering,
 )
 from app.modules.grades import calc
 from app.modules.grades.models import AssessmentGrade
+from app.modules.programs.models import Program
 from app.modules.settings.models import (
     AcademicYear,
     AssessmentPolicy,
@@ -192,19 +195,24 @@ def _school_policy(db: Session) -> AssessmentPolicy | None:
 # ──────────────────────────────────────────────────────────────────────────────
 # Principal
 # ──────────────────────────────────────────────────────────────────────────────
-def _enrollment_by_grade(db: Session, year: AcademicYear) -> list[EnrollmentByGradeItem]:
-    rows = db.execute(
-        select(Class.grade_level, func.count(func.distinct(ClassEnrollment.student_id)))
-        .join(ClassEnrollment, ClassEnrollment.class_id == Class.id)
-        .where(
-            Class.academic_year_id == year.id,
-            Class.deleted_at.is_(None),
-            ClassEnrollment.unenrolled_at.is_(None),
+def _enrollment_by_programme(
+    db: Session, year: AcademicYear
+) -> list[EnrollmentByProgrammeItem]:
+    """Students per programme, for the year (D31 — replaces the by-Form breakdown).
+
+    The query itself lives in `programs/queries.py` because `GET /reports/enrollment`
+    needs the same numbers; two screens reporting different enrolment totals is a bug
+    users notice and nobody can explain. This only shapes the tile's wire model.
+    """
+    return [
+        EnrollmentByProgrammeItem(
+            programme_id=row.programme_id,
+            programme_code=row.code,
+            programme_name=row.name,
+            count=row.count,
         )
-        .group_by(Class.grade_level)
-        .order_by(Class.grade_level.asc())
-    ).all()
-    return [EnrollmentByGradeItem(grade_level=g, count=c) for g, c in rows]
+        for row in enrollment_by_programme(db, year)
+    ]
 
 
 def _new_students_term(db: Session, year: AcademicYear) -> int:
@@ -273,12 +281,11 @@ def _grade_distribution(
         return []
 
     offerings = db.execute(
-        select(ClassSubject.id, ClassSubject.class_id)
-        .join(Class, ClassSubject.class_id == Class.id)
+        select(CourseOffering.id, CourseOffering.id)
         .where(
-            Class.academic_year_id == year.id,
-            Class.deleted_at.is_(None),
-            ClassSubject.deleted_at.is_(None),
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
     ).all()
     if not offerings:
@@ -288,7 +295,7 @@ def _grade_distribution(
     assessments = list(
         db.scalars(
             select(Assessment).where(
-                Assessment.class_subject_id.in_(cs_ids),
+                Assessment.offering_id.in_(cs_ids),
                 Assessment.semester_id == semester.id,
                 Assessment.deleted_at.is_(None),
             )
@@ -298,16 +305,16 @@ def _grade_distribution(
         return []
     by_cs: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in assessments:
-        by_cs[a.class_subject_id].append(a)
+        by_cs[a.offering_id].append(a)
 
     categories = list(
         db.scalars(
-            select(AssessmentCategory).where(AssessmentCategory.class_subject_id.in_(cs_ids))
+            select(AssessmentCategory).where(AssessmentCategory.offering_id.in_(cs_ids))
         ).all()
     )
     cats_by_cs: dict[uuid.UUID, list[AssessmentCategory]] = defaultdict(list)
     for c in categories:
-        cats_by_cs[c.class_subject_id].append(c)
+        cats_by_cs[c.offering_id].append(c)
     cats_by_id = {c.id: c for c in categories}
 
     grades = list(
@@ -320,7 +327,7 @@ def _grade_distribution(
     grades_by_student_cs: dict[
         tuple[uuid.UUID, uuid.UUID], dict[uuid.UUID, AssessmentGrade]
     ] = defaultdict(dict)
-    assessment_cs = {a.id: a.class_subject_id for a in assessments}
+    assessment_cs = {a.id: a.offering_id for a in assessments}
     for g in grades:
         cs_id = assessment_cs.get(g.assessment_id)
         if cs_id is not None:
@@ -385,8 +392,8 @@ def _school_attendance_rate(db: Session, year: AcademicYear) -> float:
     statuses = list(
         db.scalars(
             select(AttendanceRecord.status)
-            .join(Class, AttendanceRecord.class_id == Class.id)
-            .where(Class.academic_year_id == year.id, Class.deleted_at.is_(None))
+            .join(CourseOffering, AttendanceRecord.offering_id == CourseOffering.id)
+            .where(offerings_in_year(year.id), CourseOffering.deleted_at.is_(None))
         ).all()
     )
     return _summarize(statuses).pct_present
@@ -409,24 +416,24 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             TeacherProfile.status == TeacherStatus.ACTIVE,
         )
     ) or 0
-    sections = list(
-        db.scalars(
-            select(Class).where(
-                Class.academic_year_id == year.id,
-                Class.deleted_at.is_(None),
-                Class.is_archived.is_(False),
-            )
-        ).all()
-    )
+    sections = db.execute(
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.is_archived.is_(False),
+        )
+        .order_by(*OFFERING_ORDER)
+    ).all()
     total_courses = db.scalar(
         select(func.count())
-        .select_from(ClassSubject)
-        .join(Class, ClassSubject.class_id == Class.id)
+        .select_from(CourseOffering)
         .where(
-            Class.academic_year_id == year.id,
-            Class.deleted_at.is_(None),
-            ClassSubject.deleted_at.is_(None),
-            ClassSubject.is_active.is_(True),
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
         )
     ) or 0
 
@@ -450,7 +457,8 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         ).all()
     ]
 
-    section_names = {s.id: s.name for s in sections}
+    # The offering's DERIVED label, not a stored homeroom name (D31).
+    section_names = {o.id: offering_label(c.code, o.section_code) for o, c in sections}
     recent_students = [
         DashboardPerson(
             id=s.id,
@@ -459,7 +467,7 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             status=PersonStatus(label="Active", kind="success"),
         )
         for s, cls_id in db.execute(
-            select(StudentProfile, ClassEnrollment.class_id)
+            select(StudentProfile, ClassEnrollment.offering_id)
             .outerjoin(
                 ClassEnrollment,
                 (ClassEnrollment.student_id == StudentProfile.id)
@@ -487,9 +495,9 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             unread_announcements=_unread_count(db, actor),
             new_students_term=_new_students_term(db, year),
             total_courses=total_courses,
-            student_capacity=sum(s.capacity or 0 for s in sections),
+            student_capacity=sum(s.capacity or 0 for s, _c in sections),
         ),
-        enrollment_by_grade=_enrollment_by_grade(db, year),
+        enrollment_by_programme=_enrollment_by_programme(db, year),
         grade_distribution=_grade_distribution(db, year, semester),
         enrollment_trend=_enrollment_trend(db, year),
         recent_teachers=recent_teachers,
@@ -504,44 +512,44 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
 def _secretary_payload(
     db: Session, actor: User, year: AcademicYear, semester: Semester
 ) -> SecretaryDashboard:
-    sections = list(
-        db.scalars(
-            select(Class).where(
-                Class.academic_year_id == year.id,
-                Class.deleted_at.is_(None),
-                Class.is_archived.is_(False),
-            )
-        ).all()
-    )
+    sections = db.execute(
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
+        .where(
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.is_archived.is_(False),
+        )
+        .order_by(*OFFERING_ORDER)
+    ).all()
 
     # Active offerings with nobody assigned — the clerk's setup queue.
-    staffed = select(ClassTeacher.class_subject_id).distinct().subquery()
+    staffed = select(ClassTeacher.offering_id).distinct().subquery()
     unstaffed_subjects = db.scalar(
         select(func.count())
-        .select_from(ClassSubject)
-        .join(Class, ClassSubject.class_id == Class.id)
+        .select_from(CourseOffering)
         .where(
-            Class.academic_year_id == year.id,
-            Class.deleted_at.is_(None),
-            ClassSubject.deleted_at.is_(None),
-            ClassSubject.is_active.is_(True),
-            ClassSubject.id.notin_(select(staffed.c.class_subject_id)),
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.deleted_at.is_(None),
+            CourseOffering.id.notin_(select(staffed.c.offering_id)),
         )
     ) or 0
 
     roster_counts = dict(
         db.execute(
-            select(ClassEnrollment.class_id, func.count())
+            select(ClassEnrollment.offering_id, func.count())
             .where(
                 ClassEnrollment.semester_id == semester.id,
                 ClassEnrollment.unenrolled_at.is_(None),
             )
-            .group_by(ClassEnrollment.class_id)
+            .group_by(ClassEnrollment.offering_id)
         ).all()
     )
     over_capacity_sections = sum(
         1
-        for s in sections
+        for s, _c in sections
         if s.capacity and roster_counts.get(s.id, 0) > s.capacity
     )
 
@@ -549,21 +557,23 @@ def _secretary_payload(
         SecretaryEnrollmentItem(
             enrollment_id=enr_id,
             student_name=student_name,
-            section_name=section_name,
+            offering_label=offering_label(code, section),
             enrolled_at=enrolled_at,
         )
-        for enr_id, student_name, section_name, enrolled_at in db.execute(
+        for enr_id, student_name, code, section, enrolled_at in db.execute(
             select(
                 ClassEnrollment.id,
                 StudentProfile.full_name,
-                Class.name,
+                Course.code,
+                CourseOffering.section_code,
                 ClassEnrollment.enrolled_at,
             )
             .join(StudentProfile, ClassEnrollment.student_id == StudentProfile.id)
-            .join(Class, ClassEnrollment.class_id == Class.id)
+            .join(CourseOffering, ClassEnrollment.offering_id == CourseOffering.id)
+            .join(Course, CourseOffering.course_id == Course.id)
             .where(
                 ClassEnrollment.unenrolled_at.is_(None),
-                Class.academic_year_id == year.id,
+                offerings_in_year(year.id),
             )
             .order_by(ClassEnrollment.enrolled_at.desc(), ClassEnrollment.id.desc())
             .limit(_CARD_LIMIT)
@@ -610,22 +620,21 @@ def _secretary_payload(
 def _teacher_payload(
     db: Session, actor: User, year: AcademicYear, semester: Semester
 ) -> TeacherDashboard:
-    section_ids = teacher_section_ids(db, actor)
+    section_ids = teacher_offering_ids(db, actor)
 
     owned = []
     if section_ids:
         owned = db.execute(
-            select(ClassSubject, Class, Subject)
-            .join(Class, ClassSubject.class_id == Class.id)
-            .join(Subject, ClassSubject.subject_id == Subject.id)
-            .join(ClassTeacher, ClassTeacher.class_subject_id == ClassSubject.id)
+            select(CourseOffering, Course)
+            .join(Course, CourseOffering.course_id == Course.id)
+            .join(ClassTeacher, ClassTeacher.offering_id == CourseOffering.id)
             .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
             .where(
                 TeacherProfile.user_id == actor.id,
-                ClassSubject.deleted_at.is_(None),
-                Class.deleted_at.is_(None),
-                Class.academic_year_id == year.id,
+                CourseOffering.deleted_at.is_(None),
+                offerings_in_year(year.id),
             )
+            .order_by(*OFFERING_ORDER)
         ).all()
 
     today = school_today()
@@ -633,42 +642,35 @@ def _teacher_payload(
     if section_ids:
         recorded_sections = set(
             db.scalars(
-                select(AttendanceRecord.class_id)
+                select(AttendanceRecord.offering_id)
                 .where(
-                    AttendanceRecord.class_id.in_(section_ids),
+                    AttendanceRecord.offering_id.in_(section_ids),
                     AttendanceRecord.attendance_date == today,
                 )
                 .distinct()
             ).all()
         )
 
-    # One row per SECTION — attendance is per-section-per-day, so a teacher taking
-    # three subjects in one homeroom still marks that register once.
-    first_offering_by_section: dict[uuid.UUID, tuple] = {}
-    for cs, section, subject in owned:
-        first_offering_by_section.setdefault(section.id, (cs, section, subject))
-
+    # D31 dropped a dedupe that existed only for homerooms. Attendance is marked once
+    # per offering per day, and an offering teaches exactly one course — so the old
+    # "collapse the seven subjects a teacher takes in one homeroom down to one register"
+    # step now has nothing to collapse, and every owned offering is its own register.
     today_classes = [
-        TeacherTodayClass(
-            class_subject_id=cs.id,
-            section_id=section.id,
-            section_name=section.name,
-            subject_name=subject.name,
-            attendance_recorded=section.id in recorded_sections,
+        TeacherTodayOffering(
+            offering=offering_ref(cs, subject),
+            attendance_recorded=cs.id in recorded_sections,
         )
-        for cs, section, subject in sorted(
-            first_offering_by_section.values(), key=lambda t: t[1].name
-        )
+        for cs, subject in owned
     ]
 
-    cs_meta = {cs.id: (section, subject) for cs, section, subject in owned}
+    cs_meta = {cs.id: (cs, subject) for cs, subject in owned}
     pending_statuses = (AssessmentStatus.PUBLISHED, AssessmentStatus.GRADING)
     pending = []
     if cs_meta:
         pending = list(
             db.scalars(
                 select(Assessment).where(
-                    Assessment.class_subject_id.in_(list(cs_meta)),
+                    Assessment.offering_id.in_(list(cs_meta)),
                     Assessment.semester_id == semester.id,
                     Assessment.status.in_(pending_statuses),
                     Assessment.deleted_at.is_(None),
@@ -681,8 +683,7 @@ def _teacher_payload(
         TeacherAssessmentItem(
             id=a.id,
             title=a.title,
-            subject_name=cs_meta[a.class_subject_id][1].name,
-            section_name=cs_meta[a.class_subject_id][0].name,
+            offering=offering_ref(*cs_meta[a.offering_id]),
             assessment_date=a.assessment_date,
             status=a.status,
         )
@@ -696,8 +697,7 @@ def _teacher_payload(
         academic_year_name=year.name,
         semester_name=semester.name,
         stats=TeacherStats(
-            my_sections=len(first_offering_by_section),
-            my_class_subjects=len(owned),
+            my_offerings=len(owned),
             attendance_due_today=sum(
                 1 for c in today_classes if not c.attendance_recorded
             ),
@@ -746,7 +746,7 @@ def _awaiting_release(
     rows = db.execute(
         select(
             Assessment.id,
-            Assessment.class_subject_id,
+            Assessment.offering_id,
             Assessment.title,
             Assessment.assessment_date,
             Assessment.status,
@@ -754,14 +754,14 @@ def _awaiting_release(
         )
         .join(AssessmentGrade, AssessmentGrade.assessment_id == Assessment.id)
         .where(
-            Assessment.class_subject_id.in_(list(cs_meta)),
+            Assessment.offering_id.in_(list(cs_meta)),
             Assessment.semester_id == semester.id,
             Assessment.deleted_at.is_(None),
             graded_unreleased_clause(),
         )
         .group_by(
             Assessment.id,
-            Assessment.class_subject_id,
+            Assessment.offering_id,
             Assessment.title,
             Assessment.assessment_date,
             Assessment.status,
@@ -772,11 +772,10 @@ def _awaiting_release(
         TeacherAwaitingReleaseItem(
             id=a_id,
             title=title,
-            subject_name=cs_meta[cs_id][1].name,
-            section_name=cs_meta[cs_id][0].name,
+            offering=offering_ref(*cs_meta[cs_id]),
             assessment_date=on,
             status=status,
-            class_subject_id=cs_id,
+            offering_id=cs_id,
             graded_unreleased_count=waiting,
         )
         for a_id, cs_id, title, on, status, waiting in rows
@@ -813,13 +812,13 @@ def _student_payload(
     class_ids = list(
         dict.fromkeys(
             db.scalars(
-                select(ClassEnrollment.class_id)
-                .join(Class, ClassEnrollment.class_id == Class.id)
+                select(ClassEnrollment.offering_id)
+                .join(CourseOffering, ClassEnrollment.offering_id == CourseOffering.id)
                 .where(
                     ClassEnrollment.student_id == student.id,
                     ClassEnrollment.semester_id == semester.id,
                     ClassEnrollment.unenrolled_at.is_(None),
-                    Class.deleted_at.is_(None),
+                    CourseOffering.deleted_at.is_(None),
                 )
             ).all()
         )
@@ -832,34 +831,33 @@ def _student_payload(
         )
 
     offerings = db.execute(
-        select(ClassSubject, Subject)
-        .join(Subject, ClassSubject.subject_id == Subject.id)
+        select(CourseOffering, Course)
+        .join(Course, CourseOffering.course_id == Course.id)
         .where(
-            ClassSubject.class_id.in_(class_ids),
-            ClassSubject.deleted_at.is_(None),
-            ClassSubject.is_active.is_(True),
+            CourseOffering.id.in_(class_ids),
+            CourseOffering.deleted_at.is_(None),
         )
+        .order_by(*OFFERING_ORDER)
     ).all()
 
     lead_names: dict[uuid.UUID, str] = {}
     if offerings:
         for cs_id, name in db.execute(
-            select(ClassTeacher.class_subject_id, TeacherProfile.full_name)
+            select(ClassTeacher.offering_id, TeacherProfile.full_name)
             .join(TeacherProfile, ClassTeacher.teacher_id == TeacherProfile.id)
             .where(
-                ClassTeacher.class_subject_id.in_([cs.id for cs, _ in offerings]),
+                ClassTeacher.offering_id.in_([cs.id for cs, _ in offerings]),
                 ClassTeacher.is_lead.is_(True),
             )
         ).all():
             lead_names[cs_id] = name
 
     my_classes = [
-        StudentClassItem(
-            class_subject_id=cs.id,
-            subject_name=subject.name,
+        StudentOfferingItem(
+            offering=offering_ref(cs, subject),
             teacher_name=lead_names.get(cs.id, "Unassigned"),
         )
-        for cs, subject in sorted(offerings, key=lambda t: t[1].name)
+        for cs, subject in offerings
     ]
 
     bands, _pass_mark = _bands(db, year)
@@ -871,7 +869,7 @@ def _student_payload(
         assessments = list(
             db.scalars(
                 select(Assessment).where(
-                    Assessment.class_subject_id.in_(cs_ids),
+                    Assessment.offering_id.in_(cs_ids),
                     Assessment.semester_id == semester.id,
                     Assessment.deleted_at.is_(None),
                 )
@@ -894,19 +892,19 @@ def _student_payload(
         categories = list(
             db.scalars(
                 select(AssessmentCategory).where(
-                    AssessmentCategory.class_subject_id.in_(cs_ids)
+                    AssessmentCategory.offering_id.in_(cs_ids)
                 )
             ).all()
         )
     cats_by_cs: dict[uuid.UUID, list[AssessmentCategory]] = defaultdict(list)
     for c in categories:
-        cats_by_cs[c.class_subject_id].append(c)
+        cats_by_cs[c.offering_id].append(c)
     cats_by_id = {c.id: c for c in categories}
 
-    subject_names = {cs.id: subject.name for cs, subject in offerings}
+    offering_refs = {cs.id: offering_ref(cs, subject) for cs, subject in offerings}
     by_cs: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in assessments:
-        by_cs[a.class_subject_id].append(a)
+        by_cs[a.offering_id].append(a)
 
     def released(a: Assessment) -> bool:
         g = my_grades.get(a.id)
@@ -996,7 +994,7 @@ def _student_payload(
         StudentGradeItem(
             assessment_id=a.id,
             title=a.title,
-            subject_name=subject_names.get(a.class_subject_id, ""),
+            offering=offering_refs.get(a.offering_id),
             score=_f(my_grades[a.id].score),
             max_score=_f(a.max_score),
             letter=calc.letter_for(
@@ -1020,7 +1018,7 @@ def _student_payload(
         StudentUpcomingItem(
             id=a.id,
             title=a.title,
-            subject_name=subject_names.get(a.class_subject_id, ""),
+            offering=offering_refs.get(a.offering_id),
             assessment_date=a.assessment_date,
         )
         for a in upcoming[:_ANNOUNCEMENT_LIMIT]

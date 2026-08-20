@@ -34,7 +34,7 @@ import { useSelectedYear } from '@app/providers/YearContext';
 import {
   useAssessmentCategories,
   useAssessmentsList,
-  useClassSubjectOptions,
+  useOfferingPickerOptions,
   useCreateAssessment,
   useDeleteAssessment,
   useSetAssessmentStatus,
@@ -42,23 +42,26 @@ import {
   type AssessmentListItem,
 } from './hooks/useAssessments';
 import { AssessmentFormDialog, type AssessmentFormValues } from './components/AssessmentFormDialog';
-import { ClassSubjectPicker } from './components/ClassSubjectPicker';
+import { OfferingPicker } from './components/OfferingPicker';
 import { NEXT_STATUSES, STATUS_META, TYPE_LABEL, transitionLabel } from './statusMeta';
 
-const CLASS_SUBJECT_PARAM = 'class_subject_id';
+const OFFERING_PARAM = 'offering_id';
 
 /**
- * Assessments list — the assessment-first authoring surface (API-9). You pick a
- * class_subject (URL-persisted via `?class_subject_id=`), then create/edit assessment
- * DEFINITIONS and drive their status lifecycle (draft → published → grading → graded).
- * Grade ENTRY lives in the Grades module.
+ * Assessments list — the assessment-first authoring surface (API-9). You pick a COURSE
+ * OFFERING (URL-persisted via `?offering_id=`), then create/edit assessment DEFINITIONS and
+ * drive their status lifecycle (draft → published → grading → graded). Grade ENTRY lives in
+ * the Grades module.
  *
- * Scope:
- *  - Teacher: the picker lists ONLY their owned offerings; authoring is enabled.
- *  - Principal / Secretary: the picker lists all offerings; view-all, no authoring
- *    (OQ-API-2 — P/S do not author on a teacher's behalf). The server is authoritative.
- *  - Student ("My Assessments"): read-only, and scoped by the GLOBAL top-bar
- *    year·semester switcher rather than by a picker on this page (see below).
+ * Scope, all of it SERVER-decided: the picker feed is scoped to the caller, so a lecturer
+ * gets the offerings they teach and the Dean and Registrar get all. This screen no longer
+ * tells the server whose offerings to return — it used to pass `scope` plus the caller's own
+ * `teacher_profile_id`, which is a request to be trusted about identity.
+ *  - Lecturer: authoring is enabled on their own offerings.
+ *  - Dean / Registrar: view-all, no authoring (OQ-API-2 — they do not author on a
+ *    lecturer's behalf). The server is authoritative.
+ *  - Student ("My Assessments"): read-only, and scoped by the GLOBAL top-bar year·semester
+ *    switcher rather than by a picker on this page (see below).
  */
 export function AssessmentsListScreen() {
   const navigate = useNavigate();
@@ -85,29 +88,25 @@ export function AssessmentsListScreen() {
   const yearId = isStudent ? selectedYearId : staffYear.yearId;
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedCs = searchParams.get(CLASS_SUBJECT_PARAM) ?? '';
+  const selectedOfferingId = searchParams.get(OFFERING_PARAM) ?? '';
 
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
 
-  // ── Picker options (scoped) ─────────────────────────────────────────────────────
-  const optionsQuery = useClassSubjectOptions(
-    isTeacher ? 'me' : 'all',
-    user?.teacher_profile_id ?? null,
-    yearId,
-  );
+  // ── Picker options (scoped server-side to the caller) ────────────────────────────
+  const optionsQuery = useOfferingPickerOptions(yearId);
   // Memoized because the reconcile effect below depends on it — a fresh `[]` literal on
   // every render would re-run that effect continuously.
   const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
-  const selectedOption = options.find((o) => o.class_subject_id === selectedCs) ?? null;
+  const selectedOption = options.find((o) => o.id === selectedOfferingId) ?? null;
 
-  const setSelectedCs = useCallback(
+  const setSelectedOfferingId = useCallback(
     (id: string) => {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          if (id) next.set(CLASS_SUBJECT_PARAM, id);
-          else next.delete(CLASS_SUBJECT_PARAM);
+          if (id) next.set(OFFERING_PARAM, id);
+          else next.delete(OFFERING_PARAM);
           return next;
         },
         { replace: true },
@@ -118,26 +117,27 @@ export function AssessmentsListScreen() {
   );
 
   /**
-   * A class·subject belongs to ONE year, so a `?class_subject_id=` carried across a
-   * year change names an offering that no longer exists in the selected year — the
-   * table renders empty and the picker shows a blank selection, which reads exactly
-   * like the switcher being broken. Staff already clear it in `YearSelect.onChange`;
-   * a student's change arrives from outside this screen (the top bar), so there is no
-   * event to hang it on and it has to be reconciled here.
+   * An offering belongs to ONE term, so an `?offering_id=` carried across a year change
+   * names an offering that is not in the selected year — the table renders empty and the
+   * picker shows a blank selection, which reads exactly like the switcher being broken.
+   * Staff already clear it in `YearSelect.onChange`; a student's change arrives from
+   * outside this screen (the top bar), so there is no event to hang it on and it has to
+   * be reconciled here.
    *
    * Keyed on the OPTIONS rather than on the year: it must only fire once the new year's
    * options have actually loaded, otherwise it would wipe a valid selection during
    * every refetch.
    */
   useEffect(() => {
-    if (!isStudent || !selectedCs || optionsQuery.isPending || options.length === 0) return;
-    if (!options.some((o) => o.class_subject_id === selectedCs)) setSelectedCs('');
-  }, [isStudent, selectedCs, options, optionsQuery.isPending, setSelectedCs]);
+    if (!isStudent || !selectedOfferingId || optionsQuery.isPending || options.length === 0)
+      return;
+    if (!options.some((o) => o.id === selectedOfferingId)) setSelectedOfferingId('');
+  }, [isStudent, selectedOfferingId, options, optionsQuery.isPending, setSelectedOfferingId]);
 
-  // ── List (only once a class_subject is chosen) ────────────────────────────────────
+  // ── List (only once an offering is chosen) ────────────────────────────────────────
   const listParams = useMemo(
     () => ({
-      class_subject_id: selectedCs || undefined,
+      offering_id: selectedOfferingId || undefined,
       academic_year_id: yearId || undefined,
       // Students only: staff scope by year here and manage every term of an offering
       // together. `semester_id` is what makes the switcher's "· Semester 2" mean
@@ -147,9 +147,9 @@ export function AssessmentsListScreen() {
       page_size: pageSize,
       sort: '-assessment_date',
     }),
-    [selectedCs, yearId, isStudent, selectedSemesterId, page, pageSize],
+    [selectedOfferingId, yearId, isStudent, selectedSemesterId, page, pageSize],
   );
-  const listQuery = useAssessmentsList(listParams, Boolean(selectedCs));
+  const listQuery = useAssessmentsList(listParams, Boolean(selectedOfferingId));
 
   // ── Mutations ──────────────────────────────────────────────────────────────────
   const createMut = useCreateAssessment();
@@ -162,7 +162,7 @@ export function AssessmentsListScreen() {
   const [editing, setEditing] = useState<AssessmentListItem | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string[]>>({});
-  const categoriesQuery = useAssessmentCategories(formOpen ? selectedCs || null : null);
+  const categoriesQuery = useAssessmentCategories(formOpen ? selectedOfferingId || null : null);
   // Every assessment write needs the REAL active semester id — the school's CURRENT
   // term, not `selectedSemesterId` (what the reader is browsing). Read from YearContext,
   // which already holds `GET /settings/active-term` — no extra request. It was a
@@ -216,7 +216,7 @@ export function AssessmentsListScreen() {
       }
       createMut.mutate(
         {
-          class_subject_id: selectedCs,
+          offering_id: selectedOfferingId,
           semester_id: activeSemesterId,
           title: values.title,
           type: values.type,
@@ -301,8 +301,10 @@ export function AssessmentsListScreen() {
   ];
 
   const openGrading = (a: AssessmentListItem) => {
-    const csId = a.class_subject?.class_subject_id ?? selectedCs;
-    navigate(`${ROUTES.gradeAssessment}/${a.id}?${CLASS_SUBJECT_PARAM}=${encodeURIComponent(csId)}`);
+    const offeringId = a.offering?.id ?? selectedOfferingId;
+    navigate(
+      `${ROUTES.gradeAssessment}/${a.id}?${OFFERING_PARAM}=${encodeURIComponent(offeringId)}`,
+    );
   };
 
   const rowActions = canGrade
@@ -359,7 +361,7 @@ export function AssessmentsListScreen() {
     : undefined;
 
   const primaryAction =
-    canAuthor && selectedCs ? (
+    canAuthor && selectedOfferingId ? (
       <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
         New assessment
       </Button>
@@ -376,8 +378,8 @@ export function AssessmentsListScreen() {
               ? // Name the period rather than implying "now" — this screen is reachable
                 // for any year·semester the student was enrolled in.
                 selectedPeriod
-                ? `Your assessments for ${selectedPeriod.label}. Pick a subject to see its quizzes, tests, and exams.`
-                : 'Assessments in your class. Pick a subject to see its quizzes, tests, and exams.'
+                ? `Your assessments for ${selectedPeriod.label}. Pick a course to see its quizzes, tests, and exams.`
+                : 'Your assessments. Pick a course to see its quizzes, tests, and exams.'
               : 'Browse assessments across the school.'
         }
         primaryAction={primaryAction}
@@ -394,8 +396,8 @@ export function AssessmentsListScreen() {
           <YearSelect
             value={staffYear.yearId}
             onChange={(id) => {
-              // A class·subject belongs to one year — clear the stale selection.
-              setSelectedCs('');
+              // An offering belongs to one term — clear the stale selection.
+              setSelectedOfferingId('');
               staffYear.setYearId(id);
               setPage(0);
             }}
@@ -404,10 +406,10 @@ export function AssessmentsListScreen() {
             isLoading={staffYear.isLoading}
           />
         )}
-        <ClassSubjectPicker
+        <OfferingPicker
           options={options}
-          value={selectedCs}
-          onChange={setSelectedCs}
+          value={selectedOfferingId}
+          onChange={setSelectedOfferingId}
           isLoading={optionsQuery.isLoading}
           disabled={optionsQuery.isError}
         />
@@ -415,34 +417,36 @@ export function AssessmentsListScreen() {
 
       {optionsQuery.isError && (
         <Alert severity="error" sx={{ mb: 2 }} role="alert">
-          Could not load your class subjects.{' '}
+          Could not load your course offerings.{' '}
           <Button size="small" onClick={() => void optionsQuery.refetch()}>
             Retry
           </Button>
         </Alert>
       )}
 
-      {!selectedCs ? (
+      {!selectedOfferingId ? (
         <EmptyState
           variant="card"
-          title="Select a class subject"
+          title="Select a course offering"
           description={
             isTeacher
-              ? 'Choose one of your class subjects to view and create its assessments.'
+              ? 'Choose one of the courses you teach to view and create its assessments.'
               : isStudent
-                ? 'Choose one of your subjects to see its assessments.'
-                : 'Choose a class subject to view its assessments.'
+                ? 'Choose one of your courses to see its assessments.'
+                : 'Choose a course offering to view its assessments.'
           }
         />
       ) : (
         <>
           {selectedOption && (
             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-              {selectedOption.label}
+              {[selectedOption.course.name, selectedOption.label, selectedOption.semester?.name]
+                .filter(Boolean)
+                .join(' · ')}
             </Typography>
           )}
           <DataTable<AssessmentListItem>
-            caption="Assessments for the selected class subject"
+            caption="Assessments for the selected course offering"
             columns={columns}
             rows={listQuery.data?.items ?? []}
             getRowId={(a) => a.id}

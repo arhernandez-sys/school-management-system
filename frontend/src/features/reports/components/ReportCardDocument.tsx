@@ -109,7 +109,7 @@ export function ReportCardDocument({ data, variant = 'end-of-semester' }: Report
           <div>Student No. {student.student_number}</div>
           {/* D29: the letterhead names the student's LEVEL. A sixth-former sits many
               subject classes, so there is no single class name to print here. */}
-          {student.year_group && <div>{student.year_group}</div>}
+          {student.year_of_study && <div>{student.year_of_study}</div>}
         </>
       }
     >

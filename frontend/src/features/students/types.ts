@@ -6,22 +6,22 @@
  * enums are re-used from the shared vocabulary so the feature can never drift from the
  * role/status sets the real backend uses.
  */
-import type { Page } from '@shared/types/api';
+import type { CourseRef, OfferingRef, Page } from '@shared/types/api';
 import type { StudentStatus, AssessmentType, GradeStatus } from '@shared/types/enums';
 
-/**
- * Lightweight ref to one subject class the student is enrolled in.
+/** The two BAJC years. `enum('First','Second')` server-side, not free text. */
+export type YearOfStudy = 'First' | 'Second';
+
+/*
+ * NOTE — `StudentClassRef` is gone (D31).
  *
- * `grade_level` here is the YEAR GROUP THE CLASS IS FOR, not the student's own level —
- * the student's level is `year_group` on the profile (D29). The two are usually equal
- * and are still distinct fields.
+ * It described a homeroom: `{ id, name, grade_level, section }`, where `grade_level` was
+ * "the year group the CLASS is for" as distinct from the student's own level. Neither
+ * column exists any more, and an offering has no `name` at all. The shared `OfferingRef`
+ * from `@shared/types/api` replaces it — the same ref every other module now uses, so
+ * "the courses this student takes" and "the offerings on the schedule" cannot render
+ * differently.
  */
-export interface StudentClassRef {
-  id: string;
-  name: string;
-  grade_level: string;
-  section: string | null;
-}
 
 /**
  * The stored name parts (D30 §D10, brief §11).
@@ -42,10 +42,13 @@ export interface StudentListItem extends StudentNameParts {
   id: string;
   student_number: string;
   status: StudentStatus;
-  /** The student's own level, e.g. "Lower 6" (D29 — replaced the homeroom's grade). */
-  year_group: string | null;
-  /** How many subject classes they actively sit this term (D29). */
-  class_count: number;
+  /**
+   * The student's own level. `enum('First','Second')` server-side — D30 renamed this from
+   * `year_group` and narrowed it to the two BAJC years, so free text is not accepted.
+   */
+  year_of_study: YearOfStudy | null;
+  /** How many course offerings they actively sit this term (D31: was `class_count`). */
+  offering_count: number;
   guardian_name: string | null;
 }
 
@@ -55,7 +58,7 @@ export interface StudentDetail extends StudentNameParts {
   student_number: string;
   date_of_birth: string;
   gender: 'male' | 'female';
-  year_group: string | null;
+  year_of_study: YearOfStudy | null;
   enrollment_date: string;
   status: StudentStatus;
   guardian_name: string;
@@ -64,11 +67,13 @@ export interface StudentDetail extends StudentNameParts {
   address: string;
   phone: string;
   /**
-   * EVERY subject class the student actively sits (D29 — was `current_section`, one
-   * homeroom). Name-ordered. Empty when they are not enrolled anywhere, which is a
-   * normal state for a newly registered student.
+   * EVERY offering the student actively sits, ordered by course code then section.
+   *
+   * D29 made this a list (it was `current_section`, one homeroom); **D31 renamed it to
+   * `current_offerings`** and gave it the shared `OfferingRef`. Empty when they are not
+   * enrolled anywhere, which is a normal state for a newly registered student.
    */
-  current_classes: StudentClassRef[];
+  current_offerings: OfferingRef[];
 }
 
 /** One assessment line under a subject group (GET /students/{id}/assessments). */
@@ -91,10 +96,16 @@ export interface StudentAssessmentLine {
   last_nudged_at: string | null;
 }
 
-/** Assessments grouped by the student's class-subject offerings. */
+/**
+ * Assessments grouped by the offerings the student sits.
+ *
+ * The group key is `offering_id` (D31: was `class_subject_id`). The `subject` field keeps
+ * its wire name — it carries a `CourseRef` and is one of the few places the server still
+ * spells the catalog entry "subject"; renaming it is a backend change, not a client one.
+ */
 export interface StudentAssessmentGroup {
-  class_subject_id: string;
-  subject: { id: string; name: string; code: string } | null;
+  offering_id: string;
+  subject: CourseRef | null;
   term_grade: { numeric: number | null; letter: string | null };
   assessments: StudentAssessmentLine[];
 }
@@ -132,7 +143,7 @@ export interface StudentWritePayload {
   last_name: string;
   date_of_birth: string;
   gender?: 'male' | 'female';
-  year_group?: string | null;
+  year_of_study?: YearOfStudy | null;
   enrollment_date: string;
   status?: StudentStatus;
   guardian_name?: string;
@@ -141,12 +152,12 @@ export interface StudentWritePayload {
   address?: string;
   phone?: string;
   /**
-   * Subject classes to enrol into, in the same transaction as the create (D29 —
-   * replaced the single `section_id`). CREATE ONLY: PATCH rejects it, because with many
-   * enrolments "set them from here" would be ambiguous about removals. Later changes go
-   * through `POST /classes/{id}/enrollments`.
+   * Offerings to enrol into, in the same transaction as the create (D29 replaced the
+   * single `section_id`; D31 renamed `class_ids` → `offering_ids`). CREATE ONLY: PATCH
+   * rejects it, because with many enrolments "set them from here" would be ambiguous
+   * about removals. Later changes go through `POST /offerings/{id}/enrollments`.
    */
-  class_ids?: string[];
+  offering_ids?: string[];
 }
 
 /** One academic year the student was enrolled in (GET /students/{id}/years). */
@@ -163,13 +174,13 @@ export interface StudentsListParams {
   sort?: string;
   search?: string;
   status?: StudentStatus;
-  /** Narrow to the roster of ONE subject class. */
-  class_id?: string;
+  /** Narrow to the roster of ONE course offering (D31: was `class_id`). */
+  offering_id?: string;
   /**
-   * Filter on the student's own level (D29 — replaced `grade_level`, which resolved
-   * through the homeroom and would now answer the wrong question).
+   * Filter on the student's own level. D29 replaced `grade_level` (which resolved through
+   * the homeroom and would now answer the wrong question); D30 renamed it `year_of_study`.
    */
-  year_group?: string;
+  year_of_study?: string;
   /** Per-module year switcher: restrict to students enrolled in this academic year. */
   academic_year_id?: string;
 }
@@ -197,7 +208,7 @@ export interface ProgramChangePayload {
   /** Defaults to today server-side. The outgoing programme closes the day before. */
   effective_from?: string | null;
   reason?: string | null;
-  year_of_study?: 'First' | 'Second' | null;
+  year_of_study?: YearOfStudy | null;
   enrollment_load?: 'Part Time' | 'Full Time' | 'Transient' | null;
 }
 
@@ -214,7 +225,7 @@ export interface ProgramHistoryEntry {
 export interface StudentProgramRef {
   student_id: string;
   program: StudentProgramRefLite | null;
-  year_of_study: 'First' | 'Second' | null;
+  year_of_study: YearOfStudy | null;
   enrollment_load: 'Part Time' | 'Full Time' | 'Transient' | null;
   history: ProgramHistoryEntry[];
 }
@@ -261,7 +272,7 @@ export interface AcademicHistory {
   full_name: string;
   student_number: string;
   program: StudentProgramRefLite | null;
-  year_of_study: 'First' | 'Second' | null;
+  year_of_study: YearOfStudy | null;
   enrollment_load: 'Part Time' | 'Full Time' | 'Transient' | null;
   /** As PRINTED on the programme sequence (86–102 for the BAJC awards). */
   program_total_credits: number | null;
