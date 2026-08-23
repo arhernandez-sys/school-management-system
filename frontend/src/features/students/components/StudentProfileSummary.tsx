@@ -21,6 +21,7 @@ import {
   StatusBadge,
 } from '@shared/components';
 import type { StatCardColor } from '@shared/components';
+import { genderLabel } from '@shared/types/enums';
 import { STUDENT_STATUS_KIND, STUDENT_STATUS_LABEL } from '../constants';
 import type { StudentDetail } from '../types';
 
@@ -191,7 +192,10 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
 
   const personalRows = present([
     { label: 'Date of birth', value: student.date_of_birth || '—' },
-    { label: 'Gender', value: student.gender === 'female' ? 'Female' : 'Male' },
+    // D37 — `genderLabel`, not a ternary. `gender === 'female' ? 'Female' : 'Male'`
+    // showed "Male" for a stored 'Female' (capital F falls to the else branch) and for
+    // any other value too. Live data already had 'Male' on the applications table.
+    { label: 'Gender', value: genderLabel(student.gender) },
     { label: 'Civil status', value: student.civil_status },
     // Filterable in the directory (D32), so it has to be visible here.
     { label: 'Religion', value: student.religion },

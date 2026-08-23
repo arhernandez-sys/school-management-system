@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
+import { canonicalGender } from '@shared/types/enums';
 import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, getCourse } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoApplication,
@@ -639,10 +640,11 @@ export const admissionsHandlers = [
       last_name: app.last_name,
       full_name: fullName(app),
       date_of_birth: app.date_of_birth ?? '2000-01-01',
-      // `DemoStudent` narrows gender to male/female while the FORM takes free text — the
-      // real column is a plain string. Coerced rather than widened: changing the demo type
-      // would ripple through every student fixture for no gain here.
-      gender: app.gender === 'female' ? 'female' : 'male',
+      // D37 — `canonicalGender`, mirroring the server's `normalise_gender` on this same
+      // copy. The old line was `app.gender === 'female' ? 'female' : 'male'`, which sent
+      // every unrecognised value — including a capitalised `'Female'` — to 'male'. That is
+      // the browser-side half of the bug the live data already had.
+      gender: canonicalGender(app.gender) ?? 'female',
       // D32 - acceptance copies the application's religion onto the student, mirroring
       // `admissions/service.py:263`. This is the only path that ever populates it.
       religion: app.religion ?? null,

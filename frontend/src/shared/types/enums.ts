@@ -31,6 +31,55 @@ import type { Role } from '@shared/api/generated/model';
  * is the authority for that column and normalising it would put the database out of step
  * with their own tooling. Mirrors `app/common/enums.py::StudentStatus`.
  */
+/**
+ * The gender values the forms offer (D37). Mirrors `app/common/enums.py::Gender`.
+ *
+ * **The COLUMNS are free text and stay so** — `student_profiles.gender` and
+ * `applications.gender` are `varchar` carrying the comment "Free/lookup text; not a fixed
+ * enum", because narrowing them would reject historical rows this system did not write.
+ * What is constrained is the WRITE PATH: these two are the only values the dropdowns
+ * offer, and the server folds anything else onto them (`normalise_gender`).
+ *
+ * Lowercase because 46 of the 47 live rows already are, and because every comparison in
+ * this codebase is written that way — `gender === 'female'`. That matters more than it
+ * looks: MariaDB's collation is case-insensitive so the directory FILTER tolerated a
+ * stray `'Male'`, but JS does not, and a mismatched value renders an EMPTY select and the
+ * wrong label on the profile card.
+ */
+export type Gender = 'female' | 'male';
+
+export const GENDERS: readonly Gender[] = ['female', 'male'];
+
+/** Display labels. The stored values are lowercase; these are what a human reads. */
+export const GENDER_LABEL: Record<Gender, string> = {
+  female: 'Female',
+  male: 'Male',
+};
+
+/**
+ * The value as one of the two canonical options, or `null` if it is neither.
+ *
+ * Used to seed a `<select>`: a value that is not among the options renders BLANK, and
+ * saving from a blank select clears the field. Canonicalising on load turns a stored
+ * `'Male'` into the Male option instead.
+ */
+export function canonicalGender(value: string | null | undefined): Gender | null {
+  if (!value) return null;
+  const key = value.trim().toLowerCase();
+  return key === 'female' || key === 'male' ? key : null;
+}
+
+/**
+ * A stored value as a label, tolerating anything the dropdowns did not write.
+ */
+export function genderLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const key = value.trim().toLowerCase();
+  if (key === 'female' || key === 'male') return GENDER_LABEL[key];
+  // Not one of ours — show it as stored rather than mislabelling it.
+  return value;
+}
+
 export type StudentStatus =
   | 'Registered'
   | 'Unregistered'

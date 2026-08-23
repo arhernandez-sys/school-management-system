@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AcademicYearStatus, Role, StudentStatus
+from app.common.enums import AcademicYearStatus, Role, StudentStatus, normalise_gender
 from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
@@ -817,7 +817,9 @@ def create_student(
         middle_name=(payload.middle_name or "").strip() or None,
         last_name=payload.last_name.strip(),
         date_of_birth=payload.date_of_birth,
-        gender=payload.gender,
+        # D37 — folded onto the canonical lowercase vocabulary. The column is free text
+        # (and stays so, for historical rows), so this is where consistency is enforced.
+        gender=normalise_gender(payload.gender),
         year_of_study=payload.year_of_study,
         enrollment_date=payload.enrollment_date,
         status=payload.status,
@@ -966,7 +968,7 @@ def update_student(
     if payload.last_name is not None:
         student.last_name = payload.last_name.strip()
     if payload.gender is not None:
-        student.gender = payload.gender
+        student.gender = normalise_gender(payload.gender)
     if payload.year_of_study is not None:
         student.year_of_study = payload.year_of_study
     if payload.enrollment_date is not None:

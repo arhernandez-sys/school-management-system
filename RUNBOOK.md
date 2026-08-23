@@ -483,7 +483,8 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 .\.venv\Scripts\python.exe -m pytest tests/test_requirements_sync.py -q  # setup sanity, <1s
 ```
 
-- **1,606 tests, all green** (D36, 2026-08-23), in about **3m40s**. Run the whole thing —
+- **1,633 tests, all green** (D37, 2026-08-23), in about **1m15s–3m40s** (it varies with
+  connection warmth). Run the whole thing —
   cherry-picking a file is how a cross-module regression gets missed.
 - The count and the runtime both grew a lot since this section was written (it said 941
   tests / 56 seconds). If the number you see is materially lower, you are probably on a

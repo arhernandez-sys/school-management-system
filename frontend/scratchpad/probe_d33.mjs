@@ -33,6 +33,8 @@ await build({
         activeStudentFilterCount,
         EMPTY_STUDENT_FILTERS,
       } from '@features/students/components/studentFilters';
+      export { GENDERS, GENDER_LABEL, genderLabel, canonicalGender } from '@shared/types/enums';
+      export { schoolYearOptions } from '@shared/utils/schoolYears';
     `,
     resolveDir: FE,
     loader: 'ts',
@@ -550,6 +552,78 @@ console.log('\n=== 8 · D35: coursestatus (audit / withdrew) ===');
 
   // Leave the dataset as it was found.
   mine.forEach((e, i) => { e.enrollment_status = saved[i]; });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n=== 9 · D37: gender + school year as dropdowns ===');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // 9a — the shared vocabulary.
+  ok(M.GENDERS.join(',') === 'female,male', 'the canonical pair is lowercase', M.GENDERS.join(','));
+
+  // `canonicalGender` is what seeds a <select>. A value it cannot place returns null, and
+  // the caller renders an extra "(as recorded)" option rather than a blank select.
+  ok(M.canonicalGender('Male') === 'male', "canonicalGender folds 'Male'");
+  ok(M.canonicalGender(' FEMALE ') === 'female', 'and trims + lowercases');
+  ok(M.canonicalGender('Non-binary') === null, 'and returns null for anything else');
+  ok(M.canonicalGender(null) === null, 'and for null');
+
+  // `genderLabel` replaced `gender === 'female' ? 'Female' : 'Male'`, which mislabelled
+  // BOTH a capitalised 'Female' and any other value as "Male".
+  ok(M.genderLabel('female') === 'Female', 'genderLabel labels female');
+  ok(M.genderLabel('Female') === 'Female', 'and a CAPITALISED Female — the old bug');
+  ok(M.genderLabel('Non-binary') === 'Non-binary', 'and shows an unknown value as stored');
+  ok(M.genderLabel(null) === null, 'and passes null through');
+
+  // 9b — the school-year options.
+  const years = ['2024-2025', '2025-2026'];
+  const opts = M.schoolYearOptions(years);
+  ok(opts[0] === '2028-2029', 'the list is newest-first', opts.join(' '));
+  ok(opts.includes('2026-2027'), 'and offers the FUTURE intake the live application names');
+  ok(
+    years.every((y) => opts.includes(y)),
+    'while keeping every year on file',
+  );
+  // An existing application must never lose the value it already holds: a <select> whose
+  // value is absent from its options renders blank, and saving would then clear it.
+  ok(
+    M.schoolYearOptions(years, '2019-2020').includes('2019-2020'),
+    'a held value is carried even when it predates everything on file',
+  );
+  ok(
+    M.schoolYearOptions([], '2030-2031').includes('2030-2031'),
+    'and even when there are no years on file at all',
+  );
+  // A malformed label must not be stepped forward into invented years.
+  ok(
+    !M.schoolYearOptions(['2024-2026']).includes('2025-2027'),
+    'a non-consecutive label is not extrapolated',
+  );
+
+  // 9c — the demo write paths fold it, mirroring the server.
+  const created = await (await fetch(`${API}/students`, {
+    method: 'POST',
+    headers: { ...AS('secretary').headers, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      first_name: 'Gee', last_name: 'Seven', date_of_birth: '2007-03-03',
+      enrollment_date: '2026-01-06', gender: 'Male',
+    }),
+  })).json();
+  ok(created.gender === 'male', "create folds 'Male' to 'male'", String(created.gender));
+
+  const patched = await (await fetch(`${API}/students/${created.id}`, {
+    method: 'PATCH',
+    headers: { ...AS('secretary').headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ gender: 'FEMALE' }),
+  })).json();
+  ok(patched.gender === 'female', "patch folds 'FEMALE' to 'female'", String(patched.gender));
+
+  // 9d — no demo student is left off the canonical vocabulary, which is what the
+  // directory's Gender filter and every JS comparison assume.
+  const stray = D.students
+    .map((st) => st.gender)
+    .filter((g) => g && g !== 'female' && g !== 'male');
+  ok(stray.length === 0, 'no demo student holds a non-canonical gender', stray.join(', ') || 'none');
 }
 
 server.close();

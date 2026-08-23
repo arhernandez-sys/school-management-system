@@ -23,6 +23,7 @@ import {
 } from '@shared/api/mocks/demo/dataset';
 import type { District, EnrollmentLoad } from '@shared/types/enums';
 import type { EnrollmentStatus } from '@features/offerings/types';
+import { canonicalGender } from '@shared/types/enums';
 import type {
   DemoAssessment,
   DemoEnrollment,
@@ -583,7 +584,10 @@ export const studentsHandlers = [
       last_name: body.last_name,
       full_name: displayName(body.first_name, body.middle_name ?? null, body.last_name),
       date_of_birth: body.date_of_birth,
-      gender: body.gender ?? 'female',
+      // D37 — folded onto the canonical pair, mirroring `normalise_gender`. Demo mode
+      // has to carry this too: the last two times a rule lived in only one of the two
+      // implementations, demo mode certified a screen the real backend refused.
+      gender: canonicalGender(body.gender) ?? 'female',
       // D33 — the student form IS the application form now (ask 3), so religion is one of
       // the fields it collects. The D32 note here said the opposite, and it was true then.
       religion: body.religion ?? null,
@@ -670,7 +674,9 @@ export const studentsHandlers = [
     // `full_name` is derived, so it is recomputed after any name edit — never set.
     student.full_name = displayName(student.first_name, student.middle_name, student.last_name);
     if (body.date_of_birth !== undefined) student.date_of_birth = body.date_of_birth;
-    if (body.gender !== undefined) student.gender = body.gender;
+    if (body.gender !== undefined) {
+      student.gender = canonicalGender(body.gender) ?? student.gender;
+    }
     if (body.enrollment_date !== undefined) student.enrollment_date = body.enrollment_date;
     if (body.guardian_name !== undefined) student.guardian_name = body.guardian_name ?? '';
     if (body.guardian_phone !== undefined) student.guardian_phone = body.guardian_phone ?? '';

@@ -112,6 +112,77 @@ class PrerequisiteType(str, enum.Enum):
     ALL_PROGRAM_COURSES = "all_program_courses"
 
 
+class Gender(str, enum.Enum):
+    """The gender values the forms offer (D37).
+
+    **A `str` enum, but the COLUMNS stay free text**, and that split is deliberate.
+    `student_profiles.gender` and `applications.gender` are `varchar` with the comment
+    "Free/lookup text; not a fixed enum" — narrowing them to a DB enum would reject the
+    historical rows this system did not write, and there is no migration that can safely
+    guess what a value it has never seen was meant to be.
+
+    So this constrains the WRITE PATH instead: the forms offer exactly these two, and
+    `normalise_gender` folds anything else onto them before it is stored. Reads stay
+    permissive.
+
+    Lowercase because that is what 45 of the 47 live rows already used, and what every
+    frontend comparison (`gender === 'female'`) and the demo dataset assume.
+
+    **The drift was on BOTH tables, and a `GROUP BY gender` could not show it.** Under
+    `utf8mb4_uca1400_ai_ci` the collation is case-insensitive, so `'Male'` and `'male'`
+    collapse into one group and the query reports whichever it saw first. It took
+    `GROUP BY HEX(gender)` to see that `student_profiles` held one `'Male'` and
+    `applications` held another. Both were folded to lowercase in D37; `normalise_gender`
+    is what stops them coming back.
+    """
+
+    FEMALE = "female"
+    MALE = "male"
+
+
+#: Accepted spellings -> the canonical value. Deliberately generous: a Registrar
+#: transcribing a paper form, an import, and the client's own dump have all produced
+#: different capitalisations, and rejecting them would block a legitimate record over a
+#: letter case.
+_GENDER_ALIASES: dict[str, Gender] = {
+    "f": Gender.FEMALE,
+    "female": Gender.FEMALE,
+    "woman": Gender.FEMALE,
+    "girl": Gender.FEMALE,
+    "m": Gender.MALE,
+    "male": Gender.MALE,
+    "man": Gender.MALE,
+    "boy": Gender.MALE,
+}
+
+
+def normalise_gender(value: str | None) -> str | None:
+    """Fold a submitted gender onto the canonical vocabulary.
+
+    `None` and blank pass through as `None` — gender is optional on both forms and an
+    empty string is not a value. **An UNRECOGNISED value is returned unchanged**, not
+    rejected: this runs on every write, including the admissions transcription path, and
+    turning an unexpected spelling into a 422 would stop a Registrar recording a real
+    student over something cosmetic. The dropdowns are what keep new data clean; this is
+    the safety net under them.
+
+    Case- and whitespace-insensitive, because that is the drift actually observed —
+    `'Male'` on `applications` beside `'male'` on `student_profiles`.
+
+    **Returns a plain `str`, never the enum member.** `Gender` subclasses `str`, but from
+    Python 3.11 `str(Gender.MALE)` is `'Gender.MALE'` — so handing the member to a plain
+    `varchar` column (these two are free text, not `enum_col`) risks storing that literal
+    the moment anything in the driver stringifies it. `.value` removes the question.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = _GENDER_ALIASES.get(cleaned.casefold())
+    return match.value if match is not None else cleaned
+
+
 class EnrollmentStatus(str, enum.Enum):
     """How a student is sitting one course offering (D30 §D2 step 4).
 

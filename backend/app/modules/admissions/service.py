@@ -34,6 +34,7 @@ from app.common.enums import (
     EducationLevel,
     Role,
     StudentStatus,
+    normalise_gender,
 )
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams
@@ -531,7 +532,15 @@ def create_application(
     for name in _WRITABLE:
         if name in supplied:
             value = supplied[name]
-            setattr(row, name, value.strip() if isinstance(value, str) else value)
+            if isinstance(value, str):
+                value = value.strip()
+            # D37 — one canonical vocabulary. The column is free text and stays so (for
+            # rows this system did not write), so the write path is where consistency is
+            # enforced; `normalise_gender` folds 'Male'/'F'/'FEMALE' onto 'male'/'female'
+            # and passes anything unrecognised through untouched.
+            if name == "gender":
+                value = normalise_gender(value)
+            setattr(row, name, value)
     # Booleans are `bool | None` on the wire so a PATCH can leave them alone; the column
     # is NOT NULL, so an omitted one has to fall back to its default rather than to None.
     for flag in ("has_health_condition", "atlib_exam", "recommendation_received"):
@@ -590,6 +599,8 @@ def update_application(
             continue
         if isinstance(value, str):
             value = value.strip() or None
+        if name == "gender":
+            value = normalise_gender(value)  # D37 — see `create_application`
         setattr(row, name, value)
 
     # Required names cannot be cleared to null even though the schema allows the key.
@@ -835,7 +846,14 @@ def accept_application(
         last_name=row.last_name,
         # NOT NULL on `student_profiles`, and guaranteed present by `submission_issues`.
         date_of_birth=row.date_of_birth,
-        gender=row.gender,
+        # D37 — normalised HERE as well as on the application, because this is the copy
+        # that spreads the drift: an application written before D37 still holds whatever
+        # was typed, and copying it verbatim puts a capitalised value into the register.
+        # Both live tables had one such row, which a `GROUP BY gender` could not reveal —
+        # the collation is case-insensitive, so it took `GROUP BY HEX(gender)` to find
+        # them. The frontend compares case-SENSITIVELY and does not forgive it: the
+        # `<select>` renders blank and the profile card shows the wrong label.
+        gender=normalise_gender(row.gender),
         enrollment_date=accepted_on,
         status=StudentStatus.REGISTERED,
         phone=row.phone,

@@ -146,7 +146,13 @@ export interface StudentDetail extends StudentNameParts, StudentAdmissionFields 
   id: string;
   student_number: string;
   date_of_birth: string;
-  gender: 'male' | 'female';
+  /**
+   * D37 — `string`, not the two-value union, because the COLUMN is free text
+   * (`varchar`, "Free/lookup text; not a fixed enum") and live data already held
+   * `'Male'`. Typing it as the union was a lie that made a `<select>` render blank
+   * for such a row. Use `genderLabel` / `canonicalGender` to read it.
+   */
+  gender: string | null;
   year_of_study: YearOfStudy | null;
   enrollment_date: string;
   status: StudentStatus;
@@ -257,7 +263,8 @@ export interface StudentWritePayload extends Partial<StudentAdmissionFields> {
   middle_name?: string | null;
   last_name: string;
   date_of_birth: string;
-  gender?: 'male' | 'female';
+  /** Free text on the wire; the server folds it onto `female`/`male` (D37). */
+  gender?: string | null;
   year_of_study?: YearOfStudy | null;
   enrollment_date: string;
   status?: StudentStatus;

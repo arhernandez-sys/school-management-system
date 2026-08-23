@@ -18,6 +18,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { YearSelect } from '@shared/components';
 import type { YearOption } from '@shared/hooks/useYearFilter';
 import { strings } from '@i18n/strings';
+import { GENDERS, GENDER_LABEL } from '@shared/types/enums';
 import type { StudentStatus } from '@shared/types/enums';
 import { STUDENT_STATUS_LABEL } from '../constants';
 import { EMPTY_STUDENT_FILTERS, activeStudentFilterCount } from './studentFilters';
@@ -166,11 +167,15 @@ export function StudentFiltersDialog({
             onChange={(e) => set('gender', e.target.value)}
             fullWidth
           >
-            {/* A fixed pair, matching `StudentFormDialog` — the form only ever writes
-                these two, so there is nothing to discover from the directory. */}
+            {/* A fixed pair, from the one shared vocabulary (D37). The forms only ever
+                write these two and the server folds anything else onto them, so there is
+                nothing to discover from the directory. */}
             <MenuItem value="">All genders</MenuItem>
-            <MenuItem value="female">Female</MenuItem>
-            <MenuItem value="male">Male</MenuItem>
+            {GENDERS.map((option) => (
+              <MenuItem key={option} value={option}>
+                {GENDER_LABEL[option]}
+              </MenuItem>
+            ))}
           </TextField>
 
           <TextField

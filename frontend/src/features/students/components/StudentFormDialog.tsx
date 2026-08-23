@@ -13,7 +13,13 @@ import {
 import { FormDialog } from '@shared/components';
 import { schoolToday } from '@shared/utils/schoolDate';
 import { strings } from '@i18n/strings';
-import { DISTRICTS, ENROLLMENT_LOADS } from '@shared/types/enums';
+import {
+  DISTRICTS,
+  ENROLLMENT_LOADS,
+  GENDERS,
+  GENDER_LABEL,
+  canonicalGender,
+} from '@shared/types/enums';
 import type { District, EnrollmentLoad } from '@shared/types/enums';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import type { StudentDetail, StudentWritePayload, YearOfStudy } from '../types';
@@ -124,7 +130,9 @@ export function StudentFormDialog({
   const [lastName, setLastName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [ssno, setSsno] = useState('');
-  const [gender, setGender] = useState<'male' | 'female'>('female');
+  // D37 — a plain string, not the narrowed union: a legacy row may hold a spelling the
+  // dropdown does not offer, and typing it away does not make it not arrive.
+  const [gender, setGender] = useState<string>('female');
   const [civilStatus, setCivilStatus] = useState('');
   const [religion, setReligion] = useState('');
   // ── Section A · address + contact ───────────────────────────────────────────
@@ -180,7 +188,9 @@ export function StudentFormDialog({
     setLastName(student?.last_name ?? '');
     setDateOfBirth(student?.date_of_birth ?? '');
     setSsno(student?.ssno ?? '');
-    setGender(student?.gender ?? 'female');
+    // Canonicalise on load, so a stored 'Male' selects the Male option instead of
+    // rendering an empty select (and then clearing the field on save).
+    setGender(canonicalGender(student?.gender) ?? 'female');
     setCivilStatus(student?.civil_status ?? '');
     setReligion(student?.religion ?? '');
     setStreet(student?.street ?? '');
@@ -386,11 +396,20 @@ export function StudentFormDialog({
             select
             label="Gender"
             value={gender}
-            onChange={(e) => setGender(e.target.value as 'male' | 'female')}
+            onChange={(e) => setGender(e.target.value)}
             fullWidth
           >
-            <MenuItem value="female">Female</MenuItem>
-            <MenuItem value="male">Male</MenuItem>
+            {GENDERS.map((option) => (
+              <MenuItem key={option} value={option}>
+                {GENDER_LABEL[option]}
+              </MenuItem>
+            ))}
+            {/* Only rendered for a value the pair above does not cover — see the state
+                declaration. Without it the select would be blank and a save would wipe
+                whatever was actually on file. */}
+            {!(GENDERS as readonly string[]).includes(gender) && gender && (
+              <MenuItem value={gender}>{gender} (as recorded)</MenuItem>
+            )}
           </TextField>
         </Row>
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -31,6 +31,9 @@ import { ErrorState, LoadingState, PageContainer, PageHeader } from '@shared/com
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
+import { useAcademicYears } from '@features/settings/hooks/useSettings';
+import { GENDERS, GENDER_LABEL } from '@shared/types/enums';
+import { schoolYearOptions } from '@shared/utils/schoolYears';
 import {
   useApplication,
   useCreateApplication,
@@ -272,6 +275,9 @@ export function ApplicationWizardScreen() {
 
   const detailQuery = useApplication(applicationId);
   const programsQuery = useProgramsList({ page: 1, page_size: 100 });
+  // D37 — the School year dropdown is built from the years on file. Read-only use, so a
+  // Registrar who cannot manage settings still gets the list.
+  const academicYearsQuery = useAcademicYears();
   const createMut = useCreateApplication();
   const updateMut = useUpdateApplication();
   const educationMut = useReplaceEducation();
@@ -280,6 +286,30 @@ export function ApplicationWizardScreen() {
 
   const detail = detailQuery.data;
   const programmeOptions = programsQuery.data?.items ?? [];
+
+  // ── D37: the two new dropdowns ──────────────────────────────────────────────
+  const schoolYears = useMemo(
+    () =>
+      schoolYearOptions(
+        (academicYearsQuery.data?.items ?? []).map((y) => y.name),
+        draft.school_year,
+      ),
+    [academicYearsQuery.data, draft.school_year],
+  );
+
+  /**
+   * Gender, split into "a value the dropdown offers" and "anything else".
+   *
+   * A `<select>` whose value is not among its options renders BLANK, and saving from a
+   * blank select clears the field — so a legacy spelling has to be carried as its own
+   * option rather than silently dropped. `'Male'` is exactly that case: it is on the one
+   * live application today.
+   */
+  const genderRaw = draft.gender.trim();
+  const genderCanonical = genderRaw.toLowerCase();
+  const isKnownGender = (GENDERS as readonly string[]).includes(genderCanonical);
+  const genderValue = isKnownGender ? genderCanonical : genderRaw;
+  const legacyGender = !isKnownGender && genderRaw ? genderRaw : null;
   // `STEPS[step]` is `Step | undefined` under `noUncheckedIndexedAccess`. `step` is only
   // ever moved with `Math.min`/`Math.max` inside the range, so narrow once here rather
   // than sprinkling `!` through the JSX.
@@ -484,13 +514,30 @@ export function ApplicationWizardScreen() {
               />
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              {/* D37 — a SELECT, not free text. `school_year` is a label distinct from
+                  `academic_year_id`, and free text let the two diverge: the one live
+                  application says 2026-2027 while the years on file are 2024-2025 and
+                  2025-2026. The options are the years on file plus the next few derived
+                  from the latest, because an application is for a FUTURE intake and a
+                  strict list of existing years would block the normal case. */}
               <TextField
+                select
                 label="School year"
                 value={draft.school_year}
                 onChange={(e) => set('school_year', e.target.value)}
-                placeholder="2026-2027"
                 fullWidth
-              />
+                error={Boolean(fieldErrors.school_year)}
+                helperText={
+                  fieldErrors.school_year?.join(' ') ?? 'The intake this application is for.'
+                }
+              >
+                <MenuItem value="">—</MenuItem>
+                {schoolYears.map((year) => (
+                  <MenuItem key={year} value={year}>
+                    {year}
+                  </MenuItem>
+                ))}
+              </TextField>
               <TextField
                 label="Date of birth"
                 type="date"
@@ -508,12 +555,33 @@ export function ApplicationWizardScreen() {
               />
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              {/* D37 — a SELECT, matching `StudentFormDialog`. Free text here is what
+                  put 'Male' on this table beside 46 lowercase rows on
+                  `student_profiles`, and acceptance copied it across verbatim. MariaDB's
+                  collation hid it from the directory filter; the browser compares
+                  case-sensitively and does not. */}
               <TextField
+                select
                 label="Gender"
-                value={draft.gender}
+                value={genderValue}
                 onChange={(e) => set('gender', e.target.value)}
                 fullWidth
-              />
+                error={Boolean(fieldErrors.gender)}
+                helperText={fieldErrors.gender?.join(' ')}
+              >
+                <MenuItem value="">—</MenuItem>
+                {GENDERS.map((option) => (
+                  <MenuItem key={option} value={option}>
+                    {GENDER_LABEL[option]}
+                  </MenuItem>
+                ))}
+                {/* A legacy value the dropdown does not offer would otherwise make the
+                    select render BLANK and a save would silently clear it. Carried as its
+                    own option so it survives an edit that does not touch this field. */}
+                {legacyGender && (
+                  <MenuItem value={legacyGender}>{legacyGender} (as recorded)</MenuItem>
+                )}
+              </TextField>
               <TextField
                 label="Civil status"
                 value={draft.civil_status}
