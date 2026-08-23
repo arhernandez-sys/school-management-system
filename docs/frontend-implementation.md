@@ -38,13 +38,20 @@ _Last updated: 2026-07-28._
 ```bash
 cd frontend
 cp .env.example .env      # configure VITE_API_BASE_URL etc. (mocks ON by default)
-npm install               # installs deps + copies the MSW worker into public/
+npm install               # installs deps ONLY — see the note below
+npx msw init public/ --save  # REQUIRED on a fresh clone: creates public/mockServiceWorker.js
 npm run dev               # http://localhost:5173  (login → shell works via the mock layer)
 npm run build             # tsc -b && vite build  → dist/
 npm run typecheck         # tsc -b --noEmit
 npm run lint              # eslint
 npm run format            # prettier --write
 ```
+
+> ⚠️ **`npm install` does NOT create the MSW worker.** This block used to claim it did.
+> There is no `postinstall` script in `package.json`, and `public/mockServiceWorker.js` is
+> gitignored (`frontend/.gitignore:29`) — so on a fresh clone nothing generates it. Demo mode
+> then loads and 404s every request, which reads like a broken app rather than a missing
+> file. `RUNBOOK.md` §1.3 has the same warning.
 
 **Build/run status (verified in Phase 6):**
 - `npm install` — ✅ 362 packages, no blocking errors (transitive deprecation warnings only).

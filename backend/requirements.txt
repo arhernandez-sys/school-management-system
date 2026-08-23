@@ -1,0 +1,55 @@
+# SIS backend — RUNTIME dependencies.
+#
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │  pyproject.toml IS THE SOURCE OF TRUTH. This file mirrors it.             │
+# │                                                                          │
+# │  Two pinned lists of the same dependencies is a drift hazard, so the      │
+# │  mirror is ENFORCED by a test rather than trusted:                       │
+# │                                                                          │
+# │      tests/test_requirements_sync.py                                     │
+# │                                                                          │
+# │  It parses both files and fails if they disagree — on a package, a        │
+# │  version, or an extra. Add a dependency to pyproject.toml FIRST, then     │
+# │  copy the line here; the test tells you if you forget.                    │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
+# Why this file exists at all when `pip install -e .` already works: a plain
+# `requirements.txt` is what every deployment target, container build and CI runner
+# expects, and it installs the dependencies WITHOUT installing the app as a package.
+#
+# Install:   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Dev/tests: .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#
+# Python >= 3.11 required (3.12.10 is what this repo is developed on).
+# Everything is pinned to an exact version on purpose — see RUNBOOK §1.3.
+
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi==0.115.6
+# `[standard]` pulls watchfiles (so `--reload` actually watches instead of polling),
+# httptools, websockets, PyYAML, python-dotenv and colorama. Do not drop the extra:
+# without watchfiles, `--reload` silently falls back to a stat-polling loop.
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# ── Data / ORM ───────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+alembic==1.14.0
+# The backend targets self-hosted MariaDB. The former psycopg/Postgres driver was
+# dropped with the pivot — nothing imports psycopg, and the only remaining Postgres
+# artefact is one knowingly Postgres-only Alembic revision.
+pymysql==1.1.1
+
+# ── Validation / settings ────────────────────────────────────────────────────
+pydantic==2.10.4
+pydantic-settings==2.7.1
+email-validator==2.2.0
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+argon2-cffi==23.1.0
+pyjwt==2.10.1
+
+# ── Timezones ────────────────────────────────────────────────────────────────
+# The IANA timezone database. REQUIRED, not optional: Windows does not ship the tz
+# database, so without this `ZoneInfo("America/Belize")` in app/core/timeutil.py
+# raises ZoneInfoNotFoundError and every school-local date resolution fails.
+tzdata==2026.2

@@ -3,10 +3,12 @@
 Operational guide for the School Information System: how to run it, how to point it at a
 database, and how to recover when something breaks.
 
-- **Backend** — FastAPI + SQLAlchemy (sync, pymysql), Python 3.12
-- **Frontend** — React 19 + TypeScript + MUI + Vite, TanStack Query
+- **Backend** — FastAPI + SQLAlchemy (sync, pymysql), **Python 3.12** (3.11+ required)
+- **Frontend** — React 19 + TypeScript + MUI + Vite, TanStack Query. **Node 22 / npm 10**
 - **Database** — self-hosted **MariaDB 12.3** (`sims`)
-- **API surface** — 70 paths / 99 operations, all under `/api/v1`
+- **API surface** — 103 paths / 145 operations, all under `/api/v1`
+
+**New here? Go to §1 — first-time setup — then §3 to start both halves.**
 
 > The docs under `docs/` still describe PostgreSQL on Railway in several places
 > (`database-schema.md`, `architecture.md`, `api-specification.md`). That is **stale**.
@@ -15,7 +17,106 @@ database, and how to recover when something breaks.
 
 ---
 
-## 1. Two ways to run
+## 1. First-time setup
+
+Two independent installs: a Python virtualenv for the backend, and `node_modules` for the
+frontend. Neither knows about the other. **Do both once, then jump to §3.**
+
+### 1.1 Prerequisites
+
+| | Version | Check |
+|---|---|---|
+| Python | **3.11+** (3.12.10 here) | `python --version` |
+| Node.js | **22.x** (22.15.0 here) | `node --version` |
+| npm | **10.x** (10.9.2 here) | `npm --version` |
+| MariaDB | **12.3** — only for `npm run dev`, not for `npm run demo` | HeidiSQL, or `mysql --version` |
+
+`npm run demo` needs neither Python nor MariaDB — it is the browser and mocks only. If a
+demo is all you want, do §1.3 and stop.
+
+### 1.2 Backend — the virtualenv
+
+```powershell
+cd C:\Users\arhernandez\source\repos\school-management-system\backend
+
+# 1. Create the venv. It lives at backend\.venv and is gitignored.
+python -m venv .venv
+
+# 2. Upgrade pip inside it. Note: `.\.venv\Scripts\python.exe -m pip`, never a bare
+#    `pip` — a bare `pip` may be a DIFFERENT interpreter's pip and will install into
+#    the wrong place while appearing to succeed.
+.\.venv\Scripts\python.exe -m pip install -U pip
+
+# 3. Install. THIS is the line you want on a dev machine:
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+**~40 packages, under a minute.** Verify:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_requirements_sync.py -q
+```
+
+That test compares `requirements*.txt` against `pyproject.toml` **and against what is
+actually installed in the venv**, so a green run means the environment matches the pins the
+suite was proven against. It is the fastest check that setup worked.
+
+#### Which install command?
+
+| Command | Installs | Use when |
+|---|---|---|
+| `pip install -r requirements-dev.txt` | runtime + pytest/httpx | **normal dev work** |
+| `pip install -r requirements.txt` | runtime only | deploys, containers, CI |
+| `pip install -e ".[dev]"` | the same, plus `sis-backend` as an editable package | you want `import app` to resolve from outside `backend\` |
+
+All three give the same dependency versions — `requirements.txt` mirrors
+`pyproject.toml`, enforced by the test above. The difference is only whether the app itself
+is installed as a package. **The suite and `uvicorn` do not need it installed**, because
+both are run from `backend\` where `app/` is already importable.
+
+> **`.venv` is not portable.** It hardcodes absolute paths. Never copy one between
+> machines or commit it — delete and recreate instead.
+
+#### Why exact pins everywhere
+
+Every line in `requirements.txt` is `==`. There is **no lockfile and no CI** in this
+project, so the pins *are* the lockfile: they are the only thing making "the suite passed"
+mean the same on two machines. `test_requirements_sync.py` fails on any unpinned line.
+
+#### `backend\.env` is required for anything DB-backed
+
+Copy or create it before starting the server or running the suite — §4 has the contents.
+Without it, `app/config.py` falls back to defaults and points at the wrong database.
+
+### 1.3 Frontend — node_modules
+
+```powershell
+cd C:\Users\arhernandez\source\repos\school-management-system\frontend
+npm install
+
+# REQUIRED on a fresh clone — see below. Creates public/mockServiceWorker.js.
+npx msw init public/ --save
+```
+
+**`npm install` does NOT create the MSW service worker, despite what this runbook used to
+say.** There is no `postinstall` script in `package.json`, and
+`public/mockServiceWorker.js` is **gitignored** (`frontend/.gitignore:29`) — so on a fresh
+clone the file simply does not exist and nothing generates it.
+
+The symptom is misleading: `npm run demo` starts fine and the app loads, then **every
+request 404s**, because the worker that was supposed to intercept them is not there. If a
+fresh clone's demo mode looks broken, run the `msw init` line before investigating anything
+else. `.env.demo` is gitignored for the same reason and has the same effect — §4 has its
+contents.
+
+> ⚠️ **`npm run build` and `npm run dev` cannot run on this machine** — esbuild's binary is
+> blocked by policy, and Vite needs it. `npm run demo` is affected the same way. What DOES
+> work: `npx tsc -b --force` (typecheck), `npx eslint .` (lint), and the plain-Node probes
+> in `frontend/scratchpad/`. See §7.
+
+---
+
+## 2. Two ways to run
 
 | | `npm run demo` | `npm run dev` |
 |---|---|---|
@@ -34,9 +135,48 @@ does a flat mean and ignores both. Do not report that as a bug — see
 
 ---
 
-## 2. Running against the live database
+## 3. Running against the live database
 
 Two terminals. Both must stay open.
+
+### How it fits together
+
+```
+        browser
+           │  http://localhost:5173
+           ▼
+   ┌─────────────────────┐
+   │  Vite dev server    │   frontend/ · npm run dev
+   │       :5173         │
+   │                     │   serves the SPA, AND proxies:
+   │   /api/v1/*  ───────┼──────────┐
+   └─────────────────────┘          │  vite.config.ts → server.proxy
+                                    ▼
+                          ┌─────────────────────┐
+                          │  uvicorn / FastAPI  │   backend/ · uvicorn app.main:app
+                          │       :8000         │
+                          └──────────┬──────────┘
+                                     │  SQLAlchemy + pymysql
+                                     ▼
+                          ┌─────────────────────┐
+                          │  MariaDB  `sims`    │   127.0.0.1:3306
+                          │       :3306         │
+                          └─────────────────────┘
+```
+
+**The browser never talks to `:8000` directly, and that is deliberate.**
+`frontend/.env` sets `VITE_API_BASE_URL=/api/v1` — a *relative* base — so every request
+goes to `:5173` and Vite forwards `/api/v1/*` to `:8000`. That makes the calls
+**same-origin**, which is what lets the `SameSite=Lax` HttpOnly refresh cookie work over
+plain http. Point the base at `http://localhost:8000` instead and login appears to succeed
+but the session dies on the first refresh, because the browser drops the cookie as
+cross-site. §4 says the same thing under "Why the base URL must stay relative".
+
+Production mirrors this shape: one origin, a reverse proxy sending `/` to the static bundle
+and `/api/v1` to uvicorn (§9).
+
+**Start order does not matter.** The frontend proxies lazily, so a request made before
+uvicorn is up returns a 502 and works on retry — nothing needs restarting.
 
 ### Terminal 1 — backend on `:8000`
 
@@ -60,6 +200,26 @@ npm run dev
 ```
 
 Open http://localhost:5173.
+
+### Demo mode — one terminal, no backend, no database
+
+```powershell
+cd C:\Users\arhernandez\source\repos\school-management-system\frontend
+npm run demo
+```
+
+`--mode demo` loads `.env.demo`, which sets `VITE_ENABLE_MOCKS=true`. A **service worker
+(MSW)** then intercepts every `/api/v1/*` call inside the browser and answers it from the
+in-memory dataset in `src/shared/api/mocks/demo/` — nothing leaves the page. Log in by
+typing `principal`, `secretary`, `teacher` or `student` with **any** password.
+
+Use it for client demos and offline UI work. §2 lists what differs from the real thing.
+
+### Stopping
+
+`Ctrl+C` in each terminal. Neither leaves anything behind: the backend holds no lock and
+the frontend writes nothing outside `node_modules/.vite` (its cache — safe to delete if the
+dev server starts behaving oddly after a dependency change).
 
 ### Logins
 
@@ -103,7 +263,7 @@ intercepting — check `frontend/.env` says `VITE_ENABLE_MOCKS=false` and hard-r
 
 ---
 
-## 3. Environment files
+## 4. Environment files
 
 None of these are in git (`.env*` is gitignored); only `.env.example` is tracked.
 **All of them already exist on this machine** — this section is for a fresh clone.
@@ -159,7 +319,7 @@ VITE_ENABLE_MOCKS=true
 
 ---
 
-## 4. Provisioning a database from scratch
+## 5. Provisioning a database from scratch
 
 > Not needed on this machine — `sims` is already provisioned and seeded.
 
@@ -269,19 +429,16 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 
 ### Fresh machine, first time
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"   # [dev] matters — see §6
+**Moved to §1 — first-time setup.** It covers the venv, `requirements-dev.txt`, `npm
+install`, and how to verify each half. A second copy here had already started to drift
+(it recommended a different install command), which is why it is a pointer now and not
+a duplicate.
 
-cd ..\frontend
-npm install        # also copies the MSW worker into public/
-```
+Then come back to this section to provision the database itself.
 
 ---
 
-## 5. Database timezone — important
+## 6. Database timezone — important
 
 The app's contract (`app/core/timeutil.py`) is **"storage is always UTC"**, with calendar
 *dates* resolved in `America/Belize` (UTC-6, no DST) via `school_today()`.
@@ -312,20 +469,25 @@ sessions still show server-local time — that's expected and harmless.
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 See `docs/testing-plan.md` for the full plan — strategy, coverage, gaps and the manual UAT
 scripts. Quick reference:
 
 ```powershell
 cd C:\Users\arhernandez\source\repos\school-management-system\backend
-.\.venv\Scripts\python.exe -m pytest -q                  # full suite — ~56 seconds
-.\.venv\Scripts\python.exe -m pytest tests/test_auth.py -q   # one module — seconds
-.\.venv\Scripts\python.exe -m pytest -m "not requires_db" -q # DB-free subset
-.\.venv\Scripts\python.exe -m pytest -q --durations=10       # find the slow ones
+.\.venv\Scripts\python.exe -m pytest -q                       # full suite — ~3m40s
+.\.venv\Scripts\python.exe -m pytest tests/test_auth.py -q       # one module — seconds
+.\.venv\Scripts\python.exe -m pytest -m "not requires_db" -q    # DB-free subset
+.\.venv\Scripts\python.exe -m pytest -q --durations=10          # find the slow ones
+.\.venv\Scripts\python.exe -m pytest tests/test_requirements_sync.py -q  # setup sanity, <1s
 ```
 
-- **941 tests, all green.** The whole suite now runs in under a minute, so just run it.
+- **1,606 tests, all green** (D36, 2026-08-23), in about **3m40s**. Run the whole thing —
+  cherry-picking a file is how a cross-module regression gets missed.
+- The count and the runtime both grew a lot since this section was written (it said 941
+  tests / 56 seconds). If the number you see is materially lower, you are probably on a
+  stale checkout.
 - **It used to take ~18 minutes, and the cause recorded here was wrong.** The note said Argon2id
   dominated. Measured (2026-07-29): Argon2 was ~96ms/hash — real but minor — the database ~1ms
   per test, and **`create_app()` ~1.3s per test**, paid by all 941 tests because the `app`
@@ -344,7 +506,7 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -354,10 +516,10 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 | `423` on login with `retry_after_seconds` | Account lockout, 5 failures / 900s | Wait, or clear `users.failed_login_count` + `locked_until` |
 | Backend starts but every query fails | Started from the wrong directory → `.env` not found | `cd backend` first |
 | MariaDB error 1364 "doesn't have a default value" on login | `002_column_defaults.sql` never applied | Apply it |
-| `alembic upgrade head` fails | The revision is Postgres-only | Don't use Alembic — see §4 |
+| `alembic upgrade head` fails | The revision is Postgres-only | Don't use Alembic — see §5 |
 | CORS error in browser console | Origin missing from `CORS_ORIGINS` | Add it, restart backend |
-| Timestamps display 6 hours early | Rows written before the §5 fix | Cosmetic; re-seed if it matters |
-| `npm run demo` shows a blank/404 app | Missing `public/mockServiceWorker.js` or `.env.demo` (both gitignored) | `npx msw init public/ --save`, recreate `.env.demo` per §3 |
+| Timestamps display 6 hours early | Rows written before the §6 fix | Cosmetic; re-seed if it matters |
+| `npm run demo` shows a blank/404 app | Missing `public/mockServiceWorker.js` or `.env.demo` (both gitignored) | `npx msw init public/ --save`, recreate `.env.demo` per §4 |
 
 ### Health endpoints
 
@@ -436,7 +598,7 @@ machine **still holds the 19 pre-D31 accounts sharing `SimsDemo2025!` with
 `must_change_password = false`**, and that password is still in this repository's git history.
 If that database is what goes live, the system is open to anyone who has read the history.
 
-Before go-live, either provision a fresh database (§4, minimal seed `(a)`) or, on the existing
+Before go-live, either provision a fresh database (§5, minimal seed `(a)`) or, on the existing
 one:
 
 ```sql
@@ -551,7 +713,7 @@ tracked in `docs/testing-plan.md` §6 and the progress tracker:
 - **No backups.** Nothing is scheduled and no restore has ever been tested. For student
   records this is the largest remaining risk on this list — an untested backup is not a
   backup. A nightly `mysqldump` off-host is a few lines.
-- **No reproducible provisioning.** Alembic cannot run against MariaDB (§4), so rebuilding
+- **No reproducible provisioning.** Alembic cannot run against MariaDB (§5), so rebuilding
   the schema is a manual four-file sequence.
 - **Retention not scheduled.** `python -m app.jobs.purge` works (`--dry-run` first) but
   nothing calls it, so `login_attempts` and `audit_log` grow without bound.
@@ -599,7 +761,7 @@ see `[MSW] Mock layer active` in a production console, the build was made with
 
 ---
 
-## 8. Known gaps
+## 12. Known gaps
 
 Tracked in the production-readiness plan; none block local use. **For public deployment,
 read §10 — several of these become blockers there.**
