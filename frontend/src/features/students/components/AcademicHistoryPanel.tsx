@@ -89,7 +89,9 @@ const STATUS_META: Record<
   withdrawn: {
     label: 'Withdrawn',
     kind: 'warning',
-    hint: 'Sat the course and left. No credit, excluded from the GPA; the transcript prints W/P or W/F.',
+    // The two halves are scored differently and the hint has to say so, or a Registrar
+    // reading "Withdrawn" cannot tell whether it cost the student anything.
+    hint: 'Sat the course and left — no credit either way. Withdrew PASSING is excluded from the GPA; withdrew FAILING counts as a fail. The transcript prints W/P or W/F.',
   },
 };
 

@@ -382,10 +382,14 @@ function buildTranscript(student: DemoStudent) {
           // denominator is every enrolled credit (decision #4). Filtering first would
           // print a graded-only mean.
           //
-          // D35 EXCLUDES notated rows from the GPA on BOTH sides — an audited or withdrawn
-          // course was never being read for credit, so leaving its credits in the
-          // denominator would depress the GPA of a student who did nothing wrong.
-          const counted = subjects.filter((r) => !r.notation);
+          // Two DIFFERENT exclusions, mirroring `reports/service.get_transcript`:
+          //
+          //   * `AU` / `W/P` leave the fraction ENTIRELY — filtered out of the list.
+          //   * `W/F` COUNTS AS A FAIL (BAJC, 2026-08-23), so it stays in with `letter: ''`
+          //     — credits in the denominator, zero quality points.
+          //
+          // Excluding all three, as the first cut did, silently forgave a W/F.
+          const counted = subjects.filter((r) => !r.notation || r.notation === 'W/F');
           const termGpa = gpaFor(counted.map((r) => ({ credits: r.credits, letter: r.letter })));
           const gradedRows = subjects.filter((r) => r.numeric != null);
           const termAverage =

@@ -254,16 +254,27 @@ def _transferred_course_ids(db: Session, student: StudentProfile) -> set[uuid.UU
     )
 
 
-#: The two `coursestatus` values that mean "sat it and left" (D35).
-#:
-#: Both are OUT OF THE GPA. `withdraw_passing` is uncontroversial — the student was
-#: passing, so counting it as anything would be inventing a grade. `withdraw_failing` is
-#: the judgment call: some institutions score a W/F as an F, which would pull the GPA down.
-#: This system does not, on the same principle the `transferred` bucket documents — a
-#: number nobody at BAJC awarded should not enter the average. **Confirm with BAJC** (see
-#: the D35 plan doc §F); flipping it is a one-line change here plus a `GpaEntry` with
-#: `grade_point=0`.
+#: The two `coursestatus` values that mean "sat it and left" (D35). Both earn NO CREDIT
+#: and both print a notation instead of a grade — but they are scored DIFFERENTLY, and
+#: `_GPA_DROPPED` below is where that split lives.
 _WITHDRAWN = frozenset({EnrollmentStatus.WITHDRAW_PASSING, EnrollmentStatus.WITHDRAW_FAILING})
+
+#: Statuses that leave the GPA **entirely** — out of the numerator AND the denominator.
+#:
+#: BAJC decided the W/F case on 2026-08-23: *"yes w/f is a f because its like a student
+#: dropout while failing"*. So `withdraw_failing` is NOT here — it is scored as a fail
+#: (credits in the denominator, zero quality points), which is what
+#: `calc.GpaEntry(credits=...)` with no `grade_point` produces.
+#:
+#: The two that remain are the ones where scoring anything would be inventing a grade:
+#:
+#:   * `audit` — the student was never reading the course for credit, so its credits have
+#:     no business in the denominator. Leaving them there would depress the GPA of someone
+#:     who did nothing wrong.
+#:   * `withdraw_passing` — they were PASSING when they left. A zero would be a worse
+#:     answer than no answer, and this is the same principle the `transferred` bucket
+#:     documents: a number nobody at BAJC awarded should not enter the average.
+_GPA_DROPPED = frozenset({EnrollmentStatus.AUDIT, EnrollmentStatus.WITHDRAW_PASSING})
 
 
 def _enrolled_course_ids(
@@ -415,8 +426,19 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
             # who did nothing wrong, the same trap the `transferred` bucket documents.
             status = "audited"
         elif how in _WITHDRAWN:
-            # Sat it and left. No credit, out of the GPA — see `_WITHDRAWN`.
+            # Sat it and left. Never earns credit — but the two halves are SCORED
+            # differently, which is the BAJC decision recorded on `_GPA_DROPPED`.
             status = "withdrawn"
+            if how not in _GPA_DROPPED:
+                # W/F counts as a fail: credits in the denominator, zero quality points.
+                # `GpaEntry` with no `grade_point` is exactly that — the same shape the
+                # `in_progress` branch uses, and the reason no explicit 0.0 is passed.
+                #
+                # Note this deliberately IGNORES any mark already in the gradebook. A
+                # student who was passing and then withdrew failing is scored on the
+                # withdrawal, not on the stale mark: the status outranks the result, which
+                # is the rule the whole precedence chain above is built on.
+                gpa_entries.append(calc.GpaEntry(credits=credits))
         elif result is not None:
             numeric = result.numeric
             letter = result.letter

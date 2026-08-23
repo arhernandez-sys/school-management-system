@@ -13,8 +13,9 @@
 | **Status** | 🟢 **D35 COMPLETE** — 2026-08-23 |
 | **Branch** | `tertiary-refactor` (continues from D34) |
 | **Migration** | **none** — `class_enrollments.enrollment_status` has existed since `005_tertiary.sql` §8 with all four values |
-| **Backend suite** | **1595 green** (1566 + 29 new) |
-| **Frontend** | `tsc -b --force` clean; `eslint` 0 errors / 2 pre-existing warnings; `probe_d33.mjs` **77/77** |
+| **Backend suite** | **1597 green** (1566 + 31 new) |
+| **Frontend** | `tsc -b --force` clean; `eslint` 0 errors / 2 pre-existing warnings; `probe_d33.mjs` **82/82** |
+| **W/F ruling** | **A W/F COUNTS AS A FAIL** — BAJC, 2026-08-23. See §E. |
 
 ### What was asked
 
@@ -63,9 +64,10 @@ still taking. `academic_history` filed it as `in_progress`, which meant:
 * its credits went into the **GPA denominator with zero quality points**.
 
 The effect is a **silently depressed GPA that no screen could explain**, and it would have
-appeared the first time anyone used the feature. The bucket now carries the status, and both
-`audited` and `withdrawn` are excluded from the GPA on *both* sides of the fraction — the
-same argument the pre-existing `transferred` bucket already makes for transfer credit.
+appeared the first time anyone used the feature. The bucket now carries the status, and
+`audit` / `withdraw_passing` leave the GPA on *both* sides of the fraction — the same
+argument the pre-existing `transferred` bucket already makes for transfer credit.
+`withdraw_failing` is the exception BAJC ruled on; see §E.
 
 ### A second hole, found by a test I wrote for the happy path
 
@@ -114,20 +116,23 @@ course**. Deleting it would erase the very thing being recorded.
       word on the same screen is how the wrong one gets clicked
 
 ### Arithmetic
-- [x] `academics.py` — `audited` and `withdrawn` buckets; no credit; out of the GPA on both
-      sides; the precedence above
+- [x] `academics.py` — `audited` and `withdrawn` buckets; no credit for any of them; the
+      precedence above
+- [x] **The GPA split (§E):** `audit` / `withdraw_passing` leave the fraction entirely;
+      `withdraw_failing` keeps its credits and scores zero. One named constant per module —
+      `_GPA_DROPPED` and `GPA_DROPPED` — so the two implementations cannot drift
 - [x] `AcademicHistoryCounts` gained both keys. **Required, not cosmetic**: a key the
       service counts but the schema does not declare is dropped by pydantic on
       serialisation, so the UI would show a total that did not add up
-- [x] `_WITHDRAWN` documents the one judgment call — see §F
 
 ### Transcript
 - [x] `TranscriptSubjectRow.notation` — `AU` / `W/P` / `W/F`
 - [x] `get_transcript` prints the notated row **and skips the graded-only filter for it**.
       Without that the course vanished from the transcript entirely, which is the opposite
       of what recording the status is for
-- [x] Excluded from the term average and from the GPA via the existing
-      `_gpa_entries(exclude_cs_ids=...)` hook
+- [x] All three are out of the TERM AVERAGE. For the GPA they split: `audit` / `W/P` are
+      filtered out of the entry list, `W/F` goes through `exclude_cs_ids` (which scores as
+      ungraded — see §E for why that distinction was a bug the first time round)
 
 ### Frontend
 - [x] `CourseStatusDialog` — spells out the consequence of each option, because "audit" and
@@ -141,19 +146,21 @@ course**. Deleting it would erase the very thing being recorded.
       handler with the same 409, the academic-history precedence, and the transcript notation
 
 ### Tests
-- [x] `tests/test_course_status.py` — **29 passed**, in four groups: it is settable; a
-      withdrawal is not an un-enrolment; it changes the arithmetic; the transcript prints it
+- [x] `tests/test_course_status.py` — **31 passed**, in four groups: it is settable; a
+      withdrawal is not an un-enrolment; it changes the arithmetic (including the W/P vs W/F
+      split and a W/F over a stale passing mark); the transcript prints it
 
 ---
 
 ## §D — Verification
 
-1. **Backend suite — 1595 green** (was 1566).
-2. **`probe_d33.mjs` — 77/77**, driving the real MSW handlers. Section 8 is new: the roster
+1. **Backend suite — 1597 green** (was 1566).
+2. **`probe_d33.mjs` — 82/82**, driving the real MSW handlers. Section 8 is new: the roster
    carries it, every value settable, a Lecturer refused, an unknown value refused, a
    withdrawn student stays on the roster with the row open, the `audited`/`withdrawn`
-   buckets, **credits leaving the GPA denominator (12 → 0)**, and the transcript printing
-   `W/F` with no numeric or letter.
+   buckets, and the transcript printing `W/F` with no numeric or letter. The GPA split is
+   asserted on the denominator, which is where it is unambiguous — **`W/P=0 W/F=12
+   enrolled=12`**, i.e. an audit or W/P shrinks it and a W/F does not.
 3. **`check_msw_routes.mjs`** — it caught the new PATCH as a ghost route until
    `openapi.json` was regenerated. 0 ghosts now.
 4. **Two probe assertions were wrong**, not the code: they counted **enrolments** where the
@@ -162,14 +169,45 @@ course**. Deleting it would erase the very thing being recorded.
 
 ---
 
+## §E — BAJC's W/F ruling, and the bug it exposed
+
+**2026-08-23 — asked and answered.** *"yes w/f is a f because its like a student dropout
+while failing"*. So `withdraw_failing` keeps its credits in the GPA denominator and scores
+zero quality points. `audit` and `withdraw_passing` still leave the fraction entirely —
+scoring either would be inventing a grade (never read for credit; or passing when they
+left).
+
+The split lives in **one named constant per module**, so it cannot drift:
+`students/academics.py::_GPA_DROPPED` and `reports/service.py::GPA_DROPPED`, both
+`{audit, withdraw_passing}`.
+
+**The status outranks the result here too.** A student can be marked and *then* withdraw
+failing — a withdrawal recorded after grades went in is ordinary — so a passing mark left in
+the gradebook must not rescue the GPA. Pinned by
+`test_W_F_scores_ZERO_even_when_a_mark_exists`, which grades a 95 and then asserts a GPA of
+0.00.
+
+### ⚠️ The bug this uncovered in D35's own first cut
+
+Implementing the ruling meant reading `_gpa_entries` closely, and it does **not** do what
+D35 assumed. `exclude_cs_ids` sets `grade_point=None` but **keeps the credits in the
+denominator** — it exists so a withheld `pending` row cannot shrink the denominator and let
+a student solve for the hidden mark. That is "scored as ungraded", not "excluded".
+
+D35 passed all three notated statuses through it, so on the TRANSCRIPT an audited course
+still had its credits in the denominator earning nothing — **depressing the GPA, the exact
+opposite of what §B and §C claimed**. `students/academics.py` was correct all along; only
+the transcript's GPA was wrong.
+
+The two are now separated explicitly: `audit` / `W/P` are **filtered out of the list**, and
+`W/F` is passed as `exclude_cs_ids` — because scored-as-ungraded is precisely what a fail
+is. Worth remembering that `exclude_cs_ids` reads like "drop this" and does not.
+
+---
+
 ## §F — Open for the client
 
-1. **Does a `W/F` count as an F in the GPA?** This system says **no** — a withdrawal is
-   excluded entirely, on the same principle as transfer credit: a number nobody at BAJC
-   awarded should not enter the average. **Some institutions score W/F as 0.00**, which
-   pulls the GPA down, and that is a real policy difference BAJC should confirm. Flipping it
-   is a one-line change at `_WITHDRAWN` in `students/academics.py` plus a `GpaEntry` with
-   `grade_point=0`.
+1. ~~Does a `W/F` count as an F in the GPA?~~ **Answered 2026-08-23 — yes.** See §E.
 2. **A grade already entered is not erased by a withdrawal.** The mark stays in the
    gradebook and stops counting; it does not print on the transcript, where the notation
    replaces it. That is the conservative reading — nothing is destroyed — but if BAJC wants

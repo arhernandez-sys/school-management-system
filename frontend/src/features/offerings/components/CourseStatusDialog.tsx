@@ -26,9 +26,11 @@ const EXPLAINER: Record<EnrollmentStatus, string> = {
   audit:
     'Sitting the course without reading it for credit. Earns no credit and does not affect the GPA.',
   withdraw_passing:
-    'Left the course while passing. No credit, no effect on the GPA, and the transcript prints W/P.',
+    'Left the course while passing. No credit, and no effect on the GPA — the transcript prints W/P.',
+  // BAJC, 2026-08-23: a W/F is a fail. This is the only status that COSTS the student GPA,
+  // so the copy says so plainly rather than leaving it to be discovered.
   withdraw_failing:
-    'Left the course while failing. No credit, no effect on the GPA, and the transcript prints W/F.',
+    'Left the course while failing. No credit, and it COUNTS AS A FAIL in the GPA — the transcript prints W/F.',
 };
 
 /**

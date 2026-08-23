@@ -888,8 +888,17 @@ export const studentsHandlers = [
         // No credit, and deliberately NOT in `gpaEntries` — its credits leave the
         // denominator too, so auditing cannot depress a GPA.
         status = 'audited';
-      } else if (how === 'withdraw_passing' || how === 'withdraw_failing') {
+      } else if (how === 'withdraw_passing') {
+        // Passing when they left. Scoring it anything would be inventing a grade, so it
+        // leaves the fraction entirely — same as an audit.
         status = 'withdrawn';
+      } else if (how === 'withdraw_failing') {
+        // BAJC, 2026-08-23: "w/f is a f because its like a student dropout while failing".
+        // So it KEEPS its credits in the denominator and scores zero quality points, which
+        // `letter: null` produces. Note this ignores any mark already in the gradebook —
+        // the status outranks the result, as the precedence above establishes.
+        status = 'withdrawn';
+        gpaEntries.push({ credits, letter: null });
       } else if (numeric != null) {
         // Judged against the PROGRAMME's pass mark. Where the scale carries no grade
         // points the band's own `is_passing` decides, the same lenient fallback the

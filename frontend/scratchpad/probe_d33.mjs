@@ -495,16 +495,42 @@ console.log('\n=== 8 · D35: coursestatus (audit / withdrew) ===');
   );
 
   mine.forEach((e) => { e.enrollment_status = 'withdraw_passing'; });
-  const asWithdrawn = await history();
+  const asWP = await history();
   ok(
-    asWithdrawn.counts.withdrawn === distinctCourses,
+    asWP.counts.withdrawn === distinctCourses,
     'and a withdrawal lands in the `withdrawn` bucket',
-    `${asWithdrawn.counts.withdrawn} of ${distinctCourses}`,
+    `${asWP.counts.withdrawn} of ${distinctCourses}`,
+  );
+  ok(
+    asWP.gpa_total_credits === asAudited.gpa_total_credits,
+    'W/P leaves the GPA denominator, like an audit',
+    `${asWP.gpa_total_credits}`,
   );
 
-  // 8e — the transcript PRINTS the notation. This is the point of the whole feature: the
-  // graded-only filter would otherwise drop the course entirely.
+  // 8d-bis — BAJC, 2026-08-23: "w/f is a f because its like a student dropout while
+  // failing". So W/F is the ONE status that keeps its credits and scores zero — the
+  // observable difference from W/P is the denominator.
   mine.forEach((e) => { e.enrollment_status = 'withdraw_failing'; });
+  const asWF = await history();
+  ok(
+    asWF.counts.withdrawn === distinctCourses,
+    'W/F is still bucketed as withdrawn',
+    `${asWF.counts.withdrawn} of ${distinctCourses}`,
+  );
+  ok(
+    asWF.gpa_total_credits === asEnrolled.gpa_total_credits,
+    'but its credits STAY in the GPA denominator — it counts as a fail',
+    `W/P=${asWP.gpa_total_credits} W/F=${asWF.gpa_total_credits} enrolled=${asEnrolled.gpa_total_credits}`,
+  );
+  ok(
+    asWF.gpa === 0,
+    'and it scores ZERO quality points',
+    `gpa=${asWF.gpa}`,
+  );
+  ok(asWF.credits_earned === 0, 'and earns no credit');
+
+  // 8e — the transcript PRINTS the notation. This is the point of the whole feature: the
+  // graded-only filter would otherwise drop the course entirely. (Still W/F from above.)
   const transcript = await (
     await fetch(`${API}/reports/transcript?student_id=${studentId}`, AS('secretary'))
   ).json();

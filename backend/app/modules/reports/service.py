@@ -157,6 +157,13 @@ TRANSCRIPT_NOTATION: dict[EnrollmentStatus, str] = {
     EnrollmentStatus.WITHDRAW_FAILING: "W/F",
 }
 
+#: Statuses whose credits leave the term GPA **entirely** — see
+#: `students/academics.py::_GPA_DROPPED`, which this mirrors.
+#:
+#: `withdraw_failing` is absent on purpose: BAJC decided (2026-08-23) that a W/F counts as
+#: a fail, so it keeps its credits in the denominator and scores zero quality points.
+GPA_DROPPED = frozenset({EnrollmentStatus.AUDIT, EnrollmentStatus.WITHDRAW_PASSING})
+
 
 def _enrollment_status_map(
     db: Session, student_id: uuid.UUID, semester_id: uuid.UUID | None
@@ -912,11 +919,28 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
                 # these from `rows` would silently drop the ungraded courses and print
                 # a graded-only mean.
                 #
-                # D35 EXCLUDES audits and withdrawals from that denominator. Their credits
-                # were never being read for credit, so leaving them in would depress the
-                # GPA of a student who did nothing wrong — the same argument the
-                # `transferred` bucket makes in `students/academics.py`.
-                term_gpa_entries = _gpa_entries(results, bands, exclude_cs_ids=notated)
+                # Two DIFFERENT exclusions, and conflating them was a real bug in D35's
+                # first cut. `_gpa_entries(exclude_cs_ids=...)` sets `grade_point=None` but
+                # KEEPS THE CREDITS — it was built so a withheld `pending` row cannot
+                # shrink the denominator and let a student solve for the hidden mark. That
+                # is "scored as ungraded", which is:
+                #
+                #   * exactly right for `withdraw_failing` — a W/F counts as a fail (BAJC,
+                #     2026-08-23), so its credits belong in the denominator at zero;
+                #   * exactly WRONG for `audit` / `withdraw_passing`, whose credits must
+                #     leave the fraction altogether. Those have to be filtered OUT of the
+                #     list, not passed as an exclusion.
+                dropped = {r.cs_id for r in results if how.get(r.cs_id) in GPA_DROPPED}
+                scored_zero = {
+                    r.cs_id
+                    for r in results
+                    if how.get(r.cs_id) is EnrollmentStatus.WITHDRAW_FAILING
+                }
+                term_gpa_entries = _gpa_entries(
+                    [r for r in results if r.cs_id not in dropped],
+                    bands,
+                    exclude_cs_ids=scored_zero,
+                )
                 for r in results:
                     notation = TRANSCRIPT_NOTATION.get(how.get(r.cs_id))
                     if notation is not None:

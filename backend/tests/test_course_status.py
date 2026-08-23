@@ -12,10 +12,16 @@ This suite is what makes it real. Three claims, in order of how badly they would
 wrong:
 
   1. **It is settable**, on enrol and afterwards, and a withdrawal is NOT an un-enrolment.
-  2. **It changes the arithmetic.** An audit or a withdrawal earns no credit and is out of
-     the GPA on BOTH sides of the fraction. Before D35 such a row filed as `in_progress`
-     forever and sat in the GPA denominator with no quality points — a silently depressed
-     GPA that no screen could explain.
+  2. **It changes the arithmetic**, and the three values are NOT scored alike. None earns
+     credit, but:
+       * `audit` and `withdraw_passing` leave the GPA **entirely** — numerator and
+         denominator. Scoring either would be inventing a grade (the student was never
+         reading it for credit, or was passing when they left).
+       * `withdraw_failing` **counts as a fail** — credits in the denominator, zero quality
+         points. BAJC's ruling, 2026-08-23: *"w/f is a f because its like a student dropout
+         while failing"*.
+     Before D35 all three filed as `in_progress` forever and sat in the denominator with no
+     quality points — a silently depressed GPA that no screen could explain.
   3. **The transcript prints the notation** (`AU` / `W/P` / `W/F`). A permanent record that
      omits the course a student withdrew from is not a transcript.
 
@@ -216,20 +222,23 @@ class TestAcademicHistory:
         _set_status(client, graph, graph.shared, "audit")
         assert _history(client, graph)["credits_earned"] == before
 
-    @pytest.mark.parametrize("status", ["audit", "withdraw_passing", "withdraw_failing"])
-    def test_the_credits_leave_the_GPA_DENOMINATOR(self, client, graph, status) -> None:
+    @pytest.mark.parametrize("status", ["audit", "withdraw_passing"])
+    def test_audit_and_W_P_leave_the_GPA_DENOMINATOR(self, client, graph, status) -> None:
         """Out of the GPA on BOTH sides of the fraction — asserted on the denominator,
         which is where it is unambiguous.
 
-        `gpa_total_credits` is what the GPA is divided by. Leaving an audited or withdrawn
-        course in it, with no quality points against it, depresses the GPA of a student who
-        did nothing wrong — the same argument the `transferred` bucket makes. Grading one
-        course and marking the other two isolates it: the denominator must be exactly the
-        graded course's credits.
+        `gpa_total_credits` is what the GPA is divided by. Leaving an audited course in it,
+        with no quality points against it, depresses the GPA of a student who did nothing
+        wrong — the same argument the `transferred` bucket makes. Grading one course and
+        marking the other two isolates it: the denominator must be exactly the graded
+        course's credits.
 
         Asserted this way rather than "the GPA is unchanged", which is FALSE and was the
         first cut of this test: removing dead weight from the denominator legitimately
-        RAISES the GPA. That is the whole benefit, and the next test states it directly.
+        RAISES the GPA. `test_withdrawing_RAISES_a_dragged_down_GPA` states that directly.
+
+        **`withdraw_failing` is deliberately NOT in this list** — it keeps its credits. See
+        the next test.
         """
         graph.grade(graph.shared, "95")
         _set_status(client, graph, graph.only_a, status)
@@ -237,10 +246,67 @@ class TestAcademicHistory:
 
         history = _history(client, graph)
         assert history["gpa_total_credits"] == graph.shared.credits, (
-            "the audited/withdrawn courses are still in the GPA denominator"
+            "the audited / withdrew-passing courses are still in the GPA denominator"
         )
         # And with nothing else diluting it, the one graded course's own grade point stands.
         assert history["gpa"] is not None and history["gpa"] > 0
+
+    def test_W_F_COUNTS_AS_A_FAIL(self, client, graph) -> None:
+        """BAJC, 2026-08-23: *"w/f is a f because its like a student dropout while
+        failing"*.
+
+        So unlike the two above, a W/F KEEPS its credits in the denominator and scores zero
+        quality points — which is precisely what a fail does. The observable difference is
+        the denominator: audit/W-P shrink it, W/F does not.
+        """
+        graph.grade(graph.shared, "95")
+        _set_status(client, graph, graph.only_a, "withdraw_failing")
+        _set_status(client, graph, graph.only_b, "withdraw_failing")
+
+        history = _history(client, graph)
+        expected = graph.shared.credits + graph.only_a.credits + graph.only_b.credits
+        assert history["gpa_total_credits"] == expected, (
+            "a W/F must keep its credits in the GPA denominator — it is a fail"
+        )
+        # It still earns nothing, and it still drags: one A across three courses' worth of
+        # credits cannot come out at the A's own grade point.
+        assert history["credits_earned"] == graph.shared.credits
+        assert history["gpa"] is not None and history["gpa"] < 4.0
+
+    def test_W_F_scores_ZERO_even_when_a_mark_exists(self, client, graph) -> None:
+        """The status outranks the result here too.
+
+        A student can be marked and THEN withdraw failing — a withdrawal recorded after
+        grades went in is ordinary. The withdrawal is what counts, so a passing mark left in
+        the gradebook must not rescue the GPA.
+        """
+        graph.grade(graph.only_a, "95")  # a strong pass, on the course about to be W/F'd
+        _set_status(client, graph, graph.only_a, "withdraw_failing")
+        # Everything else out of the way, so only_a decides the answer.
+        _set_status(client, graph, graph.shared, "audit")
+        _set_status(client, graph, graph.only_b, "audit")
+
+        history = _history(client, graph)
+        assert history["gpa_total_credits"] == graph.only_a.credits
+        assert history["gpa"] == 0.0, "the stale passing mark leaked into the GPA"
+        assert history["credits_earned"] == 0
+
+    def test_W_P_and_W_F_are_scored_DIFFERENTLY(self, client, graph) -> None:
+        """The contrast, in one test, because the two differ by one word in the enum and
+        the whole point of BAJC's ruling is that they are not the same thing."""
+        graph.grade(graph.shared, "95")
+
+        _set_status(client, graph, graph.only_a, "withdraw_passing")
+        passing = _history(client, graph)
+
+        _set_status(client, graph, graph.only_a, "withdraw_failing")
+        failing = _history(client, graph)
+
+        assert failing["gpa_total_credits"] > passing["gpa_total_credits"], (
+            "W/F should keep its credits in the denominator and W/P should not"
+        )
+        assert failing["gpa"] is not None and passing["gpa"] is not None
+        assert failing["gpa"] < passing["gpa"], "a W/F must cost the student GPA"
 
     def test_withdrawing_RAISES_a_dragged_down_GPA(self, client, graph) -> None:
         """The same fact stated the way it will actually be noticed.

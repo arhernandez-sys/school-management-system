@@ -773,13 +773,26 @@ Tables: `assessment_grades`, `term_grade_snapshots`, `grade_revision_requests`. 
 > | | credit | GPA | academic-history bucket | transcript |
 > |---|---|---|---|---|
 > | `enrolled` | on passing | counted | `completed` / `failed` / `in_progress` | grade |
-> | `audit` | none | **excluded both sides** | `audited` | `AU` |
-> | `withdraw_passing` | none | **excluded both sides** | `withdrawn` | `W/P` |
-> | `withdraw_failing` | none | **excluded both sides** | `withdrawn` | `W/F` |
+> | `audit` | none | **out entirely** | `audited` | `AU` |
+> | `withdraw_passing` | none | **out entirely** | `withdrawn` | `W/P` |
+> | `withdraw_failing` | none | **counts as a FAIL** | `withdrawn` | `W/F` |
 >
-> "Excluded both sides" means the credits leave the DENOMINATOR too. Leaving them in with no
+> "Out entirely" means the credits leave the DENOMINATOR too. Leaving them in with no
 > quality points against them would depress the GPA of a student who did nothing wrong —
 > the same argument the `transferred` bucket makes.
+>
+> **`withdraw_failing` is the exception, by BAJC's ruling (2026-08-23):** *"w/f is a f
+> because its like a student dropout while failing"*. Its credits stay in the denominator
+> and it scores zero quality points, which is exactly what a fail does. The split is one
+> named constant per module — `students/academics.py::_GPA_DROPPED` and
+> `reports/service.py::GPA_DROPPED`, both `{audit, withdraw_passing}` — and it applies even
+> when a mark already exists: the status outranks the result, so a passing mark left in the
+> gradebook does not rescue the GPA.
+>
+> ⚠️ `_gpa_entries(exclude_cs_ids=...)` **does not drop a row** — it scores it as UNGRADED,
+> keeping the credits in the denominator (it exists so a withheld `pending` row cannot let a
+> student solve for the hidden mark). That is right for `W/F` and wrong for the other two,
+> which have to be filtered out of the list instead.
 >
 > **The course status OUTRANKS the result** (`transferred > audit/withdrawn > result >
 > enrolled > remaining`). The gradebook does not know about course status, so a lecturer can
