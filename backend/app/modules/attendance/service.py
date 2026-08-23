@@ -413,6 +413,11 @@ def upsert_register(
                 semester_id=enrollment.semester_id,
                 attendance_date=payload.date,
                 status=entry.status,
+                # Only settable HERE — see the same note in grades.upsert_grades. The
+                # tail below sets `updated_by` on insert and update alike, which is why
+                # `get_register`'s `newest.updated_by or newest.created_by` never once
+                # reached its second arm.
+                created_by=actor.id,
             )
             db.add(row)
         row.status = entry.status

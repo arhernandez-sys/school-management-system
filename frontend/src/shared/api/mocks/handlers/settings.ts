@@ -69,6 +69,8 @@ function semesterDetail(s: DemoSemester) {
     start_date: s.start_date,
     end_date: s.end_date,
     grade_submission_deadline: s.grade_submission_deadline,
+    midterm_submission_start: s.midterm_submission_start,
+    midterm_submission_end: s.midterm_submission_end,
     is_active: s.is_active,
   };
 }
@@ -234,7 +236,15 @@ export const settingsHandlers = [
       name: string;
       start_date: string;
       end_date: string;
-      semesters: Omit<DemoSemester, 'id' | 'academic_year_id' | 'grade_submission_deadline' | 'is_active'>[];
+      semesters: Omit<
+        DemoSemester,
+        | 'id'
+        | 'academic_year_id'
+        | 'grade_submission_deadline'
+        | 'midterm_submission_start'
+        | 'midterm_submission_end'
+        | 'is_active'
+      >[];
     };
     if (body.end_date <= body.start_date) {
       return errorResponse(422, 'validation_error', 'Some fields need attention.', {
@@ -290,6 +300,8 @@ export const settingsHandlers = [
           start_date: t.start_date,
           end_date: t.end_date,
           grade_submission_deadline: null,
+          midterm_submission_start: null,
+          midterm_submission_end: null,
           is_active: t.sequence === first,
         });
       });
@@ -325,6 +337,21 @@ export const settingsHandlers = [
         end_date: ['Must be after start_date.'],
       });
     }
+    // D32 - both mid-term dates or neither, end after start (`_assert_midterm_window`).
+    const newMidStart = body.midterm_submission_start ?? null;
+    const newMidEnd = body.midterm_submission_end ?? null;
+    if ((newMidStart === null) !== (newMidEnd === null)) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        [newMidEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
+          'Required when the other mid-term date is set.',
+        ],
+      });
+    }
+    if (newMidStart !== null && newMidEnd !== null && newMidEnd <= newMidStart) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        midterm_submission_end: ['Must be after midterm_submission_start.'],
+      });
+    }
     if (
       D.semesters.some(
         (s) => s.academic_year_id === year.id && s.sequence === body.sequence,
@@ -346,6 +373,9 @@ export const settingsHandlers = [
       end_date: body.end_date,
       // Optional at creation; absent means the term never closes (D30 §D6).
       grade_submission_deadline: body.grade_submission_deadline ?? null,
+      // D32 - both or neither, validated above. Absent means no mid-term period.
+      midterm_submission_start: body.midterm_submission_start ?? null,
+      midterm_submission_end: body.midterm_submission_end ?? null,
       // Created INACTIVE: adding a future block must not move the current term.
       is_active: false,
     };
@@ -392,6 +422,33 @@ export const settingsHandlers = [
     // so renaming a term cannot silently reopen it (D30 §D6).
     if ('grade_submission_deadline' in body) {
       term.grade_submission_deadline = body.grade_submission_deadline ?? null;
+    }
+    // D32 - same presence semantics, validated on the MERGED pair so PATCHing one half
+    // is checked against the other already on the row (`_assert_midterm_window`).
+    if ('midterm_submission_start' in body || 'midterm_submission_end' in body) {
+      const midStart =
+        'midterm_submission_start' in body
+          ? (body.midterm_submission_start ?? null)
+          : term.midterm_submission_start;
+      const midEnd =
+        'midterm_submission_end' in body
+          ? (body.midterm_submission_end ?? null)
+          : term.midterm_submission_end;
+      const halfSet = (midStart === null) !== (midEnd === null);
+      if (halfSet) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          [midEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
+            'Required when the other mid-term date is set.',
+          ],
+        });
+      }
+      if (midStart !== null && midEnd !== null && midEnd <= midStart) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          midterm_submission_end: ['Must be after midterm_submission_start.'],
+        });
+      }
+      term.midterm_submission_start = midStart;
+      term.midterm_submission_end = midEnd;
     }
     term.start_date = start;
     term.end_date = end;
@@ -455,6 +512,10 @@ export const settingsHandlers = [
     if (typeof body.allow_makeup === 'boolean') D.assessment_policy.allow_makeup = body.allow_makeup;
     if (typeof body.drop_lowest_count === 'number')
       D.assessment_policy.drop_lowest_count = body.drop_lowest_count;
+    // D32 - PUT is a full replace on the server, so an omitted field takes the schema
+    // default (false) rather than keeping the stored value. Mirrored, or the demo would
+    // certify a screen that quietly behaves differently against the real API.
+    D.assessment_policy.students_can_view_grades = body.students_can_view_grades ?? false;
     return HttpResponse.json({ ...D.assessment_policy });
   }),
 

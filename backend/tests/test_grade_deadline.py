@@ -258,15 +258,28 @@ class TestGradebookReportsTheWindow:
         assert book["can_edit"] is True
         assert book["grade_window_closed"] is True
 
-    def test_the_registrar_sees_the_same_closed_window(
+    def test_the_dean_sees_the_same_closed_window(
         self, client, graph, db_session
     ) -> None:
-        """A Registrar asked 'why can't the lecturer enter these?' must be able to see
-        the answer, so the flag is reported for every viewer rather than only writers."""
+        """Someone asked "why can't the lecturer enter these?" must be able to see the
+        answer, so the flag is reported for every viewer rather than only writers.
+
+        **This used to assert it for the REGISTRAR.** D32 (brief §4) removed the Registrar
+        from every grade route outright, so the Dean is now the non-writing viewer who
+        still needs the explanation. The behaviour under test is unchanged — reported for
+        readers as well as writers — only who can be a reader is."""
         _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
-        book = self._book(client, graph, headers=graph.S)
+        book = self._book(client, graph, headers=graph.P)
         assert book["can_edit"] is False
         assert book["grade_window_closed"] is True
+
+    def test_the_registrar_cannot_read_the_gradebook_at_all(
+        self, client, graph, db_session
+    ) -> None:
+        """D32, brief §4 — unconditional, no toggle. See `grades/router.py`."""
+        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
+        resp = client.get(f"{G}/offering/{graph.cs.id}", headers=graph.S)
+        assert resp.status_code == 403, resp.text
 
 
 # ════════════════════════════════════════════════════════════════════════════

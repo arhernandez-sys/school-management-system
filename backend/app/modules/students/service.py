@@ -35,13 +35,14 @@ from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.rbac import _teacher_profile_id
+from app.core.timeutil import school_today
 from app.modules.assessments import release_nudge
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.queries import year_of_offering
 from app.modules.offerings.models import ClassEnrollment, Course, CourseOffering
 from app.modules.grades import service as grades_service
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
-from app.modules.students.models import StudentProfile
+from app.modules.students.models import StudentProfile, StudentProgramHistory
 from app.modules.students.numbering import allocate_student_number
 from app.modules.programs.models import Program
 from app.modules.students.schemas import (
@@ -51,6 +52,7 @@ from app.modules.students.schemas import (
     StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
+    StudentFilterOptions,
     StudentListItem,
     StudentStatusRequest,
     StudentTermGrade,
@@ -79,26 +81,38 @@ _STUDENT_SORT_FIELDS: dict[str, tuple] = {
     "created_at": (StudentProfile.created_at,),
 }
 
-# Lifecycle transitions (FR-STU-04). A terminal state (graduated/withdrawn/
-# transferred) may be reactivated to `active` (re-admission / correction), but
-# terminal→terminal jumps are disallowed as ambiguous — go via `active` first.
-# `inactive` is a soft pause reachable from/to any non-terminal state.
+# Lifecycle transitions (FR-STU-04). A terminal state (graduated / withdrawn /
+# transferred / DropOut) may be reactivated to `Registered` (re-admission or a
+# correction), but terminal→terminal jumps are disallowed as ambiguous — go via
+# `Registered` first. `Unregistered` is the soft pause, reachable from and to any
+# non-terminal state.
+#
+# **D34 renamed the vocabulary and added one state.** `active`→`Registered` and
+# `inactive`→`Unregistered` are pure renames and the shape of the graph is unchanged for
+# them. `DROPOUT` is genuinely new and is a TERMINAL state: a student who left
+# mid-programme has stopped, which is what distinguishes it from `Unregistered` — the
+# client's own comment defines that one as "completed the last semester but is not
+# continuing", i.e. not a failure. So DropOut sits beside `withdrawn`, reachable from
+# either live state and reversible only back to them.
 _ALLOWED_STATUS_TRANSITIONS: dict[StudentStatus, set[StudentStatus]] = {
-    StudentStatus.ACTIVE: {
-        StudentStatus.INACTIVE,
+    StudentStatus.REGISTERED: {
+        StudentStatus.UNREGISTERED,
         StudentStatus.TRANSFERRED,
         StudentStatus.GRADUATED,
         StudentStatus.WITHDRAWN,
+        StudentStatus.DROPOUT,
     },
-    StudentStatus.INACTIVE: {
-        StudentStatus.ACTIVE,
+    StudentStatus.UNREGISTERED: {
+        StudentStatus.REGISTERED,
         StudentStatus.TRANSFERRED,
         StudentStatus.GRADUATED,
         StudentStatus.WITHDRAWN,
+        StudentStatus.DROPOUT,
     },
-    StudentStatus.TRANSFERRED: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
-    StudentStatus.GRADUATED: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
-    StudentStatus.WITHDRAWN: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
+    StudentStatus.TRANSFERRED: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
+    StudentStatus.GRADUATED: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
+    StudentStatus.WITHDRAWN: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
+    StudentStatus.DROPOUT: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
 }
 
 
@@ -339,6 +353,14 @@ def _detail(
             detail.program = ProgramRef(
                 id=program.id, code=program.code, name=program.name
             )
+    # D33/D34 — the LOGIN address, so the profile can show it. Distinct from
+    # `student_profiles.email`, which D34 added as the student's own contact address: a
+    # student registered on paper has a contact email and no login at all, and the two
+    # must never be conflated (`StudentDetail.login_email` says why).
+    if student.user_id is not None:
+        account = db.get(User, student.user_id)
+        if account is not None:
+            detail.login_email = account.email
     detail.audit = _audit_stamp(db, student)
     return detail
 
@@ -372,6 +394,9 @@ def list_students(
     offering_id: uuid.UUID | None,
     year_of_study: str | None,
     academic_year_id: uuid.UUID | None = None,
+    religion: str | None = None,
+    gender: str | None = None,
+    program_id: uuid.UUID | None = None,
 ):
     """GET /students (P/S/Teacher). Page[StudentListItem]; default sort by surname.
 
@@ -422,6 +447,30 @@ def list_students(
 
     if year_of_study is not None:
         stmt = stmt.where(StudentProfile.year_of_study == year_of_study)
+
+    # D32 (brief §3) — three more attribute filters. Plain WHERE clauses on
+    # `student_profiles`, so they compose with each other AND with everything above
+    # without any structural change; "all Female students in Programme X" is just two of
+    # them ANDed, which is what the brief's worked examples ask for.
+    #
+    # They deliberately do NOT touch the enrolment scope below. These are facts about the
+    # PERSON, so a graduated or withdrawn student still matches — filtering them through
+    # enrolment would quietly empty a `status=graduated` view, the same trap the
+    # `academic_year_id` note above records.
+    if gender is not None:
+        stmt = stmt.where(StudentProfile.gender == gender)
+
+    if religion is not None:
+        # Exact match, not a LIKE. The values come from `/students/filter-options`, which
+        # returns the DISTINCT strings actually stored, so a substring match would only
+        # ever conflate two real values ("Catholic" swallowing "Roman Catholic").
+        stmt = stmt.where(StudentProfile.religion == religion)
+
+    if program_id is not None:
+        # `student_profiles.program_id` — the CURRENT programme. Not
+        # `student_program_history`, which would also match a programme the student has
+        # since left, and "print all students in Programme X" means the ones in it now.
+        stmt = stmt.where(StudentProfile.program_id == program_id)
 
     # Offering filter and teacher scope constrain via class_enrollments → offerings.
     # We
@@ -487,7 +536,70 @@ def list_students(
     offerings_map = _current_offerings_map(db, ids, semester_id=semester_id)
     for item in page.items:
         item.offering_count = len(offerings_map.get(item.id, []))
+
+    # D32 — programme CODE for the printed list. One query for the whole page, not one
+    # per row: the print view raises `page_size` to cover the entire filtered result, so
+    # a per-row lookup here would be an N+1 over the full directory rather than over 25.
+    _attach_program_codes(db, page.items)
     return page
+
+
+def _attach_program_codes(db: Session, items: list[StudentListItem]) -> None:
+    """Resolve `program_code` for a page of rows in one query (D32, brief §3)."""
+    if not items:
+        return
+    program_ids = {
+        pid
+        for pid in db.scalars(
+            select(StudentProfile.program_id).where(
+                StudentProfile.id.in_([i.id for i in items]),
+                StudentProfile.program_id.is_not(None),
+            )
+        ).all()
+        if pid is not None
+    }
+    if not program_ids:
+        return
+    codes = dict(
+        db.execute(
+            select(Program.id, Program.code).where(Program.id.in_(program_ids))
+        ).all()
+    )
+    by_student = dict(
+        db.execute(
+            select(StudentProfile.id, StudentProfile.program_id).where(
+                StudentProfile.id.in_([i.id for i in items])
+            )
+        ).all()
+    )
+    for item in items:
+        pid = by_student.get(item.id)
+        item.program_code = codes.get(pid) if pid is not None else None
+
+
+def filter_options(db: Session) -> StudentFilterOptions:
+    """GET /students/filter-options — DISTINCT religions present in the directory (D32).
+
+    Derived rather than hardcoded because `religion` is free text from the admissions
+    form; see `StudentFilterOptions` for why that matters. Soft-deleted students are
+    excluded, so a value that only ever belonged to a removed record does not linger as a
+    filter option that matches nothing.
+    """
+    religions = [
+        r
+        for r in db.scalars(
+            select(StudentProfile.religion)
+            .where(
+                StudentProfile.deleted_at.is_(None),
+                StudentProfile.religion.is_not(None),
+                StudentProfile.religion != "",
+            )
+            .distinct()
+            .order_by(StudentProfile.religion.asc())
+        ).all()
+        if r
+    ]
+    return StudentFilterOptions(religions=religions)
 
 
 def _apply_teacher_ownership(enr_stmt, teacher_id: uuid.UUID):
@@ -610,6 +722,49 @@ def get_my_student(
 # ──────────────────────────────────────────────────────────────────────────────
 # POST /students — create (+ optional enroll into subject classes, one txn)
 # ──────────────────────────────────────────────────────────────────────────────
+#: The admission-form columns a student record carries (D30 §D11, D33) — the fields
+#: `_AdmissionProfileFields` declares, in the order the paper form prints them.
+#:
+#: Iterated rather than assigned one line at a time because create, update and the
+#: acceptance path in `admissions/service.py` all copy the same set, and three
+#: hand-written lists of nineteen names is three chances to forget one. Everything here
+#: is a plain scalar with no cross-field rule, which is what makes a loop safe; anything
+#: that needs validation or a side effect (`program_id`, `status`, the two dates) is
+#: handled explicitly and is deliberately NOT in this list.
+ADMISSION_PROFILE_FIELDS: tuple[str, ...] = (
+    "ssno",
+    "civil_status",
+    "religion",
+    "street",
+    "city_town_village",
+    "district",
+    "mother_name",
+    "father_name",
+    "nok_name",
+    "nok_relationship",
+    "nok_phone",
+    "has_health_condition",
+    "health_condition_note",
+    "atlib_exam",
+    "num_csec",
+    "finance_name",
+    "finance_phone",
+    "finance_email",
+    "enrollment_load",
+    # ── D34 · reconciled from the client's own schema (`011`) ─────────────────
+    # `educationbg_id` and `doc_id` are deliberately ABSENT: they are mapped for the
+    # client's tooling and are read-only on the wire, so nothing here should write them.
+    "student_id_original",
+    "email",
+    "transferred_from",
+    "graduation_date",
+    "dropout_date",
+    "dropout_reason",
+    "comments",
+    "origin",
+)
+
+
 def create_student(
     db: Session, *, actor: User, payload: StudentCreateRequest
 ) -> StudentDetail:
@@ -634,6 +789,20 @@ def create_student(
             fields={"date_of_birth": ["Cannot be in the future."]},
         )
 
+    # D33 — resolved BEFORE the insert, not after it. `program_id` is a real FK, so an
+    # unknown id reaches the database as an `IntegrityError` on flush (a 500) rather than
+    # the clean 404 below. Validating first is what makes the error legible, and it also
+    # means a bad programme aborts the create without burning a student number.
+    program: Program | None = None
+    if payload.program_id is not None:
+        program = db.scalar(
+            select(Program).where(
+                Program.id == payload.program_id, Program.deleted_at.is_(None)
+            )
+        )
+        if program is None:
+            raise NotFound("Programme not found.", code="program_not_found")
+
     if payload.student_number is None:
         # Allocated inside THIS transaction, before the insert below, so a failed
         # registration rolls the sequence back with it and no number is burnt.
@@ -657,11 +826,32 @@ def create_student(
         guardian_email=payload.guardian_email,
         address=payload.address,
         phone=payload.phone,
+        # D33 — the registration form IS the application form (ask 3), so create writes
+        # the same Sections A–E the acceptance path does.
+        **{f: getattr(payload, f) for f in ADMISSION_PROFILE_FIELDS},
+        program_id=payload.program_id,
         created_by=actor.id,
         updated_by=actor.id,
     )
     db.add(student)
     db.flush()  # assign student.id
+
+    # D33 — a programme assigned at registration opens its history row on day one, the
+    # same way acceptance does (`admissions/service.py` step 4). Without this the column
+    # would be set while `student_program_history` stayed empty, and the Academic-history
+    # panel — which reads the history, not the column — would show a student on no
+    # programme at all. CHANGING it later is still Dean-only (`PUT /students/{id}/program`).
+    if program is not None:
+        db.add(
+            StudentProgramHistory(
+                student_id=student.id,
+                program_id=program.id,
+                started_at=payload.enrollment_date,
+                reason="Registered",
+                created_by=actor.id,
+                updated_by=actor.id,
+            )
+        )
 
     semester_id: uuid.UUID | None = None
     if payload.offering_ids:
@@ -792,6 +982,21 @@ def update_student(
     if payload.phone is not None:
         student.phone = payload.phone
 
+    # D33 — the rest of the application form. PRESENCE, not truthiness: `None` on a
+    # PATCH means "not supplied", and for the two booleans that distinction is the whole
+    # game. `has_health_condition=False` has to be writable — a condition entered by
+    # mistake must be removable — and `if payload.x is not None` cannot express that for
+    # a bool, which is why this arm reads `model_fields_set` instead.
+    supplied = payload.model_fields_set
+    for field in ADMISSION_PROFILE_FIELDS:
+        if field not in supplied:
+            continue
+        value = getattr(payload, field)
+        if field in ("has_health_condition", "atlib_exam") and value is None:
+            # Explicitly sent as null. The column is NOT NULL, so read it as "no".
+            value = False
+        setattr(student, field, value)
+
     student.updated_by = actor.id
     _audit(db, actor=actor, action="student.update", entity_id=student.id)
     db.commit()
@@ -824,6 +1029,24 @@ def change_student_status(
                 fields={"status": [f"Invalid transition from {before.value}."]},
             )
         student.status = after
+
+        # D34 — stamp the date the new state is ABOUT. `011` added both columns from the
+        # client's schema, and a column nothing ever writes is a column that is always
+        # NULL (which is what happened to `report_card_snapshots.storage_key` until D32
+        # gave it a reader). Only filled when EMPTY, so a Registrar who corrected the date
+        # by hand does not have it overwritten by a later status shuffle; and only on the
+        # transition INTO the state, so re-registering a graduate keeps the graduation on
+        # file rather than erasing it.
+        if after == StudentStatus.GRADUATED and student.graduation_date is None:
+            student.graduation_date = school_today()
+        if after == StudentStatus.DROPOUT and student.dropout_date is None:
+            student.dropout_date = _now()
+        # The reason travels with the state it explains. `reason` is already recorded on
+        # the audit row for every transition; this copies it onto the record only for the
+        # one state that has a column for it, so "why did they leave" is answerable from
+        # the student rather than by reading the audit log.
+        if after == StudentStatus.DROPOUT and payload.reason and not student.dropout_reason:
+            student.dropout_reason = payload.reason[:250]
 
     student.updated_by = actor.id
     _audit(

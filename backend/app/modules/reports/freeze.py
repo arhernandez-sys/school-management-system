@@ -29,7 +29,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.timeutil import utcnow
+from app.common.enums import ReportCardKind
+from app.core.errors import Conflict, ValidationError
+from app.core.timeutil import ensure_aware, utcnow
 from app.modules.offerings.queries import offerings_in_year
 from app.modules.offerings.models import CourseOffering, ClassEnrollment, CourseOffering
 from app.modules.grades.models import TermGradeSnapshot
@@ -88,11 +90,15 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
             )
         ).all()
     }
+    # D32: scoped to `endterm`. Without the filter this pre-load would pick up a term's
+    # MID-TERM snapshot and the upsert below would overwrite it with end-term figures —
+    # the exact collision the widened unique key exists to prevent.
     existing_cards = {
         (c.student_id, c.semester_id): c
         for c in db.scalars(
             select(ReportCardSnapshot).where(
-                ReportCardSnapshot.semester_id.in_([sem.id for sem in semesters])
+                ReportCardSnapshot.semester_id.in_([sem.id for sem in semesters]),
+                ReportCardSnapshot.kind == ReportCardKind.ENDTERM,
             )
         ).all()
     }
@@ -195,6 +201,7 @@ def freeze_academic_year(db: Session, *, actor: User, year: AcademicYear) -> int
                     card_row = ReportCardSnapshot(
                         student_id=student.id,
                         semester_id=semester.id,
+                        kind=ReportCardKind.ENDTERM,
                         payload=payload,
                         frozen_at=frozen_at,
                     )
@@ -228,3 +235,154 @@ def _policy_snapshot(db: Session, cs_id: uuid.UUID, year: AcademicYear) -> dict:
         .limit(1)
     )
     return calc.resolve_policy(None, category, year, school).as_dict()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Mid-term freeze (D32, brief §5/§6)
+# ══════════════════════════════════════════════════════════════════════════════
+def freeze_midterm(db: Session, *, actor: User, semester: Semester) -> int:
+    """Capture every enrolled student's report card for `semester` as a MID-TERM snapshot.
+
+    Returns the number of `report_card_snapshots` rows written or refreshed.
+
+    **Why this exists.** The client's requirement is that a mid-term report show what the
+    student had at mid-term — not what they have now. Everything else in this system
+    computes grades on read (§10.5), which is right for a live term and wrong for a
+    document that has already been handed out. Recomputing a mid-term card in November
+    would fold in October's post-midterm work and quietly change a mark a parent has
+    already seen.
+
+    So the figures are captured ONCE, when the mid-term window closes, and every later
+    read returns the stored payload verbatim (`reports/service.get_report_card`).
+
+    **The window must have CLOSED.** Freezing while lecturers can still submit would
+    capture a half-entered gradebook and call it final. `409 midterm_window_open` before
+    the end date; `422` if the term has no mid-term period configured at all — there is
+    nothing to freeze against, and guessing a date would be worse than refusing.
+
+    **Idempotent**, on `uq_report_card_snapshot (student_id, semester_id, kind)`. Re-running
+    it refreshes in place, which is what makes the lazy fallback in `get_report_card` safe
+    against two concurrent first-reads and lets the Dean re-freeze after fixing a mark.
+
+    **Does NOT commit** — the caller owns the transaction, matching `freeze_academic_year`.
+
+    **Writes only `report_card_snapshots`.** `term_grade_snapshots` is the transcript's
+    source and describes a FINISHED term; a mid-term figure written there would surface on
+    a transcript as though the term had ended.
+
+    `release_filter=False` for the same reason the archive freeze uses it: this is the
+    staff/canonical document, and release state is a live-term display concern.
+    """
+    start = ensure_aware(semester.midterm_submission_start)
+    end = ensure_aware(semester.midterm_submission_end)
+    if start is None or end is None:
+        raise ValidationError(
+            "This term has no mid-term grading period configured, so there are no "
+            "mid-term grades to freeze. Set the window in Academic structure first.",
+            code="no_midterm_window",
+            fields={"midterm_submission_end": ["Not configured for this term."]},
+        )
+    if utcnow() <= end:
+        raise Conflict(
+            # D33 — "still open" read as "entry is still allowed", which the freeze
+            # reversed. The BEHAVIOUR here is unchanged (D32-3: the snapshot is taken at
+            # the close, not during), only the wording.
+            "The mid-term grading period is still running. Mid-term grades can be frozen "
+            "once it closes.",
+            code="midterm_window_open",
+            extra={"midterm_submission_end": end.isoformat()},
+        )
+
+    # Imported here rather than at module scope, for the circular-import reason the
+    # module docstring gives.
+    from app.modules.reports.service import _build_report_card
+
+    frozen_at = utcnow()
+    year = db.get(AcademicYear, semester.academic_year_id)
+
+    # Every student with a live enrolment in ANY offering of this term. Collected as a
+    # set first because a student sits several offerings and their card spans all of
+    # them — building it once per offering would freeze the same card N times.
+    students = list(
+        db.scalars(
+            select(StudentProfile)
+            .join(ClassEnrollment, ClassEnrollment.student_id == StudentProfile.id)
+            .join(CourseOffering, CourseOffering.id == ClassEnrollment.offering_id)
+            .where(
+                ClassEnrollment.semester_id == semester.id,
+                ClassEnrollment.unenrolled_at.is_(None),
+                CourseOffering.deleted_at.is_(None),
+                StudentProfile.deleted_at.is_(None),
+            )
+            .distinct()
+        ).all()
+    )
+    if not students:
+        return 0
+
+    existing = {
+        c.student_id: c
+        for c in db.scalars(
+            select(ReportCardSnapshot).where(
+                ReportCardSnapshot.semester_id == semester.id,
+                ReportCardSnapshot.kind == ReportCardKind.MIDTERM,
+            )
+        ).all()
+    }
+
+    written = 0
+    for student in students:
+        card = _build_report_card(
+            db, student=student, semester=semester, release_filter=False
+        )
+        payload = card.model_dump(mode="json")
+        # A stored payload is frozen by definition, whatever the year's archive state was
+        # when it was built.
+        payload["is_frozen"] = True
+        payload["report_kind"] = ReportCardKind.MIDTERM.value
+
+        row = existing.get(student.id)
+        if row is None:
+            row = ReportCardSnapshot(
+                student_id=student.id,
+                semester_id=semester.id,
+                kind=ReportCardKind.MIDTERM,
+                payload=payload,
+                frozen_at=frozen_at,
+            )
+            db.add(row)
+            existing[student.id] = row
+        else:
+            row.payload = payload
+            row.frozen_at = frozen_at
+        written += 1
+
+    _audit_midterm(db, actor=actor, semester=semester, count=written, year=year)
+    db.flush()
+    return written
+
+
+def _audit_midterm(
+    db: Session, *, actor: User, semester: Semester, count: int, year: AcademicYear | None
+) -> None:
+    """One audit row per freeze.
+
+    Recorded because a freeze is the moment a set of marks stops being editable in the
+    document sense — "when was the mid-term card captured, by whom, and how many
+    students did it cover" is the question asked when a figure is disputed months later.
+    """
+    from app.modules.settings.models import AuditLog
+
+    db.add(
+        AuditLog(
+            actor_user_id=actor.id,
+            action="report_card.freeze_midterm",
+            entity_type="semester",
+            entity_id=semester.id,
+            summary={
+                "semester_name": semester.name,
+                "academic_year": year.name if year else None,
+                "students": count,
+            },
+        )
+    )

@@ -28,6 +28,82 @@ from app.common.schemas import AuditStamp, OfferingRef, CourseRef
 # ──────────────────────────────────────────────────────────────────────────────
 # Read models (api-spec §5.3)
 # ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# The admission-form fields carried on the student record (D30 §D11, D33)
+# ──────────────────────────────────────────────────────────────────────────────
+class _AdmissionProfileFields(BaseModel):
+    """Sections A–E of the BAJC application, as they live on `student_profiles`.
+
+    **These columns have existed since `005_tertiary.sql`** — acceptance
+    (`admissions/service.py`) has been copying them onto the student all along. What was
+    missing was any way to READ or WRITE them outside admissions: `StudentDetail` exposed
+    only `district`, and `POST`/`PATCH /students` exposed none of them. So a student
+    admitted on paper, or admitted before the admissions module existed, had a permanently
+    blank next-of-kin and no way to fill it in; and the Religion filter (D32) selected on a
+    column the Registrar could not see, let alone correct.
+
+    D33 (client asks 3 + 4) closes that: the student form is the application form, and the
+    profile shows everything. Declared ONCE here and mixed into the read model and both
+    write models, so the three cannot drift — the bug this file is most prone to.
+
+    Field constraints mirror `admissions/schemas.py` exactly. Where they differ, the
+    admissions form is the authority: it is the document these values are transcribed from.
+
+    Deliberately NOT here:
+
+    * **`program_id`** — writable on create only. Changing it has to move
+      `student_program_history` in the same transaction, which is what
+      `POST /students/{id}/program` exists for (§D12). See `StudentCreateRequest`.
+    * **documents** — no file bytes anywhere (OQ-DB5), and the client excluded them.
+    * **prior education / credit transfers** — anchored on the APPLICATION by policy
+      (§D4, brief §13), not on the student.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    #: Social Security number. 9 chars in the column; not validated further because the
+    #: Registrar transcribes whatever the card says.
+    ssno: str | None = Field(default=None, max_length=9)
+    civil_status: str | None = Field(default=None, max_length=50)
+    #: Free text, which is why the directory DISCOVERS its filter options rather than
+    #: offering a fixed list (D32, `GET /students/filter-options`).
+    religion: str | None = Field(default=None, max_length=100)
+    # ── Section A · address ────────────────────────────────────────────────────
+    street: str | None = Field(default=None, max_length=200)
+    city_town_village: str | None = Field(default=None, max_length=200)
+    district: District | None = None
+    # ── Section C · family + next of kin ──────────────────────────────────────
+    mother_name: str | None = Field(default=None, max_length=200)
+    father_name: str | None = Field(default=None, max_length=200)
+    nok_name: str | None = Field(default=None, max_length=200)
+    nok_relationship: str | None = Field(default=None, max_length=100)
+    nok_phone: str | None = Field(default=None, max_length=50)
+    # ── Section D · health ────────────────────────────────────────────────────
+    health_condition_note: str | None = None
+    # ── Section E · prior examinations ────────────────────────────────────────
+    num_csec: int | None = Field(default=None, ge=0, le=20)
+    # ── Section G · who pays ──────────────────────────────────────────────────
+    finance_name: str | None = Field(default=None, max_length=200)
+    finance_phone: str | None = Field(default=None, max_length=50)
+    finance_email: str | None = Field(default=None, max_length=254)
+    # ── D34 · reconciled from the CLIENT'S own schema (`011`) ─────────────────
+    #: The ID this record carried in the system it was imported from.
+    student_id_original: int | None = Field(default=None, ge=0)
+    #: The student's OWN email, independent of any login. **Distinct from the login**,
+    #: which is `users.email` and is still read-only on `StudentDetail.login_email`.
+    email: str | None = Field(default=None, max_length=254)
+    transferred_from: str | None = Field(default=None, max_length=250)
+    #: Auto-stamped by `change_student_status` on the move to `graduated`, and editable
+    #: here afterwards — a Registrar correcting a date must not have to change the status
+    #: twice to do it.
+    graduation_date: date | None = None
+    dropout_date: datetime | None = None
+    dropout_reason: str | None = Field(default=None, max_length=250)
+    #: The Registrar's own notes. Never surfaced on a student-facing payload.
+    comments: str | None = None
+    origin: str | None = Field(default=None, max_length=50)
+
+
 class StudentListItem(BaseModel):
     """GET /students item (api-spec §5.3).
 
@@ -53,9 +129,36 @@ class StudentListItem(BaseModel):
     #: Active subject classes for the resolved semester.
     offering_count: int = 0
     guardian_name: str | None = None
+    #: D32 (brief §3) — the three filterable attributes, returned on the row as well as
+    #: accepted as query params. The PRINTED list has to show what it was filtered by:
+    #: a sheet headed "Female students in Business Management" that does not print the
+    #: programme is unverifiable by the person holding it.
+    gender: str | None = None
+    religion: str | None = None
+    #: Resolved from `program_id` — the CODE, e.g. "BMAD", which is what the register
+    #: and the report card both print. `None` until a student is assigned a programme.
+    program_code: str | None = None
 
 
-class StudentDetail(BaseModel):
+class StudentFilterOptions(BaseModel):
+    """GET /students/filter-options — the values the directory filters can actually take.
+
+    **Only `religion` is derived**, and it has to be: it is free text collected on the
+    admissions form (`applications.religion`, copied across on acceptance), so there is no
+    enum to render a dropdown from. A hardcoded list would go stale the first time
+    somebody typed a denomination nobody had anticipated, and would show options that
+    match nothing.
+
+    `gender` is a fixed pair and `program_id` comes from `/programs`, so neither needs to
+    be discovered — they are not returned here.
+    """
+
+    #: DISTINCT non-null religions present on non-deleted students, sorted. Empty until
+    #: the admissions flow has run: as of D32 every one of the 45 live students has NULL.
+    religions: list[str] = Field(default_factory=list)
+
+
+class StudentDetail(_AdmissionProfileFields):
     """GET /students/{id}, /students/me + POST/PATCH/status responses.
 
     Mirrors `student_profiles` (schema §3.B) plus the derived `current_offerings` (every
@@ -91,7 +194,29 @@ class StudentDetail(BaseModel):
     #: predate the admissions module — or who were created directly through
     #: `POST /students` — have none, and that stays supported.
     application_id: UUID | None = None
-    district: District | None = None
+    #: D33 — `district` and the rest of Sections A–E come from
+    #: `_AdmissionProfileFields`. These two are booleans that are NOT NULL in the column,
+    #: so they read as plain `bool` here and are only optional on PATCH.
+    has_health_condition: bool = False
+    atlib_exam: bool = False
+    #: The student's LOGIN address, read from the linked `users` row. READ ONLY and not on
+    #: either write model: changing a login is a Users-module action with its own
+    #: uniqueness rules. `None` for a student with no account yet — a paper registration
+    #: that has not been given a login.
+    #:
+    #: **D34 renamed this from `email`**, because `student_profiles` gained a real `email`
+    #: column of its own (`011` §1) and the two are different facts: one is how the office
+    #: writes to them, the other is what they sign in with. Conflating them under one name
+    #: is how an address change would silently move a login.
+    login_email: str | None = None
+    # ── D34 · mapped for the client's tooling, unused by the API ──────────────
+    #: ⚠️ No FK and no consumer. Prior education is APPLICATION-scoped
+    #: (`application_education.application_id`); there is no student-level education table
+    #: to point at. Exposed read-only so the client can see what their column holds.
+    educationbg_id: UUID | None = None
+    #: ⚠️ Same. Cannot be a FK — `student_documents.id` is a uuid, not an int — and a
+    #: student's documents are 1:N, so one scalar cannot name them.
+    doc_id: int | None = None
     #: Every subject class the student is actively enrolled in, name-ordered.
     current_offerings: list[OfferingRef] = Field(default_factory=list)
     audit: AuditStamp | None = None
@@ -182,7 +307,7 @@ class StudentYearsResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 # Write models (api-spec §5.3)
 # ──────────────────────────────────────────────────────────────────────────────
-class StudentCreateRequest(BaseModel):
+class StudentCreateRequest(_AdmissionProfileFields):
     """POST /students (api-spec §5.3, FR-STU-01/02/05).
 
     `status` is accepted here (defaults active). Lifecycle CHANGES after creation
@@ -194,6 +319,9 @@ class StudentCreateRequest(BaseModel):
     whole course load in one action.
     """
 
+    # `from_attributes` is inherited from the mixin and harmless on a write model; the
+    # `extra="forbid"` that matters is re-stated here because a subclass's config
+    # REPLACES rather than merges (api-spec §1.4 — a typo'd field must 422, not vanish).
     model_config = ConfigDict(extra="forbid")
     #: OPTIONAL since D30 (§D9, brief §10). Omit it and the server issues the next
     #: `YYYYMM###` for the current month. Supplying one is still accepted so an
@@ -208,16 +336,28 @@ class StudentCreateRequest(BaseModel):
     gender: str | None = Field(default=None, max_length=40)
     year_of_study: str | None = Field(default=None, max_length=50)
     enrollment_date: date
-    status: StudentStatus = StudentStatus.ACTIVE
+    status: StudentStatus = StudentStatus.REGISTERED
     guardian_name: str | None = Field(default=None, max_length=160)
     guardian_phone: str | None = Field(default=None, max_length=40)
     guardian_email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=500)
     phone: str | None = Field(default=None, max_length=40)
     offering_ids: list[UUID] = Field(default_factory=list)
+    # ── D33: the rest of the application form ─────────────────────────────────
+    #: NOT NULL in the column, so a plain bool with a default rather than optional.
+    has_health_condition: bool = False
+    atlib_exam: bool = False
+    enrollment_load: EnrollmentLoad | None = None
+    #: **Create only.** Set here so a student registered directly — the paper-form path,
+    #: or a college that predates this system — lands on a programme in one action, the
+    #: same as acceptance does. It is absent from `StudentUpdateRequest` on purpose:
+    #: CHANGING a programme has to close the open `student_program_history` row and open a
+    #: new one in the same transaction, which is `POST /students/{id}/program` (§D12). A
+    #: PATCH field here would write the column and silently leave the history behind.
+    program_id: UUID | None = None
 
 
-class StudentUpdateRequest(BaseModel):
+class StudentUpdateRequest(_AdmissionProfileFields):
     """PATCH /students/{id} (api-spec §5.3, FR-STU-03).
 
     All fields optional (partial update). `status` is intentionally ABSENT — it is
@@ -243,6 +383,13 @@ class StudentUpdateRequest(BaseModel):
     guardian_email: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=500)
     phone: str | None = Field(default=None, max_length=40)
+    # ── D33: the rest of the application form, all partial ────────────────────
+    #: `None` means "not supplied" here, not "set it false" — see
+    #: `update_student`, which uses `model_fields_set` for exactly this reason.
+    has_health_condition: bool | None = None
+    atlib_exam: bool | None = None
+    enrollment_load: EnrollmentLoad | None = None
+    #: `program_id` is ABSENT by design — see `StudentCreateRequest.program_id`.
 
 
 class StudentStatusRequest(BaseModel):
@@ -325,6 +472,12 @@ class AcademicHistoryCourse(BaseModel):
       * `failed`       — a result below it. Counted in the GPA; still owed.
       * `in_progress`  — enrolled, nothing marked yet.
       * `remaining`    — in the programme curriculum, never taken.
+      * `audited`      — D35, the client's `coursestatus`: sitting it without reading it
+                         for credit. No credit, and out of the GPA on BOTH sides of the
+                         fraction — its credits are not in the denominator either.
+      * `withdrawn`    — D35: sat it and left (`withdraw_passing` / `withdraw_failing`).
+                         No credit, out of the GPA; the transcript still prints the
+                         notation, which is the point of recording it at all.
     """
 
     course_id: UUID
@@ -355,6 +508,12 @@ class AcademicHistoryCounts(BaseModel):
     in_progress: int = 0
     transferred: int = 0
     remaining: int = 0
+    #: D35 — the client's `coursestatus` buckets. Declared here as well as counted in the
+    #: service, because this model is the wire shape: a key the service adds and the schema
+    #: does not declare is dropped by pydantic on serialisation, so the UI would show a
+    #: total that did not add up and nothing would report why.
+    audited: int = 0
+    withdrawn: int = 0
 
 
 class AcademicHistory(BaseModel):

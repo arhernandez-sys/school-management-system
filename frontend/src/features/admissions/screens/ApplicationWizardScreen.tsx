@@ -279,6 +279,7 @@ export function ApplicationWizardScreen() {
   const submitMut = useSubmitApplication();
 
   const detail = detailQuery.data;
+  const programmeOptions = programsQuery.data?.items ?? [];
   // `STEPS[step]` is `Step | undefined` under `noUncheckedIndexedAccess`. `step` is only
   // ever moved with `Math.min`/`Math.max` inside the range, so narrow once here rather
   // than sprinkling `!` through the JSX.
@@ -850,11 +851,23 @@ export function ApplicationWizardScreen() {
               onChange={(e) => set('program_id', e.target.value)}
               fullWidth
               required
-              error={Boolean(fieldErrors.program_id)}
-              helperText={fieldErrors.program_id?.join(' ')}
+              error={Boolean(fieldErrors.program_id) || programsQuery.isError}
+              // An empty picker used to look identical to "no programmes chosen yet", so a
+              // GET /programs that answered 200-with-no-rows was invisible on this screen.
+              // Say which of the three states it is instead.
+              helperText={
+                fieldErrors.program_id?.join(' ') ??
+                (programsQuery.isError
+                  ? 'Could not load the programmes. Retry, or check that the catalog is seeded.'
+                  : programsQuery.isLoading
+                    ? 'Loading programmes…'
+                    : programmeOptions.length === 0
+                      ? 'No active programmes are available to choose from.'
+                      : undefined)
+              }
             >
               <MenuItem value="">—</MenuItem>
-              {(programsQuery.data?.items ?? []).map((program) => (
+              {programmeOptions.map((program) => (
                 <MenuItem key={program.id} value={program.id}>
                   {program.code} — {program.name}
                 </MenuItem>

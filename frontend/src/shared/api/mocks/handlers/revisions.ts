@@ -7,6 +7,7 @@ import {
   getOffering,
   getSemester,
   getStudent,
+  midtermRevisionEligible,
   offeringLabel,
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoGradeRevisionRequest } from '@shared/api/mocks/demo/dataset';
@@ -228,6 +229,19 @@ export const revisionsHandlers = [
           'grade_not_graded',
           `This result is ${grade.status}, not graded. An absent result already has a makeup path.`,
           { student_id: [`Result is ${grade.status}.`] },
+        );
+      }
+      // D32 (brief §1) - the mid-term rules, mirroring `create_revision`. Placed exactly
+      // where the server places them: after ownership and grade-exists, before the score
+      // checks, so a request that could never be filed is told WHY rather than being
+      // rejected for an unrelated reason.
+      const eligibility = midtermRevisionEligible(assessment, grade);
+      if (!eligibility.eligible) {
+        return errorResponse(
+          422,
+          'revision_not_eligible',
+          'This result was not part of the mid-term submission, so it cannot be revised.',
+          { assessment_id: [eligibility.reason ?? 'not_eligible'] },
         );
       }
       const proposed = Number(body.proposed_score);

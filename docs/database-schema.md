@@ -363,12 +363,20 @@ Exactly 2 per year (D10); exactly one active at a time.
 | `sequence` | `smallint` | no | — | 1 or 2 |
 | `start_date` | `date` | no | — | |
 | `end_date` | `date` | no | — | |
+| `grade_submission_deadline` | `timestamptz` | yes | — | **D30 §D6 / D32-1 — the END-TERM grade-entry cutoff.** NULL = the term never closes. Enforced as 409 `grade_window_closed` in `grades/service.upsert_grades`. The column is not renamed; the plan doc §E says why. |
+| `midterm_submission_start` | `timestamptz` | yes | — | **D32 — the mid-term grading period opens.** |
+| `midterm_submission_end` | `timestamptz` | yes | — | **D32 — it closes.** Once passed, grade revisions unlock for work that predates `midterm_submission_start`, and the mid-term report card can be frozen. |
 | `is_active` | `boolean` | no | `false` | Exactly one true globally |
 | Mixins | | | | `TimestampMixin` |
 
 - **FK** `fk_semesters_year (academic_year_id) → academic_years(id) ON DELETE RESTRICT`
 - **Unique** `uq_semesters_year_seq (academic_year_id, sequence)`; **`uq_semesters_one_active` partial `UNIQUE ((is_active)) WHERE is_active`**
 - **Check** `ck_semesters_sequence CHECK (sequence IN (1,2))` (enforces the 2-semester model, D10); `ck_semesters_dates CHECK (end_date > start_date)`
+- **Check (D32)** `ck_semesters_midterm_window` — the two mid-term columns are **both NULL or both set with end > start**. Either half alone is a configuration that cannot produce a correct answer: a start with no end never elapses, and an end with no start has nothing to measure "existed before" against. The service raises the readable 422 first; this is the backstop against a direct SQL edit.
+
+> **D30 §D3 supersedes the "exactly 2 per year" note above** — `ck_semesters_sequence` was
+> dropped by `005_tertiary.sql` §6 and `term_type` added, because BAJC runs Summer and
+> Spring blocks alongside the numbered semesters.
 
 #### `subjects`
 School-wide subject catalog, year-independent.
@@ -719,20 +727,28 @@ Optional read-tracking for the unread-count bell (UI NotificationsBell, OQ-E). O
 - **Unique** `uq_student_documents_key (storage_key)`
 
 #### `report_card_snapshots`
-Frozen, generated report-card payload for a (student, semester) — written when a year archives (FR-SET-07) so historical report cards are immutable. **Live-year report cards are generated on read** (UI §7.8) and are *not* stored.
+A frozen, fully-rendered report-card payload. **Two kinds since D32** (`kind`):
+
+- **`endterm`** — written when a YEAR ARCHIVES (FR-SET-07), so historical report cards are immutable. Live-year end-term cards are still generated on read (UI §7.8) and are *not* stored.
+- **`midterm`** — written when a TERM's mid-term grading window closes, by the Dean's `POST /settings/semesters/{id}/midterm-freeze` or the lazy fallback on first read. A mid-term card is served back **verbatim** and never recalculates: recomputing it later would fold in post-midterm work and move a figure already issued.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `semester_id` | `uuid` | no | — | FK → semesters |
+| `kind` | `enum('midterm','endterm')` | no | `'endterm'` | **D32.** The default is also the correct backfill: the year-archive freeze was the only writer that ever existed. |
 | `payload` | `jsonb` | no | — | Fully-rendered report card (subjects, scores, letters, attendance summary, term avg, school identity at freeze time) |
 | `storage_key` | `text` | yes | — | Optional pointer to a generated PDF (Q8/OQ-A, if server PDF is later adopted) |
 | `frozen_at` | `timestamptz` | no | `now()` | |
 | Mixins | | | | `TimestampMixin` |
 
 - **FK** both `ON DELETE RESTRICT`
-- **Unique** `uq_report_card_snapshot (student_id, semester_id)`
+- **Unique** `uq_report_card_snapshot (student_id, semester_id, kind)` — **widened by D32** (`009` §3). It was `(student_id, semester_id)`, which assumed one frozen card per student per term; the mid-term freeze and the year-archive freeze would then have collided on upsert and the second would have silently overwritten the first.
+
+> **Until D32 nothing READ this table.** `reports/freeze.py` wrote it and `reports/service`
+> rebuilt archived cards from `term_grade_snapshots` instead, so the one genuinely frozen
+> artefact was discarded on every read. The mid-term report path is its first reader.
 
 > **`jsonb` is deliberate:** a frozen report card is a *document*, not relational data to be joined — it captures a denormalized point-in-time view (school name/logo as they were). `jsonb` stores it faithfully and is GIN-indexable if ever needed. The one justified document-style denormalization.
 
@@ -1089,6 +1105,7 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 | DB-11 | **`subject_specializations text[]`** on teacher (denormalized, GIN-indexed) | Display/search tag, not referential truth (which is the class graph) (§3.B). |
 | DB-12 | **`semester_id` denormalized onto term-scoped children** (enrollments, assessments, attendance) | Keeps hot queries single-join; year derivable via semester→year (§1.6). |
 | DB-13 | **`report_card_snapshots.payload jsonb`** | A frozen report card is a point-in-time document, not relational data (§3.G). |
+| DB-16 (D32) | **`assessment_policies.students_can_view_grades boolean NOT NULL DEFAULT false`** | Whether students may reach any grade surface at all (brief §4). It lands on the existing Dean-only singleton rather than in a new settings table because that is already the row the Dean edits, and a second singleton would need its own endpoint, screen and `id = 1` CHECK for one boolean. Enforced by `core.deps.require_student_grade_visibility` (403 `grades_hidden`) and echoed on `CurrentUser` so the SPA can hide the nav without being handed the staff-only settings endpoint. **The Registrar's removal is NOT this flag** — that is unconditional and lives in the role tuples on `grades/router.py`. |
 | DB-14 | **Configurable per-assessment grading policy + explicit grade `status`** (resolves OQ-DB1, supersedes hardcoded "absent = 0"). New single-row `assessment_policies` (school default) + nullable override columns on `academic_years`/`assessment_categories`/`assessments`; `grade_marker` → `grade_status` enum (pending/graded/absent/excused/exempt) + `makeup_score`; `term_grade_snapshots.effective_policy jsonb`. | Stakeholder resolved OQ-DB1 broader than asked: absent-as-zero, makeups, and drop-lowest are now configurable, resolved most-specific-wins (assessment→category→year→school) at compute-time and frozen at archival. `pending` distinguishes not-yet-graded (always excluded) from absent (policy-driven); `exempt`/`excused` always excluded. Compute-on-read + assessment-first model unchanged (§10, §3.D). |
 | DB-15 | **Class = multi-subject SECTION/homeroom; new `class_subjects` join (D23).** Removed `classes.subject_id`; a section is subject-agnostic with one roster. `class_subjects (class_id, subject_id)` is the gradebook/ownership unit — it parents `class_teachers` (rescoped to `class_subject_id`), `assessment_categories` (rescoped), `assessments` (rescoped, old `subject_id` denorm dropped), and `term_grade_snapshots` (rescoped to `class_subject_id`). Students enroll per **section** (`class_enrollments` unchanged). Ownership helper split into `assert_teacher_owns_class_subject` (grades/assessments) + `assert_teacher_owns_section` (attendance/announcements). | Caribbean/Commonwealth model (stakeholder D23, Belize secondary structure): one homeroom, many subjects taught within it each with its own teacher(s) and gradebook. Surrogate-PK join chosen over composite link because it parents four child tables and carries its own `is_active`/soft-delete. Term grade is now per-subject; report card aggregates all subjects in the section. Keeps ≥3NF (the join removes the prior section-conflated-with-subject anomaly). |
 | DB-16 | **Multi-year transcript support (D24)** — no new table. `term_grade_snapshots` regrained to (student, `class_subject`, semester) and given a **frozen `subject_id`**; student identity is the durable `student_profiles.id` spine; added `ix_term_snapshot_student (student_id)`. Transcript = union of archived per-subject snapshots + live-year compute, grouped year→semester→subject (§10.6). | A transcript is the multi-year academic record (FR/screen added in Phase 4.5). Frozen `subject_id` keeps historical lines stable across subject renames/retirements and soft-deleted offerings. No stored transcript/cumulative-GPA aggregate (v1 is 0–100+letter, not GPA) — compute-on-read for the live year mirrors the report-card stance and avoids staleness. |

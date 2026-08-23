@@ -166,7 +166,7 @@ class _Graph:
             **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=date(2025, 9, 1),
-            status="active",
+            status="Registered",
         )
         if with_login:
             user = self._make_user(role=Role.STUDENT, full_name=s.full_name)
@@ -904,6 +904,10 @@ class TestRelease:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestMyGrades:
     def test_only_released_assessments_appear(self, client, graph) -> None:
         shown = graph.assessment(max_score="20", is_released=True)
@@ -1010,6 +1014,10 @@ class TestMyGrades:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestTermEndpoint:
     def test_student_is_scoped_to_self(self, client, graph) -> None:
         a = graph.assessment(max_score="100", is_released=True)

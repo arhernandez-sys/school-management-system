@@ -89,7 +89,7 @@ def _make_student(
     *,
     student_number=None,
     full_name="Test Student",
-    status=StudentStatus.ACTIVE,
+    status=StudentStatus.REGISTERED,
     user_id=None,
     date_of_birth=None,
     enrollment_date=None,
@@ -574,7 +574,7 @@ class TestCreateStudent:
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert body["status"] == "active"
+        assert body["status"] == "Registered"
         assert body["current_offerings"] == []  # no class_ids given
         n_audit = db_session.scalar(
             select(func.count()).select_from(AuditLog).where(
@@ -661,16 +661,20 @@ class TestCreateStudent:
     def test_create_status_not_editable_field_is_accepted_on_create(
         self, client, make_user, auth_headers
     ) -> None:
-        """`status` IS accepted on create (defaults active); the write model allows
-        it here (lifecycle CHANGES go through the status endpoint)."""
+        """`status` IS accepted on create (defaults `Registered`); the write model
+        allows it here (lifecycle CHANGES go through the status endpoint).
+
+        D34 moved the vocabulary to the client's own: `Unregistered` is what `inactive`
+        used to be called.
+        """
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(status="inactive"),
+            json=self._payload(status="Unregistered"),
         )
         assert resp.status_code == 201, resp.text
-        assert resp.json()["status"] == "inactive"
+        assert resp.json()["status"] == "Unregistered"
 
     def test_create_with_enroll_into_section_201(
         self, client, make_user, auth_headers, db_session
@@ -872,16 +876,16 @@ class TestStudentStatusMatrix:
         )
 
     @pytest.mark.parametrize("start,target", [
-        (StudentStatus.ACTIVE, "inactive"),
-        (StudentStatus.ACTIVE, "transferred"),
-        (StudentStatus.ACTIVE, "graduated"),
-        (StudentStatus.ACTIVE, "withdrawn"),
-        (StudentStatus.INACTIVE, "active"),
-        (StudentStatus.INACTIVE, "graduated"),
-        (StudentStatus.TRANSFERRED, "active"),
-        (StudentStatus.TRANSFERRED, "inactive"),
-        (StudentStatus.GRADUATED, "active"),
-        (StudentStatus.WITHDRAWN, "inactive"),
+        (StudentStatus.REGISTERED, "Unregistered"),
+        (StudentStatus.REGISTERED, "transferred"),
+        (StudentStatus.REGISTERED, "graduated"),
+        (StudentStatus.REGISTERED, "withdrawn"),
+        (StudentStatus.UNREGISTERED, "Registered"),
+        (StudentStatus.UNREGISTERED, "graduated"),
+        (StudentStatus.TRANSFERRED, "Registered"),
+        (StudentStatus.TRANSFERRED, "Unregistered"),
+        (StudentStatus.GRADUATED, "Registered"),
+        (StudentStatus.WITHDRAWN, "Unregistered"),
     ])
     def test_allowed_transitions_200(
         self, client, make_user, auth_headers, db_session, start, target
@@ -920,7 +924,7 @@ class TestStudentStatusMatrix:
     def test_status_change_audits_before_after(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        student = _make_student(db_session, status=StudentStatus.ACTIVE)
+        student = _make_student(db_session, status=StudentStatus.REGISTERED)
         principal = make_user(role=Role.PRINCIPAL)
         resp = self._set_status(client, auth_headers, principal, student.id, "graduated")
         assert resp.status_code == 200, resp.text
@@ -931,12 +935,12 @@ class TestStudentStatusMatrix:
             )
         )
         assert row is not None
-        assert row.summary["before"] == "active"
+        assert row.summary["before"] == "Registered"
         assert row.summary["after"] == "graduated"
 
     def test_status_unknown_student_404(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)
-        resp = self._set_status(client, auth_headers, principal, uuid.uuid4(), "inactive")
+        resp = self._set_status(client, auth_headers, principal, uuid.uuid4(), "Unregistered")
         assert resp.status_code == 404
         _assert_envelope(resp.json(), code="not_found")
 

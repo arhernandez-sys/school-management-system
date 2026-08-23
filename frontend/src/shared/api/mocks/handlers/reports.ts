@@ -70,7 +70,7 @@ function sessionRole(cookies: Record<string, string>): string | null {
  * pick the first active student that has a linked login (stu-1 = Freddy Lopez).
  */
 function selfStudent(): DemoStudent | undefined {
-  return D.students.find((s) => s.status === 'active' && s.user_id) ?? D.students[0];
+  return D.students.find((s) => s.status === 'Registered' && s.user_id) ?? D.students[0];
 }
 
 // ── Response shape builders ───────────────────────────────────────────────────────
@@ -243,7 +243,72 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
     gpa: gpa.gpa,
     total_credits: gpa.total_credits,
     is_frozen: false, // demo: live compute-on-read only (no archived snapshots)
+    // Widened deliberately: `freezeMidtermFor` re-labels the same payload as 'midterm',
+    // so pinning this to a literal would make the frozen copy untypeable.
+    report_kind: 'endterm' as 'midterm' | 'endterm',
+    frozen_at: null as string | null,
   };
+}
+
+/**
+ * D32 (brief §5) — the demo's `report_card_snapshots`, keyed `studentId|semesterId`.
+ *
+ * **In-memory and per-session, on purpose.** A frozen card only means something if it
+ * STOPS MOVING, so the demo has to actually store one rather than recompute and relabel.
+ * A module-level Map is the demo's equivalent of the table; the dataset is a single
+ * browser session by design (see `demo/selectors.ts`), so this is consistent with how
+ * every other demo mutation works.
+ */
+const midtermSnapshots = new Map<string, { payload: ReturnType<typeof buildReportCard>; frozen_at: string }>();
+
+function midtermKey(studentId: string, semesterId: string): string {
+  return `${studentId}|${semesterId}`;
+}
+
+/**
+ * Capture one student's mid-term card, mirroring `reports/freeze.freeze_midterm`.
+ * Idempotent — a re-freeze refreshes in place, which is what lets a Dean re-freeze after
+ * correcting a mark.
+ */
+function freezeMidtermFor(student: DemoStudent, semester: DemoSemester): void {
+  const payload = buildReportCard(student, semester, false);
+  midtermSnapshots.set(midtermKey(student.id, semester.id), {
+    payload: { ...payload, is_frozen: true, report_kind: 'midterm' as const },
+    frozen_at: DEMO_TODAY_ISO,
+  });
+}
+
+/**
+ * The mid-term branch of both report-card handlers, mirroring
+ * `reports/service._midterm_report_card` — including the LAZY FREEZE, because the
+ * behaviour a demo needs to show is "the number stops moving", and that only happens if
+ * the first read captures.
+ *
+ * Returns an MSW response on every path: the error cases (`409 midterm_window_open`,
+ * `422 no_midterm_window`) are states the screen explains, not failures to swallow.
+ */
+function midtermReportResponse(student: DemoStudent, semester: DemoSemester) {
+  const start = semester.midterm_submission_start;
+  const end = semester.midterm_submission_end;
+  if (!start || !end) {
+    return errorResponse(
+      422,
+      'no_midterm_window',
+      'This term has no mid-term grading period configured, so there are no mid-term grades to freeze.',
+    );
+  }
+  // DEMO_TODAY, not the real clock — same reason as `gradeWindow()` in the grades handler.
+  if (new Date(DEMO_TODAY_ISO).getTime() <= new Date(end).getTime()) {
+    return errorResponse(
+      409,
+      'midterm_window_open',
+      'The mid-term grading period is still open. Mid-term grades can be frozen once it closes.',
+    );
+  }
+  const key = midtermKey(student.id, semester.id);
+  if (!midtermSnapshots.has(key)) freezeMidtermFor(student, semester);
+  const snap = midtermSnapshots.get(key)!;
+  return HttpResponse.json({ ...snap.payload, frozen_at: snap.frozen_at });
 }
 
 /**
@@ -287,6 +352,17 @@ function buildTranscript(student: DemoStudent) {
             .map((offering) => {
               const course = getCourse(offering.course_id);
               const term = computeTermGrade(student.id, offering.id);
+              // D35 — how the student sat it. `AU` / `W/P` / `W/F` is printed INSTEAD of a
+              // grade, which is the whole reason the client wants the status recorded: the
+              // graded-only filter below would otherwise drop the course entirely, and a
+              // permanent record that omits a withdrawal is not a transcript.
+              const enr = D.enrollments.find(
+                (e) =>
+                  e.student_id === student.id &&
+                  e.offering_id === offering.id &&
+                  !e.unenrolled_at,
+              );
+              const notation = enr ? NOTATION[enr.enrollment_status] : null;
               return {
                 subject: {
                   id: offering.course_id,
@@ -295,8 +371,9 @@ function buildTranscript(student: DemoStudent) {
                 },
                 teacher: leadTeacherName(offering),
                 credits: course?.credits ?? null,
-                numeric: term.numeric,
-                letter: term.letter ?? '',
+                numeric: notation ? null : term.numeric,
+                letter: notation ? '' : (term.letter ?? ''),
+                notation,
               };
             })
             .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
@@ -304,7 +381,12 @@ function buildTranscript(student: DemoStudent) {
           // matching the backend: a transcript prints graded lines only, but the GPA
           // denominator is every enrolled credit (decision #4). Filtering first would
           // print a graded-only mean.
-          const termGpa = gpaFor(subjects.map((r) => ({ credits: r.credits, letter: r.letter })));
+          //
+          // D35 EXCLUDES notated rows from the GPA on BOTH sides — an audited or withdrawn
+          // course was never being read for credit, so leaving its credits in the
+          // denominator would depress the GPA of a student who did nothing wrong.
+          const counted = subjects.filter((r) => !r.notation);
+          const termGpa = gpaFor(counted.map((r) => ({ credits: r.credits, letter: r.letter })));
           const gradedRows = subjects.filter((r) => r.numeric != null);
           const termAverage =
             gradedRows.length > 0
@@ -319,8 +401,9 @@ function buildTranscript(student: DemoStudent) {
             term_average: termAverage,
             gpa: termGpa.gpa,
             total_credits: termGpa.total_credits,
-            gpaEntries: subjects.map((r) => ({ credits: r.credits, letter: r.letter })),
-            subjects: gradedRows,
+            gpaEntries: counted.map((r) => ({ credits: r.credits, letter: r.letter })),
+            // Graded lines PLUS the notated ones — the notation is the information.
+            subjects: subjects.filter((r) => r.numeric != null || r.notation),
           };
         })
         .filter((s) => s.subjects.length > 0 || s.is_current);
@@ -369,6 +452,14 @@ function buildTranscript(student: DemoStudent) {
   };
 }
 
+/** `coursestatus` -> what the transcript prints instead of a grade (D35). */
+const NOTATION: Record<string, string | null> = {
+  enrolled: null,
+  audit: 'AU',
+  withdraw_passing: 'W/P',
+  withdraw_failing: 'W/F',
+};
+
 export const reportsHandlers = [
   // ── Student picker source (self-contained for the Reports module) ────────────────
   http.get(`${API_BASE_URL}/reports/students`, ({ request }) => {
@@ -391,6 +482,11 @@ export const reportsHandlers = [
     const semester =
       D.semesters.find((s) => s.id === url.searchParams.get('semester_id')) ?? getActiveSemester();
     if (!semester) return errorResponse(409, 'no_active_semester', 'No active term is configured.');
+    // D32 — a frozen card carries NO release filter: it is a document already issued, and
+    // re-applying "hide unreleased" would blank rows the student has already been shown.
+    if (url.searchParams.get('kind') === 'midterm') {
+      return midtermReportResponse(student, semester);
+    }
     return HttpResponse.json(buildReportCard(student, semester, true));
   }),
 
@@ -410,8 +506,71 @@ export const reportsHandlers = [
     const semester =
       D.semesters.find((s) => s.id === url.searchParams.get('semester_id')) ?? getActiveSemester();
     if (!semester) return errorResponse(409, 'no_active_semester', 'No active term is configured.');
+    if (url.searchParams.get('kind') === 'midterm') {
+      return midtermReportResponse(student, semester);
+    }
     // Release filter only applies to student callers (P/S/teacher see computed values).
     return HttpResponse.json(buildReportCard(student, semester, false));
+  }),
+
+  /*
+   * D32 (brief §6) — the Dean's explicit mid-term freeze.
+   *
+   * Lives in THIS file rather than in `settings.ts`, even though the path is under
+   * `/settings`, because the snapshot store and `buildReportCard` are here. Same
+   * reasoning as the server, where `reports/freeze.py` owns the computation and
+   * `settings/service` just calls it: a snapshot IS a report card, and putting the
+   * shaping logic anywhere else would guarantee the two drift.
+   */
+  http.post(`${API_BASE_URL}/settings/semesters/:semesterId/midterm-freeze`, ({ params, cookies }) => {
+    const role = sessionRole(cookies);
+    if (!role) return errorResponse(401, 'unauthenticated', 'Not signed in.');
+    if (role !== 'principal') {
+      return errorResponse(403, 'forbidden', 'Only the Dean may freeze mid-term grades.');
+    }
+    const semester = D.semesters.find((sem) => sem.id === String(params.semesterId));
+    if (!semester) return errorResponse(404, 'not_found', 'Semester not found.');
+
+    const start = semester.midterm_submission_start;
+    const end = semester.midterm_submission_end;
+    if (!start || !end) {
+      return errorResponse(
+        422,
+        'no_midterm_window',
+        'This term has no mid-term grading period configured, so there are no mid-term grades to freeze.',
+      );
+    }
+    if (new Date(DEMO_TODAY_ISO).getTime() <= new Date(end).getTime()) {
+      return errorResponse(
+        409,
+        'midterm_window_open',
+        'The mid-term grading period is still open. Mid-term grades can be frozen once it closes.',
+      );
+    }
+
+    // Every student with a live enrolment in the term, collected as a SET: a student
+    // sits several offerings and their card spans all of them, so freezing per
+    // enrolment would capture the same card repeatedly.
+    const semesterOfferings = new Set(
+      D.offerings.filter((o) => o.semester_id === semester.id).map((o) => o.id),
+    );
+    const studentIds = new Set(
+      D.enrollments
+        .filter((e) => semesterOfferings.has(e.offering_id) && !e.unenrolled_at)
+        .map((e) => e.student_id),
+    );
+    let written = 0;
+    for (const id of studentIds) {
+      const student = getStudent(id);
+      if (!student) continue;
+      freezeMidtermFor(student, semester);
+      written += 1;
+    }
+    return HttpResponse.json({
+      snapshots_written: written,
+      semester_id: semester.id,
+      frozen_at: DEMO_TODAY_ISO,
+    });
   }),
 
   // ── Transcript (multi-year; Principal / Secretary ONLY — D26) ────────────────────
@@ -500,7 +659,7 @@ export const reportsHandlers = [
     if (role !== 'principal' && role !== 'secretary') {
       return errorResponse(403, 'forbidden', 'Enrollment reports are restricted to principals and secretaries.');
     }
-    const activeStudents = D.students.filter((s) => s.status === 'active');
+    const activeStudents = D.students.filter((s) => s.status === 'Registered');
     /**
      * Bucketed by PROGRAMME (D31), not by Form.
      *

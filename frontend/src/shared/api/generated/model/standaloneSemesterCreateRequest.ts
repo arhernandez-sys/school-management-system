@@ -6,6 +6,8 @@
  */
 import type { TermType } from './termType';
 import type { StandaloneSemesterCreateRequestGradeSubmissionDeadline } from './standaloneSemesterCreateRequestGradeSubmissionDeadline';
+import type { StandaloneSemesterCreateRequestMidtermSubmissionStart } from './standaloneSemesterCreateRequestMidtermSubmissionStart';
+import type { StandaloneSemesterCreateRequestMidtermSubmissionEnd } from './standaloneSemesterCreateRequestMidtermSubmissionEnd';
 
 /**
  * POST /settings/semesters (Dean only) — add ONE term to an existing year.
@@ -30,4 +32,6 @@ export interface StandaloneSemesterCreateRequest {
   end_date: string;
   academic_year_id: string;
   grade_submission_deadline?: StandaloneSemesterCreateRequestGradeSubmissionDeadline;
+  midterm_submission_start?: StandaloneSemesterCreateRequestMidtermSubmissionStart;
+  midterm_submission_end?: StandaloneSemesterCreateRequestMidtermSubmissionEnd;
 }

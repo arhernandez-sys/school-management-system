@@ -121,7 +121,11 @@ export const programsHandlers = [
 
     let rows = D.programs;
     // Default to active-only, like the course catalog: the common caller is a picker.
-    rows = rows.filter((p) => (isActive === undefined ? p.is_active : p.is_active === isActive));
+    // ⚠️ `boolParam` reports an ABSENT param as `null`, not `undefined`. Comparing against
+    // `undefined` here made the unfiltered call — the one the admissions wizard's
+    // programme picker sends — fall through to `p.is_active === null`, which is false for
+    // every row, so the picker received an EMPTY list while the endpoint answered 200.
+    rows = rows.filter((p) => (isActive === null ? p.is_active : p.is_active === isActive));
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(

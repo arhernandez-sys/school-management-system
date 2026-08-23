@@ -243,30 +243,64 @@ def database_url() -> str:
 #: database still on `007` cannot satisfy a single offering-backed test — it fails with
 #: hundreds of unrelated-looking errors instead of one honest one.
 _D31_REQUIRED_TABLES = ("course_offerings",)
-#: Tables `008` quarantines away. Their presence means the run is pointed at a pre-`008`
-#: database — most likely `sims` itself, because `backend/.env` still names it and only an
-#: exported `DATABASE_URL` overrides that (see `_bridge_env_from_dotenv` above).
+#: Tables `008` quarantines away (it RENAMES them to `*_legacy_pre_d31` rather than dropping
+#: them, so the cut-over `sims` passes). Their presence under the ORIGINAL name means the run is
+#: pointed at a pre-`008` database.
 _D31_FORBIDDEN_TABLES = ("classes", "class_subjects")
+
+#: D32 (`009_midterm_windows.sql`) adds COLUMNS rather than tables, so the table-level probe
+#: above cannot see it. Same argument for checking it: without the mid-term window columns
+#: every Phase 1-4 test fails on an `OperationalError: Unknown column`, which reads like a
+#: broken model rather than an unapplied migration. `table -> column` pairs.
+_D32_REQUIRED_COLUMNS = (
+    ("semesters", "midterm_submission_start"),
+    ("semesters", "midterm_submission_end"),
+    ("assessment_policies", "students_can_view_grades"),
+    ("report_card_snapshots", "kind"),
+)
 
 
 def _assert_d31_schema(eng) -> None:  # noqa: ANN001 - sqlalchemy Engine
     """Fail the run — loudly, once — if the target database is not on `008` (D31).
 
-    This exists because the failure it prevents is SILENT. `backend/.env` points at `sims`,
-    which is deliberately held at `007` until the D31 switchover; the suite only reaches the
-    migrated copy when `DATABASE_URL` is exported to `sims_d31`. Forget that export and every
-    offering test fails on a missing table, which reads exactly like a broken refactor. One
+    This exists because the failure it prevents is SILENT: a database still on `007` fails
+    every offering test on a missing table, which reads exactly like a broken refactor. One
     named error at session start is worth more than 500 misleading ones.
+
+    **The `sims` cut-over is DONE (2026-08-20)**, so `backend/.env`'s `sims` now SATISFIES this
+    check and needs no `DATABASE_URL` export. The guard is kept because it is cheap and it is
+    the only thing standing between a stale copy of the database and 500 misleading failures --
+    `sims_d31` and any pre-cut-over restore are both still reachable by exporting a DSN.
 
     A hard failure, never a skip: the DB fixtures skip *green* when the database is
     unreachable, so "skip" is the one verdict that could hide this.
     """
     from sqlalchemy import inspect
 
-    present = set(inspect(eng).get_table_names())
+    inspector = inspect(eng)
+    present = set(inspector.get_table_names())
     missing = [t for t in _D31_REQUIRED_TABLES if t not in present]
     lingering = [t for t in _D31_FORBIDDEN_TABLES if t in present]
+
+    # D32 column probe. Only run once the tables themselves are in place — on a pre-008
+    # database the column lookup would raise instead of reporting, burying the real cause.
+    missing_columns: list[str] = []
     if not missing and not lingering:
+        for table, column in _D32_REQUIRED_COLUMNS:
+            if table not in present:
+                missing_columns.append(f"{table}.{column} (table absent)")
+                continue
+            if column not in {c["name"] for c in inspector.get_columns(table)}:
+                missing_columns.append(f"{table}.{column}")
+        if missing_columns:
+            pytest.exit(
+                "The configured test database is NOT on migration 009 (D32 mid-term "
+                "windows).\n"
+                f"  missing columns:  {missing_columns}\n"
+                "Apply it to the target:\n"
+                "  python db/mariadb/apply_sql.py db/mariadb/009_midterm_windows.sql",
+                returncode=1,
+            )
         return
     # `pytest.exit`, not `UsageError`/`fail`: raising from a fixture would repeat this
     # message once per test (33 identical errors on the first probe), which buries the one
@@ -275,9 +309,10 @@ def _assert_d31_schema(eng) -> None:  # noqa: ANN001 - sqlalchemy Engine
         "The configured test database is NOT on migration 008 (D31 course offerings).\n"
         f"  missing tables:   {missing or 'none'}\n"
         f"  pre-008 tables:   {lingering or 'none'}\n"
-        "The D31 work runs against the migrated copy `sims_d31`; `backend/.env` still names\n"
-        "`sims`, which is held at 007 on purpose. Export the DSN before running:\n"
-        '  DATABASE_URL="mysql+pymysql://root:...@127.0.0.1:3306/sims_d31" pytest -q\n'
+        "`sims` was cut over to 008 on 2026-08-20, so the default target should pass this\n"
+        "check. Seeing this means DATABASE_URL points somewhere else (a pre-008 restore, or\n"
+        "a stale copy), or the cut-over was rolled back. Apply 008 to the target:\n"
+        "  python db/mariadb/apply_sql.py db/mariadb/008_course_offerings.sql\n"
         "Confirm with: python db/mariadb/verify_schema.py --expect 008",
         returncode=1,
     )
@@ -322,7 +357,8 @@ def db_session(_engine) -> Iterator["Session"]:  # noqa: ANN001
     """A SQLAlchemy Session wrapped in an always-rolled-back outer transaction.
 
     Nothing this session (or the code under test) writes is ever committed to the
-    shared Supabase DB. See the module docstring for the full rationale.
+    target database. See the module docstring for the full rationale. (The mention of
+    Supabase here predates the MariaDB pivot; the target is now local MariaDB `sims`.)
     """
     from sqlalchemy.orm import Session
 
@@ -714,6 +750,20 @@ def set_assessment_policy(db_session) -> "callable":  # noqa: ANN001
         return policy
 
     return _set
+
+
+@pytest.fixture
+def student_grades_visible(set_assessment_policy):  # noqa: ANN001, ANN201
+    """Turn ON `assessment_policies.students_can_view_grades` for this test (D32, §4).
+
+    **The default is OFF**, which is the client's decision — a student sees no grade
+    surface unless the Dean publishes them. Every suite that exercises a student-facing
+    grade endpoint therefore has to opt in, and that is the point: the opt-in is visible
+    in the test, so nobody can quietly widen the default and have the suite stay green.
+
+    `tests/test_student_grade_visibility.py` owns the OFF case; everywhere else uses this.
+    """
+    return set_assessment_policy(students_can_view_grades=True)
 
 
 @pytest.fixture

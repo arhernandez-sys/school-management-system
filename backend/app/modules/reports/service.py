@@ -24,10 +24,17 @@ from math import ceil
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AcademicYearStatus, AssessmentStatus, Role, StudentStatus
+from app.common.enums import (
+    EnrollmentStatus,
+    AcademicYearStatus,
+    AssessmentStatus,
+    ReportCardKind,
+    Role,
+    StudentStatus,
+)
 from app.core.errors import Forbidden, NotFound
 from app.core.pagination import PageParams
-from app.core.timeutil import utcnow
+from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.service import _summarize
@@ -42,6 +49,7 @@ from app.modules.offerings.models import (
 )
 from app.modules.grades import calc
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
+from app.modules.reports.models import ReportCardSnapshot
 from app.modules.reports.schemas import (
     AttendanceReport,
     AttendanceReportSummary,
@@ -134,6 +142,43 @@ def _semester_ref(db: Session, semester: Semester) -> ReportSemesterRef:
         academic_year_id=semester.academic_year_id,
         academic_year_name=year_name or "",
     )
+
+
+#: `coursestatus` -> the notation a transcript prints for it (D35).
+#:
+#: Standard registry shorthand, and the reason the column is worth recording at all: an
+#: audit and a withdrawal produce NO GRADE, so before D35 the transcript's
+#: `if r.numeric is None: continue` filter dropped them entirely. A permanent record that
+#: silently omits the course a student withdrew from is not a transcript — the notation IS
+#: the information.
+TRANSCRIPT_NOTATION: dict[EnrollmentStatus, str] = {
+    EnrollmentStatus.AUDIT: "AU",
+    EnrollmentStatus.WITHDRAW_PASSING: "W/P",
+    EnrollmentStatus.WITHDRAW_FAILING: "W/F",
+}
+
+
+def _enrollment_status_map(
+    db: Session, student_id: uuid.UUID, semester_id: uuid.UUID | None
+) -> dict[uuid.UUID, EnrollmentStatus]:
+    """`{offering_id: how the student sat it}` for one term (D35).
+
+    A separate read rather than a change to `_classes_for`, which returns
+    `CourseOffering` rows and is shared with the report card — threading the status through
+    it would have changed a signature two callers depend on to serve one of them.
+    """
+    if semester_id is None:
+        return {}
+    return {
+        offering_id: status
+        for offering_id, status in db.execute(
+            select(ClassEnrollment.offering_id, ClassEnrollment.enrollment_status).where(
+                ClassEnrollment.student_id == student_id,
+                ClassEnrollment.semester_id == semester_id,
+                ClassEnrollment.unenrolled_at.is_(None),
+            )
+        ).all()
+    }
 
 
 def _classes_for(
@@ -656,10 +701,84 @@ def _build_report_card(
     )
 
 
-def get_report_card(
-    db: Session, *, actor: User, student_id: uuid.UUID, semester_id: uuid.UUID | None
+def _midterm_report_card(
+    db: Session, *, actor: User, student: StudentProfile, semester: Semester
 ) -> ReportCard:
-    """GET /reports/report-card (P/S/Teacher). Staff see computed values."""
+    """A MID-TERM report card — read back VERBATIM from `report_card_snapshots` (D32, §5).
+
+    **This never recalculates, and that is the whole feature.** The stored payload is the
+    card exactly as it stood when the mid-term window closed. Rebuilding it from current
+    grades would fold in post-midterm work and silently move a figure a parent has already
+    been shown, which is the behaviour the client asked to eliminate.
+
+    This is also the FIRST READER `report_card_snapshots` has ever had. Before D32 the
+    table was written by the year-archive freeze and never read: archived cards were
+    rebuilt from `term_grade_snapshots` instead, so the one genuinely frozen artefact was
+    discarded on every read.
+
+    **The lazy freeze.** If the window has closed and no snapshot exists, one is captured
+    here and then read. The backend has no scheduler (`app/jobs/purge.py` says so
+    explicitly), so the alternative is a report that fails until the Dean remembers to
+    press a button. `freeze_midterm` is idempotent, so two concurrent first-reads converge
+    rather than duplicating.
+
+    Before the window closes there is nothing to serve and nothing honest to invent:
+    `freeze_midterm` raises 409 `midterm_window_open`, or 422 `no_midterm_window` for a
+    term with no mid-term period at all.
+    """
+
+    def _load() -> ReportCardSnapshot | None:
+        return db.scalar(
+            select(ReportCardSnapshot).where(
+                ReportCardSnapshot.student_id == student.id,
+                ReportCardSnapshot.semester_id == semester.id,
+                ReportCardSnapshot.kind == ReportCardKind.MIDTERM,
+            )
+        )
+
+    row = _load()
+    if row is None:
+        # Imported here, not at module scope: `reports.freeze` imports this module for
+        # `_build_report_card`, so a top-level import either way round would be circular
+        # — the same reason `settings.service` imports the freeze lazily.
+        from app.modules.reports.freeze import freeze_midterm
+
+        # Raises 409/422 when the window is open or unconfigured, so the caller gets a
+        # reason rather than an empty card.
+        freeze_midterm(db, actor=actor, semester=semester)
+        db.commit()
+        row = _load()
+    if row is None:
+        # The freeze ran but wrote nothing for this student: they hold no live enrolment
+        # in the term. 404 is honest; an empty card would read as "no marks earned".
+        raise NotFound(
+            "No mid-term report card exists for this student in that term.",
+            code="no_midterm_snapshot",
+        )
+
+    # `model_validate` rather than trusting the dict: a payload may have been written by
+    # an older build of this schema, and validating on the way out gives a field added
+    # since then its default instead of letting it arrive missing.
+    card = ReportCard.model_validate(row.payload)
+    card.is_frozen = True
+    card.report_kind = ReportCardKind.MIDTERM
+    card.frozen_at = ensure_aware(row.frozen_at)
+    return card
+
+
+def get_report_card(
+    db: Session,
+    *,
+    actor: User,
+    student_id: uuid.UUID,
+    semester_id: uuid.UUID | None,
+    kind: ReportCardKind = ReportCardKind.ENDTERM,
+) -> ReportCard:
+    """GET /reports/report-card (P/S/Teacher). Staff see computed values.
+
+    D32: `kind=midterm` reads the frozen snapshot instead. `endterm` is unchanged — live
+    years compute on read, archived ones read `term_grade_snapshots` (§10.4).
+    """
     student = db.scalar(
         select(StudentProfile).where(
             StudentProfile.id == student_id, StudentProfile.deleted_at.is_(None)
@@ -668,13 +787,19 @@ def get_report_card(
     if student is None:
         raise NotFound("Student not found.", code="not_found")
     semester = _resolve_semester(db, semester_id)
+    if kind == ReportCardKind.MIDTERM:
+        return _midterm_report_card(db, actor=actor, student=student, semester=semester)
     return _build_report_card(
         db, student=student, semester=semester, release_filter=False
     )
 
 
 def get_my_report_card(
-    db: Session, *, actor: User, semester_id: uuid.UUID | None
+    db: Session,
+    *,
+    actor: User,
+    semester_id: uuid.UUID | None,
+    kind: ReportCardKind = ReportCardKind.ENDTERM,
 ) -> ReportCard:
     """GET /reports/report-card/me (student).
 
@@ -690,6 +815,12 @@ def get_my_report_card(
     if student is None:
         raise NotFound("Student profile not found.", code="not_found")
     semester = _resolve_semester(db, semester_id)
+    if kind == ReportCardKind.MIDTERM:
+        # NOTE the absence of a release filter on this branch, unlike the end-term one
+        # below. A frozen card is a document that has already been issued; re-applying
+        # "hide subjects with unreleased work" to it would blank rows the student has
+        # already been shown, because release state has moved on since the freeze.
+        return _midterm_report_card(db, actor=actor, student=student, semester=semester)
     return _build_report_card(db, student=student, semester=semester, release_filter=True)
 
 
@@ -769,12 +900,45 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
                     year=year, frozen=frozen,
                 )
                 teachers = _lead_teacher_names(db, [r.cs_id for r in results])
+                # D35 — how the student sat each of them (the client's `coursestatus`).
+                how = _enrollment_status_map(db, student.id, semester.id)
+                notated = {
+                    r.cs_id
+                    for r in results
+                    if how.get(r.cs_id) in TRANSCRIPT_NOTATION
+                }
                 # BEFORE the filter below: the transcript LISTS only graded lines, but
                 # the GPA denominator is every enrolled credit (decision #4). Building
                 # these from `rows` would silently drop the ungraded courses and print
                 # a graded-only mean.
-                term_gpa_entries = _gpa_entries(results, bands)
+                #
+                # D35 EXCLUDES audits and withdrawals from that denominator. Their credits
+                # were never being read for credit, so leaving them in would depress the
+                # GPA of a student who did nothing wrong — the same argument the
+                # `transferred` bucket makes in `students/academics.py`.
+                term_gpa_entries = _gpa_entries(results, bands, exclude_cs_ids=notated)
                 for r in results:
+                    notation = TRANSCRIPT_NOTATION.get(how.get(r.cs_id))
+                    if notation is not None:
+                        # An audit or a withdrawal has NO grade, so it would have been
+                        # dropped by the filter below. It is printed with its notation and
+                        # no numeric — and left out of `numerics`, so it does not move the
+                        # term average either.
+                        rows.append(
+                            TranscriptSubjectRow(
+                                subject=ReportSubjectRef(
+                                    id=r.subject_id,
+                                    name=r.subject_name,
+                                    code=r.subject_code,
+                                ),
+                                teacher=teachers.get(r.cs_id),
+                                credits=r.credits,
+                                numeric=None,
+                                letter="",
+                                notation=notation,
+                            )
+                        )
+                        continue
                     # A transcript lists only lines that resolved to a grade.
                     if r.numeric is None:
                         continue
@@ -1044,7 +1208,7 @@ def get_enrollment_report(db: Session, *, actor: User) -> EnrollmentReport:
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.ACTIVE,
+            StudentProfile.status == StudentStatus.REGISTERED,
         )
     ) or 0
 

@@ -111,7 +111,7 @@ class _Graph:
     def enrolled_student(self):
         s = StudentProfile(
             student_number=f"S-{uuid.uuid4().hex[:8]}", **split_name(f"Stu {uuid.uuid4().hex[:4]}"),
-            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="active",
+            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="Registered",
         )
         self._db.add(s)
         self._db.flush()

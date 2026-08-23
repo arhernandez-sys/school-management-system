@@ -17,6 +17,7 @@ import { api } from '@shared/api/client';
 import { teacherKeys } from '@features/teachers/hooks/useTeachers';
 import type {
   EnrollmentResult,
+  EnrollmentStatusBody,
   MeetingsReplaceBody,
   MeetingsResult,
   OfferingCreateBody,
@@ -217,7 +218,45 @@ export function useAssignTeachers(offeringId: string) {
   });
 }
 
-/** DELETE /offerings/{id}/enrollments/{enrollmentId} — withdraw from the roster. */
+/**
+ * PATCH /offerings/{id}/enrollments/{enrollmentId} — set the student's COURSE STATUS
+ * (D35, the client's `coursestatus`).
+ *
+ * **Not the same action as `useWithdrawStudent` below**, which DELETEs. That un-enrols:
+ * the row closes and the student leaves the roster, as though the registration were a
+ * mistake. This records that they sat the course and left — the row stays open and on the
+ * roster, because the transcript has to print `W/P` or `W/F` against it.
+ *
+ * Invalidates the roster and the affected student's reads: the status changes their
+ * academic history buckets, their credits and their GPA.
+ */
+export function useSetEnrollmentStatus(offeringId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: { enrollmentId: string; body: EnrollmentStatusBody }) => {
+      const res = await api.patch<RosterEntry>(
+        `/offerings/${offeringId}/enrollments/${vars.enrollmentId}`,
+        vars.body,
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: offeringKeys.roster(offeringId) });
+      // The status feeds credits_earned, the GPA and the academic-history buckets, so the
+      // student's own reads are stale the moment it changes.
+      void qc.invalidateQueries({ queryKey: ['students'] });
+      void qc.invalidateQueries({ queryKey: ['reports'] });
+    },
+  });
+}
+
+/**
+ * DELETE /offerings/{id}/enrollments/{enrollmentId} — UN-ENROL from the roster.
+ *
+ * D35 renamed what this is called in the UI, from "Withdraw" to "Remove". "Withdraw" now
+ * means a `coursestatus` that KEEPS the row (see `useSetEnrollmentStatus`), and two
+ * different actions sharing one word on the same screen is how the wrong one gets clicked.
+ */
 export function useWithdrawStudent(offeringId: string) {
   const qc = useQueryClient();
   return useMutation({

@@ -107,7 +107,18 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     applications: 'full', // the Registrar owns admissions (D30 §D14)
     timetable: 'none', // see the principal note
     assessments: 'none', // folded into Grades (see principal note)
-    grades: 'view-all',
+    /**
+     * D32 (brief §4) — **the Register lost grades outright**, and unconditionally: there
+     * is no Dean toggle for this the way there is for students, because the client asked
+     * for the removal rather than for a switch. `Role.SECRETARY` is absent from every
+     * grade route in `grades/router.py`, so this is the nav catching up with the server.
+     *
+     * Deliberately NOT extended to `reports`: the brief named the Grades section, grade
+     * navigation and grade information on the registration screens. Issuing report cards
+     * is core registry work, and taking it away would stop the Registrar doing their job.
+     * Flagged for BAJC in `docs/midterm-revision-reports-plan.md`.
+     */
+    grades: 'none',
     attendance: 'view-all',
     announcements: 'full',
     calendar: 'full', // secretary can add/edit school events too
@@ -160,6 +171,18 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     applications: 'none',
     timetable: 'view-own', // the offerings they are enrolled in, Mon-Fri
     assessments: 'view-own',
+    /**
+     * D32 (brief §4) — a student's grades are published by the DEAN, not by their role.
+     *
+     * The capability stays `view-own` because that is still what the role permits; what
+     * changed is that permission alone is no longer sufficient. `navSectionsForRole` takes
+     * `studentsCanViewGrades` and drops this item when the Dean has grades hidden, and the
+     * server answers 403 `grades_hidden` regardless (`require_student_grade_visibility`).
+     *
+     * Encoding the switch as `'none'` here instead would have been wrong: this map is
+     * static role policy, and the flag is runtime configuration that can change between
+     * two loads of the same page.
+     */
     grades: 'view-own',
     attendance: 'view-own',
     announcements: 'view-own',

@@ -25,6 +25,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.common.enums import EnrollmentStatus
 from app.common.schemas import (
     AcademicYearRef,
     AuditStamp,
@@ -119,6 +120,12 @@ class RosterEntry(BaseModel):
     student: StudentRef
     enrolled_at: datetime
     unenrolled_at: datetime | None = None
+    #: D35 — HOW the student is sitting this offering: the client's `coursestatus`.
+    #:
+    #: The column has existed since `005_tertiary.sql` §8 and was **mapped and nothing
+    #: else** until D35 — no endpoint set it, no calculation read it, and all 393 live rows
+    #: said `enrolled`. Putting it on the roster is what makes it visible at all.
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.ENROLLED
 
 
 class EnrollmentResult(BaseModel):
@@ -242,3 +249,33 @@ class EnrollRequest(BaseModel):
 
     student_ids: list[UUID] = Field(min_length=1)
     semester_id: UUID | None = None
+    #: D35 — how these students are sitting the offering. Applies to EVERY id in the
+    #: batch, which is what an audit cohort actually looks like; a single student's status
+    #: is changed afterwards through `PATCH .../enrollments/{id}`.
+    #:
+    #: Defaults to `enrolled`, so every existing caller is unchanged. The two `withdraw_*`
+    #: values are accepted here as well as on the PATCH — a Registrar transcribing a paper
+    #: record backwards needs to be able to register a withdrawal that already happened.
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.ENROLLED
+
+
+class EnrollmentStatusRequest(BaseModel):
+    """PATCH /offerings/{id}/enrollments/{enrollment_id} (D35).
+
+    A SEPARATE endpoint from `DELETE`, and the distinction is the point:
+
+      * `DELETE` un-enrols — the row is closed with `unenrolled_at` and the student is off
+        the roster, as though the registration were a mistake.
+      * a WITHDRAWAL is a fact about a course the student did sit and then left. The row
+        stays open and on the roster, because the transcript has to print `W/P` or `W/F`
+        against it. Deleting it would erase the very thing being recorded.
+
+    `reason` is not stored on the enrolment — there is no column for it — but it is written
+    to the audit log, which is where "why did this change" is answerable for every other
+    guarded transition in this system.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enrollment_status: EnrollmentStatus
+    reason: str | None = Field(default=None, max_length=500)

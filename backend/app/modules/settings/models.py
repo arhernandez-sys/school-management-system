@@ -94,13 +94,34 @@ class Semester(Base, TimestampMixin):
     sequence: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
     start_date: Mapped[date] = mapped_column(Date(), nullable=False)
     end_date: Mapped[date] = mapped_column(Date(), nullable=False)
-    #: Brief §18 / D30 §D6 — the Lecturer grade-entry cutoff. Set by the Dean-only
-    #: `POST`/`PATCH /settings/semesters`; enforced by `_assert_grade_window_open` in
+    #: Brief §18 / D30 §D6 — the Lecturer grade-entry cutoff, i.e. the **END-TERM**
+    #: deadline (D32-1; the column keeps its name, see `docs/midterm-revision-reports-plan.md`
+    #: §E for why it was not renamed). Set by the Dean-only `POST`/`PATCH
+    #: /settings/semesters`; enforced by `_assert_grade_window_open` in
     #: `grades/service.upsert_grades`, the single grade write path, as a 409
     #: `grade_window_closed`. **NULL = no deadline, window open** — the default, and
     #: deliberately so: a guessed cutoff would lock lecturers out of a live term.
     #: Stored UTC (see `settings/service._to_utc`).
     grade_submission_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: D32 — the **MID-TERM** grading window, independent of the end-term deadline
+    #: above. Together they answer a question the single cutoff could not: *which
+    #: grading period does an assessment belong to*. That is what
+    #: `grades/revisions.midterm_revision_eligible` needs, and what decides when a
+    #: mid-term report card can be frozen (`reports/freeze.freeze_midterm`).
+    #:
+    #: **Both NULL is the default and means "this term has no mid-term period"** — the
+    #: state of every semester that existed before D32, and the reason `009` needs no
+    #: data migration. The two are set and cleared together; the service rejects one
+    #: without the other, because a start with no end can never elapse and an end with
+    #: no start has nothing to measure "existed before" against.
+    #:
+    #: Stored UTC, same as the deadline (see `settings/service._to_utc`).
+    midterm_submission_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    midterm_submission_end: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(
@@ -119,6 +140,17 @@ class Semester(Base, TimestampMixin):
         # class docstring. `sequence` is still 1-based and unique within the year; the
         # service enforces the lower bound.
         CheckConstraint("end_date > start_date", name="ck_semesters_dates"),
+        # Both NULL, or both set with end after start. The service raises a readable
+        # 422 first (`create_semester` / `update_semester`); this is the backstop that
+        # stops a direct SQL edit leaving a half-configured window behind, which the
+        # revision rules would then read as "no mid-term period" and silently disable.
+        CheckConstraint(
+            "(midterm_submission_start IS NULL AND midterm_submission_end IS NULL)"
+            " OR (midterm_submission_start IS NOT NULL"
+            " AND midterm_submission_end IS NOT NULL"
+            " AND midterm_submission_end > midterm_submission_start)",
+            name="ck_semesters_midterm_window",
+        ),
     )
 
 
@@ -191,6 +223,24 @@ class AssessmentPolicy(Base, TimestampMixin, AuditMixin):
     )
     drop_lowest_count: Mapped[int] = mapped_column(
         SmallInteger(), nullable=False, server_default=text("0")
+    )
+    #: D32 (brief §4) — may STUDENTS see their own grades at all?
+    #:
+    #: **Default false**, which is the client's decision rather than a conservative guess:
+    #: students lose grade visibility unless the Dean turns it back on. Enforced server-side
+    #: by `core.deps.require_student_grade_visibility` (403 `grades_hidden`) on every
+    #: student-facing grade surface, and echoed on `CurrentUser` so the SPA can hide the nav
+    #: without handing students the settings endpoint.
+    #:
+    #: It lands on this singleton rather than in a new table because this is already the one
+    #: row the Dean edits at `/settings/assessment-policy`; a second singleton would need its
+    #: own endpoint, screen and `id = 1` CHECK for one boolean.
+    #:
+    #: **The Registrar's removal is NOT this flag.** That is unconditional and lives in the
+    #: role tuples on `grades/router.py` — a toggle would imply it is reversible, and the
+    #: client asked for it to be permanent.
+    students_can_view_grades: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default=text("false")
     )
 
     __table_args__ = (

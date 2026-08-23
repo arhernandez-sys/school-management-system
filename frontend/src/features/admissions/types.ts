@@ -20,16 +20,17 @@ export type ApplicationStatus =
   | 'denied'
   | 'withdrawn';
 
-export type District =
-  | 'Corozal'
-  | 'Orange Walk'
-  | 'Belize'
-  | 'Cayo'
-  | 'Stann Creek'
-  | 'Toledo';
+/**
+ * D33 — `District` and `EnrollmentLoad` now live in `@shared/types/enums`, because the
+ * STUDENT record carries both too (asks 3 + 4) and two copies of a closed enum is how one
+ * district ends up spelled two ways. Re-exported here so every existing import of them
+ * from this module keeps working.
+ */
+export type { District, EnrollmentLoad } from '@shared/types/enums';
+// A re-export does not bring the names into local scope; the shapes below use them.
+import type { District, EnrollmentLoad } from '@shared/types/enums';
 
 export type YearOfStudy = 'First' | 'Second';
-export type EnrollmentLoad = 'Part Time' | 'Full Time' | 'Transient';
 export type EducationLevel = 'High School' | 'Tertiary';
 export type CreditTransferStatus = 'pending' | 'approved' | 'denied';
 
@@ -268,14 +269,7 @@ export const APPLICATION_STATUS_LABEL: Record<ApplicationStatus, string> = {
   withdrawn: 'Withdrawn',
 };
 
-export const DISTRICTS: District[] = [
-  'Corozal',
-  'Orange Walk',
-  'Belize',
-  'Cayo',
-  'Stann Creek',
-  'Toledo',
-];
+export { DISTRICTS } from '@shared/types/enums';
 
 /**
  * Section F's checklist, in the order the form prints it. The last three are not on

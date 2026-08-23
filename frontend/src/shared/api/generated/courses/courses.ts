@@ -38,7 +38,7 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 /**
  * Everyone may read the catalog (reference data, no PII). Default is_active
 filter hides retired courses from the picker.
- * @summary The subject catalog / picker (authenticated; api-spec §5b)
+ * @summary The course catalog / picker (authenticated; api-spec §5b)
  */
 export const listCoursesApiV1CoursesGet = (
   params?: ListCoursesApiV1CoursesGetParams,
@@ -145,7 +145,7 @@ export function useListCoursesApiV1CoursesGet<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 /**
- * @summary The subject catalog / picker (authenticated; api-spec §5b)
+ * @summary The course catalog / picker (authenticated; api-spec §5b)
  */
 
 export function useListCoursesApiV1CoursesGet<
@@ -173,7 +173,7 @@ export function useListCoursesApiV1CoursesGet<
 }
 
 /**
- * 409 duplicate_subject_name / duplicate_subject_code.
+ * 409 duplicate_course_name / duplicate_course_code.
  * @summary Create a course in the catalog (Dean only; api-spec §5b, FR-CLS-01a)
  */
 export const createCourseApiV1CoursesPost = (
@@ -357,7 +357,7 @@ export const useUpdateCourseApiV1CoursesCourseIdPatch = <
 };
 /**
  * Soft-delete only if no offering references it; else 409
-subject_in_use (retire via PATCH is_active=false instead).
+course_in_use (retire via PATCH is_active=false instead).
  * @summary Soft-delete a course if unused (Dean only; api-spec §5b)
  */
 export const deleteCourseApiV1CoursesCourseIdDelete = (

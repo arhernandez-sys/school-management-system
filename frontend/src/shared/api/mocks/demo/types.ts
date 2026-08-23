@@ -13,6 +13,7 @@
  *
  * ⚠️ Downstream module agents: import these (and the selectors) — do NOT redefine.
  */
+import type { EnrollmentStatus } from '@features/offerings/types';
 import type {
   Role,
   StudentStatus,
@@ -23,6 +24,8 @@ import type {
   GradeStatus,
   AttendanceStatus,
   AnnouncementAudience,
+  District,
+  EnrollmentLoad,
 } from '@shared/types/enums';
 
 // ── School identity / branding (api-spec §5.11) ─────────────────────────────────
@@ -60,8 +63,17 @@ export interface DemoSemester {
   sequence: number;
   start_date: string;
   end_date: string;
-  /** Brief §18 — Lecturer grade-entry cutoff. Read-only until Phase 3 (§D6). */
+  /**
+   * Brief §18 — the Lecturer grade-entry cutoff, i.e. the END-TERM deadline (D32-1).
+   * Read-only until Phase 3 (§D6).
+   */
   grade_submission_deadline: string | null;
+  /**
+   * D32 — the mid-term grading window. Both null = this term has no mid-term period, and
+   * neither grade revisions nor a mid-term report card are available for it.
+   */
+  midterm_submission_start: string | null;
+  midterm_submission_end: string | null;
   is_active: boolean;
 }
 
@@ -229,6 +241,12 @@ export interface DemoStudent {
   full_name: string;
   date_of_birth: string; // YYYY-MM-DD
   gender: 'male' | 'female';
+  /**
+   * D32 (brief §3) — free text, collected on the admissions form and copied onto the
+   * student on acceptance. Nullable because most records have never been through
+   * admissions: on the live database it is NULL for all 45 students today.
+   */
+  religion: string | null;
   enrollment_date: string;
   status: StudentStatus;
   guardian_name: string;
@@ -252,6 +270,52 @@ export interface DemoStudent {
    */
   program_id: string | null;
   /**
+   * D33 (client asks 3 + 4) — Sections A–E of the admission form, which
+   * `student_profiles` has carried since `005_tertiary.sql`. Demo mode has to hold them
+   * too: the student form now writes them and the profile displays them, and the last two
+   * times a field lived in only one of the two implementations, demo mode certified a
+   * screen the real backend did not serve.
+   *
+   * All nullable, because most records have never been through admissions — the same
+   * reason `religion` above is.
+   */
+  ssno: string | null;
+  civil_status: string | null;
+  street: string | null;
+  city_town_village: string | null;
+  district: District | null;
+  mother_name: string | null;
+  father_name: string | null;
+  nok_name: string | null;
+  nok_relationship: string | null;
+  nok_phone: string | null;
+  has_health_condition: boolean;
+  health_condition_note: string | null;
+  atlib_exam: boolean;
+  num_csec: number | null;
+  finance_name: string | null;
+  finance_phone: string | null;
+  finance_email: string | null;
+  enrollment_load: EnrollmentLoad | null;
+  // ── D34 · reconciled from the CLIENT'S own schema (migration 011) ─────────
+  /** The ID this record carried in the system it was imported from. */
+  student_id_original: number | null;
+  /**
+   * The student's OWN email. **NOT the login** — that is on the linked `users` row and is
+   * served as `StudentDetail.login_email`. Before D34 the student record had no email
+   * column at all, so a paper registration had nowhere to record a contact address.
+   */
+  email: string | null;
+  transferred_from: string | null;
+  graduation_date: string | null;
+  dropout_date: string | null;
+  dropout_reason: string | null;
+  comments: string | null;
+  origin: string | null;
+  /** Client-tooling columns: no FK, no consumer. Mirrored so the shape matches. */
+  educationbg_id: string | null;
+  doc_id: number | null;
+  /**
    * NOTE: there is deliberately no `section_id`/`offering_id` here. It was a convenience
    * denormalization of "the student's ONE current section", and a student sits many
    * offerings — any single-offering field would be an arbitrary pick. Enrollment is read
@@ -267,6 +331,15 @@ export interface DemoEnrollment {
   semester_id: string;
   enrolled_at: string; // RFC3339
   unenrolled_at: string | null; // null = active member
+  /**
+   * D35 — the client's `coursestatus`: HOW the student is sitting the offering.
+   *
+   * `audit` and both `withdraw_*` values mean no credit and out of the GPA, and the
+   * transcript prints `AU` / `W/P` / `W/F` instead of a grade. Distinct from
+   * `unenrolled_at`, which means the registration was undone: a withdrawal KEEPS the row,
+   * because the transcript has to show the course.
+   */
+  enrollment_status: EnrollmentStatus;
 }
 
 // ── Assessment categories (optional weighting groups) ───────────────────────────
@@ -393,6 +466,11 @@ export interface DemoAssessmentPolicy {
   absent_as_zero: boolean;
   allow_makeup: boolean;
   drop_lowest_count: number;
+  /**
+   * D32 (brief §4) — the Dean's student grade-visibility switch. Not a grading rule; it
+   * shares this singleton because that is the row the Dean already edits.
+   */
+  students_can_view_grades: boolean;
 }
 
 // ── Users (login accounts, backs Settings › Users) ──────────────────────────────
@@ -439,7 +517,12 @@ export interface DemoApplication {
   health_condition_note: string | null;
   street: string | null;
   city_town_village: string | null;
-  district: string | null;
+  /**
+   * D33 — narrowed from `string` to the `District` enum. The wizard has always written it
+   * from a fixed select and the column is `enum(...)` server-side, so the loose type only
+   * ever hid the fact that acceptance copies this onto the student record.
+   */
+  district: District | null;
   mother_name: string | null;
   father_name: string | null;
   nok_name: string | null;

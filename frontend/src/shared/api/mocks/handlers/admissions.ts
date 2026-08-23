@@ -643,8 +643,11 @@ export const admissionsHandlers = [
       // real column is a plain string. Coerced rather than widened: changing the demo type
       // would ripple through every student fixture for no gain here.
       gender: app.gender === 'female' ? 'female' : 'male',
+      // D32 - acceptance copies the application's religion onto the student, mirroring
+      // `admissions/service.py:263`. This is the only path that ever populates it.
+      religion: app.religion ?? null,
       enrollment_date: acceptedOn,
-      status: 'active',
+      status: 'Registered',
       // The declared year IS the level — the application and the profile now speak the same
       // `enum('First','Second')`, so this is a straight carry rather than a coercion.
       year_of_study: app.year_of_study ?? 'First',
@@ -656,6 +659,42 @@ export const admissionsHandlers = [
       guardian_email: '',
       address: [app.street, app.city_town_village, app.district].filter(Boolean).join(', '),
       phone: app.phone ?? '',
+      // D33 — acceptance carries the WHOLE of Sections A-E across, mirroring
+      // `admissions/service.py`. Before this only religion made the trip, so an accepted
+      // applicant's next of kin and financier were on the frozen application and nowhere
+      // on the live record the Registrar actually edits.
+      ssno: app.ssno ?? null,
+      civil_status: app.civil_status ?? null,
+      street: app.street ?? null,
+      city_town_village: app.city_town_village ?? null,
+      district: app.district ?? null,
+      mother_name: app.mother_name ?? null,
+      father_name: app.father_name ?? null,
+      nok_name: app.nok_name ?? null,
+      nok_relationship: app.nok_relationship ?? null,
+      nok_phone: app.nok_phone ?? null,
+      has_health_condition: app.has_health_condition ?? false,
+      health_condition_note: app.health_condition_note ?? null,
+      atlib_exam: app.atlib_exam ?? false,
+      num_csec: app.num_csec ?? null,
+      finance_name: app.finance_name ?? null,
+      finance_phone: app.finance_phone ?? null,
+      finance_email: app.finance_email ?? null,
+      enrollment_load: app.enrollment_load ?? null,
+      // ── D34 · the client's own columns ─────────────────────────────────────
+      // The applicant's email becomes BOTH their login and their contact address at
+      // acceptance; they are separate fields from here on, and only the login is
+      // maintained through the Users module.
+      email: app.email ?? null,
+      origin: 'admissions',
+      student_id_original: null,
+      transferred_from: null,
+      graduation_date: null,
+      dropout_date: null,
+      dropout_reason: null,
+      comments: null,
+      educationbg_id: null,
+      doc_id: null,
     });
     if (app.program_id) {
       // History opens at admission, not at the first change (§D12).

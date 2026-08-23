@@ -7,24 +7,33 @@ import type { StudentStatus } from '@shared/types/enums';
  * the status vocabulary can never drift between them.
  */
 export const STUDENT_STATUS_KIND: Record<StudentStatus, StatusKind> = {
-  active: 'success',
-  inactive: 'neutral',
+  Registered: 'success',
+  // Not an error state: the client's definition is "completed the last semester but is not
+  // continuing", so it reads neutral rather than warning.
+  Unregistered: 'neutral',
+  // This one IS a negative outcome — a student who left mid-programme — and it is the only
+  // status that should draw the eye on a register.
+  DropOut: 'error',
   transferred: 'info',
   graduated: 'info',
   withdrawn: 'neutral',
 };
 
 export const STUDENT_STATUS_LABEL: Record<StudentStatus, string> = {
-  active: 'Active',
-  inactive: 'Inactive',
+  // The stored values are already display-ready except DropOut, which gets a space. The
+  // labels are what a Registrar reads; the VALUES are the client's and are not touched.
+  Registered: 'Registered',
+  Unregistered: 'Unregistered',
+  DropOut: 'Drop out',
   transferred: 'Transferred',
   graduated: 'Graduated',
   withdrawn: 'Withdrawn',
 };
 
 export const STUDENT_STATUS_OPTIONS: StudentStatus[] = [
-  'active',
-  'inactive',
+  'Registered',
+  'Unregistered',
+  'DropOut',
   'transferred',
   'graduated',
   'withdrawn',

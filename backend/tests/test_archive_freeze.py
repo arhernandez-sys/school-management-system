@@ -98,7 +98,7 @@ class _TinyYear:
         self.student = StudentProfile(
             student_number=f"FS-{tag}", **split_name("Freeze Student"),
             date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1),
-            status="active",
+            status="Registered",
         )
         db_session.add(self.student)
         db_session.flush()

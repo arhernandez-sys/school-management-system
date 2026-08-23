@@ -14,6 +14,7 @@ import {
   useCreateSemesterApiV1SettingsSemestersPost,
   useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch,
   useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost,
+  useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost,
   useGetGradingScaleApiV1SettingsGradingScaleGet,
   useUpdateGradingScaleApiV1SettingsGradingScalePut,
   useGetAssessmentPolicyApiV1SettingsAssessmentPolicyGet,
@@ -98,6 +99,26 @@ export function useArchiveAcademicYear() {
   const invalidate = useInvalidateAcademicStructure();
   return useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost({
     mutation: { onSuccess: invalidate },
+  });
+}
+
+/**
+ * D32 (brief §6) — capture the term's mid-term report cards.
+ *
+ * Invalidates the report-card cache as well as the academic structure: a freeze changes
+ * what `GET /reports/report-card?kind=midterm` returns, and a Dean who freezes and then
+ * opens the report should not be shown the pre-freeze error from cache.
+ */
+export function useFreezeMidtermGrades() {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidateAcademicStructure();
+  return useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        void queryClient.invalidateQueries({ queryKey: ['reports', 'report-card'] });
+      },
+    },
   });
 }
 

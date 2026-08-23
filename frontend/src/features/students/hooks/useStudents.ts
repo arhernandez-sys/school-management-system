@@ -10,6 +10,7 @@ import {
   deleteStudent,
   getMyStudentRecord,
   getStudent,
+  getStudentFilterOptions,
   getStudentAssessments,
   getStudentYears,
   listStudents,
@@ -39,6 +40,42 @@ export function useStudentsList(params: StudentsListParams) {
     queryKey: studentKeys.list(params),
     queryFn: ({ signal }) => listStudents(params, signal),
     placeholderData: (prev) => prev, // keep the previous page visible during pagination
+  });
+}
+
+/**
+ * GET /students/filter-options — the religion dropdown's values (D32, brief §3).
+ *
+ * Long `staleTime`: the set of religions in the directory changes only when a student is
+ * admitted or edited, and re-fetching it on every mount of the list would be a request
+ * per navigation for data that is effectively reference data.
+ */
+export function useStudentFilterOptions() {
+  return useQuery({
+    queryKey: [...studentKeys.all, 'filter-options'],
+    queryFn: ({ signal }) => getStudentFilterOptions(signal),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * The FULL filtered result set, for printing (D32, brief §3).
+ *
+ * The brief's requirement is that the printout match what is on screen — but what is on
+ * screen is one PAGE of it, and "print all Male students" plainly means all of them, not
+ * the 25 currently visible. So the print view re-fetches the same filters with the page
+ * size raised.
+ *
+ * `enabled` gates it on the print dialog actually being open: the directory would
+ * otherwise fetch the entire student body on every visit to pre-warm a button most
+ * visitors never press.
+ */
+export function useStudentsForPrint(params: StudentsListParams, enabled: boolean) {
+  const printParams: StudentsListParams = { ...params, page: 1, page_size: 100 };
+  return useQuery({
+    queryKey: [...studentKeys.list(printParams), 'print'],
+    queryFn: ({ signal }) => listStudents(printParams, signal),
+    enabled,
   });
 }
 

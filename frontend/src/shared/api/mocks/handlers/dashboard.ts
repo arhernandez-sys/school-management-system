@@ -112,7 +112,7 @@ function termHeader() {
 
 // ── Admin (principal) — school-wide ─────────────────────────────────────────────
 function adminPayload(user: DemoUser) {
-  const activeStudents = D.students.filter((s) => s.status === 'active');
+  const activeStudents = D.students.filter((s) => s.status === 'Registered');
   const liveOfferings = D.offerings.filter((o) => !o.is_archived);
   const active_students = activeStudents.length;
 
@@ -238,7 +238,7 @@ function secretaryPayload(user: DemoUser) {
     user_full_name: user.full_name,
     ...termHeader(),
     stats: {
-      active_students: D.students.filter((s) => s.status === 'active').length,
+      active_students: D.students.filter((s) => s.status === 'Registered').length,
       active_teachers: D.teachers.filter((t) => t.status === 'active').length,
       total_sections: offerings.length,
       unstaffed_subjects,

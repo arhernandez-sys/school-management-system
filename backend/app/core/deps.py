@@ -130,3 +130,45 @@ def require_role(*roles: Role):
         return user
 
     return _checker
+
+
+def require_student_grade_visibility(*roles: Role):
+    """`require_role(*roles)` PLUS the Dean's student grade-visibility switch (D32, §4).
+
+    **Why a dependency and not a check inside each service.** The rule is "a student may
+    not reach a grade at all", and there are four separate student-facing grade surfaces
+    (`/grades/me`, `/reports/report-card/me`, `/students/me/assessments`, and the
+    dashboard's own-grade block). Putting the check in each service would be four places
+    to forget it; putting it in the transport layer means a new student grade endpoint has
+    to opt IN to exposure rather than remember to opt out.
+
+    **Only STUDENTS are gated by it.** A Lecturer needs their own gradebook to teach and a
+    Dean needs every grade to run the college; the flag is about what a student sees. The
+    Registrar's removal is NOT here either — that is unconditional, and is expressed by
+    leaving `Role.SECRETARY` out of the role tuple on those routes.
+
+    403 `grades_hidden`, not 404: the resource plainly exists, the student simply is not
+    permitted it right now, and a 404 would send them hunting for a bug.
+    """
+    allowed = set(roles)
+
+    def _checker(
+        user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    ) -> User:
+        if user.role not in allowed:
+            raise Forbidden("You do not have access to this resource.")
+        if user.role == Role.STUDENT:
+            # Imported here, not at module scope: `auth.service` imports `core.security`
+            # and the users/settings models, and a top-level import would make every
+            # module that touches `deps` drag that graph in.
+            from app.modules.auth.service import students_can_view_grades
+
+            if not students_can_view_grades(db):
+                raise Forbidden(
+                    "Grades are not published to students at the moment. Your lecturer "
+                    "or the Dean can tell you your results.",
+                    code="grades_hidden",
+                )
+        return user
+
+    return _checker

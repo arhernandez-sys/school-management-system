@@ -107,7 +107,18 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
                     {row.numeric != null ? row.numeric.toFixed(1) : '—'}
                   </TableCell>
                   <TableCell align="center">
-                    <GradeLetter letter={row.letter} />
+                    {/* D35 — a course with no grade because it was AUDITED or WITHDRAWN
+                        prints its registry notation (AU / W/P / W/F) in the grade column.
+                        That notation is the whole reason the client wants the status
+                        recorded: a permanent record that silently omits the course a
+                        student withdrew from is not a transcript. */}
+                    {row.notation ? (
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {row.notation}
+                      </Typography>
+                    ) : (
+                      <GradeLetter letter={row.letter} />
+                    )}
                   </TableCell>
                   <TableCell>{row.teacher ?? '—'}</TableCell>
                 </TableRow>

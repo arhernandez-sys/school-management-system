@@ -80,6 +80,9 @@ export function AppShell() {
         mobileOpen={mobileDrawer.isOpen}
         onMobileClose={mobileDrawer.close}
         collapsed={collapsed}
+        // D32 — the Dean can unpublish grades; the nav follows the session payload
+        // rather than the role alone (brief §4).
+        studentsCanViewGrades={user.students_can_view_grades ?? true}
       />
 
       <Box

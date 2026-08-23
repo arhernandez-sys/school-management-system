@@ -39,7 +39,7 @@ from app.modules.offerings.models import (
     ClassTeacher,
     Course,
 )
-from app.modules.grades import calc
+from app.modules.grades import calc, revisions
 from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.grades.schemas import (
     OfferingOption,
@@ -178,6 +178,82 @@ def _assert_grade_window_open(db: Session, assessment: Assessment, actor: User) 
             # The date is the actionable part: a Lecturer needs to know whether they
             # are an hour late or a month late before deciding whom to ask.
             extra={"grade_submission_deadline": deadline.isoformat() if deadline else None},
+        )
+
+
+def midterm_freeze_state(
+    db: Session, semester_id: uuid.UUID | None
+) -> tuple[bool, datetime | None, datetime | None]:
+    """`(frozen, start, end)` for a term's MID-TERM grading window (D33, client ask 7).
+
+    **This is the freeze the mid-term window never had.** D32 Phase 1 added
+    `midterm_submission_start` / `midterm_submission_end` and used them for one thing only:
+    deciding whether a result was part of the mid-term submission, and therefore whether it
+    could be *revised* (`revisions.midterm_revision_eligible`). Nothing stopped a mark being
+    typed in while the window was running — so the mid-term snapshot the Dean freezes at
+    the end of it was assembled from a set that could still move underneath it. The
+    client's ask is the missing half: **from the start date to the end date the mid-term is
+    frozen and nobody enters a grade.**
+
+    `frozen` is true only strictly inside `[start, end]`. Both bounds are INCLUSIVE, which
+    is the reading that leaves no gap: `utcnow() == end` must not be the one instant a mark
+    slips through, and `midterm_revision_eligible` uses `utcnow() <= end` for the mirror-image
+    reason. After `end` the window is over and entry re-opens — a *new* mark goes in normally
+    (which is what makes rules 2 and 3 of the revision gate reachable), while CHANGING one
+    that was entered before `start` needs the Dean to approve a revision.
+
+    NULL either side → never frozen, the same safe default as `_grade_window_closed`. That
+    is the state of every semester created before D32, and an invented window would lock a
+    live term. `_assert_midterm_window` in `settings/service.py` already refuses to store
+    only one of the pair, so a half-configured window cannot reach this function.
+
+    `ensure_aware` is load-bearing for the reason `_grade_window_closed` documents: these
+    are MariaDB `DATETIME`s and pymysql returns them naive.
+    """
+    if semester_id is None:
+        return False, None, None
+    row = db.execute(
+        select(Semester.midterm_submission_start, Semester.midterm_submission_end).where(
+            Semester.id == semester_id
+        )
+    ).one_or_none()
+    if row is None:
+        return False, None, None
+    start = ensure_aware(row[0])
+    end = ensure_aware(row[1])
+    if start is None or end is None:
+        return False, None, None
+    return start <= utcnow() <= end, start, end
+
+
+def _assert_midterm_not_frozen(db: Session, assessment: Assessment, actor: User) -> None:
+    """409 `midterm_frozen` while the term's mid-term grading window is running (D33).
+
+    Sits beside `_assert_grade_window_open` in `upsert_grades` for the same reason that one
+    is there: it is the single grade write path, so the freeze, the seeds and any future
+    writer are all inside the rule.
+
+    **The Dean is exempt**, matching `_assert_grade_window_open`. The same caveat applies —
+    the arm is currently unreachable because the route is `require_role(Role.TEACHER)` — and
+    it is written for the same reason: the rule belongs with the check, and the Dean's
+    sanctioned post-freeze path is approving a revision rather than typing the mark.
+
+    The 409 carries BOTH dates. "Frozen" with no reopen date is unactionable: the Lecturer's
+    next question is always whether to wait or to file a revision, and the end date is the
+    answer.
+    """
+    if actor.role == Role.PRINCIPAL:
+        return
+    frozen, start, end = midterm_freeze_state(db, assessment.semester_id)
+    if frozen:
+        raise Conflict(
+            "The mid-term grading period is in progress, so grades for this term are "
+            "frozen. Entry reopens once the period closes.",
+            code="midterm_frozen",
+            extra={
+                "midterm_submission_start": start.isoformat() if start else None,
+                "midterm_submission_end": end.isoformat() if end else None,
+            },
         )
 
 
@@ -579,6 +655,15 @@ def get_gradebook(
         if g.status == GradeStatus.GRADED and g.score is not None:
             bucket["graded"] += 1
 
+    # D32 (brief §1) — only a Lecturer can FILE a revision, so nobody else is told whether
+    # a cell qualifies. Resolved once here rather than inside the loop: the answer does not
+    # vary by cell, and asking per cell would put a role comparison in an N×M inner loop.
+    #
+    # `midterm_revision_eligible` calls `db.get(Semester, ...)` per cell, which costs one
+    # query for the whole gradebook: every assessment here belongs to the same term, and
+    # `Session.get` serves repeats from the identity map without touching the database.
+    viewer_is_lecturer = actor.role == Role.TEACHER
+
     rows: list[GradebookRow] = []
     for student, enrollment_id, is_member in ordered:
         student_grades = by_student.get(student.id, {})
@@ -593,6 +678,19 @@ def get_gradebook(
             letter = None
             if status == GradeStatus.GRADED and score is not None:
                 letter = calc.letter_for(calc.percentage_for(score, a.max_score), bands)
+
+            can_revise = False
+            blocked_reason: str | None = None
+            if viewer_is_lecturer:
+                if g is None:
+                    # No row at all: there is nothing to revise, and the Lecturer should
+                    # enter the grade rather than appeal a mark that was never given.
+                    blocked_reason = "not_graded"
+                else:
+                    can_revise, blocked_reason = revisions.midterm_revision_eligible(
+                        db, grade=g, assessment=a
+                    )
+
             cells.append(
                 GradebookCell(
                     assessment_id=a.id,
@@ -601,6 +699,8 @@ def get_gradebook(
                     makeup_score=_f(g.makeup_score) if g is not None else None,
                     is_released=bool(released),
                     letter=letter,
+                    can_request_revision=can_revise,
+                    revision_blocked_reason=blocked_reason,
                 )
             )
 
@@ -627,6 +727,10 @@ def get_gradebook(
         )
 
     window_closed, window_deadline = _grade_window_closed(
+        db, semester.id if semester is not None else None
+    )
+    # D33 ask 7 — the mid-term freeze, reported the same way and for the same reason.
+    midterm_frozen, midterm_start, midterm_end = midterm_freeze_state(
         db, semester.id if semester is not None else None
     )
 
@@ -675,6 +779,9 @@ def get_gradebook(
         # "why can't the lecturer enter these?" needs to see the same closed window.
         grade_window_closed=window_closed,
         grade_submission_deadline=window_deadline,
+        midterm_frozen=midterm_frozen,
+        midterm_submission_start=midterm_start,
+        midterm_submission_end=midterm_end,
         viewer_role=actor.role.value,
     )
 
@@ -696,6 +803,10 @@ def upsert_grades(
     cs = db.get(CourseOffering, assessment.offering_id)
     _assert_year_writable(db, cs)
     _assert_grade_window_open(db, assessment, actor)
+    # D33 ask 7 — and it is checked AFTER the end-term deadline on purpose. If both are
+    # shut the end-term message is the more useful one: the term is over, and waiting for
+    # the mid-term window to reopen would not help.
+    _assert_midterm_not_frozen(db, assessment, actor)
 
     entries = payload.entries
     max_score = _dec(assessment.max_score) or Decimal(0)
@@ -824,6 +935,11 @@ def upsert_grades(
                 student_id=entry.student_id,
                 enrollment_id=enrollments[entry.student_id].id,
                 status=entry.status,
+                # Only settable HERE. The tail below sets `updated_by` on insert and
+                # update alike, so without this the row would record who last touched
+                # a mark but never who first entered it — the provenance a grade
+                # dispute actually asks for, and unrecoverable once the row exists.
+                created_by=actor.id,
             )
             db.add(row)
         row.status = entry.status

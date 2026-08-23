@@ -72,6 +72,9 @@ export interface AttendanceSummary {
   excused: number;
 }
 
+/** D32 — the two report kinds. Mirrors `app/common/enums.py::ReportCardKind`. */
+export type ReportCardKind = 'midterm' | 'endterm';
+
 export interface ReportCard {
   student: StudentRef;
   /**
@@ -104,6 +107,16 @@ export interface ReportCard {
   gpa: number | null;
   total_credits: number;
   is_frozen: boolean;
+  /**
+   * D32 (brief §5) — which report this is.
+   *
+   * `midterm` is served VERBATIM from a `report_card_snapshots` payload and never
+   * recalculates: it is the document as it stood when the mid-term window closed.
+   * `endterm` computes from current grades while the year is live.
+   */
+  report_kind: ReportCardKind;
+  /** When a frozen card was captured; null on a computed one. */
+  frozen_at: string | null;
 }
 
 // ── Transcript ─────────────────────────────────────────────────────────────────
@@ -113,6 +126,14 @@ export interface TranscriptSubjectRow {
   credits: number | null;
   numeric: number | null;
   letter: string;
+  /**
+   * D35 — the registry notation for a course with no grade: `AU` (audited), `W/P`
+   * (withdrew passing), `W/F` (withdrew failing). `null` on an ordinary graded row.
+   *
+   * When set, `numeric` and `letter` are empty and the row is out of the term average AND
+   * the GPA. It is printed anyway, which is the point of recording the status.
+   */
+  notation: string | null;
 }
 
 export interface TranscriptSemester {

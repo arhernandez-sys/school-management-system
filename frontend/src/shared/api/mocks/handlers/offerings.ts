@@ -23,6 +23,7 @@ import {
   yearIdOfOffering,
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoOffering, DemoStudent } from '@shared/api/mocks/demo/dataset';
+import type { EnrollmentStatus } from '@features/offerings/types';
 import { errorResponse, listParamsFrom } from './_helpers';
 
 /**
@@ -168,6 +169,9 @@ function rosterEntry(offering: DemoOffering, student: DemoStudent) {
     student: studentRef(student),
     enrolled_at: enr?.enrolled_at ?? '',
     unenrolled_at: enr?.unenrolled_at ?? null,
+    // D35 — the client's `coursestatus`. `enrolled` when there is no row to read it from,
+    // which is the same default the column carries server-side.
+    enrollment_status: enr?.enrollment_status ?? 'enrolled',
   };
 }
 
@@ -605,7 +609,7 @@ export const offeringsHandlers = [
     const url = new URL(request.url);
     const search = (url.searchParams.get('search') ?? '').toLowerCase();
     const rows = D.students
-      .filter((s) => s.status === 'active' && !onRoster.has(s.id))
+      .filter((s) => s.status === 'Registered' && !onRoster.has(s.id))
       .filter(
         (s) =>
           !search ||
@@ -630,7 +634,12 @@ export const offeringsHandlers = [
     if (notWritable(offering)) {
       return errorResponse(409, 'year_archived', 'This offering belongs to an archived year.');
     }
-    const body = (await request.json()) as { student_ids?: string[]; semester_id?: string };
+    const body = (await request.json()) as {
+      student_ids?: string[];
+      semester_id?: string;
+      // D35 — the client's `coursestatus`, applied to the whole batch.
+      enrollment_status?: EnrollmentStatus;
+    };
     const ids = body.student_ids ?? [];
     // The term is the OFFERING's, not the caller's choice. A `semester_id` that disagrees is
     // refused rather than quietly honoured — writing an enrolment into a term the offering
@@ -686,6 +695,9 @@ export const offeringsHandlers = [
           semester_id: semesterId,
           enrolled_at: new Date().toISOString(),
           unenrolled_at: null,
+          // D35 — the client's `coursestatus`, applied to the whole batch,
+          // mirroring `offerings/service.enroll_students`.
+          enrollment_status: body.enrollment_status ?? 'enrolled',
         });
       }
       enrolled.push(rosterEntry(offering, student));
@@ -711,8 +723,55 @@ export const offeringsHandlers = [
       if (!enr) return errorResponse(404, 'not_found', 'Enrollment not found.');
       enr.unenrolled_at = new Date().toISOString();
       // Nothing else to clear: the student's other enrolments are untouched, which is the
-      // point — withdrawing from one course is not withdrawing from the term.
+      // point — un-enrolling from one course is not leaving the term.
       return new HttpResponse(null, { status: 204 });
+    },
+  ),
+
+  // ── PATCH /offerings/{id}/enrollments/{enrollmentId} — the course status (D35) ──
+  //
+  // NOT the DELETE above. That un-enrols and takes the student off the roster; this
+  // records that they SAT the course and left, so the row stays open — the transcript has
+  // to print `AU` / `W/P` / `W/F` against it, and deleting it would erase that.
+  http.patch(
+    `${API_BASE_URL}/offerings/:offeringId/enrollments/:enrollmentId`,
+    async ({ params, request, cookies }) => {
+      const role = sessionRole(cookies);
+      if (role !== 'principal' && role !== 'secretary') {
+        return errorResponse(403, 'forbidden', 'You cannot change enrolments.');
+      }
+      const offering = getOffering(String(params.offeringId));
+      if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+      if (notWritable(offering)) {
+        return errorResponse(409, 'year_archived', 'This offering belongs to an archived year.');
+      }
+      const enr = D.enrollments.find((e) => e.id === params.enrollmentId);
+      if (!enr) return errorResponse(404, 'not_found', 'Enrollment not found.');
+      // Mirrors `set_enrollment_status`: there is nothing to describe on a closed row.
+      if (enr.unenrolled_at) {
+        return errorResponse(
+          409,
+          'enrollment_closed',
+          'This student is no longer enrolled in the offering, so their course status cannot be set. Re-enrol them first.',
+        );
+      }
+      const body = (await request.json()) as { enrollment_status?: EnrollmentStatus };
+      const next = body.enrollment_status;
+      const allowed: EnrollmentStatus[] = [
+        'enrolled',
+        'audit',
+        'withdraw_passing',
+        'withdraw_failing',
+      ];
+      if (!next || !allowed.includes(next)) {
+        return errorResponse(422, 'validation_error', 'Unknown course status.', {
+          enrollment_status: ['Must be enrolled, audit, withdraw_passing or withdraw_failing.'],
+        });
+      }
+      enr.enrollment_status = next;
+      const student = D.students.find((s) => s.id === enr.student_id);
+      if (!student) return errorResponse(404, 'not_found', 'Student not found.');
+      return HttpResponse.json(rosterEntry(offering, student));
     },
   ),
 

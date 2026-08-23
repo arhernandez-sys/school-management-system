@@ -40,6 +40,7 @@ import type {
   ListSemestersApiV1SettingsSemestersGetParams,
   ListUsersApiV1SettingsUsersGetParams,
   LogoUploadResponse,
+  MidtermFreezeResponse,
   PageUserListItem,
   SchoolProfileRead,
   SchoolUpdateRequest,
@@ -1223,6 +1224,119 @@ export const useActivateSemesterApiV1SettingsSemestersSemesterIdActivatePatch = 
 > => {
   const mutationOptions =
     getActivateSemesterApiV1SettingsSemestersSemesterIdActivatePatchMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * Dean only. Captures every enrolled student's report card for the term into
+`report_card_snapshots` with `kind='midterm'`, so mid-term reports serve a frozen
+document instead of recalculating from grades that have since moved.
+
+**Idempotent** — re-running refreshes in place, which is what lets a Dean re-freeze
+after correcting a mark.
+
+409 `midterm_window_open` while the mid-term period is still running (freezing a
+half-entered gradebook and calling it final would be worse than refusing);
+422 `no_midterm_window` if the term has no mid-term period configured.
+
+Pressing this is OPTIONAL: a mid-term report requested after the window closes
+freezes itself on first read. The button exists so the Dean can choose the moment.
+ * @summary Freeze mid-term report cards for a term (principal; D32, brief §6)
+ */
+export const freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost = (
+  semesterId: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal,
+) => {
+  return customInstance<MidtermFreezeResponse>(
+    { url: `/settings/semesters/${semesterId}/midterm-freeze`, method: 'POST', signal },
+    options,
+  );
+};
+
+export const getFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePostMutationOptions =
+  <
+    TError = ErrorType<
+      ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse
+    >,
+    TContext = unknown,
+  >(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>
+      >,
+      TError,
+      { semesterId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>
+    >,
+    TError,
+    { semesterId: string },
+    TContext
+  > => {
+    const mutationKey = ['freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost'];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>
+      >,
+      { semesterId: string }
+    > = (props) => {
+      const { semesterId } = props ?? {};
+
+      return freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost(
+        semesterId,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type FreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePostMutationResult =
+  NonNullable<
+    Awaited<ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>>
+  >;
+
+export type FreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePostMutationError =
+  ErrorType<ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse>;
+
+/**
+ * @summary Freeze mid-term report cards for a term (principal; D32, brief §6)
+ */
+export const useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost = <
+  TError = ErrorType<ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse | ErrorResponse>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>
+      >,
+      TError,
+      { semesterId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customInstance>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof freezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost>>,
+  TError,
+  { semesterId: string },
+  TContext
+> => {
+  const mutationOptions =
+    getFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePostMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

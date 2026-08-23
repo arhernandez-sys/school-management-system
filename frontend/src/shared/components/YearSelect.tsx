@@ -15,6 +15,8 @@ export interface YearSelectProps {
   activeYearId?: string | undefined;
   isLoading?: boolean;
   label?: string;
+  /** Stretch to the container. For grid/stacked layouts (D33 — the filters modal). */
+  fullWidth?: boolean;
 }
 
 export function YearSelect({
@@ -24,6 +26,7 @@ export function YearSelect({
   activeYearId,
   isLoading = false,
   label = 'Year',
+  fullWidth = false,
 }: YearSelectProps) {
   return (
     <TextField
@@ -33,7 +36,8 @@ export function YearSelect({
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value)}
       disabled={isLoading || years.length === 0}
-      sx={{ minWidth: 150 }}
+      fullWidth={fullWidth}
+      sx={fullWidth ? undefined : { minWidth: 150 }}
     >
       {years.map((y) => (
         <MenuItem key={y.id} value={y.id}>

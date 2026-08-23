@@ -380,6 +380,13 @@ class TestCourseCatalogCutover:
         So the assertion changed from "no row landed in `subjects`" to "there is no
         `subjects` table to land in" — which is the stronger statement, and the one that
         fails loudly if a later migration ever recreates it.
+
+        **D34 dropped the quarantined copy too**, on the operator's explicit go-ahead
+        ("remove all legacy tables it is not needed"), after re-verifying that all 11 of
+        its rows exist in `courses` under the same ids. So the second assertion INVERTED:
+        it used to insist the quarantine was kept, and this test firing was exactly the
+        signal `010`'s audit note said it would be. Both tables must now be absent, which
+        is the strongest form of the claim — nothing anywhere is a `subjects` row.
         """
         from sqlalchemy import text
 
@@ -411,7 +418,10 @@ class TestCourseCatalogCutover:
             )
         )
         assert live_subjects == 0, "`subjects` should have been quarantined by 008"
-        assert quarantined == 1, "the quarantined copy must be KEPT, never dropped"
+        assert quarantined == 0, (
+            "the quarantine was DROPPED by D34 (010) after its 11 rows were verified "
+            "present in `courses`; a non-zero count here means a migration recreated it"
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════

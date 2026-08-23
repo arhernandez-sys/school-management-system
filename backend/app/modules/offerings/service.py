@@ -596,6 +596,7 @@ def _roster_entry(enr: ClassEnrollment, student: StudentProfile):
         student=StudentRef.model_validate(student),
         enrolled_at=enr.enrolled_at,
         unenrolled_at=enr.unenrolled_at,
+        enrollment_status=enr.enrollment_status,
     )
 
 
@@ -986,7 +987,7 @@ def enrollable_students(
 
     stmt = select(StudentProfile).where(
         StudentProfile.deleted_at.is_(None),
-        StudentProfile.status == StudentStatus.ACTIVE,
+        StudentProfile.status == StudentStatus.REGISTERED,
         StudentProfile.id.notin_(already),
     )
     if search:
@@ -1119,6 +1120,9 @@ def enroll_students(db: Session, *, actor: User, offering_id: uuid.UUID, payload
                 student_id=sid,
                 semester_id=semester_id,
                 enrolled_at=now,
+                # D35 — the client's `coursestatus`, applied to the whole batch. Defaults
+                # to `enrolled`, so every pre-D35 caller is unchanged.
+                enrollment_status=payload.enrollment_status,
                 created_by=actor.id,
                 updated_by=actor.id,
             )
@@ -1132,6 +1136,7 @@ def enroll_students(db: Session, *, actor: User, offering_id: uuid.UUID, payload
         summary={
             "student_ids": [str(s) for s in payload.student_ids],
             "semester_id": str(semester_id),
+            "enrollment_status": payload.enrollment_status.value,
         },
     )
     db.commit()
@@ -1185,6 +1190,77 @@ def unenroll_student(
         summary={"enrollment_id": str(enrollment_id)},
     )
     db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PATCH /offerings/{id}/enrollments/{enrollment_id} — the client's `coursestatus`
+# ══════════════════════════════════════════════════════════════════════════════
+def set_enrollment_status(
+    db: Session,
+    *,
+    actor: User,
+    offering_id: uuid.UUID,
+    enrollment_id: uuid.UUID,
+    payload,
+):
+    """Change HOW one student is sitting one offering (D35 — the client's `coursestatus`).
+
+    **Deliberately NOT `DELETE`.** Un-enrolling closes the row with `unenrolled_at` and
+    takes the student off the roster, which says the registration was a mistake. A
+    WITHDRAWAL is the opposite claim: the student did sit the course and then left, and the
+    transcript has to print `W/P` or `W/F` against it. So the row stays open and on the
+    roster — deleting it would erase the very thing being recorded.
+
+    **An un-enrolled row is refused**, because there is nothing to describe: the student is
+    not sitting the offering at all. Re-enrol them first if the intent was to reinstate.
+
+    The change is audited with the before/after and the reason, which is the only place the
+    reason is kept — `class_enrollments` has no column for it, and inventing one to hold
+    free text that nothing reads would be worse than the audit row that already exists for
+    exactly this purpose.
+    """
+    from app.modules.offerings.schemas import RosterEntry  # noqa: F401 - shape only
+
+    offering = _offering_or_404(db, offering_id)
+    _assert_year_writable(db, offering)
+
+    enr = db.scalar(
+        select(ClassEnrollment).where(
+            ClassEnrollment.id == enrollment_id,
+            ClassEnrollment.offering_id == offering.id,
+        )
+    )
+    if enr is None:
+        raise NotFound("Enrollment not found.", code="not_found")
+    if enr.unenrolled_at is not None:
+        raise Conflict(
+            "This student is no longer enrolled in the offering, so their course status "
+            "cannot be set. Re-enrol them first.",
+            code="enrollment_closed",
+        )
+
+    before = enr.enrollment_status
+    after = payload.enrollment_status
+    enr.enrollment_status = after
+    enr.updated_by = actor.id
+
+    _audit(
+        db,
+        actor=actor,
+        action="offering.enrollment_status",
+        entity_id=offering.id,
+        summary={
+            "enrollment_id": str(enrollment_id),
+            "student_id": str(enr.student_id),
+            "before": before.value,
+            "after": after.value,
+            "reason": payload.reason,
+        },
+    )
+    db.commit()
+
+    student = db.get(StudentProfile, enr.student_id)
+    return _roster_entry(enr, student)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

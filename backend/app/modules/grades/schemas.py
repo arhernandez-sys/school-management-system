@@ -132,6 +132,21 @@ class GradebookCell(_LetterOptional):
     makeup_score: float | None = None
     #: `grade.is_released ?? assessment.is_released`.
     is_released: bool = False
+    #: D32 (brief §1) — may a Lecturer file a Revision of Grades against THIS result?
+    #:
+    #: Server-computed rather than re-derived in the browser, because the four rules read
+    #: `assessments.created_at`, `assessment_grades.graded_at` and the term's mid-term
+    #: window — none of which the gradebook payload carries, and all of which the client
+    #: would have to be trusted to combine identically to `create_revision`. Sending the
+    #: verdict keeps one implementation of the rule.
+    #:
+    #: Always `false` for a non-Lecturer viewer: the Dean decides revisions and does not
+    #: file them (§D7), and a Registrar has no grade authority at all.
+    can_request_revision: bool = False
+    #: The reason code from `REVISION_BLOCKED_REASONS` when `can_request_revision` is
+    #: false, so the tooltip can say WHICH rule bit instead of greying a button silently.
+    #: `None` when the request is allowed, or when the viewer is not a Lecturer.
+    revision_blocked_reason: str | None = None
 
 
 class GradebookRow(BaseModel):
@@ -162,6 +177,18 @@ class Gradebook(BaseModel):
     #: Lecturer needs to be told which one they are looking at.
     grade_window_closed: bool = False
     grade_submission_deadline: datetime | None = None
+    #: D33 (client ask 7). True while `[midterm_submission_start, midterm_submission_end]`
+    #: is running, during which NOBODY enters a grade for this term.
+    #:
+    #: A THIRD flag rather than a value folded into `grade_window_closed`, for the reason
+    #: that field's own note gives: the three states are answered differently by the
+    #: Lecturer. `can_edit=false` → "not yours". `grade_window_closed` → "the term is
+    #: over; file a revision". `midterm_frozen` → "wait; it reopens on this date". The
+    #: window dates travel with it so the UI can name that date instead of saying
+    #: "later".
+    midterm_frozen: bool = False
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
     viewer_role: str
 
 

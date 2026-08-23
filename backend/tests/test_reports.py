@@ -132,7 +132,7 @@ class _Graph:
             **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 3, 4),
             enrollment_date=date(2025, 9, 1),
-            status="active",
+            status="Registered",
             # D29: the level lives on the student, not on a homeroom, and the report
             # card header reads it from here.
             year_of_study="First",
@@ -322,7 +322,12 @@ class TestReportCard:
             "attendance_summary", "term_average", "term_average_letter", "is_frozen",
             # D30 Phase 3 — the BAJC layout's header labels plus the credit-weighted GPA.
             "program_code", "period", "block", "gpa", "total_credits",
+            # D32 — which report this is, and when it was frozen (null on a computed one).
+            "report_kind", "frozen_at",
         }
+        # The default is the pre-D32 behaviour, so every existing caller is unaffected.
+        assert body["report_kind"] == "endterm"
+        assert body["frozen_at"] is None
         # D29: the header names the student's LEVEL, not a homeroom.
         assert body["year_of_study"] == "First"
 
@@ -421,6 +426,10 @@ class TestReportCard:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestMyReportCard:
     def test_student_reads_their_own(self, client, graph) -> None:
         body = client.get(f"{R}/report-card/me", headers=graph.U).json()
@@ -531,6 +540,10 @@ def _reband_to_bajc(db_session, year_id) -> None:
     db_session.flush()
 
 
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestReportCardGpa:
     """**The D30 Phase 3 gate, over HTTP.** The BAJC sample report card prints GPA 2.1
     for five 3-credit courses of which only three are graded; `test_gpa_calc.py` proves
@@ -962,7 +975,7 @@ class TestTranscript:
     def test_student_with_no_enrollments_gets_an_empty_transcript(self, client, graph, db_session) -> None:
         loner = StudentProfile(
             student_number=f"L-{graph.tag}", **split_name("No Classes"),
-            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="active",
+            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="Registered",
         )
         db_session.add(loner)
         db_session.flush()

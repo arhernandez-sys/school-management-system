@@ -153,6 +153,31 @@ function buildSections(role: Role): NavSection[] {
     .filter((section) => section.items.length > 0);
 }
 
-export function navSectionsForRole(role: Role): NavSection[] {
-  return buildSections(role);
+/** Runtime facts, beyond the caller's role, that change what the nav should show. */
+export interface NavOptions {
+  /**
+   * D32 (brief §4) — the Dean's `assessment_policies.students_can_view_grades`, as it
+   * arrives on `CurrentUser`. Only affects STUDENTS: with grades unpublished the
+   * "My Grades" item is dropped rather than left pointing at a screen that 403s.
+   *
+   * Defaults to `true` so a caller that has not been updated keeps today's nav rather
+   * than silently losing an item; the server is the boundary either way.
+   */
+  studentsCanViewGrades?: boolean;
+}
+
+export function navSectionsForRole(role: Role, options: NavOptions = {}): NavSection[] {
+  const { studentsCanViewGrades = true } = options;
+  const sections = buildSections(role);
+  if (role !== 'student' || studentsCanViewGrades) return sections;
+
+  // Drop the grades item, then any section it emptied — the same two-step
+  // `buildSections` already does for role filtering, so a section never renders as a
+  // bare heading.
+  return sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => item.module !== 'grades'),
+    }))
+    .filter((section) => section.items.length > 0);
 }

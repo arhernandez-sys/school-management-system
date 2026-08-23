@@ -6,6 +6,8 @@
  */
 import type { TermType } from './termType';
 import type { SemesterDetailGradeSubmissionDeadline } from './semesterDetailGradeSubmissionDeadline';
+import type { SemesterDetailMidtermSubmissionStart } from './semesterDetailMidtermSubmissionStart';
+import type { SemesterDetailMidtermSubmissionEnd } from './semesterDetailMidtermSubmissionEnd';
 
 export interface SemesterDetail {
   id: string;
@@ -16,5 +18,7 @@ export interface SemesterDetail {
   start_date: string;
   end_date: string;
   grade_submission_deadline?: SemesterDetailGradeSubmissionDeadline;
+  midterm_submission_start?: SemesterDetailMidtermSubmissionStart;
+  midterm_submission_end?: SemesterDetailMidtermSubmissionEnd;
   is_active: boolean;
 }

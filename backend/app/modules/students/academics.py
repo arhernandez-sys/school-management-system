@@ -32,7 +32,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.common.enums import CreditTransferStatus
+from app.common.enums import CreditTransferStatus, EnrollmentStatus
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.timeutil import school_today
 from app.modules.admissions.models import CreditTransferRequest
@@ -254,23 +254,53 @@ def _transferred_course_ids(db: Session, student: StudentProfile) -> set[uuid.UU
     )
 
 
-def _enrolled_course_ids(db: Session, student_id: uuid.UUID) -> dict[uuid.UUID, uuid.UUID]:
-    """`{course_id: latest semester_id}` for every course the student has ever sat.
+#: The two `coursestatus` values that mean "sat it and left" (D35).
+#:
+#: Both are OUT OF THE GPA. `withdraw_passing` is uncontroversial — the student was
+#: passing, so counting it as anything would be inventing a grade. `withdraw_failing` is
+#: the judgment call: some institutions score a W/F as an F, which would pull the GPA down.
+#: This system does not, on the same principle the `transferred` bucket documents — a
+#: number nobody at BAJC awarded should not enter the average. **Confirm with BAJC** (see
+#: the D35 plan doc §F); flipping it is a one-line change here plus a `GpaEntry` with
+#: `grade_point=0`.
+_WITHDRAWN = frozenset({EnrollmentStatus.WITHDRAW_PASSING, EnrollmentStatus.WITHDRAW_FAILING})
+
+
+def _enrolled_course_ids(
+    db: Session, student_id: uuid.UUID
+) -> dict[uuid.UUID, tuple[uuid.UUID, EnrollmentStatus]]:
+    """`{course_id: (latest semester_id, how they sat it)}` for every course ever sat.
 
     Keyed on the course rather than the offering: "have you taken Intermediate Algebra?"
     is a question about the course, and the same course may have been sat in two terms.
+
+    **D35 added the status**, and it is not cosmetic. Before it, a course the student
+    AUDITED or WITHDREW from was indistinguishable from one they were still taking, so
+    `academic_history` filed it as `in_progress` — permanently, since no grade would ever
+    arrive — and put its credits in the GPA denominator with no quality points against
+    them. The effect was a **silently depressed GPA that no screen could explain**, and it
+    would have appeared the first time anyone used the client's `coursestatus`.
+
+    Ordered so the LATEST enrolment wins when a course was sat twice: a student who
+    withdrew from Algebra and re-took it is a student who took Algebra, and the retake is
+    the row that describes where they now stand.
     """
     rows = db.execute(
-        select(CourseOffering.course_id, ClassEnrollment.semester_id)
+        select(
+            CourseOffering.course_id,
+            ClassEnrollment.semester_id,
+            ClassEnrollment.enrollment_status,
+        )
         .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
         .where(
             ClassEnrollment.student_id == student_id,
             CourseOffering.deleted_at.is_(None),
         )
+        .order_by(ClassEnrollment.enrolled_at)
     ).all()
-    out: dict[uuid.UUID, uuid.UUID] = {}
-    for course_id, semester_id in rows:
-        out[course_id] = semester_id
+    out: dict[uuid.UUID, tuple[uuid.UUID, EnrollmentStatus]] = {}
+    for course_id, semester_id, status in rows:
+        out[course_id] = (semester_id, status)
     return out
 
 
@@ -289,6 +319,10 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
       * **failed** — a result that does not clear it. Still counted in the GPA, and still
         leaves the course owing.
       * **in_progress** — enrolled, no result yet.
+      * **audited** — sitting it without reading it for credit (D35). No credit, and out
+        of the GPA on both sides of the fraction.
+      * **withdrawn** — sat it and left (D35, `withdraw_passing` / `withdraw_failing`). No
+        credit, out of the GPA; the transcript still prints the notation.
       * **remaining** — in the programme's curriculum and never taken.
 
     Credits: **earned** = completed + transferred; **remaining** = required curriculum
@@ -333,7 +367,17 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
 
     rows: list[AcademicHistoryCourse] = []
     gpa_entries: list[calc.GpaEntry] = []
-    counts = {"completed": 0, "failed": 0, "in_progress": 0, "transferred": 0, "remaining": 0}
+    counts = {
+        "completed": 0,
+        "failed": 0,
+        "in_progress": 0,
+        "transferred": 0,
+        "remaining": 0,
+        # D35 — the client's `coursestatus`. Separate buckets because they answer a
+        # different question from the five above: not "how did it go" but "did it count".
+        "audited": 0,
+        "withdrawn": 0,
+    }
     credits_earned = 0
 
     for course_id in course_ids:
@@ -349,9 +393,30 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
         letter = None
         is_frozen = False
 
+        # D35 — THE COURSE STATUS OUTRANKS THE RESULT, and the order here is the whole
+        # rule. An audit or a withdrawal means "this does not count", whether or not a mark
+        # exists: the gradebook does not know about course status, so a lecturer can mark
+        # an auditing student, and a withdrawal recorded after grades went in is ordinary.
+        # Checking the result first (as the first cut of this did) let a graded-then-audited
+        # course earn credit and enter the GPA — caught by
+        # `test_an_audit_earns_no_credit`, which grades the course before auditing it.
+        #
+        # `transferred` still wins over everything: a granted transfer is a decision about
+        # the award, made after the fact.
+        how = enrolled[course_id][1] if course_id in enrolled else None
+
         if course_id in transferred:
             status = "transferred"
             credits_earned += credits
+        elif how is EnrollmentStatus.AUDIT:
+            # No credit and no grade, by definition — the student sat it without reading it
+            # for credit. Deliberately NOT in `gpa_entries`, so its credits are absent from
+            # the denominator too; leaving them there would depress the GPA of a student
+            # who did nothing wrong, the same trap the `transferred` bucket documents.
+            status = "audited"
+        elif how in _WITHDRAWN:
+            # Sat it and left. No credit, out of the GPA — see `_WITHDRAWN`.
+            status = "withdrawn"
         elif result is not None:
             numeric = result.numeric
             letter = result.letter
@@ -389,7 +454,8 @@ def academic_history(db: Session, *, student_id: uuid.UUID) -> AcademicHistory:
                 letter=letter,
                 grade_point=float(grade_point) if grade_point is not None else None,
                 is_frozen=is_frozen,
-                semester_id=enrolled.get(course_id),
+                # D35: the scan returns (semester_id, status) now.
+                semester_id=(enrolled[course_id][0] if course_id in enrolled else None),
             )
         )
 

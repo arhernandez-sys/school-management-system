@@ -10,6 +10,8 @@ import type { SemesterUpdateRequestSequence } from './semesterUpdateRequestSeque
 import type { SemesterUpdateRequestStartDate } from './semesterUpdateRequestStartDate';
 import type { SemesterUpdateRequestEndDate } from './semesterUpdateRequestEndDate';
 import type { SemesterUpdateRequestGradeSubmissionDeadline } from './semesterUpdateRequestGradeSubmissionDeadline';
+import type { SemesterUpdateRequestMidtermSubmissionStart } from './semesterUpdateRequestMidtermSubmissionStart';
+import type { SemesterUpdateRequestMidtermSubmissionEnd } from './semesterUpdateRequestMidtermSubmissionEnd';
 
 /**
  * PATCH /settings/semesters/{id} (Dean only). All fields optional.
@@ -19,11 +21,15 @@ silently re-file every enrolment, assessment and snapshot that keys off it.
 `is_active` is absent too — that goes through `/activate`, which maintains the
 one-active invariant.
 
-**`grade_submission_deadline` is the one field where omitted and `null` differ**
-(§D6). Every other field here treats `None` as "leave alone", but reopening a
-closed grade window is a real Dean action and it is spelled `null`. The service
-therefore consults `model_fields_set` for this field rather than checking for
-`None`, so a PATCH that only renames a term cannot silently reopen it.
+**The three datetime fields are the ones where omitted and `null` differ** (§D6,
+D32). Every other field here treats `None` as "leave alone", but reopening a closed
+grade window — or clearing a mid-term period — is a real Dean action and it is
+spelled `null`. The service therefore consults `model_fields_set` for these fields
+rather than checking for `None`, so a PATCH that only renames a term cannot
+silently reopen or erase anything.
+
+The two mid-term fields must be cleared TOGETHER: sending `null` for one while the
+other keeps a value is a 422, not a silent half-clear. See `update_semester`.
  */
 export interface SemesterUpdateRequest {
   name?: SemesterUpdateRequestName;
@@ -32,4 +38,6 @@ export interface SemesterUpdateRequest {
   start_date?: SemesterUpdateRequestStartDate;
   end_date?: SemesterUpdateRequestEndDate;
   grade_submission_deadline?: SemesterUpdateRequestGradeSubmissionDeadline;
+  midterm_submission_start?: SemesterUpdateRequestMidtermSubmissionStart;
+  midterm_submission_end?: SemesterUpdateRequestMidtermSubmissionEnd;
 }

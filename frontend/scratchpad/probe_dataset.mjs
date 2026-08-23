@@ -125,8 +125,10 @@ const loadOf = (id) =>
   D.currentOfferingsFor(id).map(label).sort();
 const f = loadOf('stu-1');
 const j = loadOf('stu-2');
-check('Freddy is stu-1 and active', freddy?.full_name === 'Freddy Lopez' && freddy.status === 'active');
-check('John is stu-2 and active', john?.full_name === 'John Garcia' && john.status === 'active');
+// D34 renamed the vocabulary: 'active' is 'Registered' now. The two scenario students
+// must stay live — the demo depends on their timetables and gradebooks rendering.
+check('Freddy is stu-1 and Registered', freddy?.full_name === 'Freddy Lopez' && freddy.status === 'Registered');
+check('John is stu-2 and Registered', john?.full_name === 'John Garcia' && john.status === 'Registered');
 check('Freddy and John differ in exactly one course', (() => {
   const onlyF = f.filter((x) => !j.includes(x));
   const onlyJ = j.filter((x) => !f.includes(x));

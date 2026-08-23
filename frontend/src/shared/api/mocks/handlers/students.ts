@@ -13,6 +13,7 @@ import {
   getSemester,
   getStudent,
   listStudents,
+  studentReligions,
   offeringLabel,
   offeringsForStudentInYear,
   offeringsForStudent,
@@ -20,6 +21,8 @@ import {
   offeringsOwnedByTeacher,
   yearsForStudent,
 } from '@shared/api/mocks/demo/dataset';
+import type { District, EnrollmentLoad } from '@shared/types/enums';
+import type { EnrollmentStatus } from '@features/offerings/types';
 import type {
   DemoAssessment,
   DemoEnrollment,
@@ -156,6 +159,11 @@ function studentListItem(s: DemoStudent) {
     year_of_study: s.year_of_study,
     offering_count: currentOfferingsFor(s.id).length,
     guardian_name: s.guardian_name || null,
+    // D32 — on the ROW as well as in the query, because the printed sheet has to show
+    // what it was filtered by (brief §3).
+    gender: s.gender ?? null,
+    religion: s.religion ?? null,
+    program_code: D.programs.find((p) => p.id === s.program_id)?.code ?? null,
   };
 }
 
@@ -182,6 +190,49 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     address: s.address,
     phone: s.phone,
     current_offerings: scopedOfferingsFor(s, yearId).map(offeringRef).filter(Boolean),
+    // ── D33 (ask 4): the whole record, so the profile can show it ─────────────
+    program: (() => {
+      const p = D.programs.find((x) => x.id === s.program_id);
+      return p ? { id: p.id, code: p.code, name: p.name } : null;
+    })(),
+    // Demo mode has no `applications` link on the student row, so this is derived from
+    // whether an accepted application points back at them — which is what the server's
+    // `application_id` column records.
+    application_id: D.applications?.find((a) => a.student_id === s.id)?.id ?? null,
+    // READ ONLY, and D34 renamed it: the student now has an `email` column of their own
+    // (above), so the LOGIN needs a name that cannot be confused with it. Null for a
+    // student who has no account.
+    login_email: D.users.find((u) => u.id === s.user_id)?.email ?? null,
+    ssno: s.ssno,
+    civil_status: s.civil_status,
+    religion: s.religion,
+    street: s.street,
+    city_town_village: s.city_town_village,
+    district: s.district,
+    mother_name: s.mother_name,
+    father_name: s.father_name,
+    nok_name: s.nok_name,
+    nok_relationship: s.nok_relationship,
+    nok_phone: s.nok_phone,
+    has_health_condition: s.has_health_condition,
+    health_condition_note: s.health_condition_note,
+    atlib_exam: s.atlib_exam,
+    num_csec: s.num_csec,
+    finance_name: s.finance_name,
+    finance_phone: s.finance_phone,
+    finance_email: s.finance_email,
+    enrollment_load: s.enrollment_load,
+    // ── D34 · the client's own columns ───────────────────────────────────────
+    email: s.email,
+    student_id_original: s.student_id_original,
+    transferred_from: s.transferred_from,
+    graduation_date: s.graduation_date,
+    dropout_date: s.dropout_date,
+    dropout_reason: s.dropout_reason,
+    comments: s.comments,
+    origin: s.origin,
+    educationbg_id: s.educationbg_id,
+    doc_id: s.doc_id,
   };
 }
 
@@ -299,9 +350,44 @@ interface StudentWriteBody {
   /** Many offerings to enrol into on CREATE (D29 replaced the single section_id; D31
    *  renamed `class_ids` → `offering_ids`). */
   offering_ids?: string[];
+  // ── D33: the student form is the application form (ask 3) ──────────────────
+  religion?: string | null;
+  ssno?: string | null;
+  civil_status?: string | null;
+  street?: string | null;
+  city_town_village?: string | null;
+  district?: District | null;
+  mother_name?: string | null;
+  father_name?: string | null;
+  nok_name?: string | null;
+  nok_relationship?: string | null;
+  nok_phone?: string | null;
+  has_health_condition?: boolean | null;
+  health_condition_note?: string | null;
+  atlib_exam?: boolean | null;
+  num_csec?: number | null;
+  finance_name?: string | null;
+  finance_phone?: string | null;
+  finance_email?: string | null;
+  enrollment_load?: EnrollmentLoad | null;
+  /** CREATE ONLY — a CHANGE has to move the programme history with it (§D12). */
+  program_id?: string | null;
+  // ── D34 · reconciled from the client's own schema ──────────────────────────
+  /** The student's OWN email. NOT the login, which lives on `users`. */
+  email?: string | null;
+  student_id_original?: number | null;
+  transferred_from?: string | null;
+  graduation_date?: string | null;
+  dropout_date?: string | null;
+  dropout_reason?: string | null;
+  comments?: string | null;
+  origin?: string | null;
 }
 
-const LIVE_STATUSES: DemoStudent['status'][] = ['active', 'inactive', 'transferred'];
+// D34 vocabulary. `DropOut` is NOT live: a student who left mid-programme is gone,
+// which is what separates it from `Unregistered` ("completed the last semester but
+// is not continuing").
+const LIVE_STATUSES: DemoStudent['status'][] = ['Registered', 'Unregistered', 'transferred'];
 function isDuplicateNumber(num: string, exceptId?: string): boolean {
   const q = num.trim().toLowerCase();
   return D.students.some(
@@ -340,6 +426,9 @@ function enrollStudent(student: DemoStudent, offeringId: string): void {
     semester_id: offering.semester_id,
     enrolled_at: new Date().toISOString(),
     unenrolled_at: null,
+    // D35 — registering a student enrols them ordinarily; a course status is set
+    // afterwards from the offering roster.
+    enrollment_status: 'enrolled',
   };
   D.enrollments.push(enrollment);
 }
@@ -362,8 +451,27 @@ export const studentsHandlers = [
       teacher_id: role === 'teacher' ? currentTeacherId(role) : null,
       // Per-module year switcher: restrict to students enrolled in the chosen year.
       academic_year_id: url.searchParams.get('academic_year_id'),
+      // D32 (brief §3) — the three attribute filters.
+      gender: url.searchParams.get('gender'),
+      religion: url.searchParams.get('religion'),
+      program_id: url.searchParams.get('program_id'),
     });
     return HttpResponse.json({ ...page, items: page.items.map(studentListItem) });
+  }),
+
+  /*
+   * D32 — GET /students/filter-options.
+   *
+   * Declared BEFORE `/students/:studentId` so the literal wins; MSW matches in
+   * registration order, exactly as the FastAPI route ordering note describes.
+   */
+  http.get(`${API_BASE_URL}/students/filter-options`, ({ cookies }) => {
+    const role = sessionRole(cookies);
+    if (!role) return errorResponse(401, 'unauthenticated', 'Not signed in.');
+    if (role === 'student') {
+      return errorResponse(403, 'forbidden', 'Students do not have access to the roster.');
+    }
+    return HttpResponse.json({ religions: studentReligions() });
   }),
 
   // ── GET /students/me/years — academic years the acting student was enrolled in ──
@@ -476,18 +584,67 @@ export const studentsHandlers = [
       full_name: displayName(body.first_name, body.middle_name ?? null, body.last_name),
       date_of_birth: body.date_of_birth,
       gender: body.gender ?? 'female',
+      // D33 — the student form IS the application form now (ask 3), so religion is one of
+      // the fields it collects. The D32 note here said the opposite, and it was true then.
+      religion: body.religion ?? null,
       enrollment_date: body.enrollment_date,
-      status: body.status ?? 'active',
+      status: body.status ?? 'Registered',
       guardian_name: body.guardian_name ?? '',
       guardian_phone: body.guardian_phone ?? '',
       guardian_email: body.guardian_email ?? '',
       address: body.address ?? '',
       phone: body.phone ?? '',
       year_of_study: body.year_of_study ?? null,
-      // A programme is assigned separately (§D12); a student created here has none.
-      program_id: null,
+      // D33 — assignable AT REGISTRATION (create only). Changing it later is the Dean's
+      // action, because it has to move the programme history with it (§D12).
+      program_id: body.program_id ?? null,
+      // ── the rest of Sections A-E (D33) ──
+      ssno: body.ssno ?? null,
+      civil_status: body.civil_status ?? null,
+      street: body.street ?? null,
+      city_town_village: body.city_town_village ?? null,
+      district: body.district ?? null,
+      mother_name: body.mother_name ?? null,
+      father_name: body.father_name ?? null,
+      nok_name: body.nok_name ?? null,
+      nok_relationship: body.nok_relationship ?? null,
+      nok_phone: body.nok_phone ?? null,
+      has_health_condition: body.has_health_condition ?? false,
+      health_condition_note: body.health_condition_note ?? null,
+      atlib_exam: body.atlib_exam ?? false,
+      num_csec: body.num_csec ?? null,
+      finance_name: body.finance_name ?? null,
+      finance_phone: body.finance_phone ?? null,
+      finance_email: body.finance_email ?? null,
+      enrollment_load: body.enrollment_load ?? null,
+      // ── D34 · the client's own columns ─────────────────────────────────────
+      email: body.email ?? null,
+      student_id_original: body.student_id_original ?? null,
+      transferred_from: body.transferred_from ?? null,
+      graduation_date: body.graduation_date ?? null,
+      dropout_date: body.dropout_date ?? null,
+      dropout_reason: body.dropout_reason ?? null,
+      comments: body.comments ?? null,
+      origin: body.origin ?? null,
+      // Read-only on the wire (no FK, no consumer), so a create never sets them.
+      educationbg_id: null,
+      doc_id: null,
     };
     D.students.push(created);
+    // D33 — a programme assigned at registration opens its history row on day one, the
+    // same as acceptance does. Without it the column would be set while the history stayed
+    // empty, and the Academic-history panel reads the HISTORY, not the column — so the
+    // student would show as being on no programme at all.
+    if (created.program_id) {
+      D.student_program_history.push({
+        id: `sph-new-${D.student_program_history.length + 1}`,
+        student_id: created.id,
+        program_id: created.program_id,
+        started_at: created.enrollment_date,
+        ended_at: null,
+        reason: 'Registered',
+      });
+    }
     for (const offeringId of body.offering_ids ?? []) enrollStudent(created, offeringId);
     return HttpResponse.json(studentDetail(created), { status: 201 });
   }),
@@ -521,7 +678,55 @@ export const studentsHandlers = [
     if (body.address !== undefined) student.address = body.address ?? '';
     if (body.phone !== undefined) student.phone = body.phone ?? '';
     if (body.year_of_study !== undefined) student.year_of_study = body.year_of_study ?? null;
+    // ── D33: the rest of the application form ─────────────────────────────────
+    // PRESENCE, not truthiness — `undefined` means "not supplied" and null/"" means
+    // "clear it", which is the distinction the server's `model_fields_set` arm exists for.
+    // For the two booleans it is the whole game: unticking a health condition has to be
+    // writable, and `if (body.x)` cannot express that.
+    if (body.religion !== undefined) student.religion = body.religion || null;
+    if (body.ssno !== undefined) student.ssno = body.ssno || null;
+    if (body.civil_status !== undefined) student.civil_status = body.civil_status || null;
+    if (body.street !== undefined) student.street = body.street || null;
+    if (body.city_town_village !== undefined) {
+      student.city_town_village = body.city_town_village || null;
+    }
+    if (body.district !== undefined) student.district = body.district ?? null;
+    if (body.mother_name !== undefined) student.mother_name = body.mother_name || null;
+    if (body.father_name !== undefined) student.father_name = body.father_name || null;
+    if (body.nok_name !== undefined) student.nok_name = body.nok_name || null;
+    if (body.nok_relationship !== undefined) {
+      student.nok_relationship = body.nok_relationship || null;
+    }
+    if (body.nok_phone !== undefined) student.nok_phone = body.nok_phone || null;
+    if (body.has_health_condition !== undefined) {
+      student.has_health_condition = Boolean(body.has_health_condition);
+    }
+    if (body.health_condition_note !== undefined) {
+      student.health_condition_note = body.health_condition_note || null;
+    }
+    if (body.atlib_exam !== undefined) student.atlib_exam = Boolean(body.atlib_exam);
+    if (body.num_csec !== undefined) student.num_csec = body.num_csec ?? null;
+    if (body.finance_name !== undefined) student.finance_name = body.finance_name || null;
+    if (body.finance_phone !== undefined) student.finance_phone = body.finance_phone || null;
+    if (body.finance_email !== undefined) student.finance_email = body.finance_email || null;
+    if (body.enrollment_load !== undefined) student.enrollment_load = body.enrollment_load ?? null;
+    // ── D34 · the client's own columns. Presence, not truthiness (as above). ──
+    if (body.email !== undefined) student.email = body.email || null;
+    if (body.student_id_original !== undefined) {
+      student.student_id_original = body.student_id_original ?? null;
+    }
+    if (body.transferred_from !== undefined) {
+      student.transferred_from = body.transferred_from || null;
+    }
+    if (body.graduation_date !== undefined) student.graduation_date = body.graduation_date || null;
+    if (body.dropout_date !== undefined) student.dropout_date = body.dropout_date || null;
+    if (body.dropout_reason !== undefined) student.dropout_reason = body.dropout_reason || null;
+    if (body.comments !== undefined) student.comments = body.comments || null;
+    if (body.origin !== undefined) student.origin = body.origin || null;
+    // `educationbg_id` / `doc_id` are NOT writable — no FK, no consumer.
     // Enrollment is NOT a PATCH field — it moves under Course Offerings → Roster.
+    // Neither is `program_id`: a change closes the open `student_program_history` row and
+    // opens a new one, which is the Dean-only `PUT /students/{id}/program` (§D12).
     return HttpResponse.json(studentDetail(student));
   }),
 
@@ -536,14 +741,25 @@ export const studentsHandlers = [
     const body = (await request.json()) as { status?: DemoStudent['status'] };
     const next = body.status;
     const allowed: DemoStudent['status'][] = [
-      'active',
-      'inactive',
+      'Registered',
+      'Unregistered',
+      'DropOut',
       'transferred',
       'graduated',
       'withdrawn',
     ];
     if (!next || !allowed.includes(next)) {
       return errorResponse(422, 'invalid_transition', 'That status change is not allowed.');
+    }
+    // D34 — stamp the date the new state is ABOUT, mirroring
+    // `students/service.change_student_status`. Only when EMPTY, so a corrected date is
+    // not overwritten by a later status shuffle, and only on the transition INTO the
+    // state, so re-registering a graduate keeps the graduation on file.
+    if (next === 'graduated' && !student.graduation_date) {
+      student.graduation_date = DEMO_TODAY;
+    }
+    if (next === 'DropOut' && !student.dropout_date) {
+      student.dropout_date = `${DEMO_TODAY}T00:00:00Z`;
     }
     student.status = next;
     return HttpResponse.json(studentDetail(student));
@@ -604,9 +820,16 @@ export const studentsHandlers = [
     // Every course the student has ever sat, keyed by COURSE — the question is about the
     // course, and the same one may have been taken in two terms.
     const enrolled = new Map<string, string>();
+    // D35 — and HOW they sat it (the client's `coursestatus`). Without this an audited or
+    // withdrawn course is indistinguishable from one still being taken, so it files as
+    // `in_progress` forever and its credits sit in the GPA denominator earning nothing.
+    const howSat = new Map<string, EnrollmentStatus>();
     for (const enr of D.enrollments.filter((e) => e.student_id === student.id)) {
       const offering = getOffering(enr.offering_id);
-      if (offering) enrolled.set(offering.course_id, enr.semester_id);
+      if (offering) {
+        enrolled.set(offering.course_id, enr.semester_id);
+        howSat.set(offering.course_id, enr.enrollment_status);
+      }
     }
 
     const scale = getActiveGradingScale();
@@ -616,7 +839,16 @@ export const studentsHandlers = [
       ...enrolled.keys(),
     ]);
 
-    const counts = { completed: 0, failed: 0, in_progress: 0, transferred: 0, remaining: 0 };
+    const counts = {
+      completed: 0,
+      failed: 0,
+      in_progress: 0,
+      transferred: 0,
+      remaining: 0,
+      // D35 — the client's `coursestatus`.
+      audited: 0,
+      withdrawn: 0,
+    };
     let creditsEarned = 0;
     const gpaEntries: { credits: number | null; letter: string | null }[] = [];
     const courses: Record<string, unknown>[] = [];
@@ -642,9 +874,22 @@ export const studentsHandlers = [
       const gradePoint = gradePointFor(letter);
 
       let status: keyof typeof counts;
+      // D35 — THE COURSE STATUS OUTRANKS THE RESULT, and the order is the rule. An audit
+      // or a withdrawal means "this does not count" whether or not a mark exists: the
+      // gradebook does not know about course status, so an auditing student can be marked,
+      // and a withdrawal recorded after grades went in is ordinary. Checking the result
+      // first lets a graded-then-audited course earn credit and enter the GPA — which is
+      // exactly the bug `test_an_audit_earns_no_credit` caught server-side.
+      const how = howSat.get(courseId);
       if (transferred.has(courseId)) {
         status = 'transferred';
         creditsEarned += credits;
+      } else if (how === 'audit') {
+        // No credit, and deliberately NOT in `gpaEntries` — its credits leave the
+        // denominator too, so auditing cannot depress a GPA.
+        status = 'audited';
+      } else if (how === 'withdraw_passing' || how === 'withdraw_failing') {
+        status = 'withdrawn';
       } else if (numeric != null) {
         // Judged against the PROGRAMME's pass mark. Where the scale carries no grade
         // points the band's own `is_passing` decides, the same lenient fallback the

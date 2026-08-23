@@ -15,7 +15,7 @@
  * derivation logic (roster ∪ grade-rows, letter bands, attendance rate) stays in one
  * place and screens stay consistent.
  */
-import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY } from './data';
+import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, DEMO_TODAY_ISO } from './data';
 import type {
   DemoAcademicYear,
   DemoAssessment,
@@ -267,7 +267,25 @@ export interface ListStudentsParams extends DemoListParams {
   teacher_id?: string | null;
   /** year scope: restrict to students enrolled in an offering of this academic year. */
   academic_year_id?: string | null;
+  /**
+   * D32 (brief §3). Attribute filters on the STUDENT RECORD, not on their enrolment — so
+   * a graduated student still matches, which is what "print all Catholic students" means.
+   */
+  gender?: string | null;
+  religion?: string | null;
+  program_id?: string | null;
 }
+/**
+ * D32 — the DISTINCT religions present on non-deleted students, sorted (brief §3).
+ *
+ * Backs `GET /students/filter-options`. Derived rather than hardcoded for the same reason
+ * the server derives it: religion is free text on the admissions form, so a fixed list
+ * would offer options that match nothing.
+ */
+export function studentReligions(): string[] {
+  return [...new Set(D.students.map((s) => s.religion).filter((r): r is string => Boolean(r)))].sort();
+}
+
 export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStudent> {
   let rows = D.students;
   // Year scope: for a past year, restrict to students enrolled that year. For the
@@ -289,6 +307,12 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
   // The level filter reads the STUDENT's own `year_of_study`. There is nothing on an
   // offering to confuse it with any more — `grade_level` went with the homeroom.
   if (params.year_of_study) rows = rows.filter((s) => s.year_of_study === params.year_of_study);
+  // D32 — all three AND with everything above, mirroring `students/service.list_students`.
+  // Religion is EXACT, never a substring: the options come from the distinct stored
+  // values, and a LIKE would only conflate two real ones ("Catholic" / "Roman Catholic").
+  if (params.gender) rows = rows.filter((s) => s.gender === params.gender);
+  if (params.religion) rows = rows.filter((s) => s.religion === params.religion);
+  if (params.program_id) rows = rows.filter((s) => s.program_id === params.program_id);
   if (params.search) {
     const q = params.search;
     // Matches the backend (students/service.py): the display string AND the parts,
@@ -428,6 +452,54 @@ export function gradesForAssessment(assessmentId: string): DemoAssessmentGrade[]
  * grade row for it (M3 — a student who switched sections stays visible).
  * Returns rows of { student, enrollment_id, is_active_member, cells[] }.
  */
+/**
+ * D32 mid-term revision eligibility, mirroring
+ * `backend/app/modules/grades/revisions.py::midterm_revision_eligible` (brief §1).
+ *
+ * Demo mode has to carry this rule too. The last two times a grading rule lived in only
+ * one of the two implementations, demo mode certified a screen the real backend refused.
+ *
+ * **ONE DELIBERATE DIVERGENCE.** The server reads `assessments.created_at` and
+ * `assessment_grades.graded_at`; the demo dataset has neither — it is a hand-authored
+ * fixture with no audit stamps. `assessment_date` stands in for both. That is the right
+ * proxy here: it is when the work happened, so an assessment dated before the window
+ * opened is exactly the "was part of the mid-term submission" case the rule is about, and
+ * it makes the two states visible in the marquee gradebook. It is NOT the rule the server
+ * applies, and the seed comment on `SEM_ACTIVE` says so.
+ */
+export function midtermRevisionEligible(
+  a: DemoAssessment,
+  g: DemoAssessmentGrade | undefined,
+): { eligible: boolean; reason: string | null } {
+  const sem = getSemester(a.semester_id);
+  if (!sem) return { eligible: false, reason: 'not_current_semester' };
+
+  const start = sem.midterm_submission_start;
+  const end = sem.midterm_submission_end;
+  if (!start || !end) return { eligible: false, reason: 'no_midterm_window' };
+
+  // DEMO_TODAY, not the real clock — same reason as `gradeWindow()` in the handler: the
+  // dataset is deterministic, and reading `Date.now()` would make the answer depend on
+  // when the demo happens to be opened.
+  const now = new Date(DEMO_TODAY_ISO).getTime();
+  if (now <= new Date(end).getTime()) {
+    return { eligible: false, reason: 'midterm_window_open' };
+  }
+
+  const openedAt = new Date(start).getTime();
+  const worked = a.assessment_date ? new Date(a.assessment_date).getTime() : null;
+  if (worked === null || worked >= openedAt) {
+    return { eligible: false, reason: 'assessment_after_window' };
+  }
+  if (!g) return { eligible: false, reason: 'not_graded' };
+  if (g.status !== 'graded' || g.score == null) {
+    return { eligible: false, reason: 'not_graded' };
+  }
+  if (!sem.is_active) return { eligible: false, reason: 'not_current_semester' };
+
+  return { eligible: true, reason: null };
+}
+
 export function gradebookFor(offeringId: string): {
   offering: DemoOffering | undefined;
   assessments: DemoAssessment[];
@@ -442,6 +514,8 @@ export function gradebookFor(offeringId: string): {
       makeup_score: number | null;
       is_released: boolean;
       letter?: string;
+      can_request_revision: boolean;
+      revision_blocked_reason: string | null;
     }>;
     term_numeric: number | null;
     term_letter: string | null;
@@ -467,6 +541,7 @@ export function gradebookFor(offeringId: string): {
         (row) => row.assessment_id === a.id && row.student_id === student.id,
       );
       const released = g?.is_released ?? a.is_released;
+      const revision = midtermRevisionEligible(a, g);
       return {
         assessment_id: a.id,
         status: g?.status ?? ('pending' as DemoAssessmentGrade['status']),
@@ -476,6 +551,10 @@ export function gradebookFor(offeringId: string): {
         ...(g?.status === 'graded' && g.score != null
           ? { letter: letterFor((g.score / a.max_score) * 100) }
           : {}),
+        // D32. The handler zeroes this for non-Lecturer viewers — the selector has no
+        // caller identity, and the server's rule is "may YOU file one".
+        can_request_revision: revision.eligible,
+        revision_blocked_reason: revision.reason,
       };
     });
     const term = computeTermGrade(student.id, offeringId);
@@ -792,7 +871,7 @@ export function dashboardFor(role: string, userId?: string) {
       role,
       semester,
       stats: {
-        total_students: D.students.filter((s) => s.status === 'active').length,
+        total_students: D.students.filter((s) => s.status === 'Registered').length,
         total_teachers: D.teachers.filter((t) => t.status === 'active').length,
         total_classes: offeringsForYear(DEMO_IDS.activeYearId).length,
         attendance_rate: schoolAttendanceRate(),
@@ -848,7 +927,7 @@ export function dashboardFor(role: string, userId?: string) {
 export function enrollmentByYearOfStudy(): Array<{ year_of_study: string; count: number }> {
   const map = new Map<string, number>();
   for (const s of D.students) {
-    if (s.status !== 'active' || !s.year_of_study) continue;
+    if (s.status !== 'Registered' || !s.year_of_study) continue;
     map.set(s.year_of_study, (map.get(s.year_of_study) ?? 0) + 1);
   }
   // 'First' before 'Second' — progression order, which alphabetical happens to give.

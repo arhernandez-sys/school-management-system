@@ -22,8 +22,35 @@ class Role(str, enum.Enum):
 
 
 class StudentStatus(str, enum.Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
+    """Student lifecycle, in the CLIENT'S vocabulary (D34).
+
+    Adopted verbatim from the client's own `student_profiles` dump, including its comment
+    on what each state means:
+
+      REGISTERED    "instead of active" - enrolled and attending.
+      UNREGISTERED  "when student do not continue further semesters, but has successfully
+                    completed the last semester". NOT a failure state, which is why
+                    "inactive" was the wrong word for it.
+      DROPOUT       left mid-programme. Pairs with `dropout_date` / `dropout_reason`.
+      GRADUATED     "Dean/Registrar are the only ones with access to change to this
+                    status" - already true, since POST /students/{id}/status is
+                    require_role(PRINCIPAL, SECRETARY).
+      TRANSFERRED / WITHDRAWN  unchanged.
+
+    **The mixed case is deliberate.** Three values are TitleCase and three are lowercase
+    because that is exactly how the client's enum reads, and their dump is the authority
+    for this column - normalising it would put the database out of step with their own
+    tooling for a cosmetic gain. MariaDB's `utf8mb4_uca1400_ai_ci` is case-insensitive, so
+    comparison is unaffected; the case matters only for what is stored and echoed.
+
+    The MEMBER names track the values (`REGISTERED`, not `ACTIVE`) so a reader of
+    `StudentStatus.REGISTERED` sees the word the registry actually uses. That rename is
+    why D34 touches ~20 call sites it otherwise would not have.
+    """
+
+    REGISTERED = "Registered"
+    UNREGISTERED = "Unregistered"
+    DROPOUT = "DropOut"
     TRANSFERRED = "transferred"
     GRADUATED = "graduated"
     WITHDRAWN = "withdrawn"
@@ -223,6 +250,12 @@ class EnrollmentLoad(str, enum.Enum):
     PART_TIME = "Part Time"
     FULL_TIME = "Full Time"
     TRANSIENT = "Transient"
+    #: D34 — from the client's `yearofstudy` enum, which conflated the year with the load.
+    #: 'Summer' names a TERM rather than a load, but it answers the same question this
+    #: column does ("how is this student attending") and it goes here rather than on
+    #: `YearOfStudy` because a summer student still has a first or second year — putting it
+    #: there would make that unanswerable, which is the exact defect the D30 split fixed.
+    SUMMER = "Summer"
 
 
 class EducationLevel(str, enum.Enum):
@@ -297,6 +330,26 @@ class CreditTransferStatus(str, enum.Enum):
     PENDING = "pending"
     APPROVED = "approved"
     DENIED = "denied"
+
+
+class ReportCardKind(str, enum.Enum):
+    """Which report card a `report_card_snapshots` row holds (D32, brief §5).
+
+    **The two are produced by different mechanisms, not just at different times**, and
+    that is why they need distinguishing rather than a date range:
+
+      * `MIDTERM` is a FROZEN document. It is captured once when the term's mid-term
+        window closes and is served back verbatim thereafter — the client's requirement
+        that a mid-term report must not recalculate from current grades.
+      * `ENDTERM` is COMPUTED ON READ while the year is live, and only becomes a frozen
+        row when the year archives. Its figures are supposed to keep moving until then.
+
+    A term therefore holds at most one of each per student, which is what
+    `uq_report_card_snapshot (student_id, semester_id, kind)` enforces.
+    """
+
+    MIDTERM = "midterm"
+    ENDTERM = "endterm"
 
 
 # Maps each Python enum to its Postgres native enum type name (schema §1.5).

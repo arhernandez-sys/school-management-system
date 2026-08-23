@@ -9,4 +9,5 @@ export interface AssessmentPolicyRead {
   absent_as_zero: boolean;
   allow_makeup: boolean;
   drop_lowest_count: number;
+  students_can_view_grades?: boolean;
 }

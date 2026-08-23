@@ -49,7 +49,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.auth.models import LoginAttempt, RefreshSession
-from app.modules.settings.models import AuditLog
+from app.modules.settings.models import AssessmentPolicy, AuditLog
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User, UserPreferences as UserPreferencesRow
@@ -75,6 +75,22 @@ def _preferences_for(db: Session, user: User) -> UserPreferences:
             locale="en", theme="light", date_format=None, default_page_size=25
         )
     return UserPreferences.model_validate(row)
+
+
+def students_can_view_grades(db: Session) -> bool:
+    """The Dean's student grade-visibility switch (D32, brief §4).
+
+    Lives here rather than in `settings.service` because `core.deps` and this module both
+    need it on the hot path, and importing `settings.service` from `core.deps` would pull
+    the whole Settings surface — including `reports.freeze` — into every authenticated
+    request. This reads one boolean off one row.
+
+    **Missing policy row → False**, i.e. hidden. The row is seeded and its absence is a
+    setup error, but a setup error must not be the thing that exposes grades.
+    """
+    return bool(
+        db.scalar(select(AssessmentPolicy.students_can_view_grades).where(AssessmentPolicy.id == 1))
+    )
 
 
 def build_current_user(db: Session, user: User) -> CurrentUser:
@@ -112,6 +128,7 @@ def build_current_user(db: Session, user: User) -> CurrentUser:
         student_profile_id=student_profile_id,
         teacher_profile_id=teacher_profile_id,
         preferences=_preferences_for(db, user),
+        students_can_view_grades=students_can_view_grades(db),
     )
 
 

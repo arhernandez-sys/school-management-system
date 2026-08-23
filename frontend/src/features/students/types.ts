@@ -7,7 +7,13 @@
  * role/status sets the real backend uses.
  */
 import type { CourseRef, OfferingRef, Page } from '@shared/types/api';
-import type { StudentStatus, AssessmentType, GradeStatus } from '@shared/types/enums';
+import type {
+  StudentStatus,
+  AssessmentType,
+  GradeStatus,
+  District,
+  EnrollmentLoad,
+} from '@shared/types/enums';
 
 /** The two BAJC years. `enum('First','Second')` server-side, not free text. */
 export type YearOfStudy = 'First' | 'Second';
@@ -50,10 +56,93 @@ export interface StudentListItem extends StudentNameParts {
   /** How many course offerings they actively sit this term (D31: was `class_count`). */
   offering_count: number;
   guardian_name: string | null;
+  /**
+   * D32 (brief §3) — the three filterable attributes, on the ROW as well as in the query.
+   * The printed list has to show what it was filtered by: a sheet headed "Female students
+   * in Business Management" that does not print the programme cannot be checked by the
+   * person holding it.
+   */
+  gender: string | null;
+  religion: string | null;
+  /** The programme CODE, e.g. "BMAD". Null until a student is assigned one. */
+  program_code: string | null;
+}
+
+/** GET /students/filter-options — values the directory filters can take (D32). */
+export interface StudentFilterOptions {
+  /**
+   * DISTINCT religions actually present. Derived rather than hardcoded because religion
+   * is free text from the admissions form; a fixed list would go stale and would offer
+   * options matching nothing. Empty until admissions has run.
+   */
+  religions: string[];
+}
+
+/**
+ * Sections A–E of the BAJC application form, as they live on the STUDENT record
+ * (D30 §D11, D33).
+ *
+ * These columns have existed on `student_profiles` since `005_tertiary.sql` — acceptance
+ * has been copying them across all along — but nothing outside admissions could read or
+ * write them. D33 (client asks 3 + 4) makes the student form the application form and the
+ * profile show everything, which needs them on the wire.
+ *
+ * Declared once and reused by `StudentDetail` and `StudentWritePayload`, mirroring the
+ * server's `_AdmissionProfileFields`. Documents, prior education and credit transfers stay
+ * on the APPLICATION: no file bytes exist anywhere (OQ-DB5), and a transfer is anchored on
+ * the application by policy (§D4).
+ */
+export interface StudentAdmissionFields {
+  /** Social Security number, 9 chars. Transcribed as the card reads. */
+  ssno: string | null;
+  civil_status: string | null;
+  /** Free text — which is why the directory DISCOVERS its filter options (D32). */
+  religion: string | null;
+  street: string | null;
+  city_town_village: string | null;
+  district: District | null;
+  mother_name: string | null;
+  father_name: string | null;
+  nok_name: string | null;
+  nok_relationship: string | null;
+  nok_phone: string | null;
+  has_health_condition: boolean;
+  health_condition_note: string | null;
+  atlib_exam: boolean;
+  num_csec: number | null;
+  finance_name: string | null;
+  finance_phone: string | null;
+  finance_email: string | null;
+  enrollment_load: EnrollmentLoad | null;
+  // ── D34 · reconciled from the CLIENT'S own schema (migration 011) ──────────
+  // Their `student_profiles` had moved on from the `sims.sql` this repo was built
+  // against; these are the columns it held that live had under no spelling.
+  /** The ID this record carried in the system it was imported from. */
+  student_id_original: number | null;
+  /**
+   * The student's OWN email address — how the office writes to them.
+   *
+   * **NOT the login.** That is `StudentDetail.login_email`, read from the linked `users`
+   * row. Before D34 there was no email column on the student at all, so a paper
+   * registration with no account had nowhere to record an address; conflating the two
+   * under one name is how an address change would silently move a login.
+   */
+  email: string | null;
+  /** The institution a transfer student came from (client column: `transferedfrom`). */
+  transferred_from: string | null;
+  /** Auto-stamped when the status becomes `graduated`; editable afterwards. */
+  graduation_date: string | null;
+  /** Auto-stamped when the status becomes `DropOut`; editable afterwards. */
+  dropout_date: string | null;
+  dropout_reason: string | null;
+  /** The Registrar's own notes. Never on a student-facing payload. */
+  comments: string | null;
+  /** Where the record came from — an import batch, a migration, `admissions`. */
+  origin: string | null;
 }
 
 /** GET /students/{id}, /me, POST, PATCH, POST /status. */
-export interface StudentDetail extends StudentNameParts {
+export interface StudentDetail extends StudentNameParts, StudentAdmissionFields {
   id: string;
   student_number: string;
   date_of_birth: string;
@@ -74,6 +163,25 @@ export interface StudentDetail extends StudentNameParts {
    * enrolled anywhere, which is a normal state for a newly registered student.
    */
   current_offerings: OfferingRef[];
+  /** The programme the student is CURRENTLY registered on (D30 §D12). */
+  program: StudentProgramRefLite | null;
+  /** The application admitted from, when there is one. Null for a paper registration. */
+  application_id: string | null;
+  /**
+   * The student's LOGIN address, read from the linked `users` row. READ ONLY: changing a
+   * login is a Users-module action with its own uniqueness rules. Null for a student who
+   * has not been given an account yet.
+   *
+   * **D34 renamed this from `email`**, because the student record gained a real `email`
+   * column of its own — see `StudentAdmissionFields.email` for why the two must not share
+   * a name.
+   */
+  login_email: string | null;
+  // ── D34 · mapped for the client's tooling, unused by the API ──────────────
+  /** No FK and no consumer: prior education is application-scoped. Read-only. */
+  educationbg_id: string | null;
+  /** No FK: `student_documents.id` is a uuid and documents are 1:N. Read-only. */
+  doc_id: number | null;
 }
 
 /** One assessment line under a subject group (GET /students/{id}/assessments). */
@@ -130,8 +238,15 @@ export interface NudgeReleaseResult {
   cooldown_seconds: number;
 }
 
-/** Create/update payload (StudentCreate; all optional on PATCH). */
-export interface StudentWritePayload {
+/**
+ * Create/update payload (StudentCreate; all optional on PATCH).
+ *
+ * D33 — extends `StudentAdmissionFields` as a Partial, so `StudentFormDialog` writes the
+ * same Sections A–E the application collects. `program_id` is CREATE ONLY: changing a
+ * programme has to move `student_program_history` with it, which is `PUT
+ * /students/{id}/program` (Dean only, §D12).
+ */
+export interface StudentWritePayload extends Partial<StudentAdmissionFields> {
   /**
    * OPTIONAL on create (D30 §D9): omit it and the server issues the next
    * `YYYYMM###`. Generation is server-side only — the SPA never composes one.
@@ -158,6 +273,8 @@ export interface StudentWritePayload {
    * about removals. Later changes go through `POST /offerings/{id}/enrollments`.
    */
   offering_ids?: string[];
+  /** CREATE ONLY — see the note on this interface. */
+  program_id?: string | null;
 }
 
 /** One academic year the student was enrolled in (GET /students/{id}/years). */
@@ -183,6 +300,14 @@ export interface StudentsListParams {
   year_of_study?: string;
   /** Per-module year switcher: restrict to students enrolled in this academic year. */
   academic_year_id?: string;
+  /**
+   * D32 (brief §3). All three AND with each other and with everything above, and they
+   * filter the STUDENT RECORD rather than their enrolment — so a graduated student still
+   * matches, which is what "print all Catholic students" means.
+   */
+  religion?: string;
+  gender?: string;
+  program_id?: string;
 }
 
 export type StudentsPage = Page<StudentListItem>;
@@ -201,7 +326,11 @@ export type AcademicHistoryCourseStatus =
   | 'failed'
   | 'in_progress'
   | 'transferred'
-  | 'remaining';
+  | 'remaining'
+  // D35 — the client's `coursestatus` buckets. Neither earns credit and neither enters the
+  // GPA on either side of the fraction.
+  | 'audited'
+  | 'withdrawn';
 
 export interface ProgramChangePayload {
   program_id: string;
@@ -259,6 +388,9 @@ export interface AcademicHistoryCounts {
   in_progress: number;
   transferred: number;
   remaining: number;
+  /** D35 — the client's `coursestatus` buckets. Keyed to match `STATUS_META`. */
+  audited: number;
+  withdrawn: number;
 }
 
 /**

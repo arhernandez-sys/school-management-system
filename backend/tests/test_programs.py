@@ -386,7 +386,7 @@ class TestUpdateAndDeleteProgram:
                 **split_name("Enrolled Student"),
                 date_of_birth=date(2007, 1, 1),
                 enrollment_date=date(2025, 9, 1),
-                status="active",
+                status="Registered",
                 program_id=program.id,
             )
         )

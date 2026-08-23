@@ -68,10 +68,15 @@ class SemesterDetail(BaseModel):
     sequence: int
     start_date: date
     end_date: date
-    #: Brief §18 / D30 §D6. Set by the Dean-only `POST`/`PATCH /settings/semesters`;
-    #: enforced in `grades/service.upsert_grades`, the single grade write path, as a
-    #: 409 `grade_window_closed`. `None` means the term never closes.
+    #: Brief §18 / D30 §D6 — the **END-TERM** grade-entry cutoff (D32-1). Set by the
+    #: Dean-only `POST`/`PATCH /settings/semesters`; enforced in
+    #: `grades/service.upsert_grades`, the single grade write path, as a 409
+    #: `grade_window_closed`. `None` means the term never closes.
     grade_submission_deadline: datetime | None = None
+    #: D32 — the mid-term grading window. Both `None` means the term has no mid-term
+    #: period, which disables mid-term revision gating and mid-term report cards for it.
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
     is_active: bool
 
 
@@ -127,6 +132,11 @@ class StandaloneSemesterCreateRequest(SemesterCreateRequest):
     #: which is the safe default: a wrongly-guessed deadline would lock lecturers out
     #: of a term nobody has finished teaching.
     grade_submission_deadline: datetime | None = None
+    #: D32 — the mid-term grading window. Optional, and for the same reason as the
+    #: deadline above: a term created without one simply has no mid-term period. Supply
+    #: BOTH or NEITHER; the service rejects a half-configured window with a 422.
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
 
 
 class SemesterUpdateRequest(BaseModel):
@@ -137,11 +147,15 @@ class SemesterUpdateRequest(BaseModel):
     `is_active` is absent too — that goes through `/activate`, which maintains the
     one-active invariant.
 
-    **`grade_submission_deadline` is the one field where omitted and `null` differ**
-    (§D6). Every other field here treats `None` as "leave alone", but reopening a
-    closed grade window is a real Dean action and it is spelled `null`. The service
-    therefore consults `model_fields_set` for this field rather than checking for
-    `None`, so a PATCH that only renames a term cannot silently reopen it.
+    **The three datetime fields are the ones where omitted and `null` differ** (§D6,
+    D32). Every other field here treats `None` as "leave alone", but reopening a closed
+    grade window — or clearing a mid-term period — is a real Dean action and it is
+    spelled `null`. The service therefore consults `model_fields_set` for these fields
+    rather than checking for `None`, so a PATCH that only renames a term cannot
+    silently reopen or erase anything.
+
+    The two mid-term fields must be cleared TOGETHER: sending `null` for one while the
+    other keeps a value is a 422, not a silent half-clear. See `update_semester`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -151,6 +165,8 @@ class SemesterUpdateRequest(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     grade_submission_deadline: datetime | None = None
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
 
 
 class AcademicYearCreateRequest(BaseModel):
@@ -174,6 +190,16 @@ class ArchiveYearResponse(BaseModel):
 
     snapshots_written: int
     no_active_year_remaining: bool
+
+
+class MidtermFreezeResponse(BaseModel):
+    """200 body of POST /settings/semesters/{id}/midterm-freeze (D32, brief §6)."""
+
+    #: Report cards captured or refreshed — one per student with a live enrolment in the
+    #: term. 0 means nobody was enrolled, not that the freeze failed.
+    snapshots_written: int
+    semester_id: UUID
+    frozen_at: datetime
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -230,6 +256,9 @@ class AssessmentPolicyRead(BaseModel):
     absent_as_zero: bool
     allow_makeup: bool
     drop_lowest_count: int
+    #: D32 (brief §4). Dean-controlled; default false. Grouped with the grading policy
+    #: because it is the same singleton and the same Dean-only screen — see the model.
+    students_can_view_grades: bool = False
 
 
 class AssessmentPolicyUpdateRequest(BaseModel):
@@ -237,6 +266,10 @@ class AssessmentPolicyUpdateRequest(BaseModel):
     absent_as_zero: bool
     allow_makeup: bool
     drop_lowest_count: int = Field(ge=0)
+    #: Defaulted rather than required, so a client that predates D32 can still PUT this
+    #: object without silently re-enabling student visibility it never meant to touch.
+    #: The screen always sends it.
+    students_can_view_grades: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────

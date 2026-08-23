@@ -93,6 +93,8 @@ export {
   assessmentsForOffering,
   gradesForAssessment,
   gradebookFor,
+  midtermRevisionEligible,
+  studentReligions,
   computeTermGrade,
   letterFor,
   gradePointFor,

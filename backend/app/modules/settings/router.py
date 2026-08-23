@@ -52,6 +52,7 @@ from app.modules.settings.schemas import (
     AcademicYearDetail,
     AcademicYearList,
     ArchiveYearResponse,
+    MidtermFreezeResponse,
     AssessmentPolicyRead,
     AssessmentPolicyUpdateRequest,
     GradingScaleRead,
@@ -265,6 +266,38 @@ def activate_semester(
 ) -> SemesterDetail:
     """Principal. Clears the prior active semester, sets this one active."""
     return service.activate_semester(db, actor=actor, semester_id=semester_id)
+
+
+@router.post(
+    "/semesters/{semester_id}/midterm-freeze",
+    response_model=MidtermFreezeResponse,
+    summary="Freeze mid-term report cards for a term (principal; D32, brief §6)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def freeze_midterm_grades(
+    semester_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> MidtermFreezeResponse:
+    """Dean only. Captures every enrolled student's report card for the term into
+    `report_card_snapshots` with `kind='midterm'`, so mid-term reports serve a frozen
+    document instead of recalculating from grades that have since moved.
+
+    **Idempotent** — re-running refreshes in place, which is what lets a Dean re-freeze
+    after correcting a mark.
+
+    409 `midterm_window_open` while the mid-term period is still running (freezing a
+    half-entered gradebook and calling it final would be worse than refusing);
+    422 `no_midterm_window` if the term has no mid-term period configured.
+
+    Pressing this is OPTIONAL: a mid-term report requested after the window closes
+    freezes itself on first read. The button exists so the Dean can choose the moment."""
+    written, frozen_at = service.freeze_midterm_grades(
+        db, actor=actor, semester_id=semester_id
+    )
+    return MidtermFreezeResponse(
+        snapshots_written=written, semester_id=semester_id, frozen_at=frozen_at
+    )
 
 
 @router.post(

@@ -39,10 +39,32 @@ import type { ReportCard } from '../types';
  * one layout was ever supplied, and whether the two really differ is open with BAJC
  * (plan §G item 4). So there is ONE template with a heading variant, rather than two
  * templates guessing at a difference.
+ *
+ * **D32 makes the variant follow the DATA by default.** `data.report_kind` says which
+ * report the server produced, so the heading is derived from it rather than from a prop a
+ * caller might forget — a mid-term card headed "End of Semester Report" would be a
+ * mislabelled official document. The prop remains as an explicit override.
  */
 export interface ReportCardDocumentProps {
   data: ReportCard;
   variant?: 'mid-semester' | 'end-of-semester';
+}
+
+/**
+ * A freeze instant in the reader's own timezone, to the day.
+ *
+ * To the DAY, not the minute: "the marks as they stood on 12 October" is what a reader
+ * needs from a report card, and a timestamp would imply a precision the grading process
+ * does not have.
+ */
+function formatFrozenAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 }
 
 /** The label block under the letterhead: Student ID · Name · Program · Semester · Period · Block. */
@@ -83,7 +105,7 @@ function LabelBlock({ data }: { data: ReportCard }) {
   );
 }
 
-export function ReportCardDocument({ data, variant = 'end-of-semester' }: ReportCardDocumentProps) {
+export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
   const {
     student,
     school,
@@ -94,9 +116,15 @@ export function ReportCardDocument({ data, variant = 'end-of-semester' }: Report
     term_average_letter,
     gpa,
     total_credits,
+    report_kind,
+    frozen_at,
   } = data;
 
-  const heading = variant === 'mid-semester' ? 'Mid-Semester Report' : 'End of Semester Report';
+  // D32: the data decides unless a caller overrides it.
+  const resolvedVariant =
+    variant ?? (report_kind === 'midterm' ? 'mid-semester' : 'end-of-semester');
+  const heading =
+    resolvedVariant === 'mid-semester' ? 'Mid-Term Report' : 'End-Term Report';
   const documentTitle = `${heading} — ${semester.name}, ${semester.academic_year_name}`;
 
   return (
@@ -113,9 +141,24 @@ export function ReportCardDocument({ data, variant = 'end-of-semester' }: Report
         </>
       }
     >
-      <Typography variant="h4" component="h2" sx={{ textAlign: 'center', mb: 3 }}>
+      <Typography variant="h4" component="h2" sx={{ textAlign: 'center', mb: 1 }}>
         {heading}
       </Typography>
+
+      {/* D32 — a mid-term card is a FROZEN document, and saying when it was captured is
+          what makes it defensible: "this is what the marks were on that date", rather
+          than an undated figure a reader would assume is current. Printed, not hidden
+          behind `sis-print-hide`, because the paper copy needs it most. */}
+      {frozen_at && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ textAlign: 'center', mb: 3 }}
+        >
+          Grades as recorded on {formatFrozenAt(frozen_at)}
+        </Typography>
+      )}
+      {!frozen_at && <Box sx={{ mb: 2 }} />}
 
       <LabelBlock data={data} />
 

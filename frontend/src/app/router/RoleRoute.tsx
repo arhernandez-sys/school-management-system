@@ -24,6 +24,18 @@ export function RoleRoute({ module, children }: { module: ModuleKey; children: R
     return <Navigate to={ROUTES.forbidden} replace />;
   }
 
+  // D32 (brief §4) — a student's grade access is the Dean's to publish, so the role map
+  // alone does not decide it. Kept HERE rather than folded into `canAccessModule`: that
+  // map is static role policy, and this is runtime configuration that can differ between
+  // two loads of the same page. Same reasoning as the `grades: 'view-own'` comment there.
+  if (
+    module === 'grades' &&
+    user.role === 'student' &&
+    user.students_can_view_grades === false
+  ) {
+    return <Navigate to={ROUTES.forbidden} replace />;
+  }
+
   return <>{children}</>;
 }
 

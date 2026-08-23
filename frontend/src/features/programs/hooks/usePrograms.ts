@@ -14,11 +14,20 @@ export const programKeys = {
   detail: (id: string) => [...programKeys.all, 'detail', id] as const,
 };
 
-export function useProgramsList(params: ProgramsListParams) {
+/**
+ * `options.enabled` lets a caller hold the request until the picker is actually on screen
+ * (D33 — `StudentFormDialog` only needs the programme list on CREATE, and only once the
+ * dialog is open). Defaults to enabled, so every existing call site is unchanged.
+ */
+export function useProgramsList(
+  params: ProgramsListParams,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: programKeys.list(params),
     queryFn: ({ signal }) => api.listPrograms(params, signal),
     placeholderData: (prev) => prev,
+    enabled: options.enabled ?? true,
   });
 }
 

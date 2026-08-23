@@ -340,7 +340,16 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 - **Authz:** `require_role(principal, secretary, teacher)`. **Teacher scope:** results auto-restricted to students enrolled in a section the teacher owns any subject of (`assert_teacher_owns_section` as a filter, read-only) — cannot list students outside own classes (FR-STU-08).
 - **Query:** list params (§6) + `search` (name or `student_number`), `status: StudentStatus`, `class_id: uuid`, `grade_level: string`, `academic_year_id: uuid`. `sort` ∈ {`full_name`,`student_number`,`status`,`created_at`}; default `full_name`.
 - **`academic_year_id` (year switcher) FILTERS the student set, it does not rescope rows.** A **past** year restricts the directory to students enrolled that year (ended enrollments included — `unenrolled_at` being set is the normal state for a past year). The **active** year, or no year at all, applies no enrollment filter so the whole directory lists, including graduated/withdrawn students who hold no active enrollment; filtering there would silently empty the `status=graduated` view. Each row's `current_section` always stays the student's **live** section — the field is named *current*, and the frontend's `studentListItem` resolves it with no year. Teacher scope (FR-STU-08) composes with the filter and is evaluated against the selected year's sections.
-- **Success `200`:** `Page[StudentListItem]` `{ id, student_number, full_name, status, current_section?: ClassRef, guardian_name? }`.
+- **`religion`, `gender`, `program_id` (D32, brief §3).** Three attribute filters that AND with each other and with everything above — "all Female students in Programme X" is two of them together. They filter the **student record**, not their enrolment, so a graduated or withdrawn student still matches; filtering them through enrolment would silently empty the `status=graduated` view, the same trap the `academic_year_id` note above records. `religion` is **exact-match**, never a substring, because a LIKE would only conflate two real values ("Catholic" swallowing "Roman Catholic").
+- **Success `200`:** `Page[StudentListItem]` `{ id, student_number, full_name, status, current_section?: ClassRef, guardian_name?, gender?, religion?, program_code? }`. The last three are D32: the printed list has to show what it was filtered by.
+- **Errors:** `401`, `403` (student).
+
+#### `GET /students/filter-options` *(D32)*
+- **Purpose:** the values the directory's filters can actually take (brief §3).
+- **Authz:** `require_role(principal, secretary, teacher)`.
+- **Success `200`:** `{ religions: string[] }` — DISTINCT non-null religions present on non-deleted students, sorted.
+- **Only `religion` is served, and it has to be:** it is free text collected on the admissions form (`applications.religion`, copied across on acceptance), so there is no enum to build a dropdown from and a hardcoded list would offer options matching nothing. `gender` is a fixed pair and programmes come from `/programs`.
+- **Route order:** declared before `/students/{student_id}` so the literal wins — otherwise FastAPI parses "filter-options" as a UUID and 422s.
 - **Errors:** `401`, `403` (student).
 
 #### `GET /students/{id}`
@@ -348,6 +357,37 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 - **Authz:** `require_role(principal, secretary, teacher)`; **Teacher** must own a section the student is enrolled in (else `404`, §3.3).
 - **Query:** `academic_year_id?` — rescopes `current_section` to the section the student sat in **that year**, resolved by the same helper `GET /students/{id}/assessments` uses (`students.service.section_in_year`), so the profile header and the assessments tab can never name different sections for the same selected year. Branching is on the **presence** of the param: supplied and unmatched → `current_section: null`, never a fall-through to another year. Omitted → the live active-semester section. Authorization is unaffected — teacher ownership is still evaluated against live enrollments, so a past year cannot widen a teacher's reach.
 - **Success `200`:** `StudentDetail { ...profile fields per student_profiles..., current_section?: ClassRef, audit: AuditStamp }`.
+
+> **D33 (client asks 3 + 4) — `StudentDetail` and both write models now carry the whole
+> admission form.** The nineteen Section A–E fields (`ssno`, `civil_status`, `religion`,
+> `street`, `city_town_village`, `district`, `mother_name`, `father_name`, `nok_name`,
+> `nok_relationship`, `nok_phone`, `has_health_condition`, `health_condition_note`,
+> `atlib_exam`, `num_csec`, `finance_name`, `finance_phone`, `finance_email`,
+> `enrollment_load`) are declared once in `schemas.py::_AdmissionProfileFields` and mixed
+> into `StudentDetail`, `StudentCreateRequest` and `StudentUpdateRequest`.
+>
+> **No migration was needed** — every column has existed on `student_profiles` since
+> `005_tertiary.sql`, and acceptance has been copying them across all along. What did not
+> exist was any way to read or write them outside admissions, so a student registered
+> directly had a permanently blank next of kin and D32's Religion filter selected on a
+> column the Registrar could not see.
+>
+> Three deliberate asymmetries:
+>
+> * **`program_id` is accepted on `POST` only.** It also opens the first
+>   `student_program_history` row (the Academic-history panel reads the history, not the
+>   column). CHANGING a programme must close the open row and open a new one in the same
+>   transaction, which is `PUT /students/{id}/program` (Dean only, §D12) — a `PATCH` field
+>   would write the column and silently leave the history behind. `404 program_not_found`
+>   for an unknown id, raised **before** the insert so it is not an FK error.
+> * **`email` is read-only on `StudentDetail`**, derived from the linked `users` row.
+>   `student_profiles` has no email column, and changing a login is a Users-module action.
+> * **`PATCH` uses presence, not truthiness** (`model_fields_set`). An omitted field is left
+>   alone; an explicit `null` clears it; and the two booleans can be set **false** —
+>   un-ticking a health condition entered by mistake has to be possible.
+>
+> Documents, prior education and credit transfers stay on the APPLICATION: no file bytes
+> exist anywhere (OQ-DB5), and a transfer is anchored on the application by policy (§D4).
 - **Errors:** `401`, `403` (student → use `/students/me`), `404`.
 
 #### `GET /students/me`
@@ -391,7 +431,7 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 
 #### `GET /students/{id}/assessments`
 - **Purpose:** assessments for the subjects in the student's section, with that student's per-assessment result and computed term grade (Student-detail Grades/Assessments tab). FR-ASMT-06.
-- **Authz:** `require_role(principal, secretary, teacher)` (teacher: owns a section the student is in → else `404`). *(Student self uses `GET /grades/me`, §5.7.)*
+- **Authz (D32):** `require_role(principal, teacher)` — **the Registrar was removed** (brief §4: grade information leaves the registration screens). Teacher must own a section the student is in → else `404`. *(Student self uses `GET /grades/me`, §5.7.)*
 - **Query:** `academic_year_id?` — scopes to the section the student sat in **that year** (a year spans both semesters, so this is *not* a semester filter). Default: the active year.
 - **Success `200`:** `{ items: StudentAssessmentGroup[] }` — **an envelope, not a bare array** (§5.0a).
   - `StudentAssessmentGroup { class_subject_id: uuid, subject: SubjectRef|null, term_grade: { numeric: float|null, letter: string|null }, assessments: StudentAssessmentLine[] }`
@@ -646,7 +686,109 @@ The school-wide subject catalog (schema `subjects`, year-independent) that **fee
 ---
 
 ### Module 7 — Grades (FR-GRD-01..11; D25; the assessment-first no-manual-grade rule)
-Tables: `assessment_grades`, `term_grade_snapshots`. **Compute-on-read term grades; derive-on-read letters** (schema §10).
+Tables: `assessment_grades`, `term_grade_snapshots`, `grade_revision_requests`. **Compute-on-read term grades; derive-on-read letters** (schema §10).
+
+> **D32 (brief §4) narrowed who can reach this whole module, in two different ways.** Every
+> `require_role(...)` listed below is superseded accordingly:
+>
+> - **The Registrar (`secretary`) is gone from every grade route, unconditionally.** There
+>   is no setting for it: the client asked for the Register to lose grade visibility, and a
+>   flag would have implied it is reversible from the UI. Everything else the Registrar owns
+>   — students, enrolment, offerings, admissions (§D14) — is untouched, and they **keep report
+>   cards and transcripts**, which is core registry work. `GET /students/{id}/assessments`
+>   was closed to them too, as the grade information on a registration screen.
+> - **A student reaches their own grades only while the Dean allows it.**
+>   `require_student_grade_visibility` layers `assessment_policies.students_can_view_grades`
+>   on top of the role check and answers `403 grades_hidden` when it is off. **Default off.**
+>   Applies to `GET /grades/me`, `GET /grades/term`, `GET /reports/report-card/me`.
+>
+> Neither affects a Lecturer or the Dean. **Revision endpoints are not gated by the student
+> switch** because a student can never see them anyway (`list_revisions` admits only the Dean
+> and the requesting Lecturer) — which is also why a student is never told whether a revision
+> was approved or denied: they see the resolved score and nothing about how it got there.
+
+> **D32 (brief §1) also gated WHICH results may be revised.**
+> `POST /assessments/{id}/grade-revisions` now requires all four of: the term's mid-term
+> window has **closed**; the assessment was **created before** `midterm_submission_start`;
+> the student's grade was **entered before** it (`graded_at`, falling back to `created_at`);
+> and the assessment is in the **current** semester. Otherwise `422 revision_not_eligible`
+> with the failing rule as `fields.assessment_id`. `GradebookCell.can_request_revision` +
+> `revision_blocked_reason` carry the same verdict to the UI so the button and the endpoint
+> cannot disagree. **Deciding and withdrawing are NOT date-gated** — a filed request must stay
+> rulable even after the window moves, or it strands as pending forever.
+
+> **D33 (client ask 7) — THE MID-TERM FREEZE. The window now stops grade ENTRY too.**
+> D32 used `midterm_submission_start`/`_end` for one thing only: deciding whether a result
+> had been part of the mid-term submission, and therefore whether it could be revised.
+> Nothing stopped a mark being typed in while the window was running, so the snapshot the
+> Dean freezes at its close was assembled from a set that could still move underneath it.
+>
+> `upsert_grades` — the single grade write path — now also calls
+> `_assert_midterm_not_frozen`, which answers **`409 midterm_frozen`** while
+> `midterm_submission_start <= now <= midterm_submission_end`, carrying both dates in
+> `extra` (a freeze with no reopen date is unactionable — the Lecturer's next question is
+> always wait-or-file-a-revision). The timeline is:
+>
+> | period | grade entry | changing a pre-`start` mark |
+> |---|---|---|
+> | before `start` | **open** — this is the mid-term submission period | n/a |
+> | `[start, end]` | **FROZEN** `409 midterm_frozen` | refused, `midterm_window_open` |
+> | after `end` | **open** — a new mark goes in normally | **revision** (D32 rules above) |
+>
+> **Both bounds are inclusive**, mirroring `midterm_revision_eligible`'s `now <= end`: if one
+> were exclusive there would be a single instant in which a mark could neither be entered nor
+> revised. Either date NULL → never frozen, the state of every semester created before D32.
+> The Dean is exempt, matching `_assert_grade_window_open`. Checked **after** the end-term
+> deadline, so when both are shut the caller gets `grade_window_closed` — the term being over
+> is more useful than being told to wait for a window to reopen.
+>
+> `Gradebook` reports it in advance via **`midterm_frozen`** +
+> `midterm_submission_start`/`_end` — a third flag rather than a value folded into
+> `grade_window_closed`, because the three states are answered differently: `can_edit=false`
+> means "not yours", `grade_window_closed` means "file a revision", `midterm_frozen` means
+> "wait, until this date". Reported to every viewer, not just writers.
+>
+> `grade_submission_deadline` is unchanged and remains the END-TERM cutoff (D32-1).
+
+> **D35 — `coursestatus`: how a student is sitting one offering.**
+>
+> `class_enrollments.enrollment_status` (`enrolled` / `audit` / `withdraw_passing` /
+> `withdraw_failing`) has existed since `005_tertiary.sql` §8, which moved it off the
+> client schema's `courses.coursestatus` — on the CATALOG, marking one student as auditing
+> would have marked everyone taking the course. Until D35 it was **mapped and nothing
+> else**: nothing set it and nothing read it.
+>
+> **Write:** `enrollment_status` on `POST /offerings/{id}/enrollments` (whole batch,
+> defaults `enrolled`), and **`PATCH /offerings/{id}/enrollments/{enrollment_id}`**
+> (Dean/Registrar) for one student. `409 enrollment_closed` on an un-enrolled row. The
+> change is audited with before/after and the reason.
+>
+> **`PATCH` is not `DELETE`.** `DELETE` un-enrols — the row closes and the student leaves
+> the roster, which says the registration was a mistake. A withdrawal says they SAT the
+> course and left, so the row stays open and on the roster, because the transcript has to
+> print `W/P` or `W/F` against it. Deleting it would erase the fact being recorded.
+>
+> **Consequences, which are most of the feature:**
+>
+> | | credit | GPA | academic-history bucket | transcript |
+> |---|---|---|---|---|
+> | `enrolled` | on passing | counted | `completed` / `failed` / `in_progress` | grade |
+> | `audit` | none | **excluded both sides** | `audited` | `AU` |
+> | `withdraw_passing` | none | **excluded both sides** | `withdrawn` | `W/P` |
+> | `withdraw_failing` | none | **excluded both sides** | `withdrawn` | `W/F` |
+>
+> "Excluded both sides" means the credits leave the DENOMINATOR too. Leaving them in with no
+> quality points against them would depress the GPA of a student who did nothing wrong —
+> the same argument the `transferred` bucket makes.
+>
+> **The course status OUTRANKS the result** (`transferred > audit/withdrawn > result >
+> enrolled > remaining`). The gradebook does not know about course status, so a lecturer can
+> mark an auditing student and a withdrawal recorded after grades went in is ordinary; a
+> graded-then-audited course must still earn nothing.
+>
+> A `notation` row on the transcript carries `numeric: null` and `letter: ""`, is out of the
+> term average, and is printed anyway — the graded-only filter would otherwise drop the
+> course, and a permanent record that omits a withdrawal is not a transcript.
 
 #### `GET /grades/class-subject/{class_subject_id}` — the gradebook read
 - **Purpose:** the grid: roster (derived from **enrollment**) × the subject's assessments, each cell carrying the student's grade row/status (UI §7.7). FR-GRD-01,04.
@@ -809,13 +951,30 @@ Read-only aggregators. Tables read: `term_grade_snapshots`, `report_card_snapsho
 #### `GET /reports/report-card/{student_id}` (FR-RPT-01,05,06)
 - **Purpose:** per-student, per-term report card: all subjects in the section with score/letter/teacher, attendance summary, term average, school identity (UI §7.8).
 - **Authz:** P/S = any `student_id`; **Teacher** = only a student in a section they own a subject of (else `404`); **Student** = self only → must call `/reports/report-card/me` (the `{student_id}` path is rejected for a student caller). **grade_release_filter** applies for students (unreleased subjects → `status:"pending"`, AC 5.5).
-- **Query:** `semester_id?` (default active; FR-RPT-07).
+- **Query:** `semester_id?` (default active; FR-RPT-07), **`kind?: "midterm"|"endterm"` (D32, default `endterm`)**.
 - **Success `200`:** `ReportCard { student: StudentRef, section: ClassRef, semester: SemesterRef, school: SchoolIdentity, subjects:{ subject: SubjectRef, teacher?: TeacherRef, numeric?: number, letter?: string, status:"graded"|"pending" }[], attendance_summary:{ pct_present, absent, late }, term_average?: number, term_average_letter?: string, is_frozen: bool }`. Archived semester → from `report_card_snapshots.payload` (frozen, `is_frozen=true`); live year → computed-on-read.
 - **`is_frozen` semantics (S1):** a value is `is_frozen=true` **only** when read from a snapshot, which exists **only after the academic year is archived** (schema §10.4 freeze is a year-level event). A **completed-but-not-archived prior semester** (e.g. Semester 1 is over, but the year is still active because Semester 2 is in progress) has **no snapshot yet** — it is still **computed-on-read with `is_frozen=false`**, against the *current* (still-editable) grading scale/policy. Report/transcript consumers must not assume a finished semester is frozen mid-year; only year archival freezes it. (This mirrors `/grades/term.is_frozen` and the transcript's `is_current` marker.)
+- **`kind` (D32, brief §5) — two report types, produced by different mechanisms.**
+  - **`endterm`** (default, and the pre-D32 behaviour): computed on read for a live year, read from `term_grade_snapshots` once the year archives. Its figures are supposed to keep moving until then. Every existing caller is unaffected.
+  - **`midterm`**: the frozen `report_card_snapshots.payload` for `kind='midterm'`, returned **verbatim**. It never recalculates, and that is the requirement rather than an optimisation — recomputing a mid-term card in November would fold in October's post-midterm work and silently move a mark a parent has already seen.
+  - The response carries `report_kind` and `frozen_at` (`null` on a computed card).
+  - **Lazy freeze:** a mid-term card requested after `semesters.midterm_submission_end` with no snapshot is frozen on the spot and then read. There is no scheduler in this backend, so the alternative is a report that fails until the Dean presses the button; `freeze_midterm` is idempotent, so concurrent first-reads converge.
+  - Extra errors on this branch: `409 midterm_window_open` before the window closes, `422 no_midterm_window` for a term with no mid-term period configured, `404 no_midterm_snapshot` for a student with no live enrolment in the term.
 - **Errors:** `401`, `403`/`404` per scope, `404 no_records` → SPA empty state.
 
 #### `GET /reports/report-card/me`
-- **Authz:** `require_role(student)`; `student_scope` + grade_release_filter. Same `ReportCard` for self.
+- **Authz:** `require_role(student)` **plus the Dean's student grade-visibility switch (D32, brief §4)** — `403 grades_hidden` when `assessment_policies.students_can_view_grades` is false, which is the default. `student_scope` + grade_release_filter otherwise.
+- **Query:** `semester_id?`, `kind?` — same semantics as above. The **mid-term branch carries no release filter**: a frozen card is a document already issued, and re-applying "hide subjects with unreleased work" would blank rows the student has already been shown, because release state has moved on since the freeze.
+- Same `ReportCard` for self.
+
+#### `POST /settings/semesters/{semester_id}/midterm-freeze` — **Dean only (D32, brief §6)**
+- **Purpose:** capture every enrolled student's report card for the term into `report_card_snapshots` with `kind='midterm'`, so mid-term reports serve a frozen document.
+- **Authz:** `require_role(principal)`.
+- **Success `200`:** `{ snapshots_written: int, semester_id: uuid, frozen_at: timestamptz }`. `0` means nobody was enrolled, not that it failed.
+- **Idempotent** on `uq_report_card_snapshot (student_id, semester_id, kind)` — a re-freeze refreshes in place, which is what lets the Dean re-freeze after correcting a mark.
+- **Writes only `report_card_snapshots`.** `term_grade_snapshots` is the transcript's source and describes a FINISHED term; a mid-term figure there would surface on a transcript as though the term had ended.
+- **Optional:** the lazy freeze on first read covers a Dean who never presses it. The endpoint exists so the moment is chosen deliberately.
+- **Errors:** `401`, `403`, `404`, `409 midterm_window_open`, `422 no_midterm_window`.
 
 #### `GET /reports/transcript/{student_id}` — **multi-year transcript (D24; Principal/Secretary ONLY, D26)**
 - **Purpose:** the full multi-year record — every academic_year → semester → subject with numeric+letter, assembled from **archived `term_grade_snapshots` ∪ live-year compute**, grouped chronologically (FR-TRN-01..07; schema §10.6; UI §7.10).

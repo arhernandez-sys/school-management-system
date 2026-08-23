@@ -4,8 +4,8 @@ Thin transport; the service owns DB access. Mounts under `/api/v1`.
 
 Endpoints:
   GET /reports/students          P/S/Teacher -> StudentPickerPage
-  GET /reports/report-card       P/S/Teacher -> ReportCard        (?student_id=&semester_id=)
-  GET /reports/report-card/me    Student     -> ReportCard        (?semester_id=)
+  GET /reports/report-card       P/S/Teacher -> ReportCard        (?student_id=&semester_id=&kind=)
+  GET /reports/report-card/me    Student     -> ReportCard        (?semester_id=&kind=)
   GET /reports/transcript        P/S ONLY    -> Transcript        (?student_id=)  [D26]
   GET /reports/offering-grades   P/S/Teacher -> OfferingGradesReport (?offering_id=)
   GET /reports/attendance        P/S/Teacher -> AttendanceReport  (?section_id=)
@@ -29,9 +29,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role
+from app.common.enums import ReportCardKind, Role
 from app.common.schemas import ErrorResponse
-from app.core.deps import get_db, require_role
+from app.core.deps import get_db, require_role, require_student_grade_visibility
 from app.core.pagination import PageParams, page_params
 from app.modules.reports import service
 from app.modules.reports.schemas import (
@@ -49,7 +49,11 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 _ERR = {"model": ErrorResponse}
 _staff = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
 _admins = require_role(Role.PRINCIPAL, Role.SECRETARY)
-_student = require_role(Role.STUDENT)
+#: D32 (brief §4) — a student's own report card is grade information, so it is gated by
+#: the Dean's `students_can_view_grades` switch exactly like `/grades/me` (403
+#: `grades_hidden` when off). Staff report cards below are NOT gated: the switch governs
+#: what a STUDENT sees, and the Registrar issuing report cards is core registry work.
+_student = require_student_grade_visibility(Role.STUDENT)
 
 
 @router.get(
@@ -76,12 +80,19 @@ def list_students(
 )
 def get_my_report_card(
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    kind: Annotated[ReportCardKind, Query()] = ReportCardKind.ENDTERM,
     db: Session = Depends(get_db),
     actor: User = Depends(_student),
 ) -> ReportCard:
     """A subject with any unreleased graded work shows as `status="pending"` with no
-    numeric (AC 5.5) — an official document must not print a partial average."""
-    return service.get_my_report_card(db, actor=actor, semester_id=semester_id)
+    numeric (AC 5.5) — an official document must not print a partial average.
+
+    D32: `kind=midterm` returns the frozen mid-term card, which carries NO release filter
+    (see `get_my_report_card` in the service for why). Gated by the Dean's student
+    grade-visibility switch like every other student grade surface."""
+    return service.get_my_report_card(
+        db, actor=actor, semester_id=semester_id, kind=kind
+    )
 
 
 @router.get(
@@ -93,13 +104,25 @@ def get_my_report_card(
 def get_report_card(
     student_id: Annotated[uuid.UUID, Query()],
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    kind: Annotated[ReportCardKind, Query()] = ReportCardKind.ENDTERM,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
 ) -> ReportCard:
     """404 `semester_not_found` for an unknown `semester_id` — no silent fallback to
-    the active term, which would mask a client bug."""
+    the active term, which would mask a client bug.
+
+    **`kind` (D32, brief §5).** `endterm` (the default, and the pre-D32 behaviour)
+    computes from current grades for a live year and reads `term_grade_snapshots` once the
+    year archives. `midterm` reads a frozen `report_card_snapshots` payload verbatim and
+    NEVER recalculates — that is the client's requirement, not an optimisation.
+
+    Defaulting to `endterm` keeps every existing caller working unchanged.
+
+    Mid-term extra failure modes, all from `freeze_midterm`: 409 `midterm_window_open`
+    before the window closes, 422 `no_midterm_window` for a term with no mid-term period,
+    404 `no_midterm_snapshot` for a student with no live enrolment in the term."""
     return service.get_report_card(
-        db, actor=actor, student_id=student_id, semester_id=semester_id
+        db, actor=actor, student_id=student_id, semester_id=semester_id, kind=kind
     )
 
 

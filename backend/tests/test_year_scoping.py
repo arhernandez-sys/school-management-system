@@ -113,7 +113,7 @@ class _TwoYears:
             **split_name(f"YS Student {tag}"),
             date_of_birth=date(2011, 5, 4),
             enrollment_date=date(2024, 9, 1),
-            status="active",
+            status="Registered",
         )
         db_session.add_all([self.teacher, self.student])
         db_session.flush()
@@ -150,7 +150,7 @@ class _TwoYears:
             **split_name(f"YS CurOnly {tag}"),
             date_of_birth=date(2011, 7, 8),
             enrollment_date=date(2025, 9, 1),
-            status="active",
+            status="Registered",
         )
         db_session.add(self.cur_only_student)
         db_session.flush()
@@ -604,6 +604,10 @@ class TestStudentYearsList:
         assert client.get(f"{V1}/students/me/years", headers=two.P).status_code == 403
 
 
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestStudentOwnDataFollowsTheSwitcher:
     """The three screens the global switcher re-scopes: My Grades, My Attendance,
     My Classes. Each must return THAT year's data — the student scored 60 in the
@@ -755,6 +759,10 @@ class TestAssessmentsSemesterFilter:
         assert {str(two.cur.assessment.id), str(two.cur.sem2_assessment.id)} <= ids
 
 
+@pytest.mark.usefixtures("student_grades_visible")
+# D32 (brief §4): a student reaches no grade surface unless the Dean has published
+# grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
+# not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestMyGradesSemesterFilter:
     """`GET /grades/me?semester_id=` — My Grades under the year·semester switcher."""
 

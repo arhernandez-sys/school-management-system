@@ -201,6 +201,30 @@ function gradeWindow(): { closed: boolean; deadline: string | null } {
   return { closed: !Number.isNaN(at) && new Date(DEMO_TODAY_ISO).getTime() > at, deadline };
 }
 
+/**
+ * The active term's MID-TERM FREEZE (D33, client ask 7), mirroring
+ * `grades/service.midterm_freeze_state`.
+ *
+ * `frozen` only inside `[start, end]`, both bounds INCLUSIVE — the same reading the server
+ * takes, and for the same reason: `midtermRevisionEligible` treats `now <= end` as still
+ * open, so an exclusive bound here would leave one instant in which a mark could neither
+ * be entered nor revised. Either date null → never frozen, the state of the demo term as
+ * shipped.
+ *
+ * DEMO_TODAY, not the real clock, for the reason `gradeWindow()` documents.
+ */
+function midtermFreeze(): { frozen: boolean; start: string | null; end: string | null } {
+  const sem = getActiveSemester();
+  const start = sem?.midterm_submission_start ?? null;
+  const end = sem?.midterm_submission_end ?? null;
+  if (!start || !end) return { frozen: false, start: null, end: null };
+  const now = new Date(DEMO_TODAY_ISO).getTime();
+  const from = new Date(start).getTime();
+  const to = new Date(end).getTime();
+  if (Number.isNaN(from) || Number.isNaN(to)) return { frozen: false, start, end };
+  return { frozen: now >= from && now <= to, start, end };
+}
+
 // ── grade-entry validation + upsert (PUT /assessments/{id}/grades) ───────────────
 interface GradeEntryBody {
   student_id: string;
@@ -267,11 +291,33 @@ export const gradesHandlers = [
     // Reported for EVERY viewer, not just writers: a Registrar asked why the lecturer
     // cannot enter grades needs to see the same closed window (D30 §D6).
     const window = gradeWindow();
+    const freeze = midtermFreeze();
+    // D32 — `can_request_revision` answers "may YOU file one", and only a Lecturer can
+    // (§D7: the Dean decides and may not request; the Registrar has no grade authority).
+    // The selector has no caller identity, so the zeroing happens here, mirroring
+    // `grades/service.get_gradebook`'s `viewer_is_lecturer` guard.
+    const rows =
+      role === 'teacher'
+        ? body.rows
+        : body.rows.map((row) => ({
+            ...row,
+            cells: row.cells.map((c) => ({
+              ...c,
+              can_request_revision: false,
+              revision_blocked_reason: null,
+            })),
+          }));
     return HttpResponse.json({
       ...body,
+      rows,
       can_edit: canEdit,
       grade_window_closed: window.closed,
       grade_submission_deadline: window.deadline,
+      // D33 — reported for EVERY viewer, like the deadline above: a Registrar asked "why
+      // can't the lecturer enter these?" must see the same frozen window.
+      midterm_frozen: freeze.frozen,
+      midterm_submission_start: freeze.start,
+      midterm_submission_end: freeze.end,
       viewer_role: role,
     });
   }),
@@ -310,6 +356,17 @@ export const gradesHandlers = [
           409,
           'grade_window_closed',
           'The grade submission deadline for this term has passed.',
+        );
+      }
+      // D33 ask 7 — checked AFTER the deadline for the reason the server documents: if
+      // both are shut, "the term is over" is the more useful message than "wait".
+      const freeze = midtermFreeze();
+      if (freeze.frozen) {
+        return errorResponse(
+          409,
+          'midterm_frozen',
+          'The mid-term grading period is in progress, so grades for this term are frozen. ' +
+            'Entry reopens once the period closes.',
         );
       }
     }

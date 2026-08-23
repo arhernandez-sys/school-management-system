@@ -469,6 +469,39 @@ def _assert_sequence_free(
         )
 
 
+def _assert_midterm_window(
+    start: datetime | None, end: datetime | None
+) -> tuple[datetime | None, datetime | None]:
+    """Validate the mid-term grading window and return it normalised to UTC (D32).
+
+    **Both or neither.** A start with no end can never elapse, so the revision rules
+    would hold every request back forever; an end with no start has nothing to measure
+    "the assessment existed before the period began" against, so rule 2 could not be
+    evaluated at all. Either half alone is a configuration that cannot produce a correct
+    answer, so it is rejected here rather than half-honoured later.
+
+    Mirrors `ck_semesters_midterm_window`, which is the backstop for a direct SQL edit;
+    this is the readable 422 a Dean actually sees.
+    """
+    start = _to_utc(start)
+    end = _to_utc(end)
+    if (start is None) != (end is None):
+        missing = "midterm_submission_end" if end is None else "midterm_submission_start"
+        raise ValidationError(
+            "The mid-term grading window needs both a start and an end date, or "
+            "neither.",
+            fields={missing: ["Required when the other mid-term date is set."]},
+        )
+    if start is not None and end is not None and end <= start:
+        raise ValidationError(
+            "midterm_submission_end must be after midterm_submission_start.",
+            fields={
+                "midterm_submission_end": ["Must be after midterm_submission_start."]
+            },
+        )
+    return start, end
+
+
 def create_semester(
     db: Session, *, actor: User, payload: StandaloneSemesterCreateRequest
 ) -> SemesterDetail:
@@ -497,6 +530,9 @@ def create_semester(
     _assert_sequence_free(
         db, academic_year_id=payload.academic_year_id, sequence=payload.sequence
     )
+    midterm_start, midterm_end = _assert_midterm_window(
+        payload.midterm_submission_start, payload.midterm_submission_end
+    )
 
     semester = Semester(
         academic_year_id=payload.academic_year_id,
@@ -506,6 +542,8 @@ def create_semester(
         start_date=payload.start_date,
         end_date=payload.end_date,
         grade_submission_deadline=_to_utc(payload.grade_submission_deadline),
+        midterm_submission_start=midterm_start,
+        midterm_submission_end=midterm_end,
         is_active=False,
     )
     db.add(semester)
@@ -560,9 +598,35 @@ def update_semester(
     if payload.term_type is not None:
         semester.term_type = payload.term_type
     # PRESENCE, not None-ness: `null` reopens a closed grade window, omitted leaves it
-    # alone. See `SemesterUpdateRequest` for why this field alone is treated that way.
+    # alone. See `SemesterUpdateRequest` for why these fields are treated that way.
     if "grade_submission_deadline" in payload.model_fields_set:
         semester.grade_submission_deadline = _to_utc(payload.grade_submission_deadline)
+
+    # D32 — same presence semantics, but validated on the MERGED pair, so sending only
+    # `midterm_submission_end` is checked against the start already on the row rather
+    # than against nothing. Sending `null` for one half while the other keeps a value is
+    # what `_assert_midterm_window` rejects; clearing the window means sending both as
+    # `null`.
+    touches_midterm = bool(
+        {"midterm_submission_start", "midterm_submission_end"}
+        & payload.model_fields_set
+    )
+    if touches_midterm:
+        merged_start = (
+            payload.midterm_submission_start
+            if "midterm_submission_start" in payload.model_fields_set
+            else semester.midterm_submission_start
+        )
+        merged_end = (
+            payload.midterm_submission_end
+            if "midterm_submission_end" in payload.model_fields_set
+            else semester.midterm_submission_end
+        )
+        (
+            semester.midterm_submission_start,
+            semester.midterm_submission_end,
+        ) = _assert_midterm_window(merged_start, merged_end)
+
     semester.start_date = start
     semester.end_date = end
 
@@ -611,6 +675,42 @@ def activate_semester(
     )
     db.commit()
     return SemesterDetail.model_validate(semester)
+
+
+def freeze_midterm_grades(
+    db: Session, *, actor: User, semester_id: uuid.UUID
+) -> tuple[int, datetime]:
+    """POST /settings/semesters/{id}/midterm-freeze (Dean only; D32, brief §6).
+
+    Captures every enrolled student's report card for the term as a MID-TERM snapshot, so
+    later reads serve a frozen document instead of recalculating from grades that have
+    moved on. Returns `(rows_written, frozen_at)`.
+
+    **Idempotent.** Re-running refreshes in place on
+    `uq_report_card_snapshot (student_id, semester_id, kind)`. That is deliberate and
+    useful: a Dean who corrects a mark after freezing can re-freeze rather than being told
+    the term is already done.
+
+    **This is the explicit half of a two-part mechanism.** The other half is the lazy
+    freeze in `reports.service._midterm_report_card`, which captures on first read if the
+    window has closed and nobody pressed this button. Both exist because the backend has
+    no scheduler (`app/jobs/purge.py` says so explicitly) — the button gives the Dean
+    control over WHEN, and the fallback guarantees a report is never simply missing.
+
+    The window checks (409 `midterm_window_open`, 422 `no_midterm_window`) live in
+    `freeze_midterm` so both entry points enforce them identically.
+
+    Mirrors `archive_academic_year`: the computation lives in `reports.freeze` because a
+    snapshot IS a report card, produced by the same builder that serves
+    `/reports/report-card`. Imported lazily for the same circular-import reason.
+    """
+    from app.modules.reports.freeze import freeze_midterm
+
+    semester = _semester_or_404(db, semester_id)
+    written = freeze_midterm(db, actor=actor, semester=semester)
+    frozen_at = _now()
+    db.commit()
+    return written, frozen_at
 
 
 def archive_academic_year(
@@ -910,12 +1010,16 @@ def update_assessment_policy(
     policy.absent_as_zero = payload.absent_as_zero
     policy.allow_makeup = payload.allow_makeup
     policy.drop_lowest_count = payload.drop_lowest_count
+    policy.students_can_view_grades = payload.students_can_view_grades
     policy.updated_by = actor.id
     _audit(
         db,
         actor=actor,
         action="assessment_policy.update",
         entity_type="assessment_policy",
+        # D32 — who can see grades is an access-control decision, not a grading tweak, so
+        # the audit row records the value rather than just "the policy changed".
+        summary={"students_can_view_grades": payload.students_can_view_grades},
     )
     db.commit()
     return AssessmentPolicyRead.model_validate(policy)

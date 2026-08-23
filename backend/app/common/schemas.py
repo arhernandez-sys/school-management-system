@@ -66,6 +66,17 @@ class CurrentUser(BaseModel):
     student_profile_id: UUID | None = None
     teacher_profile_id: UUID | None = None
     preferences: UserPreferences
+    #: D32 (brief §4) — the Dean's `assessment_policies.students_can_view_grades`.
+    #:
+    #: Echoed on the session so the SPA can hide the Grades nav item without being handed
+    #: `/settings/assessment-policy`, which is staff-only. It is a UX signal, NOT the
+    #: boundary: `core.deps.require_student_grade_visibility` re-checks it on every
+    #: student-facing grade endpoint (NFR-SEC-01).
+    #:
+    #: Reported for EVERY role, not just students, and always the raw setting. A staff
+    #: member needs to see the same value to answer "why can't my students see marks?",
+    #: and making it mean different things per role would make that impossible.
+    students_can_view_grades: bool = False
 
 
 class UserRef(BaseModel):

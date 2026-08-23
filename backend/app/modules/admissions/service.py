@@ -837,7 +837,7 @@ def accept_application(
         date_of_birth=row.date_of_birth,
         gender=row.gender,
         enrollment_date=accepted_on,
-        status=StudentStatus.ACTIVE,
+        status=StudentStatus.REGISTERED,
         phone=row.phone,
         ssno=row.ssno,
         religion=row.religion,

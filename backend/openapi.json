@@ -1099,6 +1099,95 @@
         }
       }
     },
+    "/api/v1/settings/semesters/{semester_id}/midterm-freeze": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Freeze mid-term report cards for a term (principal; D32, brief §6)",
+        "description": "Dean only. Captures every enrolled student's report card for the term into\n`report_card_snapshots` with `kind='midterm'`, so mid-term reports serve a frozen\ndocument instead of recalculating from grades that have since moved.\n\n**Idempotent** — re-running refreshes in place, which is what lets a Dean re-freeze\nafter correcting a mark.\n\n409 `midterm_window_open` while the mid-term period is still running (freezing a\nhalf-entered gradebook and calling it final would be worse than refusing);\n422 `no_midterm_window` if the term has no mid-term period configured.\n\nPressing this is OPTIONAL: a mid-term report requested after the window closes\nfreezes itself on first read. The button exists so the Dean can choose the moment.",
+        "operationId": "freeze_midterm_grades_api_v1_settings_semesters__semester_id__midterm_freeze_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "semester_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Semester Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MidtermFreezeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/settings/academic-years/{year_id}/archive": {
       "post": {
         "tags": [
@@ -3249,7 +3338,7 @@
           "students"
         ],
         "summary": "List students (P/S/Teacher; api-spec §5.3, FR-STU-06)",
-        "description": "Teacher results auto-restrict to students in a class they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).\n\n`year_of_study` filters on the student's own level (D29 — it replaced `grade_level`,\nwhich used to be read off the student's homeroom). `offering_id` narrows to one\ncourse offering. `academic_year_id` (year switcher) restricts the directory to\nstudents enrolled in that year when it is a PAST year; the active year lists\neveryone.",
+        "description": "Teacher results auto-restrict to students in a class they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).\n\n`year_of_study` filters on the student's own level (D29 — it replaced `grade_level`,\nwhich used to be read off the student's homeroom). `offering_id` narrows to one\ncourse offering. `academic_year_id` (year switcher) restricts the directory to\nstudents enrolled in that year when it is a PAST year; the active year lists\neveryone.\n\n**D32 (brief §3) adds `religion`, `gender` and `program_id`.** Server-side, and they\nAND with each other and with everything above — \"all Female students in Programme X\"\nis two of them together. They filter on the student record itself, so a graduated or\nwithdrawn student still matches; that is deliberate, and the same reasoning as the\n`academic_year_id` note above.\n\n`religion` is free text from the admissions form, so its permitted values come from\n`GET /students/filter-options` rather than an enum.",
         "operationId": "list_students_api_v1_students_get",
         "security": [
           {
@@ -3339,6 +3428,57 @@
                 }
               ],
               "title": "Academic Year Id"
+            }
+          },
+          {
+            "name": "religion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Religion"
+            }
+          },
+          {
+            "name": "gender",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 20
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gender"
+            }
+          },
+          {
+            "name": "program_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Program Id"
             }
           },
           {
@@ -3508,6 +3648,53 @@
             "description": "Unprocessable Entity"
           }
         }
+      }
+    },
+    "/api/v1/students/filter-options": {
+      "get": {
+        "tags": [
+          "students"
+        ],
+        "summary": "Values the directory filters can take (P/S/Teacher; D32, brief §3)",
+        "description": "The DISTINCT religions actually present in the directory.\n\nOnly `religion` is here, and only because it has to be: it is free text collected on\nthe admissions form, so there is no enum to build a dropdown from and a hardcoded list\nwould offer options that match nothing. `gender` is a fixed pair and programmes come\nfrom `/programs`.\n\nDeclared BEFORE `/{student_id}` so the literal wins over the UUID path param —\notherwise FastAPI tries to parse \"filter-options\" as a UUID and 422s.",
+        "operationId": "student_filter_options_api_v1_students_filter_options_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentFilterOptions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/me": {
@@ -4010,8 +4197,8 @@
         "tags": [
           "students"
         ],
-        "summary": "Assessments + term grades grouped by subject (P/S/Teacher; §5.3)",
-        "description": "Teacher must own a section the student is in, else 404. `academic_year_id`\nscopes to the section the student sat in that YEAR (a year spans both\nsemesters). A student self uses GET /grades/me.",
+        "summary": "Assessments + term grades grouped by subject (Dean/Lecturer; §5.3)",
+        "description": "Teacher must own a section the student is in, else 404. `academic_year_id`\nscopes to the section the student sat in that YEAR (a year spans both\nsemesters). A student self uses GET /grades/me.\n\n**D32: no longer open to the Registrar** — this is the grade information the client\nasked to remove from the registration screens (brief §4). The matching Grades &\nAssessments tab is hidden from them in `StudentDetailPage.tsx`.",
         "operationId": "list_student_assessments_api_v1_students__student_id__assessments_get",
         "security": [
           {
@@ -7748,11 +7935,118 @@
       }
     },
     "/api/v1/offerings/{offering_id}/enrollments/{enrollment_id}": {
+      "patch": {
+        "tags": [
+          "offerings"
+        ],
+        "summary": "Set a student's course status on an offering (Dean/Registrar; D35)",
+        "description": "The client's `coursestatus`: `enrolled` / `audit` / `withdraw_passing` /\n`withdraw_failing`.\n\nDistinct from `DELETE` below, which UN-ENROLS. A withdrawal keeps the row open and on\nthe roster because the transcript prints `W/P` or `W/F` against it; deleting it would\nerase the fact being recorded. 409 `enrollment_closed` on a row that is already\nun-enrolled.",
+        "operationId": "set_enrollment_status_api_v1_offerings__offering_id__enrollments__enrollment_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offering_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Offering Id"
+            }
+          },
+          {
+            "name": "enrollment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Enrollment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "offerings"
         ],
-        "summary": "Withdraw a student from an offering (Dean/Registrar)",
+        "summary": "Un-enrol a student from an offering (Dean/Registrar)",
         "operationId": "unenroll_student_api_v1_offerings__offering_id__enrollments__enrollment_id__delete",
         "security": [
           {
@@ -12648,7 +12942,7 @@
           "reports"
         ],
         "summary": "The signed-in student's own report card",
-        "description": "A subject with any unreleased graded work shows as `status=\"pending\"` with no\nnumeric (AC 5.5) — an official document must not print a partial average.",
+        "description": "A subject with any unreleased graded work shows as `status=\"pending\"` with no\nnumeric (AC 5.5) — an official document must not print a partial average.\n\nD32: `kind=midterm` returns the frozen mid-term card, which carries NO release filter\n(see `get_my_report_card` in the service for why). Gated by the Dean's student\ngrade-visibility switch like every other student grade surface.",
         "operationId": "get_my_report_card_api_v1_reports_report_card_me_get",
         "security": [
           {
@@ -12671,6 +12965,15 @@
                 }
               ],
               "title": "Semester Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReportCardKind",
+              "default": "endterm"
             }
           }
         ],
@@ -12734,7 +13037,7 @@
           "reports"
         ],
         "summary": "A student's report card (P/S/Teacher)",
-        "description": "404 `semester_not_found` for an unknown `semester_id` — no silent fallback to\nthe active term, which would mask a client bug.",
+        "description": "404 `semester_not_found` for an unknown `semester_id` — no silent fallback to\nthe active term, which would mask a client bug.\n\n**`kind` (D32, brief §5).** `endterm` (the default, and the pre-D32 behaviour)\ncomputes from current grades for a live year and reads `term_grade_snapshots` once the\nyear archives. `midterm` reads a frozen `report_card_snapshots` payload verbatim and\nNEVER recalculates — that is the client's requirement, not an optimisation.\n\nDefaulting to `endterm` keeps every existing caller working unchanged.\n\nMid-term extra failure modes, all from `freeze_midterm`: 409 `midterm_window_open`\nbefore the window closes, 422 `no_midterm_window` for a term with no mid-term period,\n404 `no_midterm_snapshot` for a student with no live enrolment in the term.",
         "operationId": "get_report_card_api_v1_reports_report_card_get",
         "security": [
           {
@@ -12767,6 +13070,15 @@
                 }
               ],
               "title": "Semester Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReportCardKind",
+              "default": "endterm"
             }
           }
         ],
@@ -13768,6 +14080,16 @@
             "type": "integer",
             "title": "Remaining",
             "default": 0
+          },
+          "audited": {
+            "type": "integer",
+            "title": "Audited",
+            "default": 0
+          },
+          "withdrawn": {
+            "type": "integer",
+            "title": "Withdrawn",
+            "default": 0
           }
         },
         "type": "object",
@@ -13894,7 +14216,7 @@
           "status"
         ],
         "title": "AcademicHistoryCourse",
-        "description": "One course in the student's record, in exactly one bucket.\n\n`status`:\n  * `transferred`  — granted by an approved credit transfer. Counts toward the award,\n                     EXCLUDED from the GPA (a transfer grants credit, not a grade).\n  * `completed`    — a result clearing the student's PROGRAMME pass mark (§D5).\n  * `failed`       — a result below it. Counted in the GPA; still owed.\n  * `in_progress`  — enrolled, nothing marked yet.\n  * `remaining`    — in the programme curriculum, never taken."
+        "description": "One course in the student's record, in exactly one bucket.\n\n`status`:\n  * `transferred`  — granted by an approved credit transfer. Counts toward the award,\n                     EXCLUDED from the GPA (a transfer grants credit, not a grade).\n  * `completed`    — a result clearing the student's PROGRAMME pass mark (§D5).\n  * `failed`       — a result below it. Counted in the GPA; still owed.\n  * `in_progress`  — enrolled, nothing marked yet.\n  * `remaining`    — in the programme curriculum, never taken.\n  * `audited`      — D35, the client's `coursestatus`: sitting it without reading it\n                     for credit. No credit, and out of the GPA on BOTH sides of the\n                     fraction — its credits are not in the denominator either.\n  * `withdrawn`    — D35: sat it and left (`withdraw_passing` / `withdraw_failing`).\n                     No credit, out of the GPA; the transcript still prints the\n                     notation, which is the point of recording it at all."
       },
       "AcademicYearCreateRequest": {
         "properties": {
@@ -16415,6 +16737,11 @@
           "drop_lowest_count": {
             "type": "integer",
             "title": "Drop Lowest Count"
+          },
+          "students_can_view_grades": {
+            "type": "boolean",
+            "title": "Students Can View Grades",
+            "default": false
           }
         },
         "type": "object",
@@ -16439,6 +16766,11 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Drop Lowest Count"
+          },
+          "students_can_view_grades": {
+            "type": "boolean",
+            "title": "Students Can View Grades",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -18142,6 +18474,11 @@
           },
           "preferences": {
             "$ref": "#/components/schemas/UserPreferences"
+          },
+          "students_can_view_grades": {
+            "type": "boolean",
+            "title": "Students Can View Grades",
+            "default": false
           }
         },
         "type": "object",
@@ -18357,6 +18694,10 @@
               }
             ],
             "title": "Semester Id"
+          },
+          "enrollment_status": {
+            "$ref": "#/components/schemas/EnrollmentStatus",
+            "default": "enrolled"
           }
         },
         "additionalProperties": false,
@@ -18432,7 +18773,8 @@
         "enum": [
           "Part Time",
           "Full Time",
-          "Transient"
+          "Transient",
+          "Summer"
         ],
         "title": "EnrollmentLoad",
         "description": "Study load (`applications.enrollment_load`) — the other half of the split above.\n\nThe form defines the first two by credits: Part Time is under 15 credits a term,\nFull Time is over 15. `TRANSIENT` is a visiting student taking courses without\nreading for a BAJC award. The thresholds are NOT enforced here — a load is what the\napplicant declares at admission, while their actual credits are a consequence of\nenrolment that changes term by term."
@@ -18488,6 +18830,43 @@
         "type": "object",
         "title": "EnrollmentResult",
         "description": "POST /offerings/{id}/enrollments.\n\n`over_capacity_warning` and `schedule_conflicts` are advisory: the enrolment\nsucceeded. A missing PREREQUISITE, by contrast, is a hard 409 — unlike a timetable\nclash it is not fixed by the next edit (D30 §D4, D-Q6)."
+      },
+      "EnrollmentStatus": {
+        "type": "string",
+        "enum": [
+          "enrolled",
+          "audit",
+          "withdraw_passing",
+          "withdraw_failing"
+        ],
+        "title": "EnrollmentStatus",
+        "description": "How a student is sitting one course offering (D30 §D2 step 4).\n\n`sims_bk.sql` carried this as `courses.coursestatus` — an ENROLMENT fact parked\non the CATALOG, where it would have applied to every student taking the course at\nonce. `005_tertiary.sql` §8 moved it to `class_enrollments` and added `enrolled`,\nwhich the original enum lacked entirely despite being the normal case."
+      },
+      "EnrollmentStatusRequest": {
+        "properties": {
+          "enrollment_status": {
+            "$ref": "#/components/schemas/EnrollmentStatus"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enrollment_status"
+        ],
+        "title": "EnrollmentStatusRequest",
+        "description": "PATCH /offerings/{id}/enrollments/{enrollment_id} (D35).\n\nA SEPARATE endpoint from `DELETE`, and the distinction is the point:\n\n  * `DELETE` un-enrols — the row is closed with `unenrolled_at` and the student is off\n    the roster, as though the registration were a mistake.\n  * a WITHDRAWAL is a fact about a course the student did sit and then left. The row\n    stays open and on the roster, because the transcript has to print `W/P` or `W/F`\n    against it. Deleting it would erase the very thing being recorded.\n\n`reason` is not stored on the enrolment — there is no column for it — but it is written\nto the audit log, which is where \"why did this change\" is answerable for every other\nguarded transition in this system."
       },
       "EnrollmentTotals": {
         "properties": {
@@ -19345,6 +19724,35 @@
             ],
             "title": "Grade Submission Deadline"
           },
+          "midterm_frozen": {
+            "type": "boolean",
+            "title": "Midterm Frozen",
+            "default": false
+          },
+          "midterm_submission_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission Start"
+          },
+          "midterm_submission_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission End"
+          },
           "viewer_role": {
             "type": "string",
             "title": "Viewer Role"
@@ -19827,6 +20235,32 @@
         "type": "object",
         "title": "MeetingsResult",
         "description": "GET/PUT /offerings/{id}/meetings.\n\n`conflicts` is advisory. Overlapping a lecturer or a room is a real scheduling\nmistake but not always an error (a room can be shared, a clash may be fixed minutes\nlater), and hard-blocking would make an otherwise-valid week unsaveable. So the write\nsucceeds and the UI warns — the same warn-only call already made for over-capacity\nenrolment (D-Q6)."
+      },
+      "MidtermFreezeResponse": {
+        "properties": {
+          "snapshots_written": {
+            "type": "integer",
+            "title": "Snapshots Written"
+          },
+          "semester_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Semester Id"
+          },
+          "frozen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Frozen At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshots_written",
+          "semester_id",
+          "frozen_at"
+        ],
+        "title": "MidtermFreezeResponse",
+        "description": "200 body of POST /settings/semesters/{id}/midterm-freeze (D32, brief §6)."
       },
       "MyAttendanceHistoryItem": {
         "properties": {
@@ -21850,6 +22284,22 @@
             "type": "boolean",
             "title": "Is Frozen",
             "default": false
+          },
+          "report_kind": {
+            "$ref": "#/components/schemas/ReportCardKind",
+            "default": "endterm"
+          },
+          "frozen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frozen At"
           }
         },
         "type": "object",
@@ -21860,6 +22310,15 @@
           "attendance_summary"
         ],
         "title": "ReportCard"
+      },
+      "ReportCardKind": {
+        "type": "string",
+        "enum": [
+          "midterm",
+          "endterm"
+        ],
+        "title": "ReportCardKind",
+        "description": "Which report card a `report_card_snapshots` row holds (D32, brief §5).\n\n**The two are produced by different mechanisms, not just at different times**, and\nthat is why they need distinguishing rather than a date range:\n\n  * `MIDTERM` is a FROZEN document. It is captured once when the term's mid-term\n    window closes and is served back verbatim thereafter — the client's requirement\n    that a mid-term report must not recalculate from current grades.\n  * `ENDTERM` is COMPUTED ON READ while the year is live, and only becomes a frozen\n    row when the year archives. Its figures are supposed to keep moving until then.\n\nA term therefore holds at most one of each per student, which is what\n`uq_report_card_snapshot (student_id, semester_id, kind)` enforces."
       },
       "ReportCardSubjectRow": {
         "properties": {
@@ -22165,6 +22624,10 @@
               }
             ],
             "title": "Unenrolled At"
+          },
+          "enrollment_status": {
+            "$ref": "#/components/schemas/EnrollmentStatus",
+            "default": "enrolled"
           }
         },
         "type": "object",
@@ -22427,6 +22890,30 @@
             ],
             "title": "Grade Submission Deadline"
           },
+          "midterm_submission_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission Start"
+          },
+          "midterm_submission_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission End"
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -22535,12 +23022,36 @@
               }
             ],
             "title": "Grade Submission Deadline"
+          },
+          "midterm_submission_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission Start"
+          },
+          "midterm_submission_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission End"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "SemesterUpdateRequest",
-        "description": "PATCH /settings/semesters/{id} (Dean only). All fields optional.\n\n`academic_year_id` is deliberately absent: moving a term between years would\nsilently re-file every enrolment, assessment and snapshot that keys off it.\n`is_active` is absent too — that goes through `/activate`, which maintains the\none-active invariant.\n\n**`grade_submission_deadline` is the one field where omitted and `null` differ**\n(§D6). Every other field here treats `None` as \"leave alone\", but reopening a\nclosed grade window is a real Dean action and it is spelled `null`. The service\ntherefore consults `model_fields_set` for this field rather than checking for\n`None`, so a PATCH that only renames a term cannot silently reopen it."
+        "description": "PATCH /settings/semesters/{id} (Dean only). All fields optional.\n\n`academic_year_id` is deliberately absent: moving a term between years would\nsilently re-file every enrolment, assessment and snapshot that keys off it.\n`is_active` is absent too — that goes through `/activate`, which maintains the\none-active invariant.\n\n**The three datetime fields are the ones where omitted and `null` differ** (§D6,\nD32). Every other field here treats `None` as \"leave alone\", but reopening a closed\ngrade window — or clearing a mid-term period — is a real Dean action and it is\nspelled `null`. The service therefore consults `model_fields_set` for these fields\nrather than checking for `None`, so a PATCH that only renames a term cannot\nsilently reopen or erase anything.\n\nThe two mid-term fields must be cleared TOGETHER: sending `null` for one while the\nother keeps a value is a 422, not a silent half-clear. See `update_semester`."
       },
       "StandaloneSemesterCreateRequest": {
         "properties": {
@@ -22586,6 +23097,30 @@
               }
             ],
             "title": "Grade Submission Deadline"
+          },
+          "midterm_submission_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission Start"
+          },
+          "midterm_submission_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midterm Submission End"
           }
         },
         "additionalProperties": false,
@@ -22741,6 +23276,291 @@
       },
       "StudentCreateRequest": {
         "properties": {
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Street"
+          },
+          "city_town_village": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City Town Village"
+          },
+          "district": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/District"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mother_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mother Name"
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name"
+          },
+          "nok_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Name"
+          },
+          "nok_relationship": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Relationship"
+          },
+          "nok_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Phone"
+          },
+          "health_condition_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Condition Note"
+          },
+          "num_csec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Csec"
+          },
+          "finance_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Name"
+          },
+          "finance_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Phone"
+          },
+          "finance_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Email"
+          },
+          "student_id_original": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Id Original"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "transferred_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transferred From"
+          },
+          "graduation_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduation Date"
+          },
+          "dropout_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Date"
+          },
+          "dropout_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Reason"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
           "student_number": {
             "anyOf": [
               {
@@ -22814,7 +23634,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/StudentStatus",
-            "default": "active"
+            "default": "Registered"
           },
           "guardian_name": {
             "anyOf": [
@@ -22883,6 +23703,38 @@
             },
             "type": "array",
             "title": "Offering Ids"
+          },
+          "has_health_condition": {
+            "type": "boolean",
+            "title": "Has Health Condition",
+            "default": false
+          },
+          "atlib_exam": {
+            "type": "boolean",
+            "title": "Atlib Exam",
+            "default": false
+          },
+          "enrollment_load": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrollmentLoad"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "program_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Id"
           }
         },
         "additionalProperties": false,
@@ -22898,6 +23750,291 @@
       },
       "StudentDetail": {
         "properties": {
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Street"
+          },
+          "city_town_village": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City Town Village"
+          },
+          "district": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/District"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mother_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mother Name"
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name"
+          },
+          "nok_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Name"
+          },
+          "nok_relationship": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Relationship"
+          },
+          "nok_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Phone"
+          },
+          "health_condition_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Condition Note"
+          },
+          "num_csec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Csec"
+          },
+          "finance_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Name"
+          },
+          "finance_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Phone"
+          },
+          "finance_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Email"
+          },
+          "student_id_original": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Id Original"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "transferred_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transferred From"
+          },
+          "graduation_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduation Date"
+          },
+          "dropout_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Date"
+          },
+          "dropout_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Reason"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -23058,15 +24195,49 @@
             ],
             "title": "Application Id"
           },
-          "district": {
+          "has_health_condition": {
+            "type": "boolean",
+            "title": "Has Health Condition",
+            "default": false
+          },
+          "atlib_exam": {
+            "type": "boolean",
+            "title": "Atlib Exam",
+            "default": false
+          },
+          "login_email": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/District"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Login Email"
+          },
+          "educationbg_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Educationbg Id"
+          },
+          "doc_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Id"
           },
           "current_offerings": {
             "items": {
@@ -23098,6 +24269,20 @@
         ],
         "title": "StudentDetail",
         "description": "GET /students/{id}, /students/me + POST/PATCH/status responses.\n\nMirrors `student_profiles` (schema §3.B) plus the derived `current_offerings` (every\nsubject class the student actively sits, D29) and the audit stamp."
+      },
+      "StudentFilterOptions": {
+        "properties": {
+          "religions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Religions"
+          }
+        },
+        "type": "object",
+        "title": "StudentFilterOptions",
+        "description": "GET /students/filter-options — the values the directory filters can actually take.\n\n**Only `religion` is derived**, and it has to be: it is free text collected on the\nadmissions form (`applications.religion`, copied across on acceptance), so there is no\nenum to render a dropdown from. A hardcoded list would go stale the first time\nsomebody typed a denomination nobody had anticipated, and would show options that\nmatch nothing.\n\n`gender` is a fixed pair and `program_id` comes from `/programs`, so neither needs to\nbe discovered — they are not returned here."
       },
       "StudentListItem": {
         "properties": {
@@ -23169,6 +24354,39 @@
               }
             ],
             "title": "Guardian Name"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "program_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Code"
           }
         },
         "type": "object",
@@ -23270,13 +24488,15 @@
       "StudentStatus": {
         "type": "string",
         "enum": [
-          "active",
-          "inactive",
+          "Registered",
+          "Unregistered",
+          "DropOut",
           "transferred",
           "graduated",
           "withdrawn"
         ],
-        "title": "StudentStatus"
+        "title": "StudentStatus",
+        "description": "Student lifecycle, in the CLIENT'S vocabulary (D34).\n\nAdopted verbatim from the client's own `student_profiles` dump, including its comment\non what each state means:\n\n  REGISTERED    \"instead of active\" - enrolled and attending.\n  UNREGISTERED  \"when student do not continue further semesters, but has successfully\n                completed the last semester\". NOT a failure state, which is why\n                \"inactive\" was the wrong word for it.\n  DROPOUT       left mid-programme. Pairs with `dropout_date` / `dropout_reason`.\n  GRADUATED     \"Dean/Registrar are the only ones with access to change to this\n                status\" - already true, since POST /students/{id}/status is\n                require_role(PRINCIPAL, SECRETARY).\n  TRANSFERRED / WITHDRAWN  unchanged.\n\n**The mixed case is deliberate.** Three values are TitleCase and three are lowercase\nbecause that is exactly how the client's enum reads, and their dump is the authority\nfor this column - normalising it would put the database out of step with their own\ntooling for a cosmetic gain. MariaDB's `utf8mb4_uca1400_ai_ci` is case-insensitive, so\ncomparison is unaffected; the case matters only for what is stored and echoed.\n\nThe MEMBER names track the values (`REGISTERED`, not `ACTIVE`) so a reader of\n`StudentStatus.REGISTERED` sees the word the registry actually uses. That rename is\nwhy D34 touches ~20 call sites it otherwise would not have."
       },
       "StudentStatusRequest": {
         "properties": {
@@ -23335,6 +24555,291 @@
       },
       "StudentUpdateRequest": {
         "properties": {
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Street"
+          },
+          "city_town_village": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City Town Village"
+          },
+          "district": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/District"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mother_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mother Name"
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name"
+          },
+          "nok_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Name"
+          },
+          "nok_relationship": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Relationship"
+          },
+          "nok_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Phone"
+          },
+          "health_condition_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Condition Note"
+          },
+          "num_csec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Csec"
+          },
+          "finance_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Name"
+          },
+          "finance_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Phone"
+          },
+          "finance_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Email"
+          },
+          "student_id_original": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Id Original"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "transferred_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transferred From"
+          },
+          "graduation_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduation Date"
+          },
+          "dropout_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Date"
+          },
+          "dropout_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropout Reason"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
           "student_number": {
             "anyOf": [
               {
@@ -23493,6 +24998,38 @@
               }
             ],
             "title": "Phone"
+          },
+          "has_health_condition": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Health Condition"
+          },
+          "atlib_exam": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atlib Exam"
+          },
+          "enrollment_load": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrollmentLoad"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -24329,6 +25866,17 @@
             "type": "string",
             "title": "Letter",
             "default": ""
+          },
+          "notation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notation"
           }
         },
         "type": "object",

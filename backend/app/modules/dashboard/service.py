@@ -405,7 +405,7 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.ACTIVE,
+            StudentProfile.status == StudentStatus.REGISTERED,
         )
     ) or 0
     active_teachers = db.scalar(
@@ -476,7 +476,7 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             )
             .where(
                 StudentProfile.deleted_at.is_(None),
-                StudentProfile.status == StudentStatus.ACTIVE,
+                StudentProfile.status == StudentStatus.REGISTERED,
             )
             .order_by(*STUDENT_NAME_ORDER)
             .limit(_CARD_LIMIT)
@@ -585,7 +585,7 @@ def _secretary_payload(
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.ACTIVE,
+            StudentProfile.status == StudentStatus.REGISTERED,
         )
     ) or 0
     active_teachers = db.scalar(

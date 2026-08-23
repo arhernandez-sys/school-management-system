@@ -53,12 +53,54 @@ def graph(db_session, make_user, auth_headers, archive_seeded_active_year, make_
     return _Graph(db_session, make_user, auth_headers, archive_seeded_active_year, make_grading_scale)
 
 
+def _utc(days: int) -> datetime:
+    """`days` from now, aware-UTC, whole seconds (MariaDB DATETIME has precision 0)."""
+    return (datetime.now(tz=timezone.utc) + timedelta(days=days)).replace(microsecond=0)
+
+
+def open_midterm_window(graph, *, opened: int = -30, closed: int = -1) -> None:
+    """Give `graph.sem` a mid-term window that has already CLOSED (D32, brief §1).
+
+    Every test in this file predates D32 and was written when a revision could be filed
+    against any graded cell. Rule 1 now requires a closed mid-term period, so without this
+    the whole suite would be asserting the new gate rather than the workflow it is about.
+    Defaults put the window a month back and closed yesterday — the ordinary case.
+    """
+    graph.sem.midterm_submission_start = _utc(opened)
+    graph.sem.midterm_submission_end = _utc(closed)
+    graph._db.flush()
+
+
+def backdate(graph, *, assessment=None, grade=None, days: int = -60) -> None:
+    """Push a row's creation stamp before the mid-term window opened (D32 rules 2 and 3).
+
+    The factories stamp `created_at` at `now`, which is AFTER any already-closed window,
+    so a freshly built assessment reads as post-midterm work. Real data does not look like
+    that — the assessment was set months ago — and these tests are about the workflow, not
+    about clock skew in a fixture.
+    """
+    when = _utc(days)
+    if assessment is not None:
+        assessment.created_at = when
+    if grade is not None:
+        grade.created_at = when
+        grade.graded_at = when
+    graph._db.flush()
+
+
 @pytest.fixture
 def marked(graph):
-    """A student with a GRADED result of 60 out of 100, ready to be revised."""
+    """A student with a GRADED result of 60 out of 100, ready to be revised.
+
+    The mid-term window is opened-and-closed and the rows backdated into it, so this
+    fixture describes a result that WAS part of the mid-term submission — which is what
+    every test below assumes. `TestMidtermEligibility` varies these deliberately.
+    """
+    open_midterm_window(graph)
     assessment = graph.assessment(max_score="100", weight="1", is_released=True)
     student, enrollment = graph.student()
     grade = graph.grade(assessment, student, enrollment, score="60")
+    backdate(graph, assessment=assessment, grade=grade)
     return assessment, student, grade
 
 
@@ -521,14 +563,18 @@ class TestTheQueue:
         assert revision_id not in {row["id"] for row in other["items"]}
 
     def _three_requests(self, client, graph) -> list[str]:
+        # These build their own rows rather than using `marked`, so they need the same
+        # D32 setup that fixture does: a closed mid-term window, and rows that predate it.
+        open_midterm_window(graph)
         ids = []
         for score in (91, 92, 93):
             assessment = graph.assessment(max_score="100")
             student, enrollment = graph.student()
-            graph.grade(assessment, student, enrollment, score="60")
-            ids.append(
-                _request(client, graph, assessment, student, proposed_score=score).json()["id"]
-            )
+            grade = graph.grade(assessment, student, enrollment, score="60")
+            backdate(graph, assessment=assessment, grade=grade)
+            resp = _request(client, graph, assessment, student, proposed_score=score)
+            assert resp.status_code == 201, resp.text
+            ids.append(resp.json()["id"])
         return ids
 
     def test_oldest_first(self, client, graph, db_session) -> None:

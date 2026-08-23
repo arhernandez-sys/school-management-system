@@ -10,10 +10,15 @@
 > the tertiary demo seed is written, run, and driven through the real API. **`008` is applied to
 > `sims_d31` and deliberately still NOT to `sims`.**
 >
-> **What is left is not a phase — it is the `sims` cut-over, and only an operator can run it:**
-> apply `008` to `sims`, then re-seed. See "The `sims` cut-over" below for the exact commands and
-> why the two steps belong in one sitting. Until it is done, **this checkout will not run against
-> `sims`** — point `DATABASE_URL` at `sims_d31`.
+> **~~What is left is not a phase — it is the `sims` cut-over~~ — THE CUT-OVER IS DONE
+> (2026-08-20).** `008` is applied to `sims` (`verify_schema.py --expect 008` -> PASS, every
+> migration 001-008 fully applied) and `sims` has been re-seeded from `010_seed_demo.sql`.
+> `DATABASE_URL` points at `sims` and the checkout runs against it. The 19 shared-password
+> accounts are gone: 19 users, 19 distinct hashes, `must_change_password = 1` on all of them.
+> **`sims_d31` is no longer needed as the dev target.**
+>
+> **Next is Phase 8 QA**, plus one defect this verification turned up — see
+> "Audit stamping — two write paths never set `created_by`" below.
 
 ---
 
@@ -22,13 +27,13 @@
 | | |
 |---|---|
 | **Phase** | **0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 ✅ — ALL PHASES COMPLETE** |
-| **Status** | 🟢 **Backend 1415 passed / 0 failed / 0 skipped** against `sims_d31`. 🟢 **Frontend `typecheck` + `lint` + both `vite build`s clean, demo dataset executes (21/21), MSW route parity 0 ghosts.** 🟢 **Demo seed rewritten, run, and driven through the real API.** `008` still deliberately **NOT applied to `sims`** |
+| **Status** | 🟢 **Backend 1415 passed / 0 failed / 0 skipped** (against `sims_d31`; **not yet re-run against the cut-over `sims`**). 🟢 **Frontend `typecheck` + `lint` + both `vite build`s clean, demo dataset executes (21/21), MSW route parity 0 ghosts.** 🟢 **`008` APPLIED to `sims` and re-seeded — cut-over complete 2026-08-20** |
 | **Branch** | `tertiary-refactor` — committed on top of `dc4c894` ("tertiary refractor", the D30 commit), which is the rollback point |
-| **Last updated** | 2026-08-19 (Phase 5 complete — the code work of D31 is done) |
-| **Next action** | **The `sims` cut-over, which is an OPERATOR task and the only thing left in this plan.** Apply `008` to `sims` and re-run the demo seed against it, in that order — see "The `sims` cut-over" below. After that: Phase 8 QA, and the follow-ons recorded at the end of this file |
-| **Migrations applied** | **`sims`** (the live DB): `sims.sql` → `001` → … → `007`. **`008` NOT applied** — `verify_schema.py --expect 007` passes there. **`sims_d31`** (the dev copy): `…007` → **`008` applied**, `verify_schema.py --expect 008` PASSES (20/20 probes), and the D31 demo dataset is seeded into it. Both facts together are the proof `008` never leaked |
+| **Last updated** | 2026-08-20 (the `sims` cut-over is complete and verified) |
+| **Next action** | **Phase 8 QA.** The cut-over is DONE (2026-08-20) — see "The `sims` cut-over" below, now marked complete. Carry in the follow-ons recorded at the end of this file, plus the `created_by` defect in "Audit stamping" below |
+| **Migrations applied** | **`sims`** (the live DB): `sims.sql` → `001` → … → **`008` APPLIED 2026-08-20**. `verify_schema.py --expect 008` -> **PASS**, all 8 migrations fully applied (001 4/4, 002 1/1, 003 1/1, 004 3/3, 005 20/20, 006 2/2, 007 2/2, 008 20/20). Re-seeded from `010_seed_demo.sql`. **`sims_d31`** (the dev copy): same shape, now redundant |
 | **Backups** | Full schema + data dump before Phase 0, in the session scratchpad (`d31-backups/pre-d31-full.sql`, 1.8 MB) |
-| **Dev database** | **`sims_d31`** — a copy of `sims` with `006`+`008` applied. Develop and test against it; `sims` stays pre-`008` until the switchover. Point tools at it with `DATABASE_URL=...://.../sims_d31` (both `apply_sql.py` and `verify_schema.py` now honour an exported DSN) |
+| **Dev database** | **`sims`** — the cut-over is done, so `sims` is the target again and `DATABASE_URL` points at it. `sims_d31` is kept only as a pre-re-seed comparison copy and can be dropped. Both `apply_sql.py` and `verify_schema.py` honour an exported DSN |
 
 **Marking convention**
 
@@ -39,7 +44,7 @@
 - [!] Task — BLOCKED: <reason>
 ```
 
-### The `sims` cut-over — the one task left, and it is not a code change
+### The `sims` cut-over — ✅ COMPLETE 2026-08-20
 
 `008` deletes the homeroom-era operational data and its header forbids applying it without the
 code that expects it. That code is now committed, so the two steps below can be run — but they
@@ -60,6 +65,71 @@ is why they belong in one sitting. Step 5 is also what finally clears the 19 sha
 accounts still sitting in `sims`: the seed replaces them with per-account generated passwords and
 `must_change_password = true`. Until then, that row of data remains the go-live blocker the
 RUNBOOK describes, even though the code that created it is gone.
+
+**Outcome, verified against `sims` on 2026-08-20:**
+
+- [x] **`008` applied to `sims`** — `verify_schema.py --expect 008` -> `RESULT: PASS`, every
+      required migration fully applied (`008` 20/20 probes).
+- [x] **Re-seeded from `010_seed_demo.sql`** — 22 offerings, 125 courses, 8 programmes, 243
+      `program_courses`, 45 student profiles, 393 enrolments, 84 assessments, 1,436 grades, 3,260
+      attendance records. The 17 `classes_legacy_pre_d31` rows are retained (renamed, not dropped).
+- [x] **The shared-password go-live blocker is CLEARED** — 19 users, **19 distinct password
+      hashes**, 0 hashes shared by more than one account, `must_change_password = 1` on all 19.
+      Note only 6 of the 45 students have a login (1 principal, 1 secretary, 11 teachers, 6
+      students); the rest are profiles without accounts, which is what the seed intends.
+- [x] **`DATABASE_URL` re-pointed at `sims`.**
+- [x] **`term_grade_snapshots` and `report_card_snapshots` are both 0**, exactly as follow-on 8
+      predicted — the frozen-vs-live branch is reachable only by archiving a year through Settings.
+
+Not yet re-run against the cut-over `sims`: the 1415-test backend suite (it was green against
+`sims_d31`, which has the same shape). That belongs to Phase 8 QA.
+
+### Audit stamping — two write paths never set `created_by` — ✅ FIXED 2026-08-20
+
+Found on 2026-08-20 while verifying the cut-over, by driving the **real service functions**
+against `sims` inside a rolled-back outer transaction. The services `commit()` internally, so the
+probe session joins the outer connection transaction as a SAVEPOINT — their commits release the
+savepoint and the outer rollback still discards everything. Row counts were re-checked afterwards
+and were unchanged. (A first attempt used a plain `Session.rollback()`, which does **not** hold
+against a service that commits: it left one `attendance_records` row and one `audit_log` row
+behind in `sims`, both since deleted. Worth remembering before writing the next probe.)
+
+Every `AuditMixin` table's `created_at`/`updated_at` self-populates: all 132 timestamp columns
+across the 40 audit-carrying tables have a live `DEFAULT current_timestamp()`, so `created_at` is
+never NULL. **`created_by` is application-set, not DB-set**, and two paths omit it:
+
+| write path | `created_at` | `created_by` (before) | `created_by` (after fix) |
+|---|---|---|---|
+| `assessments.create_assessment` -> `assessments` | ✅ stamped | ✅ stamped | ✅ stamped |
+| `courses.create_course` -> `courses` | ✅ stamped | ✅ stamped | ✅ stamped |
+| `grades.upsert_grades` -> `assessment_grades` | ✅ stamped | ❌ **NULL** | ✅ **stamped** |
+| `attendance.upsert_register` -> `attendance_records` | ✅ stamped | ❌ **NULL** | ✅ **stamped** |
+
+Both offenders are upserts (`backend/app/modules/grades/service.py:822`,
+`backend/app/modules/attendance/service.py:408`): the insert branch constructs the row without
+`created_by`, and the shared tail below it then sets `updated_by = actor.id` on insert and update
+alike. So the row records **who last touched a mark, never who first entered it** — the
+accountability question a gradebook dispute actually asks. `attendance/service.py:324` already
+reads `newest.updated_by or newest.created_by`, so the `created_by` fallback there is dead code.
+
+**FIXED 2026-08-20** — `created_by=actor.id` added to both insert branches, matching the other
+22 audit tables. Only the INSERT branch is touched, so re-saving a mark still leaves the original
+`created_by` alone and moves only `updated_by`, which is the point. Verified by re-running the
+same probe (all four paths now stamp both columns) and the suite: **1415 passed / 0 failed /
+0 skipped**.
+
+**Backfill is not possible for the rows that already exist** — `updated_by` is the only
+provenance they have, so every pre-2026-08-20 grade and attendance row keeps a NULL `created_by`
+permanently. Treat "`created_by IS NULL`" on those two tables as "written before the fix", not as
+"written by nobody".
+
+Two non-defects worth recording so they are not "fixed" later: `school_profile` and
+`assessment_policies` are singletons the seed creates and the app only ever *updates*, so their
+NULL `created_by` is correct; and `student_documents` has no application write path at all.
+
+One seed-vs-app inconsistency, cosmetic: `010_seed_demo.sql` populates `created_by` on all 3,260
+`attendance_records` but leaves it NULL on every other audit table — the exact inverse of what the
+application does. Seeded data therefore cannot be used to judge app behaviour either way.
 
 ---
 

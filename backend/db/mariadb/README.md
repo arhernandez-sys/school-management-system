@@ -36,7 +36,21 @@ prefer it. This exists because Alembic is non-functional against MariaDB here.
 
 ## Run order
 
-Apply in numeric order; each is re-runnable. `seed_demo.py` loads demo data and is not
+Apply in numeric order; each is re-runnable.
+
+**`010` was EXECUTED on 2026-08-23 (D34)** — all seven D31 quarantine tables are dropped
+and the database is down to 39 tables, the ORM's own count. Its statements remain commented
+out as a record; re-running it would fail on tables that no longer exist, by design.
+
+**`011_client_schema_reconcile.sql` reconciles `student_profiles` with the CLIENT'S own
+schema** (D34): ten new columns, `'Summer'` on `enrollment_load`, and the student-status
+vocabulary moved to `Registered` / `Unregistered` / `DropOut`. Unlike `009` it **cannot be
+applied ahead of the application code** — §3 rewrites the `status` column, and a backend
+still on `"active"` would silently match zero rows on every active-student filter rather
+than failing. Applied to live `sims` 2026-08-23, 26/26 statements, after dumping the 46
+`student_profiles` rows (`--backup` is schema-only). Read
+`docs/d34-client-schema-reconcile-plan.md` §A first: most of what looked like a missing
+column was a rename this chain had already done. `seed_demo.py` loads demo data and is not
 part of the schema chain.
 
 **`010_seed_demo.sql` is no longer in this directory, and that is deliberate (D31 Phase
@@ -68,7 +82,33 @@ changed (`app/core/deps.py`).
 | `005_tertiary.sql` | **D30 tertiary / junior-college model (BAJC).** Merges the stakeholder's `sims_bk.sql` tertiary work on top of 001–004. Adds the `courses` catalog (closing the grade→credit chain that made GPA impossible), `programs`, `program_courses`, `course_prerequisites`, grade points / quality points, N calendar terms + the grade-submission deadline, the application & credit-transfer tables, programme history, grade-revision requests, and `YYYYMM###` student-ID sequences. Legacy tertiary tables are **quarantined by rename** to `*_legacy_pre_d30`, never dropped. Full rationale in that file's header and in `docs/tertiary-refactor-plan.md`. |
 | `006_courses_cutover.sql` | **D30 Phase 2A — swaps the catalog from `subjects` to `courses`.** Applied 2026-08-16, in the same step as the code change that points `Subject.__tablename__` at `courses`. ⚠️ It must never be applied against an older checkout of the app: `005` copied the EXISTING rows into `courses`, but until the ORM writes there too, a newly-created course has nothing for the FK to resolve against and every attach fails with 1452 (this cost 73 test failures once). `subjects` is kept and commented as retired, not dropped. |
 | `007_student_names.sql` | **D30 Phase 1 — retires `student_profiles.full_name`.** Tightens `lastname` to NOT NULL (`firstname` stays nullable for the legacy single-token names `005` §9 parked there) and drops `full_name`, which becomes a `hybrid_property` on `StudentProfile`. Same apply-with-the-code rule as `006`. |
-| `008_course_offerings.sql` | **D31 — collapses the K-12 offering layer into a tertiary one.** New `course_offerings` table (one course, one semester, one optional section) absorbing `classes` + `class_subjects`; every child re-pointed from `class_subject_id`/`class_id` to `offering_id`. ⚠️ **DESTRUCTIVE and must land in the SAME STEP as the code that expects it**, exactly like `006` — the homeroom-era operational data is DELETED rather than migrated (a year-scoped homeroom cannot say which semester it taught in, and its enrolments pointed at a homeroom rather than a course). The deletes are gated on a PRE-COLLAPSE SENTINEL so a replay after re-seeding destroys nothing. Read that file's header before running it, and re-seed with `seed_demo.py` afterwards. Verify with `verify_schema.py --expect 008`. |
+| `008_course_offerings.sql` | **D31 — collapses the K-12 offering layer into a tertiary one.** New `course_offerings` table (one course, one semester, one optional section) absorbing `classes` + `class_subjects`; every child re-pointed from `class_subject_id`/`class_id` to `offering_id`. ⚠️ **DESTRUCTIVE and must land in the SAME STEP as the code that expects it**, exactly like `006` — the homeroom-era operational data is DELETED rather than migrated (a year-scoped homeroom cannot say which semester it taught in, and its enrolments pointed at a homeroom rather than a course). The deletes are gated on a PRE-COLLAPSE SENTINEL so a replay after re-seeding destroys nothing. Read that file's header before running it, and re-seed with `seed_demo.py` afterwards. Verify with `verify_schema.py --expect 008`. **APPLIED TO `sims` 2026-08-20 (20/20 probes) and re-seeded** — the cut-over is done and `sims` is the working target again. |
+
+| `009_midterm_windows.sql` | **D32 — mid-term grading windows, student grade visibility, two report kinds.** Adds `semesters.midterm_submission_start`/`_end` (+ `ck_semesters_midterm_window`), `assessment_policies.students_can_view_grades` (default 0), and `report_card_snapshots.kind` with the unique key widened to `(student_id, semester_id, kind)`. **Safe and additive** — it deletes nothing, migrates no rows, and every default reproduces today's behaviour, so unlike `006`/`008` it can be applied before the code that uses it. **APPLIED TO `sims` 2026-08-21 (15/15 statements)** after `--backup pre_009_backup.sql`. Rationale in `docs/midterm-revision-reports-plan.md` §B. |
+| `010_drop_legacy_pre_d31.sql` | **D32 §7 — the legacy-table audit, as an executable file.** ⚠️ **Every DROP in it is commented out and it is NOT part of the run chain.** Applying it as-is runs two read-only pre-flight SELECTs and nothing else (verified 2026-08-21). §2 drops the five tables the audit cleared; §3 holds the two that still carry rows and needs BAJC's sign-off. See the audit summary below and the full table in `docs/midterm-revision-reports-plan.md` §A5. |
+
+## Legacy tables — audit summary (D32, 2026-08-21)
+
+The live `sims` holds **46 tables**; the ORM maps **39**. The seven others are all D31
+quarantine renames (`008` renames rather than drops, by design). Nothing in the ORM, the
+API, the services or the frontend references any of them, and the only raw SQL in
+`backend/app` is `SELECT 1` in `db/session.py` — so an ORM sweep is a complete reference
+sweep. The database also has **0 views, 0 stored routines and 0 triggers**.
+
+| Table | Rows | Verdict |
+|---|---|---|
+| `grades_legacy_pre_d31` | 0 | ✅ Safe to remove |
+| `staff_legacy_pre_d31` | 0 | ✅ Safe to remove |
+| `students_legacy_pre_d31` | 0 | ✅ Safe to remove |
+| `cat_assessment_legacy_pre_d31` | 0 | ✅ Safe to remove |
+| `subjects_legacy_pre_d31` | 11 | ✅ Safe to remove — all 11 rows verified present in `courses` under the same id and code |
+| `classes_legacy_pre_d31` | 17 | ⚠️ Requires a decision — the only surviving record of the homeroom era |
+| `class_subjects_legacy_pre_d31` | 116 | ⚠️ Requires a decision — same |
+
+**No live table holds a foreign key into any of them.** The reverse is not true, and it is
+the argument for eventually dropping the two populated ones: they hold outbound FKs onto
+live `users`, `academic_years` and `courses`, so a retired 2024-era row can still block a
+delete on a live one.
 
 ## Mixin column reference (from `db/base.py`)
 

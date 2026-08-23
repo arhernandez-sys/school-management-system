@@ -101,6 +101,10 @@ export function StudentDetailPage() {
 
   const tabs = useMemo<DetailTab[]>(() => {
     if (!detail || !studentId) return [];
+    // D32 (brief §4) — "grade information from the registration screens" is THIS tab, and
+    // `GET /students/{id}/assessments` now 403s for the Registrar. Rendering it for them
+    // would show an error panel where a tab used to be, which is worse than no tab.
+    const canSeeGrades = user?.role === 'principal' || user?.role === 'teacher';
     return [
       {
         value: 'enrollment',
@@ -108,12 +112,16 @@ export function StudentDetailPage() {
         icon: <SchoolOutlinedIcon fontSize="small" />,
         render: () => <StudentEnrollmentPanel student={detail} yearName={yearName} />,
       },
-      {
-        value: 'grades',
-        label: 'Grades & Assessments',
-        icon: <GradingOutlinedIcon fontSize="small" />,
-        render: () => <GradesTab studentId={studentId} yearId={yearId} />,
-      },
+      ...(canSeeGrades
+        ? [
+            {
+              value: 'grades',
+              label: 'Grades & Assessments',
+              icon: <GradingOutlinedIcon fontSize="small" />,
+              render: () => <GradesTab studentId={studentId} yearId={yearId} />,
+            } as DetailTab,
+          ]
+        : []),
       {
         // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
         // cumulative GPA, and which courses count toward the current award. Derived on
@@ -125,7 +133,7 @@ export function StudentDetailPage() {
         render: () => <AcademicHistoryPanel studentId={studentId} />,
       },
     ];
-  }, [detail, studentId, yearId, yearName]);
+  }, [detail, studentId, yearId, yearName, user?.role]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading student" />;
@@ -199,13 +207,16 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   const [nudgeNotice, setNudgeNotice] = useState<string | null>(null);
 
   /*
-   * Who may nudge: principal + secretary, mirroring the endpoint's
-   * `require_role(PRINCIPAL, SECRETARY)`. Checked against the role directly rather
-   * than via `canWrite(role, 'grades')` — that helper is TRUE for teachers and
-   * FALSE for principals (teachers own grade entry), i.e. exactly inverted for
-   * this action. A teacher or student must never see this control.
+   * Who may nudge. The endpoint is still `require_role(PRINCIPAL, SECRETARY)` — nudging
+   * asks a lecturer to release marks and exposes none — but D32 removed the Registrar
+   * from this TAB entirely (brief §4), so in practice only the Dean reaches the control.
+   * Narrowed here to match, rather than leaving a branch that can no longer be taken.
+   *
+   * Checked against the role directly rather than via `canWrite(role, 'grades')` — that
+   * helper is TRUE for teachers and FALSE for principals (teachers own grade entry), i.e.
+   * exactly inverted for this action. A teacher or student must never see this control.
    */
-  const canNudge = user?.role === 'principal' || user?.role === 'secretary';
+  const canNudge = user?.role === 'principal';
 
   if (query.isLoading) {
     return <LoadingState variant="table" rows={4} label="Loading assessments" />;
@@ -449,7 +460,7 @@ function StudentActions({ student }: { student: StudentDetail }) {
     undefined,
   );
   const [statusOpen, setStatusOpen] = useState(false);
-  const [nextStatus, setNextStatus] = useState<StudentStatus>('active');
+  const [nextStatus, setNextStatus] = useState<StudentStatus>('Registered');
   const [statusError, setStatusError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -465,9 +476,20 @@ function StudentActions({ student }: { student: StudentDetail }) {
     // Enrollment + student_number are immutable on edit; send only benign profile
     // fields. `offering_ids` is create-only server-side (PATCH rejects it), so stripping it
     // here keeps the request valid rather than relying on the 422.
-    const { student_number: _sn, offering_ids: _oids, ...patch } = values;
+    //
+    // D33 adds `program_id` to that list. The form already leaves it `undefined` on edit
+    // and `JSON.stringify` drops undefined keys, so this is belt-and-braces — but the
+    // server's `extra="forbid"` turns a leak into a 422 on an otherwise valid save, and a
+    // programme CHANGE has to move `student_program_history` with it (§D12).
+    const {
+      student_number: _sn,
+      offering_ids: _oids,
+      program_id: _pid,
+      ...patch
+    } = values;
     void _sn;
     void _oids;
+    void _pid;
     updateMut.mutate(patch, {
       onSuccess: () => {
         setEditOpen(false);
@@ -512,7 +534,8 @@ function StudentActions({ student }: { student: StudentDetail }) {
           variant="outlined"
           onClick={() => {
             setStatusError(null);
-            setNextStatus(student.status === 'active' ? 'inactive' : 'active');
+            // D34 vocabulary: the toggle flips between the two LIVE states.
+            setNextStatus(student.status === 'Registered' ? 'Unregistered' : 'Registered');
             setStatusOpen(true);
           }}
         >

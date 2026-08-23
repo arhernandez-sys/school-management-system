@@ -14,6 +14,7 @@ transport; the service owns DB + transactions. Mounts under `/api/v1`.
   GET    /offerings/{id}/roster                        Dean/Reg/Lec         -> RosterEntry[]
   GET    /offerings/{id}/enrollable-students           Dean/Reg             -> {items: StudentRef[]}
   POST   /offerings/{id}/enrollments                   Dean/Reg             -> EnrollmentResult
+  PATCH  /offerings/{id}/enrollments/{enrollment_id}   Dean/Reg             -> RosterEntry
   DELETE /offerings/{id}/enrollments/{enrollment_id}   Dean/Reg             -> 204
 
 D31 DROPPED THREE ENDPOINTS. `GET`/`POST /classes/{id}/subjects` and
@@ -45,6 +46,7 @@ from app.modules.offerings.schemas import (
     EnrollableStudents,
     EnrollmentResult,
     EnrollRequest,
+    EnrollmentStatusRequest,
     MeetingsReplaceRequest,
     MeetingsResult,
     OfferingCreateRequest,
@@ -256,10 +258,40 @@ def enroll_students(
     )
 
 
+@router.patch(
+    "/{offering_id}/enrollments/{enrollment_id}",
+    response_model=RosterEntry,
+    summary="Set a student's course status on an offering (Dean/Registrar; D35)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def set_enrollment_status(
+    offering_id: uuid.UUID,
+    enrollment_id: uuid.UUID,
+    payload: EnrollmentStatusRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_manage),
+) -> RosterEntry:
+    """The client's `coursestatus`: `enrolled` / `audit` / `withdraw_passing` /
+    `withdraw_failing`.
+
+    Distinct from `DELETE` below, which UN-ENROLS. A withdrawal keeps the row open and on
+    the roster because the transcript prints `W/P` or `W/F` against it; deleting it would
+    erase the fact being recorded. 409 `enrollment_closed` on a row that is already
+    un-enrolled.
+    """
+    return service.set_enrollment_status(
+        db,
+        actor=actor,
+        offering_id=offering_id,
+        enrollment_id=enrollment_id,
+        payload=payload,
+    )
+
+
 @router.delete(
     "/{offering_id}/enrollments/{enrollment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Withdraw a student from an offering (Dean/Registrar)",
+    summary="Un-enrol a student from an offering (Dean/Registrar)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR},
 )
 def unenroll_student(

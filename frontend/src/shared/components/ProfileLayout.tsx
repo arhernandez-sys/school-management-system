@@ -43,7 +43,10 @@ export function ProfileLayout({
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: '35% 65%', lg: '30% 70%' },
+          // D33 — the split now starts at `md`, not `sm`. At 600px a 35% summary column
+          // is ~210px, and the profile card became much taller and denser when it grew to
+          // the whole record (ask 4): every label/value pair wrapped onto three lines.
+          gridTemplateColumns: { xs: '1fr', md: '35% 65%', lg: '30% 70%' },
           gap: 3,
           alignItems: 'start',
         }}

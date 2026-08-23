@@ -23,6 +23,12 @@ export interface SidebarProps {
   onMobileClose: () => void;
   /** Desktop mini-rail collapse state. */
   collapsed: boolean;
+  /**
+   * D32 (brief §4) — the Dean's student grade-visibility switch, from `CurrentUser`.
+   * Drops "My Grades" for a student when grades are unpublished. Defaults to shown, so
+   * a stale session payload never hides a working screen.
+   */
+  studentsCanViewGrades?: boolean;
 }
 
 /**
@@ -31,9 +37,15 @@ export interface SidebarProps {
  * - Active item highlighted via NavLink aria-current.
  * - Mini-rail collapse shows icon-only items with tooltips.
  */
-export function Sidebar({ role, mobileOpen, onMobileClose, collapsed }: SidebarProps) {
+export function Sidebar({
+  role,
+  mobileOpen,
+  onMobileClose,
+  collapsed,
+  studentsCanViewGrades = true,
+}: SidebarProps) {
   const location = useLocation();
-  const sections = navSectionsForRole(role);
+  const sections = navSectionsForRole(role, { studentsCanViewGrades });
   const width = collapsed ? DRAWER_WIDTH_MINI : DRAWER_WIDTH;
 
   const navContent = (

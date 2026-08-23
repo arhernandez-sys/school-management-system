@@ -1190,14 +1190,22 @@ class TestGradingScale:
 # ════════════════════════════════════════════════════════════════════════════
 class TestAssessmentPolicy:
     def test_get_policy_secretary_allowed(self, client, make_user, auth_headers) -> None:
-        """GET /settings/assessment-policy (P/S) → the 3 school-default fields."""
+        """GET /settings/assessment-policy (P/S) → the school-default fields.
+
+        D32 added `students_can_view_grades` to this singleton (brief §4) — see the model
+        for why it lives here rather than in a second settings table."""
         secretary = make_user(role=Role.SECRETARY)
         resp = client.get(
             ASSESSMENT_POLICY, headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY)
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert set(body.keys()) == {"absent_as_zero", "allow_makeup", "drop_lowest_count"}
+        assert set(body.keys()) == {
+            "absent_as_zero",
+            "allow_makeup",
+            "drop_lowest_count",
+            "students_can_view_grades",
+        }
 
     def test_get_policy_teacher_403(self, client, make_user, auth_headers) -> None:
         teacher = make_user(role=Role.TEACHER)
@@ -1207,7 +1215,7 @@ class TestAssessmentPolicy:
         assert resp.status_code == 403
 
     def test_put_policy_principal_updates(self, client, make_user, auth_headers) -> None:
-        """PUT /settings/assessment-policy (principal) sets the 3 fields."""
+        """PUT /settings/assessment-policy (principal) sets the fields."""
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.put(
             ASSESSMENT_POLICY,
@@ -1216,7 +1224,13 @@ class TestAssessmentPolicy:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json() == {
-            "absent_as_zero": True, "allow_makeup": False, "drop_lowest_count": 2
+            "absent_as_zero": True,
+            "allow_makeup": False,
+            "drop_lowest_count": 2,
+            # D32: omitted from the request, so it takes the schema default. Deliberate —
+            # a pre-D32 client PUTting this object must not silently enable student grade
+            # visibility it never meant to touch.
+            "students_can_view_grades": False,
         }
 
     def test_put_policy_secretary_403(self, client, make_user, auth_headers) -> None:

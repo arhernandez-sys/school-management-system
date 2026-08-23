@@ -5,11 +5,12 @@ via app/main.py.
 
 Endpoints:
   GET    /students                      P/S/Teacher   -> Page[StudentListItem]
+  GET    /students/filter-options       P/S/Teacher   -> StudentFilterOptions        [D32]
   GET    /students/me                   Student       -> StudentDetail
   GET    /students/me/years             Student       -> StudentYearsResponse
   GET    /students/{id}                 P/S/Teacher   -> StudentDetail
   GET    /students/{id}/years           P/S/Teacher   -> StudentYearsResponse
-  GET    /students/{id}/assessments     P/S/Teacher   -> StudentAssessmentsResponse
+  GET    /students/{id}/assessments     P/Teacher     -> StudentAssessmentsResponse  [D32]
   POST   /students                      P/S           -> StudentDetail (201)
   PATCH  /students/{id}                  P/S           -> StudentDetail
   POST   /students/{id}/status           P/S           -> StudentDetail
@@ -41,6 +42,7 @@ from app.modules.students.schemas import (
     StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
+    StudentFilterOptions,
     StudentListItem,
     StudentStatusRequest,
     StudentUpdateRequest,
@@ -54,6 +56,14 @@ _ERR = {"model": ErrorResponse}
 _manage = require_role(Role.PRINCIPAL, Role.SECRETARY)
 _read = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
 _student_only = require_role(Role.STUDENT)
+#: D32 (brief §4) — `/students/{id}/assessments` is the one route in this module that
+#: returns GRADES, and the client asked for grade information to leave the registration
+#: screens. So the Registrar is dropped from THIS route alone; `_read` above is unchanged
+#: and still serves them the directory, the profile and the enrolment record.
+#:
+#: Unconditional, with no toggle, for the same reason as `grades/router.py`: the removal
+#: was asked for outright, not as something to switch on and off.
+_read_grades = require_role(Role.PRINCIPAL, Role.TEACHER)
 #: A PROGRAMME change is the Dean's, unlike everything else in this module — it
 #: re-derives a degree plan and rules on what carries over (D30 §D12, §D14).
 _dean = require_role(Role.PRINCIPAL)
@@ -72,6 +82,9 @@ def list_students(
     offering_id: Annotated[uuid.UUID | None, Query()] = None,
     year_of_study: Annotated[str | None, Query(max_length=50)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    religion: Annotated[str | None, Query(max_length=100)] = None,
+    gender: Annotated[str | None, Query(max_length=20)] = None,
+    program_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_read),
 ) -> Page[StudentListItem]:
@@ -82,7 +95,16 @@ def list_students(
     which used to be read off the student's homeroom). `offering_id` narrows to one
     course offering. `academic_year_id` (year switcher) restricts the directory to
     students enrolled in that year when it is a PAST year; the active year lists
-    everyone."""
+    everyone.
+
+    **D32 (brief §3) adds `religion`, `gender` and `program_id`.** Server-side, and they
+    AND with each other and with everything above — "all Female students in Programme X"
+    is two of them together. They filter on the student record itself, so a graduated or
+    withdrawn student still matches; that is deliberate, and the same reasoning as the
+    `academic_year_id` note above.
+
+    `religion` is free text from the admissions form, so its permitted values come from
+    `GET /students/filter-options` rather than an enum."""
     return service.list_students(
         db,
         caller=caller,
@@ -90,9 +112,34 @@ def list_students(
         search=search,
         status=status_filter,
         offering_id=offering_id,
+        religion=religion,
+        gender=gender,
+        program_id=program_id,
         year_of_study=year_of_study,
         academic_year_id=academic_year_id,
     )
+
+
+@router.get(
+    "/filter-options",
+    response_model=StudentFilterOptions,
+    summary="Values the directory filters can take (P/S/Teacher; D32, brief §3)",
+    responses={401: _ERR, 403: _ERR},
+)
+def student_filter_options(
+    db: Session = Depends(get_db),
+    caller: User = Depends(_read),
+) -> StudentFilterOptions:
+    """The DISTINCT religions actually present in the directory.
+
+    Only `religion` is here, and only because it has to be: it is free text collected on
+    the admissions form, so there is no enum to build a dropdown from and a hardcoded list
+    would offer options that match nothing. `gender` is a fixed pair and programmes come
+    from `/programs`.
+
+    Declared BEFORE `/{student_id}` so the literal wins over the UUID path param —
+    otherwise FastAPI tries to parse "filter-options" as a UUID and 422s."""
+    return service.filter_options(db)
 
 
 @router.get(
@@ -176,18 +223,22 @@ def list_student_years(
 @router.get(
     "/{student_id}/assessments",
     response_model=StudentAssessmentsResponse,
-    summary="Assessments + term grades grouped by subject (P/S/Teacher; §5.3)",
+    summary="Assessments + term grades grouped by subject (Dean/Lecturer; §5.3)",
     responses={401: _ERR, 403: _ERR, 404: _ERR},
 )
 def list_student_assessments(
     student_id: uuid.UUID,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
-    caller: User = Depends(_read),
+    caller: User = Depends(_read_grades),
 ) -> StudentAssessmentsResponse:
     """Teacher must own a section the student is in, else 404. `academic_year_id`
     scopes to the section the student sat in that YEAR (a year spans both
-    semesters). A student self uses GET /grades/me."""
+    semesters). A student self uses GET /grades/me.
+
+    **D32: no longer open to the Registrar** — this is the grade information the client
+    asked to remove from the registration screens (brief §4). The matching Grades &
+    Assessments tab is hidden from them in `StudentDetailPage.tsx`."""
     return service.list_student_assessments(
         db, caller=caller, student_id=student_id, academic_year_id=academic_year_id
     )

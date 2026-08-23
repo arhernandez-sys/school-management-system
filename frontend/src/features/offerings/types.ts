@@ -129,12 +129,56 @@ export interface OfferingDetail {
   actionable_by_caller: boolean;
 }
 
+/**
+ * How a student is sitting one offering — the client's `coursestatus` (D35).
+ *
+ * Mirrors `app/common/enums.py::EnrollmentStatus`. The column has existed since
+ * `005_tertiary.sql` but was mapped and nothing else until D35: no endpoint set it and no
+ * calculation read it.
+ *
+ * `audit` and the two `withdraw_*` values all mean **no credit and out of the GPA**, and
+ * the transcript prints `AU` / `W/P` / `W/F` against them. That last part is the point —
+ * a permanent record that omits the course a student withdrew from is not a transcript.
+ */
+export type EnrollmentStatus = 'enrolled' | 'audit' | 'withdraw_passing' | 'withdraw_failing';
+
+export const ENROLLMENT_STATUS_LABEL: Record<EnrollmentStatus, string> = {
+  enrolled: 'Enrolled',
+  audit: 'Audit',
+  withdraw_passing: 'Withdrew passing',
+  withdraw_failing: 'Withdrew failing',
+};
+
+/** The short form the transcript prints. */
+export const ENROLLMENT_STATUS_NOTATION: Record<EnrollmentStatus, string | null> = {
+  enrolled: null,
+  audit: 'AU',
+  withdraw_passing: 'W/P',
+  withdraw_failing: 'W/F',
+};
+
+export const ENROLLMENT_STATUS_OPTIONS: EnrollmentStatus[] = [
+  'enrolled',
+  'audit',
+  'withdraw_passing',
+  'withdraw_failing',
+];
+
 /** Row in GET /offerings/{id}/roster. */
 export interface RosterEntry {
   enrollment_id: string;
   student: StudentRef;
   enrolled_at: string;
   unenrolled_at: string | null;
+  /** D35 — how they are sitting it. `enrolled` is the ordinary case. */
+  enrollment_status: EnrollmentStatus;
+}
+
+/** PATCH /offerings/{id}/enrollments/{enrollmentId} body (D35). */
+export interface EnrollmentStatusBody {
+  enrollment_status: EnrollmentStatus;
+  /** Recorded on the audit row, not on the enrolment — there is no column for it. */
+  reason?: string | null;
 }
 
 /**

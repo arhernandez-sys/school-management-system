@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 from app.common.enums import GradeRevisionStatus, GradeStatus, Role
 from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.core.rbac import assert_teacher_owns_offering
+from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments.models import Assessment
 from app.modules.offerings.labels import offering_ref
 from app.modules.offerings.models import Course, CourseOffering
@@ -54,7 +55,7 @@ from app.modules.grades.schemas import (
     GradeRevisionRead,
     StudentRef,
 )
-from app.modules.settings.models import AuditLog
+from app.modules.settings.models import AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.users.models import User
 
@@ -80,6 +81,107 @@ def _audit(
             summary=summary,
         )
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Mid-term eligibility (D32, brief §1)
+# ──────────────────────────────────────────────────────────────────────────────
+#: Why a result cannot be revised, in the order the rules are evaluated. The codes travel
+#: to the client on `GradebookCell.revision_blocked_reason` and in the 422 body, so the UI
+#: can say WHICH rule bit instead of greying a button with no explanation.
+REVISION_BLOCKED_REASONS: dict[str, str] = {
+    "no_midterm_window": (
+        "This term has no mid-term grading period configured, so there is nothing to "
+        "revise against. The Dean sets one in Settings → Academic structure."
+    ),
+    "midterm_window_open": (
+        # D33 — this used to say "correct the mark directly while grade entry is still
+        # open", which was true when the window gated only revisions. It now FREEZES grade
+        # entry (`_assert_midterm_not_frozen`), so the one thing a Lecturer cannot do
+        # inside it is exactly what that sentence told them to do.
+        "The mid-term grading period is still running, so grades for this term are frozen. "
+        "Wait until it closes: after that you can enter new marks directly, and request a "
+        "revision to change one that was already recorded."
+    ),
+    "assessment_after_window": (
+        "This assessment was created after the mid-term grading period began, so it was "
+        "never part of it. It belongs to the post-midterm period and needs no revision."
+    ),
+    "grade_after_window": (
+        "This result was first entered after the mid-term grading period began, so it "
+        "was not part of the mid-term submission."
+    ),
+    "not_current_semester": (
+        "Revisions are only accepted for the current semester."
+    ),
+    "not_graded": "Only a recorded grade can be revised.",
+}
+
+
+def midterm_revision_eligible(
+    db: Session, *, grade: AssessmentGrade, assessment: Assessment
+) -> tuple[bool, str | None]:
+    """`(eligible, reason_code)` for ONE result under the D32 mid-term rules (brief §1).
+
+    **What changed and why.** Before D32 a revision could be requested against any graded
+    cell at any moment, because the only date the system knew about was a single
+    end-of-term cutoff. That let a Lecturer appeal a mark on an assessment created *after*
+    the grading period it supposedly belonged to — a correction to something that was
+    never submitted in the first place, which is an edit, not a revision. The four rules
+    below are the client's definition of "was this part of the mid-term submission".
+
+    Evaluated in this order, because each later rule is only meaningful once the earlier
+    ones hold:
+
+      1. **The window must exist and have CLOSED.** While the period is open the Lecturer
+         can still just fix the mark; a revision is the post-hoc path. A term with no
+         window configured has no mid-term period at all, which is the state of every
+         semester created before D32 — those keep today's behaviour of no revisions rather
+         than acquiring an unbounded one.
+      2. **The assessment must predate the window opening.** Something created mid-period
+         or afterwards is post-midterm work; it is graded normally and needs no approval.
+      3. **The grade must have been entered before the window opened.** Rule 2 is about the
+         assessment, this is about THIS student's result on it: a row first filled in after
+         the period began was not part of the mid-term submission even if the assessment
+         itself was. Uses `graded_at`, falling back to `created_at` for rows written before
+         `graded_at` was populated.
+      4. **The assessment must be in the CURRENT semester.** A closed term's marks are
+         settled; re-opening one through the revision queue would move a report card that
+         has already been issued.
+
+    `not_graded` is checked last and is the pre-existing rule, kept here so a single call
+    answers "should the button be live" for the gradebook. `create_revision` still raises
+    its own richer error for it, because the two surfaces want different wording.
+
+    **This is a READ.** It writes nothing and is safe to call once per cell.
+    """
+    semester = db.get(Semester, assessment.semester_id)
+    if semester is None:  # pragma: no cover - FK RESTRICT keeps these in step
+        return False, "not_current_semester"
+
+    start = ensure_aware(semester.midterm_submission_start)
+    end = ensure_aware(semester.midterm_submission_end)
+    if start is None or end is None:
+        return False, "no_midterm_window"
+    if utcnow() <= end:
+        return False, "midterm_window_open"
+
+    # `created_at` is a MariaDB DATETIME (naive); `ensure_aware` reads it as UTC, which is
+    # what `_to_utc` stored the window as. Comparing without it would raise.
+    if ensure_aware(assessment.created_at) >= start:
+        return False, "assessment_after_window"
+
+    entered_at = ensure_aware(grade.graded_at) or ensure_aware(grade.created_at)
+    if entered_at is None or entered_at >= start:
+        return False, "grade_after_window"
+
+    if not semester.is_active:
+        return False, "not_current_semester"
+
+    if grade.status != GradeStatus.GRADED or grade.score is None:
+        return False, "not_graded"
+
+    return True, None
 
 
 def _revision_or_404(db: Session, revision_id: uuid.UUID) -> GradeRevisionRequest:
@@ -276,6 +378,10 @@ def create_revision(
       * the result must be `graded`. An absent result already has a first-class second
         attempt through `makeup_score` + `allow_makeup` — routing it through an approval
         workflow as well would give one situation two mechanisms;
+      * **the result must be part of the mid-term submission** (D32) —
+        `midterm_revision_eligible`, 422 `revision_not_eligible` carrying the reason code.
+        This is the rule that stops a post-midterm assessment being appealed as though it
+        had been graded in a period it was created after;
       * `proposed_score` must be within the assessment's `max_score`, and must differ from
         what the student already has. A revision to the same mark is a no-op the Dean
         would have to rule on for nothing;
@@ -320,6 +426,21 @@ def create_revision(
             "has a makeup path through the grading policy.",
             code="grade_not_graded",
             fields={"student_id": [f"Result is {grade.status.value}."]},
+        )
+
+    # D32 (brief §1) — the mid-term rules. Placed AFTER ownership and the grade-exists
+    # checks so those keep their more specific errors, and BEFORE the score checks so a
+    # Lecturer is told "this assessment was never part of the mid-term period" rather than
+    # "that score is the same as the current one" for a request that could never be filed.
+    #
+    # NOT applied to `decide_revision`: once a request is in the queue the Dean must be
+    # able to rule on it, and the window may well have moved by then.
+    eligible, reason = midterm_revision_eligible(db, grade=grade, assessment=assessment)
+    if not eligible:
+        raise ValidationError(
+            REVISION_BLOCKED_REASONS.get(reason or "", "This result cannot be revised."),
+            code="revision_not_eligible",
+            fields={"assessment_id": [reason or "not_eligible"]},
         )
 
     max_score = float(assessment.max_score or 0)

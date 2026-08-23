@@ -79,6 +79,18 @@ const STATUS_META: Record<
     hint: 'Credit carried in from another institution. Counts toward the award, excluded from the GPA.',
   },
   remaining: { label: 'Remaining', kind: 'neutral', hint: 'Required by the programme, not yet taken' },
+  // D35 — the client's `coursestatus`. Both answer a different question from the five
+  // above: not "how did it go" but "did it count".
+  audited: {
+    label: 'Audited',
+    kind: 'neutral',
+    hint: 'Sat without reading it for credit. Earns no credit and is excluded from the GPA entirely.',
+  },
+  withdrawn: {
+    label: 'Withdrawn',
+    kind: 'warning',
+    hint: 'Sat the course and left. No credit, excluded from the GPA; the transcript prints W/P or W/F.',
+  },
 };
 
 export function AcademicHistoryPanel({ studentId }: AcademicHistoryPanelProps) {

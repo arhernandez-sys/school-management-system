@@ -90,6 +90,19 @@ export interface GradebookCategory {
 }
 
 /** One cell = a student's grade row for one assessment. */
+/**
+ * Why a result cannot be revised (D32, brief §1). Mirrors `REVISION_BLOCKED_REASONS` in
+ * `backend/app/modules/grades/revisions.py` — the copy there carries the full prose; this
+ * side only needs the discriminator plus the short tooltip in `REVISION_BLOCKED_COPY`.
+ */
+export type RevisionBlockedReason =
+  | 'no_midterm_window'
+  | 'midterm_window_open'
+  | 'assessment_after_window'
+  | 'grade_after_window'
+  | 'not_current_semester'
+  | 'not_graded';
+
 export interface GradebookCell {
   assessment_id: string;
   status: GradeStatus;
@@ -97,6 +110,17 @@ export interface GradebookCell {
   makeup_score: number | null;
   is_released: boolean;
   letter?: string;
+  /**
+   * D32 — may the viewing Lecturer file a Revision of Grades against this result?
+   *
+   * SERVER-COMPUTED, deliberately. The four rules read `assessments.created_at`,
+   * `assessment_grades.graded_at` and the term's mid-term window, none of which this
+   * payload carries; re-deriving them here would be a second implementation of the rule
+   * that could disagree with the endpoint. Always false for a non-Lecturer viewer.
+   */
+  can_request_revision: boolean;
+  /** The reason code when `can_request_revision` is false; null when it is true. */
+  revision_blocked_reason: RevisionBlockedReason | null;
 }
 
 export interface GradebookRow {
@@ -131,6 +155,17 @@ export interface Gradebook {
    */
   grade_window_closed: boolean;
   grade_submission_deadline: string | null;
+  /**
+   * D33 (client ask 7) — true while the term's mid-term grading period is RUNNING, during
+   * which nobody enters a grade for this term. A third flag rather than a value folded
+   * into `grade_window_closed`, for the reason that field's note gives: the three states
+   * are answered differently, and `midterm_frozen` is the only one that resolves on its
+   * own. The dates travel with it so the UI can name the reopen date rather than saying
+   * "later".
+   */
+  midterm_frozen: boolean;
+  midterm_submission_start: string | null;
+  midterm_submission_end: string | null;
   viewer_role: string;
 }
 

@@ -25,6 +25,10 @@ function makeUser(role: Role, overrides: Partial<CurrentUser> = {}): CurrentUser
     ...(role === 'student' ? { student_profile_id: 'mock-student-profile' } : {}),
     ...(role === 'teacher' ? { teacher_profile_id: 'mock-teacher-profile' } : {}),
     preferences: { locale: 'en', theme: 'light', default_page_size: 25 },
+    // D32 - the canned fixture users predate the switch and exist to exercise the shell;
+    // published so the nav renders the full set (see the demo seed comment for the
+    // opposite default and why).
+    students_can_view_grades: true,
     ...overrides,
   };
 }

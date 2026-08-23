@@ -4,6 +4,7 @@ import type {
   NudgeReleaseResult,
   StudentAssessmentsResponse,
   StudentDetail,
+  StudentFilterOptions,
   StudentListItem,
   StudentWritePayload,
   StudentYear,
@@ -25,6 +26,18 @@ export async function listStudents(
   signal?: AbortSignal,
 ): Promise<Page<StudentListItem>> {
   const res = await api.get<Page<StudentListItem>>('/students', { params, signal });
+  return res.data;
+}
+
+/**
+ * GET /students/filter-options — the DISTINCT religions present in the directory (D32).
+ *
+ * Only religion is served: `gender` is a fixed pair and programmes come from `/programs`.
+ */
+export async function getStudentFilterOptions(
+  signal?: AbortSignal,
+): Promise<StudentFilterOptions> {
+  const res = await api.get<StudentFilterOptions>('/students/filter-options', { signal });
   return res.data;
 }
 

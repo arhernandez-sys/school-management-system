@@ -10,4 +10,5 @@ export interface AssessmentPolicyUpdateRequest {
   allow_makeup: boolean;
   /** @minimum 0 */
   drop_lowest_count: number;
+  students_can_view_grades?: boolean;
 }

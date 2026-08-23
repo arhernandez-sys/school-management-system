@@ -24,6 +24,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.common.enums import ReportCardKind
 from app.common.schemas import OfferingRef
 
 GradeReportStatus = Literal["graded", "pending"]
@@ -141,8 +142,18 @@ class ReportCard(BaseModel):
     gpa: float | None = None
     total_credits: int = 0
     #: True when the figures were read from `report_card_snapshots` /
-    #: `term_grade_snapshots` rather than computed live (archived year, schema §10.4).
+    #: `term_grade_snapshots` rather than computed live (archived year, schema §10.4;
+    #: D32: also every mid-term card, which is frozen by definition).
     is_frozen: bool = False
+    #: D32 (brief §5) — which report this is.
+    #:
+    #: `midterm` is served VERBATIM from a `report_card_snapshots` payload and never
+    #: recalculates; `endterm` keeps the existing compute-on-read behaviour for a live
+    #: year and reads `term_grade_snapshots` once the year archives.
+    report_kind: ReportCardKind = ReportCardKind.ENDTERM
+    #: When a frozen card was captured. `None` on a computed one — a live card has no
+    #: freeze moment, and printing "as of now" on it would be noise.
+    frozen_at: datetime | None = None
 
 
 # ── GET /reports/transcript ────────────────────────────────────────────────────
@@ -152,8 +163,16 @@ class TranscriptSubjectRow(BaseModel):
     credits: int | None = None
     numeric: float | None = None
     #: Non-nullable here (unlike the report card) — the transcript only lists rows
-    #: that actually resolved to a grade.
+    #: that actually resolved to a grade, OR carry a `notation` below.
     letter: str = ""
+    #: D35 — the registry notation for a course with no grade: `AU` (audited), `W/P`
+    #: (withdrew passing), `W/F` (withdrew failing). `None` for an ordinary graded row.
+    #:
+    #: When this is set, `numeric` and `letter` are empty by definition and the row is
+    #: excluded from the term average AND the GPA. It is printed anyway because that is
+    #: the whole point of the client's `coursestatus`: a permanent record that silently
+    #: omits the course a student withdrew from is not a transcript.
+    notation: str | None = None
 
 
 class TranscriptSemester(BaseModel):

@@ -580,7 +580,7 @@ class TestApprovedTransfersReachTheStudent:
             last_name=f"Case{graph.tag}",
             date_of_birth=date(2004, 1, 1),
             enrollment_date=date(2026, 8, 1),
-            status="active",
+            status="Registered",
             application_id=uuid.UUID(graph.application_id),
         )
         db_session.add(student)

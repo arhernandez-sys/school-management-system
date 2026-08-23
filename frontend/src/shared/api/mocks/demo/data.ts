@@ -74,7 +74,12 @@ import type {
   DemoTeacher,
   DemoUser,
 } from './types';
-import type { AttendanceStatus, GradeStatus } from '@shared/types/enums';
+import type {
+  AttendanceStatus,
+  District,
+  EnrollmentLoad,
+  GradeStatus,
+} from '@shared/types/enums';
 import {
   BAJC_ALL_COURSE_GATES,
   BAJC_COURSES,
@@ -166,6 +171,8 @@ const semesters: DemoSemester[] = [
     start_date: '2024-09-02',
     end_date: '2025-01-17',
     grade_submission_deadline: null,
+    midterm_submission_start: null,
+    midterm_submission_end: null,
     is_active: false,
   },
   {
@@ -177,6 +184,8 @@ const semesters: DemoSemester[] = [
     start_date: '2025-01-20',
     end_date: '2025-06-27',
     grade_submission_deadline: null,
+    midterm_submission_start: null,
+    midterm_submission_end: null,
     is_active: false,
   },
   {
@@ -194,6 +203,16 @@ const semesters: DemoSemester[] = [
     // DEMO_TODAY from Settings → Academic structure and reopen the gradebook — the banner
     // appears and the save bar disables, exactly as the backend behaves.
     grade_submission_deadline: '2026-01-23T23:59:00Z',
+    // D32 - a mid-term window that has already CLOSED relative to DEMO_TODAY
+    // (2025-10-15). The opposite choice from the end-term deadline above, and for the
+    // same reason: this is what makes the feature visible. A window still open would
+    // hide the Revision column entirely and the demo would show nothing.
+    //
+    // With these dates, assessments dated before 2025-09-20 are revisable and anything
+    // after 2025-10-10 is not - so the marquee gradebook shows BOTH states side by side,
+    // which is the whole point of the rule.
+    midterm_submission_start: '2025-09-20T00:00:00Z',
+    midterm_submission_end: '2025-10-10T23:59:00Z',
     is_active: true,
   },
   {
@@ -205,6 +224,8 @@ const semesters: DemoSemester[] = [
     start_date: '2026-01-19',
     end_date: '2026-06-26',
     grade_submission_deadline: '2026-07-03T23:59:00Z',
+    midterm_submission_start: null,
+    midterm_submission_end: null,
     is_active: false,
   },
 ];
@@ -523,6 +544,48 @@ const SCENARIO: Record<
   },
 };
 
+/**
+ * D32 - the religions the demo rotates through. `null` is IN the rotation on purpose:
+ * a filter that has never met an unknown value is not tested.
+ */
+const DEMO_RELIGIONS: Array<string | null> = [
+  'Catholic',
+  'Anglican',
+  null,
+  'Adventist',
+  'Methodist',
+  null,
+  'Catholic',
+];
+
+/**
+ * D33 — rotations for the rest of the admission form (asks 3 + 4).
+ *
+ * Deliberate NULLs and `false`s throughout, and they carry as much weight as the values:
+ * the profile card omits an empty section, and a dataset where every student has a
+ * financier and a next of kin would never exercise that. Roughly a third of each field is
+ * left blank, which is what a real register of paper-and-admissions records looks like.
+ */
+const DEMO_CIVIL_STATUS: Array<string | null> = ['Single', 'Single', null, 'Single', 'Married'];
+const DEMO_DISTRICTS: Array<District | null> = [
+  'Cayo',
+  'Belize',
+  'Orange Walk',
+  null,
+  'Stann Creek',
+  'Corozal',
+  'Toledo',
+];
+const DEMO_LOADS: Array<EnrollmentLoad | null> = [
+  'Full Time',
+  'Full Time',
+  'Part Time',
+  null,
+  'Full Time',
+  'Transient',
+];
+const DEMO_NOK_RELATIONSHIPS: Array<string | null> = ['Mother', 'Father', 'Aunt', null, 'Uncle'];
+
 const students: DemoStudent[] = [];
 const rngStu = makeRng(4242);
 /** studentId → the offering KEYS they take. Built alongside students, read by enrollments. */
@@ -553,14 +616,17 @@ for (let i = 0; i < 45; i += 1) {
   const dob = `${birthYear}-${String(randInt(rngStu, 1, 12)).padStart(2, '0')}-${String(
     randInt(rngStu, 1, 28),
   ).padStart(2, '0')}`;
-  // Mostly active; a few inactive/graduated/withdrawn for realism. The two scenario
-  // students are always active — the demo depends on their timetables rendering.
-  let status: DemoStudent['status'] = 'active';
+  // Mostly Registered; a few of every other state for realism. The two scenario
+  // students are always Registered — the demo depends on their timetables rendering.
+  // D34 renamed the vocabulary (active→Registered, inactive→Unregistered) and added
+  // DropOut, which is seeded here so the register has one to show.
+  let status: DemoStudent['status'] = 'Registered';
   if (!scenario) {
-    if (i === 7) status = 'inactive';
+    if (i === 7) status = 'Unregistered';
     else if (i === 20) status = 'withdrawn';
     else if (i === 33) status = 'transferred';
     else if (i === 41) status = 'graduated';
+    else if (i === 28) status = 'DropOut';
   }
   // D30 §D10: the parts are primary; `full_name` is derived from them, never the
   // other way round. Scenario students carry a fixed display name, so it is split
@@ -589,7 +655,18 @@ for (let i = 0; i < 45; i += 1) {
     last_name: lastName,
     full_name,
     date_of_birth: dob,
-    gender: i % 2 === 0 ? 'female' : 'male',
+    // D32 fixed a data artefact here. This was `i % 2`, and the programme rotation below
+    // is `i % 8` - so every student on a given programme shared an index parity and
+    // therefore a GENDER. "Female students in Programme X" returned all of Programme X,
+    // which makes the brief's headline combination filter impossible to demonstrate.
+    // Adding `floor(i / 8)` breaks the alignment while keeping the overall split even.
+    gender: (i + Math.floor(i / BAJC_PROGRAMS.length)) % 2 === 0 ? 'female' : 'male',
+    // D32 (brief §3) - rotated across four denominations plus "not stated", because the
+    // filter has to be demonstrable and the live database has this NULL for everyone
+    // (only the admissions form collects it, and no application has been processed).
+    // The deliberate NULLs matter as much as the values: "All religions" must not
+    // silently mean "the ones we happen to know".
+    religion: DEMO_RELIGIONS[i % DEMO_RELIGIONS.length]!,
     enrollment_date: '2025-09-01',
     status,
     year_of_study: yearOfStudy,
@@ -603,6 +680,43 @@ for (let i = 0; i < 45; i += 1) {
     guardian_email: `${last.toLowerCase()}.guardian@example.bz`,
     address: `${randInt(rngStu, 1, 99)} ${pick(rngStu, ['Cedar', 'Mahogany', 'Bougainvillea', 'Hibiscus'])} Street, Belmopan`,
     phone: `+501-6${randInt(rngStu, 100000, 999999)}`,
+    // ── D33: the rest of the admission form ──────────────────────────────────
+    // The SSN is null for a third of the register: it is transcribed off a card, and the
+    // card is often the document still missing when the student is registered.
+    ssno: i % 3 === 1 ? null : `${String(100000000 + i * 7919).slice(0, 9)}`,
+    civil_status: DEMO_CIVIL_STATUS[i % DEMO_CIVIL_STATUS.length]!,
+    street: `${randInt(rngStu, 1, 99)} ${pick(rngStu, ['Cedar', 'Mahogany', 'Bougainvillea', 'Hibiscus'])} Street`,
+    city_town_village: pick(rngStu, ['Belmopan', 'Belize City', 'San Ignacio', 'Orange Walk Town']),
+    district: DEMO_DISTRICTS[i % DEMO_DISTRICTS.length]!,
+    mother_name: i % 4 === 3 ? null : `${pick(rngStu, FIRST_NAMES)} ${last}`,
+    father_name: i % 5 === 4 ? null : `${pick(rngStu, FIRST_NAMES)} ${last}`,
+    nok_name: i % 6 === 5 ? null : `${pick(rngStu, FIRST_NAMES)} ${last}`,
+    nok_relationship: DEMO_NOK_RELATIONSHIPS[i % DEMO_NOK_RELATIONSHIPS.length]!,
+    nok_phone: i % 6 === 5 ? null : `+501-6${randInt(rngStu, 100000, 999999)}`,
+    // A handful, so the Health section is demonstrable without being the norm.
+    has_health_condition: i % 11 === 3,
+    health_condition_note: i % 11 === 3 ? 'Asthma — inhaler kept with the school nurse.' : null,
+    atlib_exam: i % 3 === 0,
+    num_csec: i % 7 === 6 ? null : randInt(rngStu, 4, 9),
+    finance_name: i % 3 === 2 ? null : `${pick(rngStu, FIRST_NAMES)} ${last}`,
+    finance_phone: i % 3 === 2 ? null : `+501-6${randInt(rngStu, 100000, 999999)}`,
+    finance_email: i % 3 === 2 ? null : `${last.toLowerCase()}.finance@example.bz`,
+    enrollment_load: DEMO_LOADS[i % DEMO_LOADS.length]!,
+    // ── D34 · the client's own columns ───────────────────────────────────────
+    // Sparse on purpose: most are the office's record-keeping about a record, and a
+    // dataset where every student had a transfer origin and a drop-out reason would
+    // never exercise the profile card's empty-section handling.
+    student_id_original: i % 5 === 0 ? 20000 + i : null,
+    email: `${first.toLowerCase()}.${last.toLowerCase()}@student.bajc.edu.bz`,
+    transferred_from: status === 'transferred' ? 'Belize High School' : null,
+    graduation_date: status === 'graduated' ? '2026-06-19' : null,
+    dropout_date: status === 'DropOut' ? '2026-03-02T00:00:00Z' : null,
+    dropout_reason: status === 'DropOut' ? 'Relocated abroad mid-semester.' : null,
+    comments: i % 9 === 4 ? 'Fee plan agreed with the bursar.' : null,
+    origin: i < 6 ? 'admissions' : 'import-2025',
+    // No FK and no consumer — mirrored only so the demo shape matches the wire.
+    educationbg_id: null,
+    doc_id: null,
   });
 }
 
@@ -622,6 +736,9 @@ function enrol(studentId: string, offering: DemoOffering, unenrolledAt: string |
     semester_id: offering.semester_id,
     enrolled_at: offering.semester_id === SEM_ACTIVE ? '2025-09-01T08:00:00Z' : '2026-01-19T08:00:00Z',
     unenrolled_at: unenrolledAt,
+    // D35 — ordinary by default. `seedCourseStatuses()` below marks a few afterwards, so
+    // the register has an audit and a withdrawal to show without every row being unusual.
+    enrollment_status: 'enrolled',
   });
 }
 
@@ -1088,6 +1205,11 @@ const assessment_policy: DemoAssessmentPolicy = {
   absent_as_zero: true,
   allow_makeup: true,
   drop_lowest_count: 0,
+  // D32 - seeded ON, unlike the server default. The demo's whole point is showing the
+  // student experience, and a student with grades hidden has almost no screens left. To
+  // see the hidden state, turn it off in Settings -> Assessment policy and reload as the
+  // student: My Grades disappears from the nav and /grades redirects to /forbidden.
+  students_can_view_grades: true,
 };
 
 // ── Users (login accounts backing Settings › Users + auth) ──────────────────────
@@ -1136,7 +1258,7 @@ for (const s of students) {
     username: s.student_number.toLowerCase(),
     full_name: s.full_name,
     role: 'student',
-    is_active: s.status === 'active',
+    is_active: s.status === 'Registered',
     must_change_password: false,
     last_login_at: addDays(DEMO_TODAY, -randInt(makeRng(s.id.length + 9), 0, 7)) + 'T15:00:00Z',
   });
@@ -1223,6 +1345,8 @@ for (const stu of students) {
       semester_id: SEM_2024_1,
       enrolled_at: '2024-09-02T08:00:00Z',
       unenrolled_at: null,
+      // D35 — last year's rows are ordinary registrations.
+      enrollment_status: 'enrolled',
     });
     histEnrollmentId.set(`${stu.id}:${twin.id}`, enrId);
   }
@@ -1735,6 +1859,31 @@ const grade_revision_requests: DemoGradeRevisionRequest[] = revisableGrade
       },
     ]
   : [];
+
+// ── D35: a few non-ordinary course statuses ─────────────────────────────────────
+//
+// The client's `coursestatus` is worth nothing in a demo where every row says `enrolled`,
+// so a handful are marked. Deliberately SPARSE and deliberately not on the two scenario
+// students (`stu-1` Freddy, `stu-2` John): their timetables, gradebooks and report cards
+// are what the demo walks through, and an audit or a withdrawal changes their GPA.
+//
+// Picked from the ACTIVE term only, so the roster the demo opens is the one that shows
+// them.
+(() => {
+  const active = enrollments.filter(
+    (e) => e.semester_id === SEM_ACTIVE && !e.unenrolled_at && e.student_id !== 'stu-1' && e.student_id !== 'stu-2',
+  );
+  const mark = (index: number, status: DemoEnrollment['enrollment_status']) => {
+    const row = active[index];
+    if (row) row.enrollment_status = status;
+  };
+  // One of each, so every branch of the roster badge, the academic-history bucket and the
+  // transcript notation has a row behind it.
+  mark(3, 'audit');
+  mark(11, 'withdraw_passing');
+  mark(19, 'withdraw_failing');
+  mark(27, 'audit');
+})();
 
 export const DEMO_DATASET: DemoDataset = {
   school_profile,

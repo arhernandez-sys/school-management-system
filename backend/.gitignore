@@ -24,6 +24,14 @@ dist/
 # script never fixed the checked-in file. Re-generate; never copy.
 db/mariadb/generated/
 
+# ── Schema backups (D32) ─────────────────────────────────────────────────────
+# `apply_sql.py --backup <file>` writes a SHOW CREATE TABLE snapshot of the live
+# database before a migration. Operator artefacts, one per run: they pin a moment in
+# a particular environment, so a tracked copy would go stale immediately and read as
+# authoritative when it is not. `sims.sql` is the tracked baseline.
+db/mariadb/pre_*.sql
+db/mariadb/*_backup.sql
+
 # ── OS / editor ──────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

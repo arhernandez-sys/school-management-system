@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, MenuItem, Stack, TextField } from '@mui/material';
+import { Alert, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { FormDialog } from '@shared/components';
 import type { SemesterDetail, TermType } from '@shared/api/generated/model';
 
@@ -10,12 +10,19 @@ export interface TermFormValues {
   start_date: string;
   end_date: string;
   /**
-   * UTC ISO instant, or null to leave the window open / reopen a closed one
-   * (brief §18 / D30 §D6). ALWAYS sent, never omitted: the PATCH distinguishes absent
-   * from null precisely so an unrelated edit cannot reopen a term, and this dialog
-   * genuinely does intend whatever the field shows.
+   * The END-TERM cutoff (D32-1). UTC ISO instant, or null to leave the window open /
+   * reopen a closed one (brief §18 / D30 §D6). ALWAYS sent, never omitted: the PATCH
+   * distinguishes absent from null precisely so an unrelated edit cannot reopen a term,
+   * and this dialog genuinely does intend whatever the field shows.
    */
   grade_submission_deadline: string | null;
+  /**
+   * The mid-term grading window (D32). Same always-sent contract as the deadline. Both
+   * null clears the window; the server rejects one without the other with a 422, which
+   * `midtermHalfSet` below catches first so the Dean never sees it.
+   */
+  midterm_submission_start: string | null;
+  midterm_submission_end: string | null;
 }
 
 export interface TermFormDialogProps {
@@ -97,6 +104,8 @@ export function TermFormDialog({
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [deadline, setDeadline] = useState('');
+  const [midStart, setMidStart] = useState('');
+  const [midEnd, setMidEnd] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -107,6 +116,8 @@ export function TermFormDialog({
     setStart(term?.start_date ?? '');
     setEnd(term?.end_date ?? '');
     setDeadline(toLocalInput(term?.grade_submission_deadline ?? null));
+    setMidStart(toLocalInput(term?.midterm_submission_start ?? null));
+    setMidEnd(toLocalInput(term?.midterm_submission_end ?? null));
   }, [open, term, usedSequences]);
 
   const seqNumber = Number(sequence);
@@ -114,6 +125,11 @@ export function TermFormDialog({
   const seqTaken =
     seqValid && seqNumber !== term?.sequence && usedSequences.includes(seqNumber);
   const datesValid = Boolean(start && end && end > start);
+  // Mirrors the server's `_assert_midterm_window`: both or neither, end after start.
+  // Checked here so the Dean is stopped at the field rather than by a 422 on submit.
+  const midtermHalfSet = Boolean(midStart) !== Boolean(midEnd);
+  const midtermOutOfOrder = Boolean(midStart && midEnd && midEnd <= midStart);
+  const midtermValid = !midtermHalfSet && !midtermOutOfOrder;
 
   return (
     <FormDialog
@@ -121,7 +137,9 @@ export function TermFormDialog({
       title={editing ? 'Edit term' : `Add a term to ${yearName}`}
       submitLabel={editing ? 'Save changes' : 'Add term'}
       submitting={submitting}
-      submitDisabled={name.trim().length === 0 || !seqValid || seqTaken || !datesValid}
+      submitDisabled={
+        name.trim().length === 0 || !seqValid || seqTaken || !datesValid || !midtermValid
+      }
       error={error}
       onClose={onClose}
       onSubmit={() =>
@@ -132,6 +150,8 @@ export function TermFormDialog({
           start_date: start,
           end_date: end,
           grade_submission_deadline: fromLocalInput(deadline),
+          midterm_submission_start: fromLocalInput(midStart),
+          midterm_submission_end: fromLocalInput(midEnd),
         })
       }
     >
@@ -209,7 +229,7 @@ export function TermFormDialog({
           />
         </Stack>
         <TextField
-          label="Grade submission deadline"
+          label="End-term grade submission deadline"
           type="datetime-local"
           value={deadline}
           onChange={(e) => setDeadline(e.target.value)}
@@ -223,6 +243,61 @@ export function TermFormDialog({
               : 'Leave blank to keep grade entry open indefinitely.')
           }
         />
+
+        <Divider />
+        <Typography variant="subtitle2">Mid-term freeze</Typography>
+        <Typography variant="body2" color="text.secondary">
+          {/* D33 ask 7 — this copy used to read "the period lecturers submit mid-term marks
+              in", which was true of the D32 behaviour and is now the opposite of it. The
+              Dean sets these two dates and needs to know what they DO. */}
+          <strong>Grade entry is frozen between these two dates</strong>, so the mid-term
+          figures cannot move while the mid-term report is being produced. Marks go in{' '}
+          <em>before</em> the freeze starts. After it ends, entry reopens: a new mark is
+          entered as normal, and changing one that was already recorded needs a revision
+          you approve.
+        </Typography>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <TextField
+            label="Freeze starts"
+            type="datetime-local"
+            value={midStart}
+            onChange={(e) => setMidStart(e.target.value)}
+            fullWidth
+            InputLabelProps={{ shrink: true }}
+            error={Boolean(fieldErrors?.midterm_submission_start) || midtermHalfSet}
+            helperText={fieldErrors?.midterm_submission_start?.join(' ')}
+          />
+          <TextField
+            label="Freeze ends"
+            type="datetime-local"
+            value={midEnd}
+            onChange={(e) => setMidEnd(e.target.value)}
+            fullWidth
+            InputLabelProps={{ shrink: true }}
+            error={
+              Boolean(fieldErrors?.midterm_submission_end) ||
+              midtermHalfSet ||
+              midtermOutOfOrder
+            }
+            helperText={
+              midtermOutOfOrder
+                ? 'Must be after the freeze start date.'
+                : fieldErrors?.midterm_submission_end?.join(' ')
+            }
+          />
+        </Stack>
+        {midtermHalfSet && (
+          <Alert severity="warning">
+            Set both mid-term dates, or clear both. A half-configured window cannot be
+            used to decide which assessments belong to the mid-term period.
+          </Alert>
+        )}
+        {!midStart && !midEnd && (
+          <Alert severity="info" variant="outlined">
+            Leave both blank if this term has no mid-term period. Nothing is frozen, and
+            mid-term reports and grade revisions stay unavailable for it.
+          </Alert>
+        )}
         <Alert severity="info" variant="outlined">
           A term may fall outside its academic year&apos;s dates — BAJC&apos;s Summer block
           legitimately does, and the report card prints it that way.

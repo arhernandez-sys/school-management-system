@@ -21,6 +21,25 @@ request came from to rule on it. Hence the third router — the same split Phase
 Route order matters: `/grades/class-subjects` and `/grades/class-subject/{id}` are
 declared before nothing ambiguous, but `/grades/me` and `/grades/term` are literals
 that must not be shadowed — there is no `/grades/{id}` route, so no conflict exists.
+
+**WHO CAN REACH THIS MODULE (D32, brief §4).** Two changes, and they are different in kind:
+
+  * **The Registrar cannot, at all, and there is no setting for it.** `Role.SECRETARY` is
+    absent from every role tuple below. The client asked for the Register to lose grade
+    visibility outright, so expressing it as a flag would have implied it is reversible
+    from the UI. Everything else the Registrar owns — students, enrolment, offerings,
+    admissions (§D14) — is untouched.
+  * **A student can, only while the Dean allows it.** `require_student_grade_visibility`
+    layers `assessment_policies.students_can_view_grades` on top of the role check and
+    answers 403 `grades_hidden` when it is off. Default off.
+
+Neither affects a Lecturer or the Dean: one needs their gradebook to teach and the other
+needs every grade to run the college.
+
+Revision endpoints are NOT gated by the student switch, because a student can never see
+them anyway — `revisions.list_revisions` admits only the Dean and the requesting Lecturer.
+That is also the reason a student is never told whether a revision was approved or denied:
+they see the resolved score and nothing about how it got there.
 """
 
 from __future__ import annotations
@@ -33,7 +52,7 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import GradeRevisionStatus, Role
 from app.common.schemas import ErrorResponse
-from app.core.deps import get_db, require_role
+from app.core.deps import get_db, require_role, require_student_grade_visibility
 from app.modules.grades import revisions as revisions_service
 from app.modules.grades import service
 from app.modules.grades.schemas import (
@@ -55,10 +74,21 @@ assessment_grades_router = APIRouter(prefix="/assessments", tags=["grades"])
 revisions_router = APIRouter(prefix="/grade-revisions", tags=["grades"])
 
 _ERR = {"model": ErrorResponse}
-_staff = require_role(Role.TEACHER, Role.PRINCIPAL, Role.SECRETARY)
+#: D32 (brief §4) — **the Registrar is no longer here, and that is unconditional.** The
+#: client's instruction was to remove grade visibility from the Register entirely; unlike
+#: the student case there is no toggle, because a toggle would imply it is reversible from
+#: the UI. `Role.SECRETARY` is simply absent from every grade route's role tuple.
+#:
+#: The Registrar keeps everything else — students, enrolment, offerings, admissions
+#: (§D14). This narrows grades alone.
+_staff = require_role(Role.TEACHER, Role.PRINCIPAL)
 _teacher = require_role(Role.TEACHER)
-_student = require_role(Role.STUDENT)
-_any_role = require_role(Role.TEACHER, Role.PRINCIPAL, Role.SECRETARY, Role.STUDENT)
+#: D32 — a student's own grades are gated by the Dean's `students_can_view_grades`
+#: switch on top of the role check (403 `grades_hidden` when off).
+_student = require_student_grade_visibility(Role.STUDENT)
+_any_role = require_student_grade_visibility(
+    Role.TEACHER, Role.PRINCIPAL, Role.STUDENT
+)
 #: A grade REVISION is decided by the Dean alone (D30 §D7, §D14).
 _dean = require_role(Role.PRINCIPAL)
 

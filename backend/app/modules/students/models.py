@@ -64,7 +64,10 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     gender: Mapped[str | None] = mapped_column(Text(), nullable=True)
     enrollment_date: Mapped[date] = mapped_column(Date(), nullable=False)
     status: Mapped[StudentStatus] = mapped_column(
-        enum_col(StudentStatus), nullable=False, server_default=text("'active'")
+        # D34: the default moved with the vocabulary. `011` §3 rewrote every stored
+        # 'active'/'inactive' and narrowed the enum, so 'active' is no longer a value the
+        # column will accept at all.
+        enum_col(StudentStatus), nullable=False, server_default=text("'Registered'")
     )
     guardian_name: Mapped[str | None] = mapped_column(Text(), nullable=True)
     guardian_phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
@@ -137,6 +140,43 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     finance_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     finance_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     finance_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+
+    # ── Columns reconciled from the CLIENT'S own schema (D34, `011`) ──────────
+    # Their `student_profiles` dump had moved on from the `sims.sql` this repo was built
+    # against. These ten are the columns it held that live had under no spelling; the rest
+    # of the diff was renames the chain had already done (`011`'s header lists them).
+    #: The ID this record carried in the system it was imported from. `int` because that
+    #: is the client's type; `student_number` here is text, since a `YYYYMM###` with a
+    #: leading zero is not a number (D30 §D9).
+    student_id_original: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    #: The student's OWN email, independent of any login. Live had NO email column at all
+    #: — D33 derived `StudentDetail.email` from the linked `users` row, which is NULL for
+    #: anyone without an account, so a paper registration had nowhere to record an address
+    #: the office could write to. **Not the login**: that is still `users.email` and is
+    #: changed through the Users module.
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    #: The institution a transfer student came from. The client spells the column
+    #: `transferedfrom`; house snake_case applies to NEW identifiers, and the misspelling
+    #: was not worth casting in a column name (`011` §1 records the mapping).
+    transferred_from: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    #: Stamped by `change_student_status` on a move to `graduated`, and editable after.
+    graduation_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    #: Stamped by `change_student_status` on a move to `DropOut`, and editable after.
+    dropout_date: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    dropout_reason: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    #: The Registrar's own notes. Never shown to the student.
+    comments: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    #: Where the record came from — an import batch, a migration, `admissions`.
+    origin: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    #: ⚠️ MAPPED FOR THE CLIENT'S TOOLING, NOT USED BY THE API. There is no
+    #: student-level education table to point at: prior education is APPLICATION-scoped
+    #: (`application_education.application_id`), by design — an application is a frozen
+    #: record of what was declared. No FK, and nothing reads it.
+    educationbg_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    #: ⚠️ Same. Cannot be a FK: `student_documents.id` is a uuid, not an int — and a
+    #: student's documents are 1:N (`student_documents.student_id`), so one scalar cannot
+    #: name them. Nothing reads it.
+    doc_id: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
     @hybrid_property
     def full_name(self) -> str:

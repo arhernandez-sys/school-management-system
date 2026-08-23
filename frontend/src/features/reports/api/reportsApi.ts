@@ -4,7 +4,13 @@
  * responses and are consumed by the TanStack Query hooks in `../hooks/useReports`.
  */
 import { api } from '@shared/api/client';
-import type { ReportCard, SemesterRef, StudentPickerPage, Transcript } from '../types';
+import type {
+  ReportCard,
+  ReportCardKind,
+  SemesterRef,
+  StudentPickerPage,
+  Transcript,
+} from '../types';
 
 /** A term option for the report-card term picker. */
 export interface TermOption {
@@ -44,19 +50,31 @@ export async function fetchReportStudents(params: StudentPickerParams): Promise<
   return res.data;
 }
 
+/**
+ * D32 — `kind` is sent explicitly rather than omitted for the default, so a request is
+ * self-describing in the network log. The server defaults to `endterm` either way.
+ */
 export async function fetchReportCard(
   studentId: string,
   semesterId?: string,
+  kind: ReportCardKind = 'endterm',
 ): Promise<ReportCard> {
   const res = await api.get<ReportCard>('/reports/report-card', {
-    params: { student_id: studentId, ...(semesterId ? { semester_id: semesterId } : {}) },
+    params: {
+      student_id: studentId,
+      kind,
+      ...(semesterId ? { semester_id: semesterId } : {}),
+    },
   });
   return res.data;
 }
 
-export async function fetchMyReportCard(semesterId?: string): Promise<ReportCard> {
+export async function fetchMyReportCard(
+  semesterId?: string,
+  kind: ReportCardKind = 'endterm',
+): Promise<ReportCard> {
   const res = await api.get<ReportCard>('/reports/report-card/me', {
-    params: semesterId ? { semester_id: semesterId } : undefined,
+    params: { kind, ...(semesterId ? { semester_id: semesterId } : {}) },
   });
   return res.data;
 }

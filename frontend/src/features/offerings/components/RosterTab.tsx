@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Box, Button, IconButton, Snackbar, Tooltip, Typography } from '@mui/material';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import PersonRemoveIcon from '@mui/icons-material/PersonRemove';
+import RuleIcon from '@mui/icons-material/Rule';
 import {
   ConfirmDialog,
   DataTable,
@@ -10,8 +11,9 @@ import {
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useOfferingRoster, useWithdrawStudent } from '../hooks/useOfferings';
-import type { RosterEntry } from '../types';
+import { ENROLLMENT_STATUS_LABEL, type RosterEntry } from '../types';
 import { EnrollStudentsDialog } from './EnrollStudentsDialog';
+import { CourseStatusDialog } from './CourseStatusDialog';
 
 /**
  * Offering detail → Roster tab (ui-design-system §7.5, api-spec §5). Shows the offering's
@@ -19,9 +21,20 @@ import { EnrollStudentsDialog } from './EnrollStudentsDialog';
  * student (sets `unenrolled_at`; grade/attendance history is preserved). Lecturers see a
  * read-only roster. Over-capacity after an enroll is surfaced as a non-blocking toast.
  *
- * **D31** — the roster hangs off the OFFERING, not a homeroom. Withdrawing a student here
+ * **D31** — the roster hangs off the OFFERING, not a homeroom. Removing a student here
  * drops them from this one course, which is the whole point: a student takes several
  * courses in a term and leaving one is not leaving the others.
+ *
+ * **D35 split one word into two actions**, and the distinction is load-bearing:
+ *
+ * * **Course status** (`PATCH`) — the client's `coursestatus`: Audit, Withdrew passing,
+ *   Withdrew failing. The student STAYS on the roster, because the transcript prints
+ *   `AU` / `W/P` / `W/F` against the course. Deleting the row would erase that.
+ * * **Remove** (`DELETE`) — un-enrols. The row closes and they leave the roster, which
+ *   says the registration itself was a mistake.
+ *
+ * This second action used to be labelled "Withdraw", which is now the name of the first.
+ * Two different actions sharing a word on one screen is how the wrong one gets clicked.
  */
 export interface RosterTabProps {
   offeringId: string;
@@ -36,6 +49,7 @@ export function RosterTab({ offeringId, offeringLabel, canManage }: RosterTabPro
 
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [withdrawTarget, setWithdrawTarget] = useState<RosterEntry | null>(null);
+  const [statusTarget, setStatusTarget] = useState<RosterEntry | null>(null);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; severity: 'success' | 'warning' } | null>(
     null,
@@ -47,7 +61,7 @@ export function RosterTab({ offeringId, offeringLabel, canManage }: RosterTabPro
     withdrawMut.mutate(withdrawTarget.enrollment_id, {
       onSuccess: () => {
         setToast({
-          message: `${withdrawTarget.student.full_name} was withdrawn from ${offeringLabel}.`,
+          message: `${withdrawTarget.student.full_name} was removed from ${offeringLabel}.`,
           severity: 'success',
         });
         setWithdrawTarget(null);
@@ -75,30 +89,53 @@ export function RosterTab({ offeringId, offeringLabel, canManage }: RosterTabPro
     {
       field: 'status',
       headerName: 'Status',
-      render: (r) =>
-        r.unenrolled_at ? (
-          <StatusBadge label="Withdrawn" kind="neutral" />
-        ) : (
-          <StatusBadge label="Enrolled" kind="success" />
-        ),
+      // D35 — the COURSE STATUS, which is the interesting fact now. `unenrolled_at` still
+      // wins when set: a removed row cannot be described by a course status at all (the
+      // server 409s on that), so showing one would be a contradiction.
+      render: (r) => {
+        if (r.unenrolled_at) return <StatusBadge label="Removed" kind="neutral" />;
+        if (r.enrollment_status === 'enrolled') {
+          return <StatusBadge label="Enrolled" kind="success" />;
+        }
+        return (
+          <StatusBadge
+            label={ENROLLMENT_STATUS_LABEL[r.enrollment_status]}
+            // An audit is a legitimate choice; a withdrawal is the one that costs the
+            // student the course, so only that reads as a warning.
+            kind={r.enrollment_status === 'audit' ? 'info' : 'warning'}
+          />
+        );
+      },
     },
   ];
 
   const rowActions = canManage
     ? (r: RosterEntry) => (
-        <Tooltip title="Withdraw from this offering">
-          <IconButton
-            size="small"
-            color="error"
-            aria-label={`Withdraw ${r.student.full_name}`}
-            onClick={() => {
-              setWithdrawError(null);
-              setWithdrawTarget(r);
-            }}
-          >
-            <PersonRemoveIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <>
+          <Tooltip title="Set course status (audit / withdrew)">
+            <IconButton
+              size="small"
+              aria-label={`Set course status for ${r.student.full_name}`}
+              disabled={Boolean(r.unenrolled_at)}
+              onClick={() => setStatusTarget(r)}
+            >
+              <RuleIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Remove from this offering (un-enrol)">
+            <IconButton
+              size="small"
+              color="error"
+              aria-label={`Remove ${r.student.full_name}`}
+              onClick={() => {
+                setWithdrawError(null);
+                setWithdrawTarget(r);
+              }}
+            >
+              <PersonRemoveIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
       )
     : undefined;
 
@@ -160,16 +197,27 @@ export function RosterTab({ offeringId, offeringLabel, canManage }: RosterTabPro
         />
       )}
 
+      {canManage && (
+        <CourseStatusDialog
+          open={Boolean(statusTarget)}
+          offeringId={offeringId}
+          offeringLabel={offeringLabel}
+          entry={statusTarget}
+          onClose={() => setStatusTarget(null)}
+          onSaved={(message) => setToast({ message, severity: 'success' })}
+        />
+      )}
+
       <ConfirmDialog
         open={Boolean(withdrawTarget)}
-        title="Withdraw student?"
+        title="Remove student from this offering?"
         destructive
         description={
           withdrawTarget
-            ? `Remove ${withdrawTarget.student.full_name} from ${offeringLabel}? Their grade and attendance history is preserved.`
+            ? `Un-enrol ${withdrawTarget.student.full_name} from ${offeringLabel}? Their grade and attendance history is preserved. If they SAT the course and left, set a course status of "Withdrew" instead — that keeps the course on their transcript.`
             : undefined
         }
-        confirmLabel="Withdraw"
+        confirmLabel="Remove"
         pending={withdrawMut.isPending}
         error={withdrawError}
         onConfirm={handleWithdraw}

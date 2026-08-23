@@ -24,6 +24,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import AcUnitIcon from '@mui/icons-material/AcUnit';
 import {
   PageHeader,
   LoadingState,
@@ -39,6 +40,7 @@ import {
   useCreateAcademicYear,
   useActivateSemester,
   useArchiveAcademicYear,
+  useFreezeMidtermGrades,
   useCreateSemester,
   useUpdateSemester,
 } from '../hooks/useSettings';
@@ -126,6 +128,7 @@ export function AcademicStructureScreen() {
   const createMut = useCreateAcademicYear();
   const activateMut = useActivateSemester();
   const archiveMut = useArchiveAcademicYear();
+  const freezeMut = useFreezeMidtermGrades();
   const createTermMut = useCreateSemester();
   const updateTermMut = useUpdateSemester();
 
@@ -153,6 +156,12 @@ export function AcademicStructureScreen() {
   const [archiveTarget, setArchiveTarget] = useState<AcademicYearDetail | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
+  // D32 — the mid-term freeze reports back inline rather than through a dialog: it is
+  // idempotent and non-destructive, so a confirm step would be ceremony. What it DOES
+  // need is a visible outcome, because "23 report cards captured" and "the window is
+  // still open" look identical if nothing is shown.
+  const [freezeError, setFreezeError] = useState<string | null>(null);
+  const [freezeNotice, setFreezeNotice] = useState<string | null>(null);
 
   if (query.isLoading) return <LoadingState variant="cards" rows={2} />;
   if (query.isError || !query.data) return <ErrorState onRetry={() => void query.refetch()} />;
@@ -275,6 +284,30 @@ export function AcademicStructureScreen() {
     }
   };
 
+  /**
+   * D32 (brief §6) — capture the term's mid-term report cards.
+   *
+   * Pressing this is OPTIONAL: a mid-term report requested after the window closes
+   * freezes itself on first read. The button exists so the Dean chooses the moment, and
+   * so a re-freeze after correcting a mark is a deliberate action rather than a side
+   * effect of somebody opening a report.
+   */
+  const handleFreezeMidterm = (semesterId: string, semesterName: string) => {
+    setFreezeError(null);
+    setFreezeNotice(null);
+    freezeMut.mutate(
+      { semesterId },
+      {
+        onSuccess: (res) =>
+          setFreezeNotice(
+            `Mid-term report cards frozen for ${semesterName} — ${res.snapshots_written} ` +
+              `student${res.snapshots_written === 1 ? '' : 's'}. Re-freeze after correcting a mark.`,
+          ),
+        onError: (err) => setFreezeError(apiErrorMessage(err)),
+      },
+    );
+  };
+
   const handleActivate = (semesterId: string) => {
     setActivateError(null);
     activateMut.mutate(
@@ -312,6 +345,17 @@ export function AcademicStructureScreen() {
       {activateError && (
         <Alert severity="error" role="alert" sx={{ mb: 2 }}>
           {activateError}
+        </Alert>
+      )}
+
+      {freezeError && (
+        <Alert severity="warning" role="alert" sx={{ mb: 2 }} onClose={() => setFreezeError(null)}>
+          {freezeError}
+        </Alert>
+      )}
+      {freezeNotice && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setFreezeNotice(null)}>
+          {freezeNotice}
         </Alert>
       )}
 
@@ -486,6 +530,22 @@ export function AcademicStructureScreen() {
                                   Grades due {formatDeadline(sem.grade_submission_deadline)}
                                 </Typography>
                               )}
+                              {/* D32 — the mid-term window decides which assessments can
+                                  be revised and when the mid-term card can be frozen, so
+                                  it belongs beside the end-term deadline, not buried in
+                                  the dialog. Both dates are set together or not at all. */}
+                              {sem.midterm_submission_start && sem.midterm_submission_end && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: 'block' }}
+                                >
+                                  {/* D33 — it is a FREEZE, not a submission period. */}
+                                  Mid-term frozen{' '}
+                                  {formatDeadline(sem.midterm_submission_start)} →{' '}
+                                  {formatDeadline(sem.midterm_submission_end)}
+                                </Typography>
+                              )}
                             </TableCell>
                             <TableCell>
                               {sem.is_active ? (
@@ -504,6 +564,23 @@ export function AcademicStructureScreen() {
                                   >
                                     Activate
                                   </Button>
+                                )}
+                                {/* D32 — only offered where it can succeed: a term with
+                                    no mid-term window has nothing to freeze, and the
+                                    server would answer 422. */}
+                                {sem.midterm_submission_end && (
+                                  <Tooltip title="Capture this term's mid-term report cards. Safe to repeat.">
+                                    <span>
+                                      <Button
+                                        size="small"
+                                        startIcon={<AcUnitIcon fontSize="small" />}
+                                        onClick={() => handleFreezeMidterm(sem.id, sem.name)}
+                                        disabled={freezeMut.isPending}
+                                      >
+                                        Freeze mid-term
+                                      </Button>
+                                    </span>
+                                  </Tooltip>
                                 )}
                                 <Tooltip title="Edit term">
                                   <IconButton
