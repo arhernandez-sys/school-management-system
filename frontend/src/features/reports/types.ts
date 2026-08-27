@@ -162,6 +162,14 @@ export interface TranscriptYear {
 export interface Transcript {
   student: StudentRef;
   school: SchoolIdentity;
+  /**
+   * The programme the transcript is issued against (D39, Meeting #2 item 7).
+   * `program_name` is sent alongside the code because this document is read by people
+   * outside the school, to whom `BMAD` means nothing. Both null when the student has no
+   * programme registration.
+   */
+  program_code: string | null;
+  program_name: string | null;
   issued_at: string;
   years: TranscriptYear[];
   cumulative_average: number | null;

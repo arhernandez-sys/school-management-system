@@ -109,8 +109,13 @@ export function PrerequisitesDialog({
     setError(null);
     addMut.mutate(
       kind === 'course'
-        ? { requirement_type: 'course', prerequisite_course_id: requiredId,
-            program_id: programId || null }
+        ? // D39 — explicitly null, NOT `programId || null`. The programme select is now
+          // hidden for this kind, but `programId` is not cleared when the Requirement
+          // dropdown changes: picking "Every required course in a programme", choosing a
+          // programme, then switching back to "A specific course" left a value the user
+          // could no longer see, and the old expression would have silently scoped the
+          // requirement to it. An invisible field must not reach the payload.
+          { requirement_type: 'course', prerequisite_course_id: requiredId, program_id: null }
         : { requirement_type: 'all_program_courses', program_id: programId },
       {
         onSuccess: () => {
@@ -235,41 +240,33 @@ export function PrerequisitesDialog({
                   />
                 )}
 
-                <TextField
-                  select
-                  label={kind === 'course' ? 'Only in this programme (optional)' : 'Programme'}
-                  value={programId}
-                  onChange={(e) => setProgramId(e.target.value)}
-                  fullWidth
-                  size="small"
-                  required={kind === 'all_program_courses'}
-                  helperText={
-                    kind === 'course'
-                      ? 'Leave blank to require it wherever this course is taken.'
-                      : '“Every course in the programme” needs to say which programme.'
-                  }
-                >
-                  {kind === 'course' && (
-                    <MenuItem value="">
-                      <em>Every programme</em>
-                    </MenuItem>
-                  )}
-                  {(programs.data?.items ?? []).map((p) => (
-                    <MenuItem key={p.id} value={p.id}>
-                      {p.code} — {p.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-
-                <Box>
-                  <Button
-                    startIcon={<AddIcon />}
-                    onClick={handleAdd}
-                    disabled={!canSubmit || addMut.isPending}
+                {/* D39 (Meeting #2) — `Only in this programme (optional)` is HIDDEN for a
+                    plain course requirement. It is a scope narrowing the Dean does not
+                    want yet, and an optional select sitting between two required fields
+                    invited the reading that a programme had to be chosen at all. The
+                    field is only hidden, not deleted: the same control is REQUIRED for
+                    `Every required course in a programme`, which cannot be expressed
+                    without naming one. Programme-scoped rows already in the database keep
+                    working — the backend still accepts and enforces `program_id`, so this
+                    can come back by deleting one condition. */}
+                {kind === 'all_program_courses' && (
+                  <TextField
+                    select
+                    label="Programme"
+                    value={programId}
+                    onChange={(e) => setProgramId(e.target.value)}
+                    fullWidth
+                    size="small"
+                    required
+                    helperText="“Every course in the programme” needs to say which programme."
                   >
-                    Add requirement
-                  </Button>
-                </Box>
+                    {(programs.data?.items ?? []).map((p) => (
+                      <MenuItem key={p.id} value={p.id}>
+                        {p.code} — {p.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                )}
 
                 <Alert severity="info" variant="outlined">
                   A prerequisite is met only by <strong>passing</strong> the course —
@@ -285,8 +282,32 @@ export function PrerequisitesDialog({
           </Stack>
         )}
       </DialogContent>
+      {/* D39 (Meeting #2) — the add action moved out of the form body and into the
+          footer as a bottom-right `Save`. It was a text button styled like a link, sitting
+          mid-form, which read as a secondary hint rather than the thing that commits the
+          requirement.
+
+          The SEMANTICS are unchanged: this still POSTs one requirement immediately, the
+          same as before. It is not a draft-then-save form — `prerequisites/router.py`
+          documents deliberately that a prerequisite has no PATCH, because all three of its
+          fields are its identity, so there is no pending state for a Save to flush. The
+          label matches what the client asked to see; the behaviour matches what the API
+          supports.
+
+          Guarded by `canManage` for the same reason the form is: the Registrar reads this
+          dialog and must not be shown a Save that would 403. */}
       <DialogActions>
         <Button onClick={onClose}>Close</Button>
+        {canManage && (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={handleAdd}
+            disabled={!canSubmit || addMut.isPending}
+          >
+            Save
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );

@@ -39,7 +39,7 @@ export interface TermPickerProps {
   label?: string;
 }
 
-export function TermPicker({ value, onChange, academicYearId, label = 'Term' }: TermPickerProps) {
+export function TermPicker({ value, onChange, academicYearId, label = 'Session' }: TermPickerProps) {
   const { data: semesters = [], isLoading } = useSemesters(academicYearId);
   const yearsQuery = useAcademicYears();
 

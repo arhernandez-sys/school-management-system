@@ -36,6 +36,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role
+from app.modules.settings import service as settings_service
 from app.modules.settings.models import (
     AcademicYear,
     AuditLog,
@@ -99,13 +100,21 @@ class TestSchool:
         self, client, make_user, auth_headers
     ) -> None:
         """GET /settings/school — authenticated read (any role); returns the seeded
-        single-row identity. logo_url is None (storage stubbed, TODO OQ-DB5)."""
+        single-row identity.
+
+        D39: `logo_url` is no longer asserted to be None. It used to be, because
+        `_logo_url_for` returned None unconditionally while waiting on a Supabase bucket
+        that the MariaDB pivot cancelled — so this assertion was pinning a bug in place.
+        A key that is already a usable reference now resolves; a bare object key still
+        does not. The assertion is `str | None` so it describes the contract rather than
+        whatever the fixture happens to seed; `TestLogoUrlResolution` pins the rule.
+        """
         student = make_user(role=Role.STUDENT)
         resp = client.get(SCHOOL, headers=auth_headers(user_id=student.id, role=Role.STUDENT))
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert isinstance(body["name"], str) and body["name"]
-        assert body["logo_url"] is None  # stubbed storage — assert shape, not a URL
+        assert body["logo_url"] is None or isinstance(body["logo_url"], str)
         assert set(body.keys()) == {
             "name", "logo_url", "address", "contact_email", "contact_phone"
         }
@@ -1657,3 +1666,32 @@ class TestEnvelopeConformance:
         ).json()
         err = _assert_envelope(body, code="validation_error")
         assert "fields" in err
+
+
+class TestLogoUrlResolution:
+    """`_logo_url_for` — the D39 rule, tested directly rather than through an endpoint.
+
+    This function returned None unconditionally for the whole Supabase era, and the one
+    test that touched it asserted exactly that, so the school logo silently never reached
+    a report card even with a key configured. These cases exist so the next person to
+    change it has to say which behaviour they meant.
+    """
+
+    def test_a_root_relative_key_resolves(self) -> None:
+        """The self-hosted case: the frontend serves `/logo.jpeg` out of `public/`."""
+        assert settings_service._logo_url_for("/logo.jpeg") == "/logo.jpeg"
+
+    def test_an_absolute_url_resolves(self) -> None:
+        assert (
+            settings_service._logo_url_for("https://cdn.example.org/logo.png")
+            == "https://cdn.example.org/logo.png"
+        )
+
+    def test_a_bare_object_key_stays_none(self) -> None:
+        """No bucket base to resolve it against — None beats a broken `<img src>`."""
+        assert settings_service._logo_url_for("schools/1/logo.png") is None
+
+    def test_blank_and_missing_stay_none(self) -> None:
+        assert settings_service._logo_url_for(None) is None
+        assert settings_service._logo_url_for("") is None
+        assert settings_service._logo_url_for("   ") is None

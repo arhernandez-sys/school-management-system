@@ -565,6 +565,19 @@ def _program_code_for(db: Session, student: StudentProfile) -> str | None:
     return db.scalar(select(Program.code).where(Program.id == student.program_id))
 
 
+def _program_name_for(db: Session, student: StudentProfile) -> str | None:
+    """The student's programme NAME, e.g. `Business Administration`, or `None`.
+
+    Separate from `_program_code_for` because the two documents want different things:
+    the report card's layout has a narrow `Program` label that the code fits, while the
+    transcript (D39) goes to readers outside the school, for whom the code alone is
+    unreadable. Same null-when-unassigned rule as the code.
+    """
+    if student.program_id is None:
+        return None
+    return db.scalar(select(Program.name).where(Program.id == student.program_id))
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /reports/students
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1047,6 +1060,8 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
     return Transcript(
         student=_student_ref(db, student),
         school=_school(db),
+        program_code=_program_code_for(db, student),
+        program_name=_program_name_for(db, student),
         issued_at=utcnow(),
         years=out_years,
         cumulative_average=_f(_mean(all_term_averages)),

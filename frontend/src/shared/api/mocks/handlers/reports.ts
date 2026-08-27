@@ -294,7 +294,7 @@ function midtermReportResponse(student: DemoStudent, semester: DemoSemester) {
     return errorResponse(
       422,
       'no_midterm_window',
-      'This term has no mid-term grading period configured, so there are no mid-term grades to freeze.',
+      'This session has no mid-session grading period configured, so there are no mid-session grades to freeze.',
     );
   }
   // DEMO_TODAY, not the real clock — same reason as `gradeWindow()` in the grades handler.
@@ -302,7 +302,7 @@ function midtermReportResponse(student: DemoStudent, semester: DemoSemester) {
     return errorResponse(
       409,
       'midterm_window_open',
-      'The mid-term grading period is still open. Mid-term grades can be frozen once it closes.',
+      'The mid-session grading period is still open. Mid-session grades can be frozen once it closes.',
     );
   }
   const key = midtermKey(student.id, semester.id);
@@ -445,9 +445,15 @@ function buildTranscript(student: DemoStudent) {
 
   const cumulative = gpaFor(years.flatMap((y) => y.gpaEntries));
 
+  const transcriptProgram = D.programs.find((pr) => pr.id === student.program_id);
+
   return {
     student: studentRef(student),
     school: schoolIdentity(),
+    // D39 (Meeting #2 item 7) — mirrors `reports/service._program_code_for` /
+    // `_program_name_for`; null for a student with no programme registration.
+    program_code: transcriptProgram?.code ?? null,
+    program_name: transcriptProgram?.name ?? null,
     issued_at: DEMO_TODAY_ISO,
     years: years.map(({ gpaEntries: _drop, ...rest }) => rest),
     cumulative_average: cumulativeAverage,
@@ -485,7 +491,7 @@ export const reportsHandlers = [
     const url = new URL(request.url);
     const semester =
       D.semesters.find((s) => s.id === url.searchParams.get('semester_id')) ?? getActiveSemester();
-    if (!semester) return errorResponse(409, 'no_active_semester', 'No active term is configured.');
+    if (!semester) return errorResponse(409, 'no_active_semester', 'No active session is configured.');
     // D32 — a frozen card carries NO release filter: it is a document already issued, and
     // re-applying "hide unreleased" would blank rows the student has already been shown.
     if (url.searchParams.get('kind') === 'midterm') {
@@ -509,7 +515,7 @@ export const reportsHandlers = [
     if (!student) return errorResponse(404, 'student_not_found', 'Student not found.');
     const semester =
       D.semesters.find((s) => s.id === url.searchParams.get('semester_id')) ?? getActiveSemester();
-    if (!semester) return errorResponse(409, 'no_active_semester', 'No active term is configured.');
+    if (!semester) return errorResponse(409, 'no_active_semester', 'No active session is configured.');
     if (url.searchParams.get('kind') === 'midterm') {
       return midtermReportResponse(student, semester);
     }
@@ -530,7 +536,7 @@ export const reportsHandlers = [
     const role = sessionRole(cookies);
     if (!role) return errorResponse(401, 'unauthenticated', 'Not signed in.');
     if (role !== 'principal') {
-      return errorResponse(403, 'forbidden', 'Only the Dean may freeze mid-term grades.');
+      return errorResponse(403, 'forbidden', 'Only the Dean may freeze mid-session grades.');
     }
     const semester = D.semesters.find((sem) => sem.id === String(params.semesterId));
     if (!semester) return errorResponse(404, 'not_found', 'Semester not found.');
@@ -541,14 +547,14 @@ export const reportsHandlers = [
       return errorResponse(
         422,
         'no_midterm_window',
-        'This term has no mid-term grading period configured, so there are no mid-term grades to freeze.',
+        'This session has no mid-session grading period configured, so there are no mid-session grades to freeze.',
       );
     }
     if (new Date(DEMO_TODAY_ISO).getTime() <= new Date(end).getTime()) {
       return errorResponse(
         409,
         'midterm_window_open',
-        'The mid-term grading period is still open. Mid-term grades can be frozen once it closes.',
+        'The mid-session grading period is still open. Mid-session grades can be frozen once it closes.',
       );
     }
 

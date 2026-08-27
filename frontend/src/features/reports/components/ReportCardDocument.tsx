@@ -124,7 +124,7 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
   const resolvedVariant =
     variant ?? (report_kind === 'midterm' ? 'mid-semester' : 'end-of-semester');
   const heading =
-    resolvedVariant === 'mid-semester' ? 'Mid-Term Report' : 'End-Term Report';
+    resolvedVariant === 'mid-semester' ? 'Mid-Session Report' : 'End-Session Report';
   const documentTitle = `${heading} — ${semester.name}, ${semester.academic_year_name}`;
 
   return (
@@ -132,6 +132,9 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
       schoolName={school.name}
       documentTitle={documentTitle}
       logoUrl={school.logo_url}
+      // D39 — the letterhead. `ReportSchool` has carried address/phone/email all along
+      // and the document printed none of them.
+      contactLines={[school.address, school.phone, school.email]}
       meta={
         <>
           <div>Student No. {student.student_number}</div>
@@ -165,7 +168,7 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
       {subjects.length === 0 ? (
         <EmptyState
           title="No courses to report"
-          description="This student is not enrolled in any courses for the selected term."
+          description="This student is not enrolled in any courses for the selected session."
           variant="card"
         />
       ) : (
@@ -202,30 +205,47 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
                     <TableCell align="center">
                       {/* Blank when ungraded or withheld — the sample prints nothing
                           rather than a placeholder, and the row is still here so the
-                          credits are visibly part of the GPA denominator. */}
+                          credits are visibly part of the GPA denominator.
+
+                          D39 (Meeting #2): the letter is PLAIN TEXT here, not a
+                          `GradeLetter` chip. The chip colour-codes the band (A green,
+                          F red), which reads as an on-screen status pill rather than an
+                          official mark — and printed, the outline and tint cost ink to
+                          say nothing the letter has not already said. `GradeLetter` is
+                          deliberately kept for `Session average` below and on screen
+                          elsewhere; only this column changed. */}
                       {row.status === 'pending' || !row.letter ? (
                         <Typography variant="body2" color="text.secondary" component="span">
                           —
                         </Typography>
                       ) : (
-                        <GradeLetter letter={row.letter} />
+                        <Typography variant="body2" component="span" sx={{ fontWeight: 600 }}>
+                          {row.letter}
+                        </Typography>
                       )}
                     </TableCell>
                   </TableRow>
                 ))}
 
-                {/* Spacer row, then the GPA row — the sample's shape exactly. */}
+                {/* Spacer row, then the GPA row — the sample's shape exactly.
+
+                    D39 (Meeting #2): the `GPA` label used to sit in the far-left cell,
+                    leaving the whole Course Name column of white space between it and
+                    the two numbers it labels. A reader scanning the row met "GPA", then
+                    a gap, then `12`, and had to work out that 12 was the credit total
+                    and not the GPA. The label now sits in the Instructor column, right
+                    up against the figure it names: `12  GPA  2.63`. */}
                 <TableRow>
                   <TableCell colSpan={5} sx={{ border: 0, height: 16, p: 0 }} />
                 </TableRow>
                 <TableRow>
-                  <TableCell colSpan={2} sx={{ fontWeight: 700 }}>
-                    GPA
-                  </TableCell>
+                  <TableCell colSpan={2} />
                   <TableCell align="right" sx={{ fontWeight: 600 }}>
                     {total_credits || '—'}
                   </TableCell>
-                  <TableCell />
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    GPA
+                  </TableCell>
                   <TableCell align="center" sx={{ fontWeight: 700, fontSize: '1.05rem' }}>
                     {gpa != null ? gpa.toFixed(2) : '—'}
                   </TableCell>
@@ -250,7 +270,7 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
               </Typography>
             </Box>
             <Box sx={{ textAlign: { sm: 'right' } }}>
-              <Typography variant="subtitle2">Term average</Typography>
+              <Typography variant="subtitle2">Session average</Typography>
               <Stack
                 direction="row"
                 spacing={1}
@@ -272,22 +292,29 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
           it in the repo, and generating one would be forging a signature onto an
           official document. The signature LINE is printed so the Dean signs the sheet.
 
-          The addresses are literals from the source document. They are not in
-          `school_profile`, which carries the school's own `contact_email` rather than
-          the Dean's, so there is nothing to read them from yet; when that table gains
-          office contacts these two lines should come from it. */}
+          D39 — the two contact lines were literals (`dean@bajc.edu.bz`,
+          `http://www.bajc.edu.bz`) hardcoded from the source PDF, which made every
+          school that ever runs this build print BAJC's address. They now fall back to
+          `school_profile`'s own contacts, which is the closest thing the table holds;
+          the school still has no separate DEAN'S email column, so when it gains one
+          this should read that instead. The line is omitted rather than guessed when
+          the profile has no email. */}
       <Divider sx={{ mt: 4, mb: 2 }} />
       <Stack spacing={0.25} sx={{ alignItems: 'flex-start' }}>
         <Box sx={{ width: 220, borderBottom: '1px solid', borderColor: 'text.primary', mb: 0.5 }} />
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
           Dean
         </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Email: dean@bajc.edu.bz
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Website: http://www.bajc.edu.bz
-        </Typography>
+        {school.email && (
+          <Typography variant="caption" color="text.secondary">
+            Email: {school.email}
+          </Typography>
+        )}
+        {school.phone && (
+          <Typography variant="caption" color="text.secondary">
+            Phone: {school.phone}
+          </Typography>
+        )}
       </Stack>
     </PrintLayout>
   );

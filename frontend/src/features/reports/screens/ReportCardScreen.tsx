@@ -59,7 +59,7 @@ export function ReportCardScreen() {
     <Box>
       <PageHeader
         title="Report card"
-        subtitle="A per-term summary of a student's subject grades and attendance."
+        subtitle="A per-session summary of a student's subject grades and attendance."
       />
 
       {/* Controls (hidden from print) */}
@@ -78,8 +78,8 @@ export function ReportCardScreen() {
           onChange={(_e, next: ReportCardKind | null) => next && setKind(next)}
           aria-label="Report type"
         >
-          <ToggleButton value="midterm">Mid-Term</ToggleButton>
-          <ToggleButton value="endterm">End-Term</ToggleButton>
+          <ToggleButton value="midterm">Mid-Session</ToggleButton>
+          <ToggleButton value="endterm">End-Session</ToggleButton>
         </ToggleButtonGroup>
         {canViewTranscript && student && (
           <Button

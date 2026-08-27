@@ -11,8 +11,9 @@ fine-grained guards are security-critical):
     assign/Change a privileged role) live here, next to the data.
 
 One deliberately-stubbed integration point is flagged inline:
-  * TODO(OQ-DB5) — logo object-storage upload (no object-storage bucket provisioned).
-    The endpoint shape + validation are real; only the byte upload is stubbed.
+  * Logo object-storage UPLOAD (no object-storage bucket provisioned). The endpoint
+    shape + validation are real; only the byte upload is stubbed, and it returns None.
+    READING a configured logo is no longer stubbed — see `_logo_url_for` (D39).
 
 The year-archival snapshot freeze is **no longer stubbed** (2026-07-28): computation
 lives in `app/modules/reports/freeze.py` and is invoked by `archive_academic_year`
@@ -134,15 +135,27 @@ def _audit(
 # ──────────────────────────────────────────────────────────────────────────────
 # School profile / branding (§5.11)
 # ──────────────────────────────────────────────────────────────────────────────
-def _logo_url_for(_key: str | None) -> str | None:
+def _logo_url_for(key: str | None) -> str | None:
     """Resolve a public logo URL from `logo_storage_key`.
 
-    TODO(OQ-DB5): the Supabase Storage bucket name + anon key are not yet
-    provisioned (OQ-FE-C pending). Until then there is no public base to compose,
-    so we return None even when a key exists. When storage lands, build:
-        f"{SUPABASE_STORAGE_PUBLIC_BASE}/{bucket}/{key}".
-    Do NOT invent a bucket name here.
+    **D39 — this used to return None unconditionally.** The original was written for
+    Supabase Storage: it waited on a bucket name + anon key to compose
+    `f"{SUPABASE_STORAGE_PUBLIC_BASE}/{bucket}/{key}"`, and returned None in the
+    meantime. The MariaDB pivot retired that plan, so the wait had no end — the school
+    logo never reached the report card or the transcript even though `school_profile`
+    had `/logo.jpeg` sitting in it, which is what Meeting #2 flagged as "*Logo".
+
+    There is no bucket to invent now: a self-hosted deployment serves its own logo.
+    So a key that is ALREADY a usable reference — an absolute URL, or a root-relative
+    path the frontend serves out of `public/` — is returned unchanged. Anything else is
+    a bare object key with no base to resolve it against, and still returns None rather
+    than emitting a broken `<img src>`.
     """
+    key = (key or "").strip()
+    if not key:
+        return None
+    if key.startswith(("http://", "https://", "/")):
+        return key
     return None
 
 
@@ -212,14 +225,22 @@ def upload_logo(
 ) -> str | None:
     """POST /settings/school/logo (principal). Returns the resolved logo_url.
 
-    TODO(OQ-DB5) — STORAGE ADAPTER BOUNDARY. The Supabase Storage bucket + anon
-    key are not yet provisioned, so we do NOT perform a real upload here. We
-    validate the file (done by the router via `validate_logo_upload`), then leave
-    `logo_storage_key` untouched and return None. When storage lands, this is the
-    single function that uploads the bytes and writes `logo_storage_key`.
+    STORAGE ADAPTER BOUNDARY — there is still no upload. The file is validated (by the
+    router, via `validate_logo_upload`), audited, and then discarded; `logo_storage_key`
+    is left untouched. When a storage backend lands, this is the single function that
+    writes the bytes and sets the key.
+
+    **Returns None, deliberately, and not `_logo_url_for(profile.logo_storage_key)`.**
+    D39 taught `_logo_url_for` to resolve an already-usable key, which is right for the
+    READ paths — a school that has `/logo.jpeg` configured should see it on its report
+    cards. Reusing it here would have made a no-op upload answer with the school's
+    PREVIOUS logo, so the Dean would upload a new file, get a URL back, see a logo, and
+    conclude it had been saved. Returning None says plainly that nothing was stored.
     """
     validate_logo_upload(content_type=content_type, size_bytes=len(data))
-    profile = _school_or_404(db)
+    # Called for its 404: uploading a logo to a school that is not configured is an
+    # error, even though nothing is written. The row itself is not needed.
+    _school_or_404(db)
     # Intentionally NOT writing logo_storage_key — no bucket/key to compute yet.
     _audit(
         db,
@@ -229,7 +250,7 @@ def upload_logo(
         summary={"content_type": content_type, "size_bytes": len(data)},
     )
     db.commit()
-    return _logo_url_for(profile.logo_storage_key)
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -361,7 +382,6 @@ def create_academic_year(
         end_date=payload.end_date,
         status=AcademicYearStatus.ACTIVE,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(year)
     db.flush()  # assign year.id
@@ -395,7 +415,6 @@ def create_academic_year(
         academic_year_id=year.id,
         pass_mark=Decimal(DEFAULT_PASS_MARK),
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(scale)
     db.flush()  # assign scale.id
@@ -1113,7 +1132,6 @@ def create_user(
         is_active=True,
         must_change_password=True,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(user)
     db.flush()  # assign id for the audit + response

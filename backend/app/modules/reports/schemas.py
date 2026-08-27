@@ -202,6 +202,17 @@ class TranscriptYear(BaseModel):
 class Transcript(BaseModel):
     student: ReportStudentRef
     school: ReportSchool
+    #: The programme the transcript is issued against — CODE and NAME (D39, Meeting #2
+    #: item 7, "Add program in Transcript"). `ReportCard` has carried `program_code`
+    #: since D30; the transcript never did, so the one document that leaves the building
+    #: was the one that did not say what the student was reading for. A receiving
+    #: institution needs the programme to interpret the courses at all.
+    #:
+    #: The NAME is sent alongside the code because a transcript is read by outsiders, to
+    #: whom `BMAD` means nothing. Both are `None` for a student with no programme
+    #: registration — printed blank rather than guessed, as `program_code` already is.
+    program_code: str | None = None
+    program_name: str | None = None
     issued_at: datetime
     years: list[TranscriptYear] = Field(default_factory=list)
     cumulative_average: float | None = None

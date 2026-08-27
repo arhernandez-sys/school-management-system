@@ -788,6 +788,10 @@ class TestTranscript:
             # D30 Phase 3 — the cumulative GPA, recomputed from credits rather than
             # averaged from the per-year figures.
             "cumulative_gpa", "total_credits",
+            # D39 (Meeting #2 item 7) — the programme the transcript is issued against.
+            # The report card has carried `program_code` since D30; the transcript, the
+            # document that actually leaves the school, did not.
+            "program_code", "program_name",
         }
 
     def test_unknown_student_404(self, client, graph) -> None:

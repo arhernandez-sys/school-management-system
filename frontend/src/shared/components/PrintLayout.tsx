@@ -21,6 +21,15 @@ export interface PrintLayoutProps {
   documentTitle: string;
   /** Optional logo URL; falls back to no image. */
   logoUrl?: string | null;
+  /**
+   * Optional letterhead contact line — address · phone · email (D39, Meeting #2 "*Letterhead").
+   *
+   * The school identity already reached this component as a NAME only, so a printed
+   * report card carried no address and no way to contact the issuing institution. A
+   * receiving school or employer holding the paper needs both. Falsy entries are dropped
+   * rather than printed as gaps, so a profile with only a phone number still reads well.
+   */
+  contactLines?: Array<string | null | undefined>;
   /** Optional right-aligned meta (issue date, student number). */
   meta?: ReactNode;
   children: ReactNode;
@@ -47,10 +56,12 @@ export function PrintLayout({
   schoolName,
   documentTitle,
   logoUrl,
+  contactLines,
   meta,
   children,
   printLabel = 'Print / Save as PDF',
 }: PrintLayoutProps) {
+  const contact = (contactLines ?? []).map((l) => (l ?? '').trim()).filter(Boolean);
   return (
     <>
       <style>{PRINT_CSS}</style>
@@ -90,6 +101,11 @@ export function PrintLayout({
               <Typography variant="subtitle1" color="text.secondary">
                 {documentTitle}
               </Typography>
+              {contact.length > 0 && (
+                <Typography variant="caption" color="text.secondary" component="div">
+                  {contact.join(' · ')}
+                </Typography>
+              )}
             </Box>
           </Stack>
           {meta && (
