@@ -383,7 +383,10 @@ class ApplicationDetail(ApplicationListItem):
     comments: str | None = None
     decided_by_user_id: UUID | None = None
     decided_at: datetime | None = None
-    updated_at: datetime
+    #: NULL until the application is actually edited (D39, `015`). This is the raw audit
+    #: field, so it keeps the raw meaning; the PENDING list's `updated_at` does not,
+    #: because there it is labelled "Last saved" and creating a form IS saving it.
+    updated_at: datetime | None = None
 
     education: list[EducationRow] = Field(default_factory=list)
     documents: list[DocumentRow] = Field(default_factory=list)
@@ -463,6 +466,10 @@ class PendingApplicationListItem(BaseModel):
     created_by: UUID | None = None
     created_by_name: str | None = None
     created_at: datetime
+    #: Shown as **"Last saved"**, so it is never null: creating a pending form IS saving
+    #: it, and a blank column on a form the Registrar just saved would read as a bug.
+    #: `015` made the underlying `updated_at` NULL until a real edit, so the service
+    #: coalesces to `created_at` here.
     updated_at: datetime
     #: What would stop this form being submitted, so the list can say "ready" or "3 things
     #: missing" without opening the wizard. Same function as `ApplicationDetail`'s.

@@ -65,7 +65,8 @@ export interface TeacherDetail {
   subject_specializations: string[];
   has_login: boolean;
   classes_taught: TeacherClassTaught[];
-  audit: { created_at: string; updated_at: string };
+  /** `updated_at` is null until the record is actually edited (D39 `015`). */
+  audit: { created_at: string; updated_at: string | null };
   /** Optional profile portrait; falls back to initials when absent. */
   avatar_url?: string;
   /** Short professional "About me" blurb. */

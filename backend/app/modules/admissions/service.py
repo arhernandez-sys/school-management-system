@@ -1470,7 +1470,9 @@ def _pending_list_item(
         created_by=row.created_by,
         created_by_name=author,
         created_at=row.created_at,
-        updated_at=row.updated_at,
+        # D39 - "Last saved" on the pending list. `updated_at` is NULL until a real edit
+        # (`015`), and a form saved once has been saved, so its creation IS its last save.
+        updated_at=row.updated_at or row.created_at,
         # The same completeness rules the real submit runs, reported on the READ so the
         # list can say "ready to submit" without anyone opening the wizard to find out.
         blocking_issues=submission_issues(row),

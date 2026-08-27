@@ -27,8 +27,14 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
   // D39 (Meeting #2 item 1) — dd/mm/yyyy.
+  //
+  // The null check is NOT redundant with the NaN check below it. `updated_at` is now
+  // null until a record is actually edited (D39 `015`), and `new Date(null)` is not an
+  // invalid date — it is the Unix epoch, so this would have printed **01/01/1970** on
+  // every lecturer nobody had edited. (`new Date(undefined)` IS NaN; only null coerces.)
+  if (iso == null || iso === '') return '—';
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '—' : formatSchoolDate(d);
 }

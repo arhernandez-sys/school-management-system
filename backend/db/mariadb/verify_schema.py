@@ -115,6 +115,30 @@ def column_exists(table: str, column: str):
     return probe
 
 
+def no_not_null_updated_at_except(*exempt: str):
+    """Every `updated_at` in the schema is NULLable, bar the named exemptions.
+
+    A per-table probe would have to list 36 tables and would go stale the moment a
+    thirty-seventh is added with the old `NOT NULL DEFAULT current_timestamp()` shape.
+    This asks the schema instead, so a NEW table that reintroduces the old default is
+    caught by a fingerprint written before that table existed.
+    """
+    allowed = set(exempt)
+
+    def _probe(cur):
+        cur.execute(
+            "SELECT TABLE_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'updated_at' "
+            "AND IS_NULLABLE = 'NO' ORDER BY TABLE_NAME"
+        )
+        offenders = sorted({r[0] for r in cur.fetchall()} - allowed)
+        if offenders:
+            return False, f"`updated_at` still NOT NULL on: {', '.join(offenders)}"
+        return True, "every `updated_at` is nullable"
+
+    return _probe
+
+
 def column_absent(table: str, column: str):
     def probe(cur):
         n = _count_column(cur, table, column)
@@ -404,6 +428,16 @@ MIGRATIONS: list[tuple[str, str, list]] = [
         "D39 - how long a graduate keeps grade/online access",
         [
             column_exists("school_profile", "post_graduation_access_days"),
+        ],
+    ),
+    (
+        "015_updated_at_null_on_insert.sql",
+        "D39 - a new row leaves `updated_at` empty; it means 'when was this EDITED'",
+        [
+            # Probing ONE table would pass while thirty-five stayed NOT NULL, so this
+            # asserts the property across the schema. `student_number_sequences` is the
+            # deliberate exemption (a counter, not a record) and is excluded by the probe.
+            no_not_null_updated_at_except("student_number_sequences"),
         ],
     ),
 ]

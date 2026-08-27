@@ -118,7 +118,8 @@ function toDetail(t: DemoTeacher) {
     subject_specializations: t.subject_specializations,
     has_login: t.user_id !== null,
     classes_taught: owned.map((off) => toClassTaught(off, t.id)),
-    audit: { created_at: DEMO_TODAY_ISO, updated_at: DEMO_TODAY_ISO },
+    // D39 `015` — null until the lecturer is actually edited, mirroring the server.
+    audit: { created_at: DEMO_TODAY_ISO, updated_at: t.updated_at ?? null },
     // Extended profile (optional; may be undefined for freshly created teachers).
     avatar_url: t.avatar_url,
     bio: t.bio,
@@ -335,6 +336,10 @@ export const teachersHandlers = [
     if (body.end_date !== undefined) teacher.end_date = body.end_date || undefined;
     if (body.comments !== undefined)
       teacher.comments = (body.comments ?? '').trim() || undefined;
+    // D39 `015` — this PATCH is the edit, so it is what stamps `updated_at`. Without it
+    // the demo would show "Last updated —" forever and the populated path would never
+    // be exercised.
+    teacher.updated_at = DEMO_TODAY_ISO;
     if (body.expertise !== undefined) {
       teacher.expertise = (body.expertise ?? [])
         .map((e) => ({

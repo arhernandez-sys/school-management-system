@@ -152,7 +152,8 @@ export interface ApplicationDetail extends ApplicationListItem {
   comments: string | null;
   decided_by_user_id: string | null;
   decided_at: string | null;
-  updated_at: string;
+  /** Null until the application is actually edited (D39 `015`). */
+  updated_at: string | null;
   education: EducationRow[];
   documents: DocumentRow[];
   credit_transfers: CreditTransfer[];

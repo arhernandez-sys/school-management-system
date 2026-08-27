@@ -11,7 +11,8 @@ offering they are assigned to, via `assert_teacher_owns_offering` (D31 merged th
 offering they became the same lookup).
 
 The live `attendance_records` table has no `recorded_at`/`recorded_by` columns, so
-those wire fields map onto the audit mixin: `recorded_at` ← `updated_at`, and
+those wire fields map onto the audit mixin: `recorded_at` ← `updated_at` falling back
+to `created_at` (D39 - see `_touched_at`), and
 `last_recorded.by` ← `updated_by` resolved to `users.full_name`.
 """
 
@@ -20,6 +21,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import date as date_type
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -198,6 +200,24 @@ def _offering_ref(
     )
 
 
+def _touched_at(record: AttendanceRecord) -> datetime:
+    """When this attendance record was last written — the mark's `recorded_at`.
+
+    **`updated_at` alone is not the answer any more.** D39's `015` made it NULL on
+    insert, because it means "when was this EDITED" and a row nobody has edited has no
+    answer. But a register mark is RECORDED by being inserted: the first save is the
+    recording, so for this module the creation instant is the answer whenever there has
+    been no later edit.
+
+    Without this, marking a register and reloading it would have shown `recorded_at:
+    null` on every fresh mark, and `max(records, key=lambda r: r.updated_at)` would have
+    raised `TypeError` comparing None to a datetime the moment ONE mark was fresh and
+    another had been edited — i.e. on a register a teacher had corrected. `created_at`
+    is NOT NULL on every row, so this always returns a real instant.
+    """
+    return record.updated_at or record.created_at
+
+
 def _student_ref(student: StudentProfile) -> AttendanceStudentRef:
     return AttendanceStudentRef(
         id=student.id,
@@ -313,14 +333,14 @@ def get_register(
             student=_student_ref(student),
             enrollment_id=enrollment.id,
             status=records[student.id].status if student.id in records else None,
-            recorded_at=records[student.id].updated_at if student.id in records else None,
+            recorded_at=_touched_at(records[student.id]) if student.id in records else None,
         )
         for student, enrollment in roster
     ]
 
     last_recorded = None
     if records:
-        newest = max(records.values(), key=lambda r: r.updated_at)
+        newest = max(records.values(), key=_touched_at)
         actor_id = newest.updated_by or newest.created_by
         name = None
         if actor_id is not None:
@@ -328,7 +348,7 @@ def get_register(
         last_recorded = LastRecorded(
             # `by` is a plain NAME STRING on the wire, not a user ref object.
             by=name or "Staff",
-            at=newest.updated_at,
+            at=_touched_at(newest),
         )
 
     teachers = _teachers_for_offerings(db, [offering.id])

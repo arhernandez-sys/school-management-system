@@ -169,6 +169,53 @@ digits would cost them information.
 > **current** student's own grades away on the strength of a NULL. `0` is the spelling for
 > "ends on graduation day", and an operator has to type it on purpose.
 
+## Phase H — a new row leaves `updated_at` empty
+
+Follow-on ask: *"make sure when I create something new the `updated_on` isn't populated too."*
+
+- [x] `015_updated_at_null_on_insert.sql` — 36 tables go
+      `NOT NULL DEFAULT current_timestamp()` → `NULL DEFAULT NULL ON UPDATE current_timestamp()`.
+      The `ON UPDATE` clause is kept: dropping the DEFAULT is what makes an INSERT leave
+      the column empty, while `ON UPDATE` still stamps a real edit and backstops
+      SQLAlchemy for the chain's hand-run SQL fixes.
+- [x] `TimestampMixin.updated_at` becomes `datetime | None`, no `server_default`,
+      `onupdate` kept.
+- [x] `AuditStamp`, `ApplicationDetail.updated_at` and the frontend types made nullable.
+
+> **`updated_by` already behaved correctly** — always NULLable, and no insert sets it
+> (the one exception, promoting a pending application, is documented at the call site).
+> So the two halves of the same fact disagreed: `updated_by` said "nobody has edited
+> this" while `updated_at` gave a date. They now agree.
+
+**Existing rows are untouched, by decision.** Widening NOT NULL → NULL cannot alter data.
+Blanking rows where `updated_at = created_at` was declined, and the reason is worth
+keeping: it is an *inference*, not a fact — a row genuinely edited within the same second
+as its creation is indistinguishable from one never edited, and once blanked the
+difference is gone. Old rows keep reading as edited-on-their-creation-date until someone
+edits them.
+
+**One column is deliberately exempt.** `student_number_sequences.updated_at` keeps its
+NOT NULL: that table is a counter, not a record — one row per `YYYYMM` whose only purpose
+is to be UPDATEd to issue the next student number, so "when was a number last issued" is
+real information about a row that is only ever written by being updated.
+
+**Two readers had to change, and one of them would have broken outright:**
+
+- `attendance/service.py` derives `recorded_at` and `last_recorded.at` from `updated_at`.
+  A register mark is *recorded by being inserted*, so a fresh mark would have reported
+  `recorded_at: null`, and `max(records, key=lambda r: r.updated_at)` would have raised
+  `TypeError` on a register that had been partly corrected. New `_touched_at` coalesces
+  to `created_at`. **Verified by negative control: reverting it fails two existing tests.**
+- The pending-applications list column is labelled **"Last saved"**, and creating a form
+  *is* saving it, so the service coalesces there too and the wire field stays non-null.
+
+**And one latent frontend bug this surfaced:** `TeacherProfileSummary.formatDate` did
+`new Date(iso)` guarded only by a NaN check. `new Date(null)` is **not** an invalid date
+— it is the Unix epoch — so a null `updated_at` would have printed **01/01/1970** rather
+than failing visibly. (`new Date(undefined)` *is* NaN; only `null` coerces.) Guarded, and
+the demo dataset now seeds no `updated_at` on any lecturer so the null path is exercised
+by simply opening a profile.
+
 ---
 
 ## Verification actually run
@@ -178,7 +225,9 @@ digits would cost them information.
 | `pytest -q` (full) | **1705 passed** |
 | `apply_sql.py 013` | 19/19, **re-run clean** (idempotent) |
 | `apply_sql.py 014` | 3/3 |
-| `verify_schema.py --expect 014` | **PASS** |
+| `apply_sql.py 015` | 37/37; existing rows unchanged (courses 125, students 46, teachers 12 still stamped) |
+| Phase H | 9 new tests, incl. a schema-wide sweep asserting **all 29 ORM tables** and the live database, so a future table reintroducing the old default is caught. Attendance fallback proven load-bearing by negative control (2 failures without it). Browser: a never-edited lecturer reads "Last updated —", and reads a real date after an edit. |
+| `verify_schema.py --expect 015` | **PASS** |
 | `tsc -b --force` | clean |
 | Live `sims` after 013 | 12 lecturers, `096543` gone, 23 `class_teachers` assignments intact, all four 31-char qualifications intact, `courses` still 125 rows with no `course_status` |
 | Live `sims` after the test suite | `religions` still exactly 2 rows — the rollback wrapper held |

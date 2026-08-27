@@ -238,6 +238,15 @@ export interface DemoTeacher {
   hire_date?: string | null;
   end_date?: string | null;
   comments?: string;
+  /**
+   * When this lecturer was last EDITED — absent until they actually are (D39 `015`).
+   *
+   * Deliberately not seeded on any demo lecturer, so demo mode exercises the null path
+   * the real API now returns. It is not decoration: `new Date(null)` is the Unix EPOCH,
+   * not an invalid date, so a reader that forgets the null check prints **01/01/1970**
+   * rather than failing visibly.
+   */
+  updated_at?: string | null;
 }
 
 /**
