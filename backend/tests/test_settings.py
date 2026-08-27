@@ -118,7 +118,10 @@ class TestSchool:
         assert isinstance(body["name"], str) and body["name"]
         assert body["logo_url"] is None or isinstance(body["logo_url"], str)
         assert set(body.keys()) == {
-            "name", "logo_url", "address", "contact_email", "contact_phone"
+            "name", "logo_url", "address", "contact_email", "contact_phone",
+            # D39 (Meeting #2 item 6) — operator-set policy, not identity, but it rides
+            # on the same singleton and the Settings screen edits it here.
+            "post_graduation_access_days",
         }
 
     def test_get_school_unauthenticated_401(self, client) -> None:

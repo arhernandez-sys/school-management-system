@@ -52,6 +52,7 @@ function schoolProfileRead() {
     address: p.address,
     contact_email: p.email,
     contact_phone: p.phone,
+    post_graduation_access_days: p.post_graduation_access_days,
   };
 }
 
@@ -143,11 +144,15 @@ export const settingsHandlers = [
       address?: string;
       contact_email?: string;
       contact_phone?: string;
+      post_graduation_access_days?: number | null;
     };
     if (body.name) D.school_profile.name = body.name;
     if (body.address !== undefined) D.school_profile.address = body.address ?? '';
     if (body.contact_email !== undefined) D.school_profile.email = body.contact_email ?? '';
     if (body.contact_phone !== undefined) D.school_profile.phone = body.contact_phone ?? '';
+    // D39 — assigned unconditionally on the PUT, like the server does: this is a full
+    // replacement, so an omitted value means "no expiry", not "keep the old window".
+    D.school_profile.post_graduation_access_days = body.post_graduation_access_days ?? null;
     return HttpResponse.json(schoolProfileRead());
   }),
 

@@ -35,6 +35,11 @@ export interface DemoSchoolProfile {
   phone: string;
   email: string;
   logo_url: string | null;
+  /**
+   * D39 (Meeting #2 item 6) — days a graduate keeps grade/online access.
+   * `null` = never expires; `0` = ends on graduation day.
+   */
+  post_graduation_access_days: number | null;
   /** Brand colors (mirror the D19 theme primary/secondary). */
   colors: { primary: string; secondary: string };
 }

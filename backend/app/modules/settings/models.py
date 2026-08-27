@@ -263,6 +263,17 @@ class SchoolProfile(Base, TimestampMixin, AuditMixin):
     address: Mapped[str | None] = mapped_column(Text(), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    #: How long a graduated student keeps grade / online access, in days from
+    #: `student_profiles.graduation_date` (D39, Meeting #2 item 6; default 90 = the
+    #: client's recommended three months).
+    #:
+    #: `None` means access NEVER expires, not "expires immediately". A school that has
+    #: not set a policy must not have its alumni locked out by the mere act of deploying
+    #: this; `0` is the spelling for "access ends on graduation day", and an operator has
+    #: to type it on purpose.
+    post_graduation_access_days: Mapped[int | None] = mapped_column(
+        SmallInteger(), nullable=True, server_default=text("90")
+    )
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_school_profile_singleton"),

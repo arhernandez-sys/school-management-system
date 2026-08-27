@@ -25,9 +25,15 @@ from app.common.schemas import (
 # School profile / branding (§5.11 — School profile)
 # ──────────────────────────────────────────────────────────────────────────────
 class SchoolProfileRead(SchoolIdentity):
-    """GET /settings/school — SchoolIdentity plus nothing extra (identity is the
-    public read shape). `logo_url` is resolved from `logo_storage_key` + the
-    Supabase public base when a key is present (TODO(OQ-DB5), see service)."""
+    """GET /settings/school — the identity, plus the operator-set policy below.
+
+    `logo_url` is resolved from `logo_storage_key` by `service._logo_url_for`, which
+    D39 taught to return an already-usable key rather than always None.
+    """
+
+    #: Days a graduated student keeps grade / online access (D39, Meeting #2 item 6).
+    #: `None` = never expires; `0` = access ends on graduation day.
+    post_graduation_access_days: int | None = None
 
 
 class SchoolUpdateRequest(BaseModel):
@@ -36,6 +42,11 @@ class SchoolUpdateRequest(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     contact_email: str | None = Field(default=None, max_length=255)
     contact_phone: str | None = Field(default=None, max_length=50)
+    #: Days a graduated student keeps grade / online access (D39, Meeting #2 item 6).
+    #: `None` = never expires; `0` = access ends on graduation day. Capped at ten years:
+    #: past that it is indistinguishable from "never", and a mistyped 3650 should be
+    #: caught rather than stored.
+    post_graduation_access_days: int | None = Field(default=None, ge=0, le=3650)
 
 
 class LogoUploadResponse(BaseModel):

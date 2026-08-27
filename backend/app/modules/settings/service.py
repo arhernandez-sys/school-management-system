@@ -196,6 +196,7 @@ def get_school(db: Session) -> SchoolProfileRead:
         address=profile.address,
         contact_email=profile.contact_email,
         contact_phone=profile.contact_phone,
+        post_graduation_access_days=profile.post_graduation_access_days,
     )
 
 
@@ -208,6 +209,10 @@ def update_school(
     profile.address = payload.address
     profile.contact_email = payload.contact_email
     profile.contact_phone = payload.contact_phone
+    # D39 (Meeting #2 item 6). Assigned unconditionally, like every other field on this
+    # PUT: the request is a full replacement, so an omitted value means "no expiry", not
+    # "leave the previous window in place".
+    profile.post_graduation_access_days = payload.post_graduation_access_days
     profile.updated_by = actor.id
     _audit(db, actor=actor, action="school.update", entity_type="school_profile")
     db.commit()
@@ -217,6 +222,7 @@ def update_school(
         address=profile.address,
         contact_email=profile.contact_email,
         contact_phone=profile.contact_phone,
+        post_graduation_access_days=profile.post_graduation_access_days,
     )
 
 

@@ -399,6 +399,13 @@ MIGRATIONS: list[tuple[str, str, list]] = [
             column_absent("courses", "course_status"),
         ],
     ),
+    (
+        "014_post_graduation_access.sql",
+        "D39 - how long a graduate keeps grade/online access",
+        [
+            column_exists("school_profile", "post_graduation_access_days"),
+        ],
+    ),
 ]
 
 

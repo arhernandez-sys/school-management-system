@@ -134,6 +134,8 @@ const school_profile: DemoSchoolProfile = {
   phone: '+501-422-2015',
   email: 'office@bajc.edu.bz',
   logo_url: '/logo.jpeg',
+  // D39 (Meeting #2 item 6) — the client's recommended three months.
+  post_graduation_access_days: 90,
   // Brand colors sampled from the BAJC seal (navy triangle + crimson ring).
   colors: { primary: '#1E3A6E', secondary: '#C21F30' },
 };

@@ -8,6 +8,19 @@ import type { SchoolUpdateRequestAddress } from './schoolUpdateRequestAddress';
 import type { SchoolUpdateRequestContactEmail } from './schoolUpdateRequestContactEmail';
 import type { SchoolUpdateRequestContactPhone } from './schoolUpdateRequestContactPhone';
 
+/**
+ * HAND-EDITED (D39, Meeting #2 item 6) — `post_graduation_access_days`.
+ *
+ * `npm run generate:api` is forbidden in this repo, so a new backend field cannot reach
+ * these types the way orval intends. The alternative was a parallel hand-written type
+ * shadowing the generated one, which is worse: two shapes for one endpoint, and no
+ * signal at all when they diverge.
+ *
+ * Whoever next runs the generator: this field is real and lives on
+ * `settings/schemas.py::SchoolProfileRead` / `SchoolUpdateRequest`, so a regenerate
+ * should reproduce it. If it disappears from here, the Settings screen stops compiling —
+ * which is the intended failure mode.
+ */
 export interface SchoolUpdateRequest {
   /**
    * @minLength 1
@@ -17,4 +30,11 @@ export interface SchoolUpdateRequest {
   address?: SchoolUpdateRequestAddress;
   contact_email?: SchoolUpdateRequestContactEmail;
   contact_phone?: SchoolUpdateRequestContactPhone;
+  /**
+   * Days a graduate keeps grade/online access. `null` = never expires; `0` = ends on
+   * graduation day. Capped at ten years server-side.
+   * @minimum 0
+   * @maximum 3650
+   */
+  post_graduation_access_days?: number | null;
 }

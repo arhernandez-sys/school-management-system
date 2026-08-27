@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import timedelta
 
 import jwt
 from fastapi import Depends, Request
@@ -18,7 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role
+from app.common.enums import Role, StudentStatus
 from app.core.errors import (
     AccountInactive,
     Forbidden,
@@ -132,6 +133,93 @@ def require_role(*roles: Role):
     return _checker
 
 
+def assert_student_access_window(db: Session, user: User) -> None:
+    """Refuse a GRADUATED student who is past the school's post-graduation window.
+
+    D39, Meeting #2 item 6: "Set Availability of Grades/online access to students after
+    graduation, for a period, recommended time is 3 months."
+
+    A graduate keeps their login and needs it: transcripts, references and outstanding
+    results all matter most in the weeks right after they finish. What the school did not
+    want is that access lasting forever. The window is
+    `school_profile.post_graduation_access_days`, counted from
+    `student_profiles.graduation_date`, and it is operator-set rather than a constant so
+    the policy can change without a deployment.
+
+    Three deliberate choices:
+
+    * **Only STUDENTS, and only GRADUATED ones.** Staff are unaffected. A withdrawn or
+      dropped-out student is not covered either — that is a different decision the school
+      has not made, and inventing an expiry for it here would lock people out on a rule
+      nobody agreed.
+    * **NULL `post_graduation_access_days` means never expires; NULL `graduation_date`
+      means the clock has not started.** Both are open, not closed. A missing policy or a
+      missing date is an absence of information, and reading absence as "expired" would
+      lock a current student out of their own grades — the exact failure worth being
+      asymmetric about.
+    * **The boundary is inclusive.** With a 90-day window, day 90 is still allowed and
+      day 91 is not, so "three months" means the whole of the third month.
+
+    403 with a distinct `access_expired` code, not 404: the record plainly exists and the
+    graduate needs to be told WHY, so they contact the Registrar instead of assuming a bug.
+    """
+    if user.role != Role.STUDENT:
+        return
+
+    # Imported here rather than at module scope for the same reason the grade-visibility
+    # switch is: a top-level import would make every module touching `deps` drag the
+    # students and settings model graph in.
+    from app.core.timeutil import school_today
+    from app.modules.settings.models import SchoolProfile
+    from app.modules.students.models import StudentProfile
+
+    student = db.scalar(
+        select(StudentProfile).where(
+            StudentProfile.user_id == user.id, StudentProfile.deleted_at.is_(None)
+        )
+    )
+    if student is None or student.status != StudentStatus.GRADUATED:
+        return
+    if student.graduation_date is None:
+        return
+
+    window = db.scalar(select(SchoolProfile.post_graduation_access_days).limit(1))
+    if window is None:
+        return
+
+    expires_on = student.graduation_date + timedelta(days=int(window))
+    if school_today() > expires_on:
+        raise Forbidden(
+            "Online access closed on "
+            f"{expires_on.strftime('%d/%m/%Y')}, "
+            f"{int(window)} days after graduation. The Registrar can still issue your "
+            "transcript.",
+            code="access_expired",
+        )
+
+
+def require_role_within_access_window(*roles: Role):
+    """`require_role(*roles)` PLUS the post-graduation access window (D39, item 6).
+
+    For the student-facing ACADEMIC RECORD surfaces that are not grade surfaces — today
+    that is `/attendance/me`. Grade surfaces use `require_student_grade_visibility`, which
+    applies the same window on top of the Dean's publish switch.
+
+    Deliberately NOT applied to `/students/me`: an expired graduate should still be able
+    to open their own profile and find the Registrar's contact details. Closing the record
+    is the ask; closing the door on the person who needs to ask about it is not.
+    """
+    base = require_role(*roles)
+
+    def _checker(
+        user: User = Depends(base), db: Session = Depends(get_db)
+    ) -> User:
+        assert_student_access_window(db, user)
+        return user
+
+    return _checker
+
+
 def require_student_grade_visibility(*roles: Role):
     """`require_role(*roles)` PLUS the Dean's student grade-visibility switch (D32, §4).
 
@@ -169,6 +257,10 @@ def require_student_grade_visibility(*roles: Role):
                     "or the Dean can tell you your results.",
                     code="grades_hidden",
                 )
+            # D39 (Meeting #2 item 6) — checked AFTER the visibility switch, so a student
+            # inside their window still gets the more specific `grades_hidden` message
+            # when grades are simply unpublished.
+            assert_student_access_window(db, user)
         return user
 
     return _checker

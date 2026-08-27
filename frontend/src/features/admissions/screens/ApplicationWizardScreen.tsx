@@ -790,7 +790,13 @@ export function ApplicationWizardScreen() {
                 value={draft.email}
                 onChange={(e) => set('email', e.target.value)}
                 fullWidth
-                helperText="Becomes the student's login when the application is accepted."
+                // D39 (Meeting #2 item 2): this used to read "Becomes the student's login
+                // when the application is accepted." An application can be DENIED, so
+                // presenting the applicant's personal address as a login-in-waiting at
+                // registration time promises an account that may never exist. It is a
+                // contact address; the Dean chooses the login (defaulting to this one) in
+                // the Accept dialog, and no `users` row is created before that.
+                helperText="Contact address. It is not a login — an account is only issued if the application is accepted."
               />
             </Stack>
 

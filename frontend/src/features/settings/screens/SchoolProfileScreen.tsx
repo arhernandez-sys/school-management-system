@@ -38,6 +38,10 @@ export function SchoolProfileScreen() {
   const [address, setAddress] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactPhone, setContactPhone] = useState('');
+  // D39 (Meeting #2 item 6). Held as a STRING so the field can be genuinely empty:
+  // empty means "never expires", and a numeric state would have to pick some number to
+  // stand for that. `0` is a real, different value — access ends on graduation day.
+  const [gradAccessDays, setGradAccessDays] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saved, setSaved] = useState(false);
@@ -48,6 +52,11 @@ export function SchoolProfileScreen() {
       setAddress(query.data.address ?? '');
       setContactEmail(query.data.contact_email ?? '');
       setContactPhone(query.data.contact_phone ?? '');
+      setGradAccessDays(
+        query.data.post_graduation_access_days == null
+          ? ''
+          : String(query.data.post_graduation_access_days),
+      );
     }
   }, [query.data]);
 
@@ -64,6 +73,11 @@ export function SchoolProfileScreen() {
           address: address.trim() || null,
           contact_email: contactEmail.trim() || null,
           contact_phone: contactPhone.trim() || null,
+          // Empty box -> null -> never expires. `Number('')` is 0, which would silently
+          // mean the opposite (access ends the day they graduate), so the blank is
+          // checked before the conversion rather than relying on it.
+          post_graduation_access_days:
+            gradAccessDays.trim() === '' ? null : Number(gradAccessDays),
         },
       },
       {
@@ -160,6 +174,25 @@ export function SchoolProfileScreen() {
               disabled={!canEdit}
               error={Boolean(fieldErrors.contact_phone)}
               helperText={fieldErrors.contact_phone?.join(' ')}
+            />
+            {/* D39 — Meeting #2 item 6: "Set Availability of Grades/online access to
+                students after graduation, for a period, recommended time is 3 months."
+                A policy, not identity, but it is operator-set and this is the screen the
+                operator has. */}
+            <TextField
+              label="Graduate access (days)"
+              type="number"
+              value={gradAccessDays}
+              onChange={(e) => setGradAccessDays(e.target.value)}
+              fullWidth
+              disabled={!canEdit}
+              slotProps={{ htmlInput: { min: 0, max: 3650 } }}
+              error={Boolean(fieldErrors.post_graduation_access_days)}
+              helperText={
+                fieldErrors.post_graduation_access_days?.join(' ') ??
+                'How long a graduate keeps their grades and attendance after graduating. ' +
+                  'Leave blank for no expiry; 90 is three months. Staff are never affected.'
+              }
             />
             {canEdit && (
               <Box>

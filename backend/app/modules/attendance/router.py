@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import Role
 from app.common.schemas import ErrorResponse
-from app.core.deps import get_db, require_role
+from app.core.deps import get_db, require_role, require_role_within_access_window
 from app.modules.attendance import service
 from app.modules.attendance.schemas import (
     AttendanceRegister,
@@ -46,7 +46,9 @@ router = APIRouter(prefix="/attendance", tags=["attendance"])
 _ERR = {"model": ErrorResponse}
 _staff = require_role(Role.TEACHER, Role.PRINCIPAL, Role.SECRETARY)
 _teacher = require_role(Role.TEACHER)
-_student = require_role(Role.STUDENT)
+# D39 (Meeting #2 item 6) — a graduated student past the school's post-graduation window
+# loses access to their attendance record along with their grades.
+_student = require_role_within_access_window(Role.STUDENT)
 
 
 @router.get(

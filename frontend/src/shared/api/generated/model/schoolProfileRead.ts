@@ -10,14 +10,28 @@ import type { SchoolProfileReadContactEmail } from './schoolProfileReadContactEm
 import type { SchoolProfileReadContactPhone } from './schoolProfileReadContactPhone';
 
 /**
- * GET /settings/school — SchoolIdentity plus nothing extra (identity is the
-public read shape). `logo_url` is resolved from `logo_storage_key` + the
-Supabase public base when a key is present (TODO(OQ-DB5), see service).
+ * GET /settings/school — the identity, plus the operator-set policy below.
  */
+/**
+ * HAND-EDITED (D39, Meeting #2 item 6) — `post_graduation_access_days`.
+ *
+ * `npm run generate:api` is forbidden in this repo, so a new backend field cannot reach
+ * these types the way orval intends. The alternative was a parallel hand-written type
+ * shadowing the generated one, which is worse: two shapes for one endpoint, and no
+ * signal at all when they diverge.
+ *
+ * Whoever next runs the generator: this field is real and lives on
+ * `settings/schemas.py::SchoolProfileRead` / `SchoolUpdateRequest`, so a regenerate
+ * should reproduce it. If it disappears from here, the Settings screen stops compiling —
+ * which is the intended failure mode.
+ */
+
 export interface SchoolProfileRead {
   name: string;
   logo_url?: SchoolProfileReadLogoUrl;
   address?: SchoolProfileReadAddress;
   contact_email?: SchoolProfileReadContactEmail;
   contact_phone?: SchoolProfileReadContactPhone;
+  /** Days a graduate keeps grade/online access. `null` = never expires; `0` = ends on graduation day. */
+  post_graduation_access_days?: number | null;
 }
