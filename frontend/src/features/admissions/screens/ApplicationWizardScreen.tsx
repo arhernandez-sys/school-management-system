@@ -32,15 +32,19 @@ import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import { useAcademicYears } from '@features/settings/hooks/useSettings';
+import { useReligions, religionOptions } from '@features/settings/hooks/useReligions';
 import { GENDERS, GENDER_LABEL } from '@shared/types/enums';
 import { schoolYearOptions } from '@shared/utils/schoolYears';
 import {
   useApplication,
-  useCreateApplication,
+  useCreatePendingApplication,
+  usePendingApplication,
   useReplaceDocuments,
   useReplaceEducation,
   useSubmitApplication,
+  useSubmitPendingApplication,
   useUpdateApplication,
+  useUpdatePendingApplication,
 } from '../hooks/useAdmissions';
 import {
   DISTRICTS,
@@ -52,31 +56,55 @@ import {
   type EducationLevel,
   type EducationRow,
   type EnrollmentLoad,
+  type PendingApplicationDetail,
   type YearOfStudy,
 } from '../types';
 
 /**
  * The BAJC application form as a SEVEN-STEP WIZARD — one step per Section A–G (§D11).
  *
- * **Each step saves before it advances**, which is what makes the wizard
- * interruption-safe. Step A files a `draft` from the applicant's names alone (the only
- * fields the server requires to create one); every later step PATCHes that draft. A closed
- * tab, a dead battery or a phone call loses at most the step in progress, and the
- * half-finished application is waiting in the Drafts filter.
+ * **D38 REVERSED THE SAVE MODEL.** Nothing is written until the Registrar asks for it.
+ * *Continue* moves between sections in browser state and makes no request at all; the form
+ * reaches the database only on the last step, through *Save and close* or *Save and submit*.
  *
- * Two consequences of that design are deliberate:
+ * Until D38 every step PATCHed `applications`, so a half-typed form was already an
+ * admissions record — it appeared in the directory, it was counted, and the Dean could
+ * read it. The client asked for the opposite, which changes three things here:
  *
- * * **The URL changes after step A.** `/applications/new` becomes
- *   `/applications/{id}/edit` via `replace`, so Back does not return to an empty form that
- *   would file a SECOND draft.
- * * **Sections B and F are their own endpoints**, not fields on the PATCH — they are
- *   repeating tables and the server replaces them as whole sets. Their steps save through
- *   `PUT .../education` and `PUT .../documents`.
+ * * **The URL no longer changes mid-flow.** Step A used to file a draft and `replace` the
+ *   URL so Back could not file a second one. With no save before the end there is nothing
+ *   to guard against, and `/applications/new` stays put.
+ * * **Sections B and F travel in the same body as the rest.** They are their own endpoints
+ *   on a real application (`PUT .../education`, `PUT .../documents`) because the server
+ *   replaces them as whole sets against an application id — which a form that has never
+ *   been saved has not got. On the pending path they ride as arrays.
+ * * **`blocking_issues` is only as fresh as the last save.** It comes back with the saved
+ *   record, so mid-wizard it reflects what is on disk, not what is on screen. Section G
+ *   says so rather than implying otherwise.
+ *
+ * **Three modes, one component**, chosen by the route:
+ *
+ *     /applications/new                    nothing on disk  -> POST /pending-applications
+ *     /applications/pending/:pendingId/edit a pending form  -> PATCH /pending-applications
+ *     /applications/:applicationId/edit     a REAL draft    -> PATCH /applications (+ the
+ *                                                              two child endpoints)
+ *
+ * The third exists for `applications.draft` rows filed before D38. They are still editable,
+ * under the same save-at-the-end rules as everything else, rather than being stranded.
  *
  * The server owns the completeness rules and reports them as `blocking_issues`; this screen
  * renders them verbatim rather than re-implementing the conditions (the under-18 guardian
  * rule especially). Duplicating them in the browser is how the two start disagreeing.
  */
+/**
+ * Shown on every control Section A now gates (D39). One constant rather than three
+ * literals: the footer says the same thing in three places, and a rule the Registrar
+ * meets as three different sentences reads as three different rules.
+ */
+const PERSONAL_INFO_HINT =
+  'Section A · Personal information must be complete: first and last name, date of birth, ' +
+  'Social Security no., gender, civil status and religion. Middle name is optional.';
+
 const STEPS = [
   { key: 'A', label: 'Personal', full: 'Section A · Personal information' },
   { key: 'B', label: 'Education', full: 'Section B · Educational background' },
@@ -86,8 +114,6 @@ const STEPS = [
   { key: 'F', label: 'Documents', full: 'Section F · Documents to submit' },
   { key: 'G', label: 'Agreement', full: 'Section G · Agreement' },
 ] as const;
-
-type StepKey = (typeof STEPS)[number]['key'];
 
 /** Local editing shape — every field a string, so a partially-typed form is representable. */
 interface Draft {
@@ -160,7 +186,12 @@ const EMPTY: Draft = {
   guardian_signed_at: '',
 };
 
-function fromDetail(detail: ApplicationDetail): Draft {
+/**
+ * Server record → editing shape. Takes EITHER source: the two records carry the same
+ * Sections A–G, and the fields that differ (`student_code`, `pending_credit_transfers`,
+ * `created_by_name`) are none of them ones the form edits.
+ */
+function fromDetail(detail: ApplicationDetail | PendingApplicationDetail): Draft {
   return {
     first_name: detail.first_name ?? '',
     middle_name: detail.middle_name ?? '',
@@ -200,68 +231,62 @@ function fromDetail(detail: ApplicationDetail): Draft {
 /** Empty string → null, so clearing a field CLEARS it rather than storing `""`. */
 const orNull = (value: string) => (value.trim() === '' ? null : value.trim());
 
-/** Only the fields the given step owns. Sending the whole draft every step would work,
- *  but a step that only asks about money should not be able to overwrite a name. */
-function payloadForStep(stepKey: StepKey, draft: Draft): ApplicationWritePayload {
-  switch (stepKey) {
-    case 'A':
-      return {
-        first_name: draft.first_name.trim(),
-        middle_name: orNull(draft.middle_name),
-        last_name: draft.last_name.trim(),
-        school_year: orNull(draft.school_year),
-        date_of_birth: orNull(draft.date_of_birth),
-        ssno: orNull(draft.ssno),
-        gender: orNull(draft.gender),
-        civil_status: orNull(draft.civil_status),
-        religion: orNull(draft.religion),
-        phone: orNull(draft.phone),
-        email: orNull(draft.email),
-        has_health_condition: draft.has_health_condition,
-        health_condition_note: orNull(draft.health_condition_note),
-        street: orNull(draft.street),
-        city_town_village: orNull(draft.city_town_village),
-        district: draft.district === '' ? null : draft.district,
-        mother_name: orNull(draft.mother_name),
-        father_name: orNull(draft.father_name),
-        nok_name: orNull(draft.nok_name),
-        nok_relationship: orNull(draft.nok_relationship),
-        nok_phone: orNull(draft.nok_phone),
-      };
-    case 'B':
-      // The institution rows go through their own endpoint; these two are the
-      // single-valued examination questions that follow them on the form.
-      return {
-        atlib_exam: draft.atlib_exam,
-        num_csec: draft.num_csec.trim() === '' ? null : Number(draft.num_csec),
-      };
-    case 'C':
-      return {
-        finance_name: orNull(draft.finance_name),
-        finance_phone: orNull(draft.finance_phone),
-        finance_email: orNull(draft.finance_email),
-      };
-    case 'D':
-      return { recommendation_received: draft.recommendation_received };
-    case 'E':
-      return {
-        program_id: draft.program_id === '' ? null : draft.program_id,
-        year_of_study: draft.year_of_study === '' ? null : draft.year_of_study,
-        enrollment_load: draft.enrollment_load === '' ? null : draft.enrollment_load,
-      };
-    case 'G':
-      return {
-        applicant_signed_at: orNull(draft.applicant_signed_at),
-        guardian_signed_at: orNull(draft.guardian_signed_at),
-      };
-    default:
-      return {};
-  }
+/**
+ * The WHOLE form, every section at once.
+ *
+ * D38 replaced a per-step `payloadForStep`, which existed so that a step asking only about
+ * money could not overwrite a name. That protection is no longer needed, and sending the
+ * whole form is no longer wasteful: there is exactly one save, and the browser is holding
+ * the only copy of every section — so a partial body would be the thing that lost data,
+ * not the thing that prevented losing it.
+ */
+function wholeFormPayload(draft: Draft): ApplicationWritePayload {
+  return {
+    // Section A
+    first_name: draft.first_name.trim(),
+    middle_name: orNull(draft.middle_name),
+    last_name: draft.last_name.trim(),
+    school_year: orNull(draft.school_year),
+    date_of_birth: orNull(draft.date_of_birth),
+    ssno: orNull(draft.ssno),
+    gender: orNull(draft.gender),
+    civil_status: orNull(draft.civil_status),
+    religion: orNull(draft.religion),
+    phone: orNull(draft.phone),
+    email: orNull(draft.email),
+    has_health_condition: draft.has_health_condition,
+    health_condition_note: orNull(draft.health_condition_note),
+    street: orNull(draft.street),
+    city_town_village: orNull(draft.city_town_village),
+    district: draft.district === '' ? null : draft.district,
+    mother_name: orNull(draft.mother_name),
+    father_name: orNull(draft.father_name),
+    nok_name: orNull(draft.nok_name),
+    nok_relationship: orNull(draft.nok_relationship),
+    nok_phone: orNull(draft.nok_phone),
+    // Section B — the examinations half; the institution rows travel separately
+    atlib_exam: draft.atlib_exam,
+    num_csec: draft.num_csec.trim() === '' ? null : Number(draft.num_csec),
+    // Section C
+    finance_name: orNull(draft.finance_name),
+    finance_phone: orNull(draft.finance_phone),
+    finance_email: orNull(draft.finance_email),
+    // Section D
+    recommendation_received: draft.recommendation_received,
+    // Section E
+    program_id: draft.program_id === '' ? null : draft.program_id,
+    year_of_study: draft.year_of_study === '' ? null : draft.year_of_study,
+    enrollment_load: draft.enrollment_load === '' ? null : draft.enrollment_load,
+    // Section G
+    applicant_signed_at: orNull(draft.applicant_signed_at),
+    guardian_signed_at: orNull(draft.guardian_signed_at),
+  };
 }
 
 export function ApplicationWizardScreen() {
   const navigate = useNavigate();
-  const { applicationId } = useParams();
+  // Exactly one of these is set, or neither on `/applications/new`. See the module note.
+  const { applicationId, pendingId } = useParams();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -272,19 +297,42 @@ export function ApplicationWizardScreen() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [hydrated, setHydrated] = useState(false);
+  /**
+   * The pending row THIS session created, on a form that started at `/applications/new`.
+   *
+   * Without it, *Save and submit* on a brand-new form that the server then refuses as
+   * incomplete would file a SECOND pending row on the next attempt: the save succeeds, the
+   * submit 422s, the user fixes the missing field and presses the button again — and
+   * `pendingId` is still undefined, so it POSTs afresh. One duplicate per failed attempt,
+   * every one of them a real row in the Registrar's list.
+   *
+   * State rather than a URL rewrite because D38 deliberately stopped moving the URL
+   * mid-flow; this is remembered for the life of the screen and no longer.
+   */
+  const [savedPendingId, setSavedPendingId] = useState<string | null>(null);
 
   const detailQuery = useApplication(applicationId);
+  const pendingQuery = usePendingApplication(pendingId);
   const programsQuery = useProgramsList({ page: 1, page_size: 100 });
   // D37 — the School year dropdown is built from the years on file. Read-only use, so a
   // Registrar who cannot manage settings still gets the list.
   const academicYearsQuery = useAcademicYears();
-  const createMut = useCreateApplication();
   const updateMut = useUpdateApplication();
   const educationMut = useReplaceEducation();
+  // D39 — the Religion vocabulary; see `useReligions` for why the column stays free text.
+  const religions = useReligions();
+  const religionChoices = useMemo(
+    () => religionOptions(religions.data?.items, draft.religion),
+    [religions.data, draft.religion],
+  );
   const documentsMut = useReplaceDocuments();
   const submitMut = useSubmitApplication();
+  const createPendingMut = useCreatePendingApplication();
+  const updatePendingMut = useUpdatePendingApplication();
+  const submitPendingMut = useSubmitPendingApplication();
 
   const detail = detailQuery.data;
+  const pending = pendingQuery.data;
   const programmeOptions = programsQuery.data?.items ?? [];
 
   // ── D37: the two new dropdowns ──────────────────────────────────────────────
@@ -315,15 +363,16 @@ export function ApplicationWizardScreen() {
   // than sprinkling `!` through the JSX.
   const current = STEPS[step] ?? STEPS[0];
 
-  // Hydrate ONCE from the server record. Re-running on every `detail` change would
-  // overwrite what the user is typing each time a save returns the merged application.
+  // Hydrate ONCE from whichever record the route named. Re-running on every change would
+  // overwrite what the user is typing each time a save returns the merged record.
   useEffect(() => {
-    if (!detail || hydrated) return;
-    setDraft(fromDetail(detail));
-    setEducation(detail.education);
-    setDocuments(detail.documents);
+    const source = detail ?? pending;
+    if (!source || hydrated) return;
+    setDraft(fromDetail(source));
+    setEducation(source.education);
+    setDocuments(source.documents);
     setHydrated(true);
-  }, [detail, hydrated]);
+  }, [detail, pending, hydrated]);
 
   const set = useCallback(
     <K extends keyof Draft>(key: K, value: Draft[K]) =>
@@ -332,64 +381,80 @@ export function ApplicationWizardScreen() {
   );
 
   const saving =
-    createMut.isPending ||
     updateMut.isPending ||
     educationMut.isPending ||
     documentsMut.isPending ||
-    submitMut.isPending;
+    submitMut.isPending ||
+    createPendingMut.isPending ||
+    updatePendingMut.isPending ||
+    submitPendingMut.isPending;
 
   const onError = (err: unknown) => {
     setError(apiErrorMessage(err));
     setFieldErrors(fieldErrorsFrom(err) ?? {});
   };
 
-  /** Persist the CURRENT step. Returns the application id, or null if it failed. */
-  const saveStep = useCallback(async (): Promise<string | null> => {
+  /**
+   * Persist the WHOLE form. Returns where it went, or `null` if it failed.
+   *
+   * The discriminated return is what lets the two callers stay honest about which submit
+   * endpoint applies: a promoted pending form is submitted through
+   * `/pending-applications/{id}/submit`, a real draft through `/applications/{id}/submit`,
+   * and the two are not interchangeable — one of them also moves the row between tables.
+   */
+  const saveForm = useCallback(async (): Promise<
+    { kind: 'application' | 'pending'; id: string } | null
+  > => {
     setError(null);
     setFieldErrors({});
-    const key = current.key;
     try {
-      if (!applicationId) {
-        // Step A on a brand-new form: file the draft. Names are all the server needs.
-        const created = await createMut.mutateAsync({
-          ...payloadForStep('A', draft),
-          first_name: draft.first_name.trim(),
-          last_name: draft.last_name.trim(),
-        });
-        // `replace`, so Back does not land on an empty /new that would file a SECOND draft.
-        navigate(`${ROUTES.applications}/${created.id}/edit`, { replace: true });
-        return created.id;
-      }
-      if (key === 'B') {
+      if (applicationId) {
+        // A `draft` row filed before D38. Still editable, under the same rules — the two
+        // child endpoints are the only way to write its repeating tables.
+        await updateMut.mutateAsync({ id: applicationId, body: wholeFormPayload(draft) });
         await educationMut.mutateAsync({ id: applicationId, items: education });
-      }
-      if (key === 'F') {
         await documentsMut.mutateAsync({ id: applicationId, items: documents });
+        return { kind: 'application', id: applicationId };
       }
-      const body = payloadForStep(current.key, draft);
-      if (Object.keys(body).length > 0) {
-        await updateMut.mutateAsync({ id: applicationId, body });
-      }
-      return applicationId;
+
+      const body = {
+        ...wholeFormPayload(draft),
+        first_name: draft.first_name.trim(),
+        last_name: draft.last_name.trim(),
+        education,
+        documents,
+      };
+      // Re-save the row this session already created, rather than filing another one.
+      const target = pendingId ?? savedPendingId;
+      const saved = target
+        ? await updatePendingMut.mutateAsync({ id: target, body })
+        : await createPendingMut.mutateAsync(body);
+      setSavedPendingId(saved.id);
+      return { kind: 'pending', id: saved.id };
     } catch (err) {
       onError(err);
       return null;
     }
   }, [
     applicationId,
-    createMut,
-    current,
+    createPendingMut,
     documentsMut,
     documents,
     draft,
     education,
     educationMut,
-    navigate,
+    pendingId,
+    savedPendingId,
     updateMut,
+    updatePendingMut,
   ]);
 
-  const next = async () => {
-    if ((await saveStep()) === null) return;
+  /**
+   * D38 — *Continue* makes NO request. It moves between sections in browser state, which
+   * is the whole point: nothing is written until the Registrar asks for it on the last step.
+   */
+  const next = () => {
+    setError(null);
     setStep((prev) => Math.min(prev + 1, STEPS.length - 1));
   };
 
@@ -398,29 +463,83 @@ export function ApplicationWizardScreen() {
     setStep((prev) => Math.max(prev - 1, 0));
   };
 
+  /** *Save and close* — the form goes to the holding table and the Registrar leaves. */
   const finish = async () => {
-    const id = await saveStep();
-    if (id === null) return;
-    navigate(`${ROUTES.applications}/${id}`);
+    const saved = await saveForm();
+    if (saved === null) return;
+    navigate(
+      saved.kind === 'application'
+        ? `${ROUTES.applications}/${saved.id}`
+        : `${ROUTES.applications}/pending`,
+    );
   };
 
+  /**
+   * *Save and submit* — save, then submit through whichever endpoint matches.
+   *
+   * A 422 here leaves the saved form exactly where it is (the server does not consume a
+   * pending row it refuses to promote), so the Registrar can fix what is missing and press
+   * the button again. That is why the save is not rolled back on a failed submit.
+   */
   const submitNow = async () => {
-    const id = await saveStep();
-    if (id === null) return;
+    const saved = await saveForm();
+    if (saved === null) return;
     try {
-      await submitMut.mutateAsync(id);
-      navigate(`${ROUTES.applications}/${id}`);
+      const application =
+        saved.kind === 'application'
+          ? await submitMut.mutateAsync(saved.id)
+          : await submitPendingMut.mutateAsync(saved.id);
+      navigate(`${ROUTES.applications}/${application.id}`);
     } catch (err) {
       onError(err);
     }
   };
 
-  const canLeaveStepA = draft.first_name.trim().length > 0 && draft.last_name.trim().length > 0;
+  // The names are all the SAVE requires, so they are what gates leaving Section A — the
+  // same rule as before D38, now enforced against the save rather than against a step.
+  const hasNames = draft.first_name.trim().length > 0 && draft.last_name.trim().length > 0;
+
+  /**
+   * Section A — Personal information is REQUIRED IN FULL (D39), matching
+   * `StudentFormDialog` — an application and a direct student record now demand the same
+   * data, so acceptance can no longer produce a student the student form would refuse to
+   * save. Middle name stays optional in both.
+   *
+   * This gates BOTH the step and the two save actions. D38 moved the write to the end of
+   * the flow, so gating only Section A's Continue would leave a form that was completed
+   * out of order savable with the gaps still in it.
+   *
+   * `school_year` is deliberately NOT here: it is the intake, not personal information,
+   * and it already carries its own D37 vocabulary.
+   */
+  const personalInfoComplete =
+    hasNames &&
+    draft.date_of_birth.trim().length > 0 &&
+    draft.ssno.trim().length > 0 &&
+    draft.gender.trim().length > 0 &&
+    draft.civil_status.trim().length > 0 &&
+    draft.religion.trim().length > 0;
   const isLast = step === STEPS.length - 1;
+  //: Whichever record the route named. Empty on a form that has never been saved.
+  const savedIssues = (detail ?? pending)?.blocking_issues ?? [];
 
   if (applicationId && detailQuery.isLoading) return <LoadingState variant="form" />;
   if (applicationId && detailQuery.isError) {
     return <ErrorState onRetry={() => void detailQuery.refetch()} />;
+  }
+  if (pendingId && pendingQuery.isLoading) return <LoadingState variant="form" />;
+  if (pendingId && pendingQuery.isError) {
+    // A 404 here is usually the SCOPE, not a missing row: a pending form belongs to
+    // whoever filed it, so another Registrar's id is indistinguishable from a dead one.
+    return (
+      <PageContainer>
+        <ErrorState
+          title="This pending form is not available"
+          message="It may have been submitted, discarded, or filed by someone else."
+          onRetry={() => navigate(`${ROUTES.applications}/pending`)}
+        />
+      </PageContainer>
+    );
   }
   if (detail && detail.status !== 'draft') {
     // A submitted or decided application is reviewed, not re-typed. Sending them to the
@@ -447,8 +566,8 @@ export function ApplicationWizardScreen() {
       </Button>
 
       <PageHeader
-        title={applicationId ? 'Continue application' : 'New application'}
-        subtitle="The BAJC application form, one section at a time. Each step is saved as you go."
+        title={applicationId || pendingId ? 'Continue application' : 'New application'}
+        subtitle="The BAJC application form, one section at a time. Nothing is saved until you reach Section G."
       />
 
       <Stepper
@@ -509,7 +628,7 @@ export function ApplicationWizardScreen() {
                 fullWidth
                 error={Boolean(fieldErrors.last_name)}
                 helperText={
-                  canLeaveStepA ? undefined : 'The names are all that is needed to save a draft.'
+                  hasNames ? undefined : 'The names are all that is needed to save the form.'
                 }
               />
             </Stack>
@@ -543,15 +662,21 @@ export function ApplicationWizardScreen() {
                 type="date"
                 value={draft.date_of_birth}
                 onChange={(e) => set('date_of_birth', e.target.value)}
+                required
                 fullWidth
                 InputLabelProps={{ shrink: true }}
+                error={Boolean(fieldErrors.date_of_birth)}
+                helperText={fieldErrors.date_of_birth?.join(' ')}
               />
               <TextField
                 label="Social Security no."
                 value={draft.ssno}
                 onChange={(e) => set('ssno', e.target.value)}
+                required
                 fullWidth
                 inputProps={{ maxLength: 9 }}
+                error={Boolean(fieldErrors.ssno)}
+                helperText={fieldErrors.ssno?.join(' ')}
               />
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
@@ -565,11 +690,13 @@ export function ApplicationWizardScreen() {
                 label="Gender"
                 value={genderValue}
                 onChange={(e) => set('gender', e.target.value)}
+                required
                 fullWidth
                 error={Boolean(fieldErrors.gender)}
                 helperText={fieldErrors.gender?.join(' ')}
               >
-                <MenuItem value="">—</MenuItem>
+                {/* No blank row: the field is required, and an option that submits an
+                    empty value would be a way to defeat that from inside the control. */}
                 {GENDERS.map((option) => (
                   <MenuItem key={option} value={option}>
                     {GENDER_LABEL[option]}
@@ -586,14 +713,34 @@ export function ApplicationWizardScreen() {
                 label="Civil status"
                 value={draft.civil_status}
                 onChange={(e) => set('civil_status', e.target.value)}
+                required
                 fullWidth
+                error={Boolean(fieldErrors.civil_status)}
+                helperText={fieldErrors.civil_status?.join(' ')}
               />
+              {/* D39 (Meeting #2 item 8) — the same vocabulary the student form uses.
+                  `religionChoices` keeps whatever the draft already holds, so reopening
+                  a saved application never opens this select blank and blanks the
+                  religion on the next save. */}
               <TextField
                 label="Religion"
+                select
                 value={draft.religion}
                 onChange={(e) => set('religion', e.target.value)}
+                required
                 fullWidth
-              />
+                error={Boolean(fieldErrors.religion)}
+                helperText={
+                  fieldErrors.religion?.join(' ') ??
+                  (religionChoices.length === 0 ? 'No religions configured yet.' : undefined)
+                }
+              >
+                {religionChoices.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>
+                    {o.label}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Stack>
 
             <Divider textAlign="left">
@@ -840,7 +987,10 @@ export function ApplicationWizardScreen() {
             <Divider textAlign="left">
               <Typography variant="overline">Examinations</Typography>
             </Divider>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            {/* Stacked, not side by side: the CSEC count sits BELOW the ATLIB checkbox
+                (client ask, D38). The two are separate questions, and a checkbox beside a
+                number field reads as though the number qualifies the checkbox. */}
+            <Stack spacing={2} sx={{ alignItems: 'flex-start' }}>
               <FormControlLabel
                 control={
                   <Checkbox
@@ -963,7 +1113,7 @@ export function ApplicationWizardScreen() {
                 required
                 // Year and load are SEPARATE questions on the form. `sims_bk.sql` had one
                 // column conflating them, which could answer neither.
-                helperText="Part Time is under 15 credits a term; Full Time is over 15."
+                helperText="Part Time is under 15 credits a session; Full Time is over 15."
               >
                 <MenuItem value="">—</MenuItem>
                 <MenuItem value="Part Time">Part Time (&lt;15 credits)</MenuItem>
@@ -1048,45 +1198,76 @@ export function ApplicationWizardScreen() {
               />
             </Stack>
 
-            {detail && detail.blocking_issues.length > 0 && (
+            {/* D38 — this list is AS OF THE LAST SAVE, and says so. It arrives with the
+                saved record, so on a form being typed for the first time there is nothing
+                to show yet, and on a re-opened one it describes what was on disk rather
+                than what is on screen. Recomputing it in the browser is how the two
+                start disagreeing, which is exactly what the server owning it prevents. */}
+            {savedIssues.length > 0 && (
               <Alert severity="warning">
                 <AlertTitle>Still needed before this can be submitted</AlertTitle>
                 <Box component="ul" sx={{ pl: 2.5, mb: 0 }}>
-                  {detail.blocking_issues
+                  {savedIssues
                     .filter((issue) => !issue.startsWith('The application must be submitted'))
                     .map((issue) => (
                       <li key={issue}>{issue}</li>
                     ))}
                 </Box>
+                <Typography variant="caption" color="text.secondary">
+                  As of the last save. Save and submit re-checks everything and will list
+                  anything still outstanding.
+                </Typography>
               </Alert>
             )}
           </Stack>
         )}
       </Paper>
 
+      {/* D38 — the footer is where the new save model is visible.
+          *Continue* writes nothing; the two save actions exist only on the last step, so
+          there is exactly one place in the flow where the form reaches the database. */}
       <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
         <Button onClick={back} disabled={step === 0 || saving}>
           Back
         </Button>
         <Box sx={{ flexGrow: 1 }} />
         {saving && <CircularProgress size={18} />}
-        {applicationId && (
-          <Button onClick={() => void finish()} disabled={saving}>
-            Save and close
-          </Button>
-        )}
         {isLast ? (
-          <Button variant="contained" onClick={() => void submitNow()} disabled={saving}>
-            Save and submit
-          </Button>
+          <>
+            <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
+              <span>
+                <Button
+                  onClick={() => void finish()}
+                  disabled={saving || !personalInfoComplete}
+                >
+                  Save and close
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
+              <span>
+                <Button
+                  variant="contained"
+                  onClick={() => void submitNow()}
+                  disabled={saving || !personalInfoComplete}
+                >
+                  Save and submit
+                </Button>
+              </span>
+            </Tooltip>
+          </>
         ) : (
-          <Button
-            variant="contained"
-            onClick={() => void next()}
-            disabled={saving || (step === 0 && !canLeaveStepA)}
-          >
-            Save and continue
-          </Button>
+          <Tooltip title={step === 0 && !personalInfoComplete ? PERSONAL_INFO_HINT : ''}>
+            <span>
+              <Button
+                variant="contained"
+                onClick={next}
+                disabled={saving || (step === 0 && !personalInfoComplete)}
+              >
+                Continue
+              </Button>
+            </span>
+          </Tooltip>
         )}
       </Stack>
     </PageContainer>

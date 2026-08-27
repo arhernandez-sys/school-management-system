@@ -22,6 +22,7 @@ import {
 } from '@shared/types/enums';
 import type { District, EnrollmentLoad } from '@shared/types/enums';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
+import { useReligions, religionOptions } from '@features/settings/hooks/useReligions';
 import type { StudentDetail, StudentWritePayload, YearOfStudy } from '../types';
 import { useOfferingOptions, YEAR_OF_STUDY_OPTIONS } from '../hooks/useOfferingOptions';
 
@@ -135,6 +136,13 @@ export function StudentFormDialog({
   const [gender, setGender] = useState<string>('female');
   const [civilStatus, setCivilStatus] = useState('');
   const [religion, setReligion] = useState('');
+  // D39 — the Religion vocabulary. `religionChoices` always contains the CURRENT value,
+  // even when it predates the vocabulary; see `religionOptions`.
+  const religions = useReligions();
+  const religionChoices = useMemo(
+    () => religionOptions(religions.data?.items, religion),
+    [religions.data, religion],
+  );
   // ── Section A · address + contact ───────────────────────────────────────────
   const [street, setStreet] = useState('');
   const [cityTownVillage, setCityTownVillage] = useState('');
@@ -232,12 +240,33 @@ export function StudentFormDialog({
   }, [open, student]);
 
   // D30: the student number is NOT required to create — omitting it is how the server is
-  // asked to issue the next YYYYMM### (§D9). Only the name and the two dates gate the
-  // button; everything the paper form leaves blank stays blank here too.
+  // asked to issue the next YYYYMM### (§D9).
   const namesMissing = firstName.trim().length === 0 || lastName.trim().length === 0;
+
+  /**
+   * Section A · Personal information is now REQUIRED IN FULL (D39), on create AND on
+   * edit. It gates edit too on purpose: a record already on file with gaps is exactly
+   * the record the college needs completed, and letting an edit save around the gap
+   * would mean the rule only ever applied to students admitted after today.
+   *
+   * MIDDLE NAME is the one deliberate exception — plenty of people genuinely have none,
+   * so requiring it would only teach Registrars to type a placeholder.
+   *
+   * The server is unchanged and still accepts these as nullable. That is intentional:
+   * this is a data-entry policy for the two human-facing forms, not a constraint that
+   * should retroactively invalidate rows the college imported or the API's own callers.
+   */
+  const personalInfoMissing =
+    namesMissing ||
+    dateOfBirth.trim().length === 0 ||
+    ssno.trim().length === 0 ||
+    gender.trim().length === 0 ||
+    civilStatus.trim().length === 0 ||
+    religion.trim().length === 0;
+
   const submitDisabled = editing
-    ? namesMissing
-    : namesMissing || dateOfBirth.trim().length === 0 || enrollmentDate.trim().length === 0;
+    ? personalInfoMissing
+    : personalInfoMissing || enrollmentDate.trim().length === 0;
 
   /** `""` → `null`, so clearing a field stores NULL rather than an empty string. */
   const orNull = (v: string) => v.trim() || null;
@@ -317,8 +346,10 @@ export function StudentFormDialog({
     >
       <Stack spacing={2} sx={{ mt: 1 }}>
         <Typography variant="body2" color="text.secondary">
-          The same information the BAJC application collects. Only the name and the two
-          dates are required — leave anything the form does not say blank.
+          The same information the BAJC application collects. Every field under{' '}
+          <strong>Personal information</strong> is required, along with the enrollment
+          date; middle name is the one exception. Leave anything else the form does not
+          mark required blank.
         </Typography>
 
         {/* ═══ Section A · Personal information ═══════════════════════════════ */}
@@ -367,7 +398,7 @@ export function StudentFormDialog({
             onChange={(e) => setMiddleName(e.target.value)}
             fullWidth
             error={Boolean(fieldErrors?.middle_name)}
-            helperText={err('middle_name') ?? 'Optional.'}
+            helperText={err('middle_name') ?? 'Optional — the only one in this section.'}
           />
         </Row>
 
@@ -387,6 +418,7 @@ export function StudentFormDialog({
             label="Social Security no."
             value={ssno}
             onChange={(e) => setSsno(e.target.value)}
+            required
             fullWidth
             inputProps={{ maxLength: 9 }}
             error={Boolean(fieldErrors?.ssno)}
@@ -397,7 +429,10 @@ export function StudentFormDialog({
             label="Gender"
             value={gender}
             onChange={(e) => setGender(e.target.value)}
+            required
             fullWidth
+            error={Boolean(fieldErrors?.gender)}
+            helperText={err('gender')}
           >
             {GENDERS.map((option) => (
               <MenuItem key={option} value={option}>
@@ -418,20 +453,42 @@ export function StudentFormDialog({
             label="Civil status"
             value={civilStatus}
             onChange={(e) => setCivilStatus(e.target.value)}
+            required
             fullWidth
             error={Boolean(fieldErrors?.civil_status)}
             helperText={err('civil_status')}
           />
+          {/* D39 (Meeting #2 item 8) — a dropdown fed by the client-owned `religions`
+              table, replacing free text. The COLUMN is still free text: D37 settled that
+              the write path is what gets constrained, so a student imported from the
+              client's previous system keeps a religion this list does not carry.
+
+              `religionOptions` appends that stored value as an "(as recorded)" option.
+              Without it the select would open BLANK on such a student, and saving an
+              unrelated edit from a blank select would quietly erase their religion. */}
           <TextField
             label="Religion"
+            select
             value={religion}
             onChange={(e) => setReligion(e.target.value)}
+            required
             fullWidth
             error={Boolean(fieldErrors?.religion)}
-            // Free text on the paper form, and the directory's Religion filter discovers
-            // its options from what has actually been entered (D32).
-            helperText={err('religion') ?? 'Free text — the directory filter follows it.'}
-          />
+            helperText={
+              err('religion') ??
+              (religions.isLoading
+                ? 'Loading…'
+                : religionChoices.length === 0
+                  ? 'No religions configured yet — ask the Dean to add them.'
+                  : 'The directory filter follows this.')
+            }
+          >
+            {religionChoices.map((o) => (
+              <MenuItem key={o.value} value={o.value}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </TextField>
           {/* Read-only on edit: the LOGIN lives on the `users` row, not here. D34 renamed
               the field it reads — the student now has an `email` column of their own. */}
           {editing && (
@@ -718,7 +775,7 @@ export function StudentFormDialog({
             fullWidth
             // Year and load are SEPARATE questions on the form. `sims_bk.sql` had one
             // column conflating them, which could answer neither.
-            helperText="Part Time is under 15 credits a term; Full Time is over 15."
+            helperText="Part Time is under 15 credits a session; Full Time is over 15."
           >
             <MenuItem value="">Not set</MenuItem>
             {ENROLLMENT_LOADS.map((l) => (
@@ -837,7 +894,7 @@ export function StudentFormDialog({
                 error={Boolean(fieldErrors?.offering_ids)}
                 helperText={
                   err('offering_ids') ??
-                  'Pick every course this student will take this term. You can change this later from an offering roster.'
+                  'Pick every course this student will take this session. You can change this later from an offering roster.'
                 }
               />
             )}

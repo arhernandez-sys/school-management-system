@@ -51,6 +51,7 @@ from app.modules.settings.models import (
     AuditLog,
     GradingScale,
     GradingScaleBand,
+    Religion,
     SchoolProfile,
     Semester,
 )
@@ -63,6 +64,8 @@ from app.modules.settings.schemas import (
     AssessmentPolicyUpdateRequest,
     GradingBand,
     GradingScaleRead,
+    ReligionItem,
+    ReligionList,
     SchoolProfileRead,
     SchoolUpdateRequest,
     SemesterDetail,
@@ -157,6 +160,22 @@ def _logo_url_for(key: str | None) -> str | None:
     if key.startswith(("http://", "https://", "/")):
         return key
     return None
+
+
+def list_religions(db: Session) -> ReligionList:
+    """GET /settings/religions — the Religion vocabulary (D39, Meeting #2 item 8).
+
+    Authenticated read, no role gate: the Secretary registering a student and the
+    student reviewing their own profile both need the same list.
+
+    Sorted by NAME, not by id. The ids are the client's insertion order, which is not
+    an order a human scanning a dropdown expects.
+
+    This is the only endpoint the `religions` table has. It is a client-owned vocabulary
+    and this application does not write it — see `models.Religion`.
+    """
+    rows = db.scalars(select(Religion).order_by(Religion.name)).all()
+    return ReligionList(items=[ReligionItem.model_validate(r) for r in rows])
 
 
 def _school_or_404(db: Session) -> SchoolProfile:

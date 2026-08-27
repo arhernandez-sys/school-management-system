@@ -70,6 +70,7 @@ import type {
   DemoProgramCourse,
   DemoSchoolProfile,
   DemoSemester,
+  DemoReligion,
   DemoStudent,
   DemoStudentProgramHistory,
   DemoTeacher,
@@ -564,6 +565,22 @@ const DEMO_RELIGIONS: Array<string | null> = [
   'Methodist',
   null,
   'Catholic',
+];
+
+/**
+ * D39 (Meeting #2 item 8) — the `religions` LOOKUP table, mirroring the two rows
+ * `013_meeting2_schema.sql` seeded into live `sims`.
+ *
+ * Deliberately NOT the same list as `DEMO_RELIGIONS` above. The rotation assigned to
+ * demo students includes 'Anglican' and 'Methodist', which this vocabulary does not
+ * carry — so opening one of those students exercises the "(as recorded)" fallback in
+ * `religionOptions` without needing a real legacy database. That fallback is the whole
+ * reason `student_profiles.religion` stayed free text, and a demo where every student's
+ * religion happened to be in the dropdown would never show it working.
+ */
+const religions: DemoReligion[] = [
+  { id: 1, name: 'Catholic', code_name: 'CATH' },
+  { id: 2, name: 'Seventh Day Adventist', code_name: 'SDA' },
 ];
 
 /**
@@ -2033,6 +2050,7 @@ const grade_revision_requests: DemoGradeRevisionRequest[] = revisableGrade
 
 export const DEMO_DATASET: DemoDataset = {
   school_profile,
+  religions,
   academic_years,
   semesters,
   courses,

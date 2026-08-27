@@ -121,6 +121,22 @@ const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 export const settingsHandlers = [
   // ── School profile ────────────────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/settings/school`, () => HttpResponse.json(schoolProfileRead())),
+
+  /**
+   * GET /settings/religions — the D39 Religion vocabulary (Meeting #2 item 8).
+   *
+   * Sorted by NAME, mirroring `settings/service.list_religions`. The demo dataset's
+   * students carry religions beyond these two on purpose, so the "(as recorded)"
+   * fallback in `religionOptions` is exercised by simply opening a student in demo mode
+   * rather than only by a real legacy database.
+   */
+  http.get(`${API_BASE_URL}/settings/religions`, () =>
+    HttpResponse.json({
+      items: [...D.religions]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((r) => ({ id: r.id, name: r.name, code_name: r.code_name })),
+    }),
+  ),
   http.put(`${API_BASE_URL}/settings/school`, async ({ request }) => {
     const body = (await request.json()) as {
       name?: string;

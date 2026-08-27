@@ -12,7 +12,8 @@ import {
   type StatusKind,
 } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
-import { useApplications } from '../hooks/useAdmissions';
+import { AdmissionsTabs } from '../components/AdmissionsTabs';
+import { usePendingApplications, useApplications } from '../hooks/useAdmissions';
 import {
   APPLICATION_STATUS_LABEL,
   type ApplicationListItem,
@@ -41,7 +42,9 @@ const STATUS_KIND: Record<ApplicationStatus, StatusKind> = {
 const STATUS_OPTIONS: { value: ApplicationStatus | 'all'; label: string }[] = [
   { value: 'submitted', label: 'Submitted' },
   { value: 'under_review', label: 'Under review' },
-  { value: 'draft', label: 'Drafts' },
+  // D38 — a form being typed today is a PENDING row on its own tab, not a draft here.
+  // This filter now reaches only `applications.draft` rows filed before that change.
+  { value: 'draft', label: 'Drafts (pre-D38)' },
   { value: 'accepted', label: 'Accepted' },
   { value: 'denied', label: 'Denied' },
   { value: 'withdrawn', label: 'Withdrawn' },
@@ -61,6 +64,9 @@ export function ApplicationsListScreen() {
     ...(status === 'all' ? {} : { status }),
     ...(search.trim() ? { search: search.trim() } : {}),
   });
+  // Page 1 only, for the tab's count. The rows are not rendered here — this is the
+  // cheapest honest way to get a total, and the endpoint is the one the tab links to.
+  const pendingQuery = usePendingApplications({ page: 1, page_size: 1 });
 
   const columns = useMemo<DataTableColumn<ApplicationListItem>[]>(
     () => [
@@ -170,6 +176,8 @@ export function ApplicationsListScreen() {
         }
       />
 
+      <AdmissionsTabs value="applications" pendingCount={pendingQuery.data?.total} />
+
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
@@ -224,7 +232,7 @@ export function ApplicationsListScreen() {
         emptyTitle="No applications here"
         emptyDescription={
           status === 'submitted'
-            ? 'Nothing is waiting on a decision. Change the filter to see drafts and past decisions.'
+            ? 'Nothing is waiting on a decision. Saved-but-unsubmitted forms are on the Pending forms tab.'
             : 'File an application to get started.'
         }
         emptyAction={{

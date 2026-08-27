@@ -235,6 +235,16 @@ export interface DemoTeacher {
   comments?: string;
 }
 
+/**
+ * D39 (Meeting #2 item 8) — one row of the client-owned `religions` lookup.
+ * Read-only: the demo lists it into a dropdown and never writes it, same as the server.
+ */
+export interface DemoReligion {
+  id: number;
+  name: string;
+  code_name: string | null;
+}
+
 // ── Students ────────────────────────────────────────────────────────────────────
 export interface DemoStudent {
   id: string;
@@ -697,6 +707,8 @@ export interface DemoGradeRevisionRequest {
 // ── The whole dataset (one object) ──────────────────────────────────────────────
 export interface DemoDataset {
   school_profile: DemoSchoolProfile;
+  /** D39 (Meeting #2 item 8) — the client-owned Religion vocabulary. Read-only. */
+  religions: DemoReligion[];
   academic_years: DemoAcademicYear[];
   semesters: DemoSemester[];
   courses: DemoCourse[];

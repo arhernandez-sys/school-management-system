@@ -13,6 +13,10 @@ import type {
   CreditTransferWritePayload,
   DocumentRow,
   EducationRow,
+  PendingApplicationDetail,
+  PendingApplicationListItem,
+  PendingApplicationWritePayload,
+  PendingApplicationsListParams,
 } from '../types';
 import type { Page } from '@shared/types/api';
 
@@ -150,5 +154,68 @@ export async function decideCreditTransfer(
   body: CreditTransferDecisionPayload,
 ): Promise<CreditTransfer> {
   const res = await api.post<CreditTransfer>(`/credit-transfers/${transferId}/decision`, body);
+  return res.data;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * D38 · pending forms
+ *
+ * A separate prefix, not `/applications/pending`: under the applications router the
+ * literal segment would have to be declared before `/{id}` or the server would try to
+ * parse "pending" as a UUID. Same reasoning as `/credit-transfers`.
+ *
+ * Row-level scope is the SERVER's: a Registrar reaches only what they filed, the Dean
+ * reaches everything, and someone else's row answers 404 rather than 403.
+ * ──────────────────────────────────────────────────────────────────────────── */
+export async function listPendingApplications(
+  params: PendingApplicationsListParams,
+  signal?: AbortSignal,
+): Promise<Page<PendingApplicationListItem>> {
+  const res = await api.get<Page<PendingApplicationListItem>>('/pending-applications', {
+    params,
+    signal,
+  });
+  return res.data;
+}
+
+export async function getPendingApplication(
+  id: string,
+  signal?: AbortSignal,
+): Promise<PendingApplicationDetail> {
+  const res = await api.get<PendingApplicationDetail>(`/pending-applications/${id}`, { signal });
+  return res.data;
+}
+
+/** *Save and close* on a form that is not yet on disk. The WHOLE form, in one body. */
+export async function createPendingApplication(
+  body: PendingApplicationWritePayload,
+): Promise<PendingApplicationDetail> {
+  const res = await api.post<PendingApplicationDetail>('/pending-applications', body);
+  return res.data;
+}
+
+/** *Save and close* on a form already on disk. Whole-form, not a per-section patch. */
+export async function updatePendingApplication(
+  id: string,
+  body: PendingApplicationWritePayload,
+): Promise<PendingApplicationDetail> {
+  const res = await api.patch<PendingApplicationDetail>(`/pending-applications/${id}`, body);
+  return res.data;
+}
+
+/** HARD, unlike an application: there is no admissions record to keep. */
+export async function deletePendingApplication(id: string): Promise<void> {
+  await api.delete(`/pending-applications/${id}`);
+}
+
+/**
+ * *Save and submit*. Promotes the pending row into `applications`, expands its two JSON
+ * arrays into the real child tables, and deletes it from the holding table.
+ *
+ * Returns the **application** — the pending form no longer exists. A 422 leaves the
+ * pending row untouched, so a refused submit never costs the Registrar their typing.
+ */
+export async function submitPendingApplication(id: string): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/pending-applications/${id}/submit`);
   return res.data;
 }

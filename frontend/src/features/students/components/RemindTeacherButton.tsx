@@ -79,7 +79,7 @@ export function RemindTeacherButton({
   const isCoolingDown = waiting > 0;
   const label = isCoolingDown
     ? `Reminded ${formatTimeAgo(line.last_nudged_at as string)}`
-    : 'Remind teacher';
+    : 'Remind lecturer';
 
   const button = (
     <span>
@@ -97,7 +97,7 @@ export function RemindTeacherButton({
 
   // The disabled button cannot own a tooltip, hence the wrapping <span> above.
   return isCoolingDown ? (
-    <Tooltip title="You can remind this teacher again once the reminder window has passed.">
+    <Tooltip title="You can remind this lecturer again once the reminder window has passed.">
       {button}
     </Tooltip>
   ) : (

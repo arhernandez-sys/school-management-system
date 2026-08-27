@@ -11,12 +11,14 @@ import {
   Snackbar,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import PrintIcon from '@mui/icons-material/Print';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import {
+  ALL_YEARS,
   DataTable,
   PageHeader,
   StatusBadge,
@@ -25,13 +27,12 @@ import {
 import { useDebounce, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
-import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { surnameFirst } from '@shared/utils/names';
-import { useCreateStudent, useStudentFilterOptions, useStudentsList } from './hooks/useStudents';
+import { genderLabel } from '@shared/types/enums';
+import { useStudentFilterOptions, useStudentsList } from './hooks/useStudents';
 import { useOfferingOptions } from './hooks/useOfferingOptions';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
-import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentListPrintDialog } from './components/StudentListPrintDialog';
 import { StudentFiltersDialog } from './components/StudentFiltersDialog';
 import {
@@ -40,13 +41,22 @@ import {
   type StudentFilterValues,
 } from './components/studentFilters';
 import { STUDENT_STATUS_KIND, STUDENT_STATUS_LABEL } from './constants';
-import type { StudentListItem, StudentWritePayload, StudentsListParams } from './types';
+import type { StudentListItem, StudentsListParams } from './types';
 
 /**
  * Students directory (api-spec §5.3 GET /students). A searchable, filterable, paginated
- * list — rows link to the student detail. Principal / secretary can add a student.
- * Scope is server-enforced: a teacher sees only students in sections they teach; the
- * route is role-guarded upstream (a student uses "My Profile" instead).
+ * list — rows link to the student detail. Scope is server-enforced: a teacher sees only
+ * students in sections they teach; the route is role-guarded upstream (a student uses
+ * "My Profile" instead).
+ *
+ * **D38 — students are no longer CREATED here.** `Add student` goes to Admissions, because
+ * acceptance is the single action that creates the profile, the login and the `YYYYMM###`
+ * together (decision #5); a second create path would skip all three. The client asked for
+ * the button to lead there, and the create dialog was removed rather than merely unlinked.
+ *
+ * D38 also gave the year filter an **All years** option and added a column for each filter
+ * that had none (gender, religion) — filtering by something the table does not show leaves
+ * the result impossible to verify.
  *
  * **D33 — the filters moved into a modal** (`StudentFiltersDialog`, client ask 1). What is
  * left on the page is the toolbar: search, a badged *Filters* button, and a removable chip
@@ -79,9 +89,7 @@ export function StudentsListPage() {
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
   const [pageSize, setPageSize] = useState(25);
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
+  // Kept: the print dialog and the filter chips still surface transient feedback here.
   const [toast, setToast] = useState<string | null>(null);
 
   const offeringsQuery = useOfferingOptions();
@@ -97,6 +105,10 @@ export function StudentsListPage() {
   // The year filter has its own hook (it is shared with other modules and persists), so
   // the modal edits it through `filters.yearId` and it is reconciled here.
   const effectiveYearId = filters.yearId ?? yearId;
+  // D38 — "All years" is the ABSENCE of `academic_year_id`, not a value for it. Sending
+  // the sentinel would have the server look for an academic year called "all" and answer
+  // with nothing, which looks exactly like a directory that has no students in it.
+  const showAllYears = effectiveYearId === ALL_YEARS;
 
   const params = useMemo<StudentsListParams>(
     () => ({
@@ -105,7 +117,7 @@ export function StudentsListPage() {
       offering_id: filters.offeringId || undefined,
       // Filters on the student's OWN level, not on anything derived from what they take.
       year_of_study: filters.yearOfStudy || undefined,
-      academic_year_id: effectiveYearId || undefined,
+      academic_year_id: showAllYears ? undefined : effectiveYearId || undefined,
       gender: filters.gender || undefined,
       religion: filters.religion || undefined,
       program_id: filters.programId || undefined,
@@ -113,35 +125,33 @@ export function StudentsListPage() {
       page_size: pageSize,
       sort: sortDirection === 'desc' ? `-${sortField}` : sortField,
     }),
-    [debouncedSearch, filters, effectiveYearId, page, pageSize, sortField, sortDirection],
+    [
+      debouncedSearch,
+      filters,
+      effectiveYearId,
+      showAllYears,
+      page,
+      pageSize,
+      sortField,
+      sortDirection,
+    ],
   );
 
   const query = useStudentsList(params);
-  const createMut = useCreateStudent();
-
   const goToStudent = (id: string) => navigate(`${ROUTES.students}/${id}`);
-
-  const handleCreate = (values: StudentWritePayload) => {
-    setFormError(null);
-    setFieldErrors(undefined);
-    createMut.mutate(values, {
-      onSuccess: (created) => {
-        setCreateOpen(false);
-        setToast(`${created.full_name} was added.`);
-      },
-      onError: (err) => {
-        setFormError(apiErrorMessage(err));
-        setFieldErrors(fieldErrorsFrom(err));
-      },
-    });
-  };
 
   const applyFilters = useCallback(
     (next: StudentFilterValues) => {
       setFilters(next);
       // `useYearFilter` owns the persisted year, so a change made in the modal has to be
       // pushed back into it or the two disagree the next time the page mounts.
-      if (next.yearId && next.yearId !== yearId) setYearId(next.yearId);
+      //
+      // `ALL_YEARS` is deliberately NOT pushed: the hook is shared with the timetable, the
+      // grade sheets and the offerings list, and none of those can render "no year". It
+      // stays local to this directory, so the other modules keep their real year.
+      if (next.yearId && next.yearId !== ALL_YEARS && next.yearId !== yearId) {
+        setYearId(next.yearId);
+      }
       setPage(0);
       setFiltersOpen(false);
     },
@@ -174,7 +184,7 @@ export function StudentsListPage() {
       const y = years.find((x) => x.id === effectiveYearId);
       out.push({
         key: 'year',
-        label: y ? `Year ${y.name}` : 'Academic year',
+        label: showAllYears ? 'All years' : y ? `Year ${y.name}` : 'Academic year',
         clear: () => {
           setFilters((prev) => ({ ...prev, yearId: activeYearId }));
           if (activeYearId) setYearId(activeYearId);
@@ -226,6 +236,7 @@ export function StudentsListPage() {
   }, [
     filters,
     effectiveYearId,
+    showAllYears,
     activeYearId,
     years,
     programOptions,
@@ -290,6 +301,25 @@ export function StudentsListPage() {
       hideOnMobile: true,
       render: (s) => <Typography variant="body2">{s.program_code || '—'}</Typography>,
     },
+    /* D38 — a column for each of the remaining filters (client ask). Filtering by
+       something the table does not show leaves the result unverifiable: narrow to Female
+       and every row looks identical to an unfiltered list. `Year`, `Programme` and
+       `Status` already had columns; these two did not.
+
+       `genderLabel` rather than the raw value: the column is free text for rows this
+       system did not write, so 'Male'/'M'/'MALE' all still occur (D37). */
+    {
+      field: 'gender',
+      headerName: 'Gender',
+      hideOnMobile: true,
+      render: (s) => <Typography variant="body2">{genderLabel(s.gender) || '—'}</Typography>,
+    },
+    {
+      field: 'religion',
+      headerName: 'Religion',
+      hideOnMobile: true,
+      render: (s) => <Typography variant="body2">{s.religion || '—'}</Typography>,
+    },
     {
       field: 'offering_count',
       headerName: 'Courses',
@@ -331,17 +361,19 @@ export function StudentsListPage() {
         }
         primaryAction={
           canManage ? (
-            <Button
-              variant="contained"
-              startIcon={<PersonAddAlt1Icon />}
-              onClick={() => {
-                setFormError(null);
-                setFieldErrors(undefined);
-                setCreateOpen(true);
-              }}
-            >
-              Add student
-            </Button>
+            /* D38 — this goes to ADMISSIONS instead of opening the create dialog (client
+               ask). A student is not typed into existence here: acceptance is the single
+               action that creates the profile, the login and the `YYYYMM###` together
+               (decision #5), so the honest starting point is the application. */
+            <Tooltip title="Students are created by accepting an application">
+              <Button
+                variant="contained"
+                startIcon={<PersonAddAlt1Icon />}
+                onClick={() => navigate(ROUTES.applications)}
+              >
+                Add student
+              </Button>
+            </Tooltip>
           ) : undefined
         }
       />
@@ -458,16 +490,10 @@ export function StudentsListPage() {
         filterSummary={filterSummary}
       />
 
-      {canManage && (
-        <StudentFormDialog
-          open={createOpen}
-          submitting={createMut.isPending}
-          error={formError}
-          fieldErrors={fieldErrors}
-          onSubmit={handleCreate}
-          onClose={() => setCreateOpen(false)}
-        />
-      )}
+      {/* D38 — the create dialog is GONE from this page, not merely unlinked. `Add student`
+          now goes to Admissions, so nothing could open it, and a dialog nothing can open is
+          a second way to create a student that quietly skips acceptance. `StudentFormDialog`
+          itself is unchanged and still serves editing from the detail page. */}
 
       <Snackbar
         open={Boolean(toast)}

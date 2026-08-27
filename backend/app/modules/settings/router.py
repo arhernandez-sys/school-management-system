@@ -56,6 +56,7 @@ from app.modules.settings.schemas import (
     AssessmentPolicyRead,
     AssessmentPolicyUpdateRequest,
     GradingScaleRead,
+    ReligionList,
     GradingScaleUpdateRequest,
     GradingScaleUpdateResponse,
     LogoUploadResponse,
@@ -94,6 +95,25 @@ def get_school(
 ) -> SchoolProfileRead:
     """Authenticated read — every role needs identity for report headers."""
     return service.get_school(db)
+
+
+@router.get(
+    "/religions",
+    response_model=ReligionList,
+    summary="Religion vocabulary (authenticated; D39, Meeting #2 item 8)",
+    responses={401: _ERR},
+)
+def list_religions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> ReligionList:
+    """Authenticated read — the Secretary registering a student and the student
+    reviewing their own profile both need the same list.
+
+    GET is the ONLY verb this vocabulary has. The table is client-owned and this
+    application never writes it; see `settings/models.Religion`.
+    """
+    return service.list_religions(db)
 
 
 @router.put(

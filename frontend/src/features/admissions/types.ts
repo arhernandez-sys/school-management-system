@@ -286,3 +286,91 @@ export const DOCUMENT_TYPES: { value: ApplicationDocumentType; label: string }[]
   { value: 'cta', label: 'Credit Transfer Application (CTA)' },
   { value: 'other', label: 'Other' },
 ];
+
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * D38 · the PENDING form (`student_profile_temp`)
+ *
+ * A form the Registrar saved but has not submitted. It is NOT an application yet: it
+ * lives in its own table, it is visible only to whoever filed it (and to the Dean), and
+ * `POST /pending-applications/{id}/submit` is what turns it into one.
+ *
+ * The wizard no longer saves per step, so the write payload is the WHOLE form —
+ * Sections B and F included, as arrays rather than through their own endpoints.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface PendingApplicationListItem {
+  id: string;
+  /** Always `'pending'`. Present so a row is self-describing in a mixed list. */
+  status: string;
+  full_name: string;
+  first_name: string;
+  middle_name: string | null;
+  last_name: string;
+  school_year: string | null;
+  program: ProgramRef | null;
+  year_of_study: YearOfStudy | null;
+  enrollment_load: EnrollmentLoad | null;
+  email: string | null;
+  phone: string | null;
+  gender: string | null;
+  created_by: string | null;
+  /** Who filed it. Only meaningful to the Dean — a Registrar sees only their own rows. */
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  /**
+   * What would stop this form being submitted, in plain sentences — the SAME rules the
+   * submit runs. On the row so the list can say "ready" or "3 things missing" without
+   * anyone re-opening the wizard.
+   */
+  blocking_issues: string[];
+}
+
+export interface PendingApplicationDetail extends PendingApplicationListItem {
+  date_of_birth: string | null;
+  ssno: string | null;
+  civil_status: string | null;
+  religion: string | null;
+  has_health_condition: boolean;
+  health_condition_note: string | null;
+  street: string | null;
+  city_town_village: string | null;
+  district: District | null;
+  mother_name: string | null;
+  father_name: string | null;
+  nok_name: string | null;
+  nok_relationship: string | null;
+  nok_phone: string | null;
+  atlib_exam: boolean;
+  num_csec: number | null;
+  finance_name: string | null;
+  finance_phone: string | null;
+  finance_email: string | null;
+  recommendation_received: boolean;
+  applicant_signed_at: string | null;
+  guardian_signed_at: string | null;
+  academic_year_id: string | null;
+  enrolment_status: string | null;
+  comments: string | null;
+  /** Read back out of the JSON columns, in the same shape the real child tables read in. */
+  education: EducationRow[];
+  documents: DocumentRow[];
+}
+
+/**
+ * The whole form in one body. Names required, everything else optional — a pending form
+ * is allowed to be half-typed, which is the only reason the table exists.
+ */
+export interface PendingApplicationWritePayload extends ApplicationWritePayload {
+  first_name: string;
+  last_name: string;
+  education: EducationRow[];
+  documents: DocumentRow[];
+}
+
+export interface PendingApplicationsListParams {
+  page?: number;
+  page_size?: number;
+  search?: string;
+}

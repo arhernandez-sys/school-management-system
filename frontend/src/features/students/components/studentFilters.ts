@@ -17,6 +17,11 @@ import type { StudentStatus } from '@shared/types/enums';
  * control people use constantly the slowest one to use.
  */
 export interface StudentFilterValues {
+  /**
+   * An academic year id, or `ALL_YEARS` (from `@shared/components`) to drop the year
+   * scope entirely (D38 — the client
+   * asked to be able to see the whole register, not only the current year's students).
+   */
   yearId: string | undefined;
   status: StudentStatus | '';
   yearOfStudy: string;
@@ -45,6 +50,11 @@ export function activeStudentFilterCount(
   // The academic year is always SET — it defaults to the active one — so it only counts
   // as a filter when it has been moved off that default. Counting it unconditionally
   // would badge the button "1" on a directory nobody has filtered.
+  //
+  // `ALL_YEARS` counts too, and that is not a contradiction: it is still a deliberate move
+  // off the default, and it is the one setting most likely to explain a surprising row
+  // count ("why is a 2024 graduate in this list?"). An uncounted filter is an unexplained
+  // list, which is the whole reason D33 put chips under the toolbar.
   if (v.yearId && v.yearId !== activeYearId) n += 1;
   if (v.status) n += 1;
   if (v.yearOfStudy) n += 1;

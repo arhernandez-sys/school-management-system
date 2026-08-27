@@ -19,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     SmallInteger,
     String,
@@ -266,6 +267,47 @@ class SchoolProfile(Base, TimestampMixin, AuditMixin):
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_school_profile_singleton"),
     )
+
+
+class Religion(Base):
+    """The Religion vocabulary (D39, Meeting #2 item 8). READ-ONLY to this application.
+
+    Created by `013_meeting2_schema.sql` from the client's own dump, and kept in THEIR
+    spelling: an int PK, and `createdon`/`createdby`/`editedby`/`editedon` where the rest
+    of this schema uses uuid PKs and `created_at`/`created_by` with a FK onto `users`.
+    Nothing here inherits the mixins, because the mixins describe the house convention
+    this table deliberately does not follow.
+
+    Keeping their spelling is affordable precisely BECAUSE it is read-only: the client
+    owns the contents and maintains them with their own tooling, and this application
+    only lists the rows into a dropdown. There is no create/update/delete path, no audit
+    row, and no router verb but GET. If religions ever need to be edited from here, that
+    is the moment to bring the table onto house convention -- not before.
+
+    Note what this is NOT: a foreign key. `student_profiles.religion` stays free-text
+    `varchar(100)`, because rows imported from the client's previous system hold values
+    this list does not carry and a FK would reject them outright. D37 settled that shape
+    for gender and school year -- constrain the WRITE PATH, not the column.
+    """
+
+    __tablename__ = "religions"
+
+    id: Mapped[int] = mapped_column(Integer(), primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    code_name: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    #: The client's audit columns, mapped so the model DESCRIBES the table rather than a
+    #: convenient subset of it. `createdon` and `createdby` are NOT NULL with no server
+    #: default, so a model that omitted them could not insert a row at all -- which reads
+    #: as "read-only" right up until someone needs a fixture and discovers it is really
+    #: "silently broken". Read-only is enforced by there being no write service and no
+    #: router verb but GET, not by leaving the mapping incomplete.
+    #:
+    #: `createdby` / `editedby` are varchar usernames in the client's system, NOT uuid
+    #: foreign keys onto `users` -- do not "fix" them into FKs without their agreement.
+    createdon: Mapped[datetime] = mapped_column(DateTime(), nullable=False)
+    createdby: Mapped[str] = mapped_column(String(50), nullable=False)
+    editedby: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    editedon: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
 
 
 class AuditLog(Base):

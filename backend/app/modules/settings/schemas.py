@@ -334,3 +334,24 @@ class AccountUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     full_name: str | None = Field(default=None, min_length=1, max_length=200)
     preferences: PreferencesUpdate | None = None
+
+
+# ── Religion vocabulary (D39, Meeting #2 item 8) ────────────────────────────────
+class ReligionItem(BaseModel):
+    """One row of the Religion dropdown.
+
+    `code_name` (e.g. `SDA`) is carried alongside the name because the client's own
+    reports use it; nothing in this application writes it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    code_name: str | None = None
+
+
+class ReligionList(BaseModel):
+    """GET /settings/religions. Not paginated — this is a short vocabulary, and a
+    dropdown that pages is not a dropdown."""
+
+    items: list[ReligionItem] = Field(default_factory=list)

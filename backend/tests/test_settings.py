@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 from app.common.enums import AcademicYearStatus, Role
 from app.modules.settings import service as settings_service
 from app.modules.settings.models import (
+    Religion,
     AcademicYear,
     AuditLog,
     GradingScale,
@@ -48,6 +49,7 @@ from app.modules.users.models import User, UserPreferences
 pytestmark = pytest.mark.requires_db
 
 # Paths (api-spec §1.1 + §5.11).
+RELIGIONS = "/api/v1/settings/religions"
 SCHOOL = "/api/v1/settings/school"
 LOGO = "/api/v1/settings/school/logo"
 ACTIVE_TERM = "/api/v1/settings/active-term"
@@ -1695,3 +1697,96 @@ class TestLogoUrlResolution:
         assert settings_service._logo_url_for(None) is None
         assert settings_service._logo_url_for("") is None
         assert settings_service._logo_url_for("   ") is None
+
+
+class TestReligions:
+    """GET /settings/religions — the D39 Religion vocabulary (Meeting #2 item 8).
+
+    The point of the endpoint is that religion becomes a DROPDOWN without becoming a
+    foreign key: `student_profiles.religion` stays free text so rows imported from the
+    client's previous system survive. These tests pin the read contract.
+
+    NOTE ON ISOLATION: this suite runs against the real `sims` inside an
+    always-rolled-back transaction (see conftest), so the table already holds the rows
+    `013_meeting2_schema.sql` seeded. Nothing here may assume an empty starting state —
+    the tests add a row with a deliberately odd name and assert about THAT.
+    """
+
+    #: A name no real vocabulary will contain, and one that sorts first, so the
+    #: assertions below hold whatever the client has added to live since.
+    PROBE = "Aaa Test Faith"
+
+    def _add(self, db_session, name: str, code: str | None = None) -> None:
+        from datetime import datetime
+
+        db_session.add(
+            Religion(
+                name=name,
+                code_name=code,
+                createdon=datetime(2026, 1, 1, 0, 0, 0),
+                createdby="pytest",
+            )
+        )
+        db_session.commit()
+
+    def test_authenticated_any_role_may_read(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        self._add(db_session, self.PROBE, "AAA")
+        student = make_user(role=Role.STUDENT)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=student.id, role=Role.STUDENT)
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["items"]
+        mine = [r for r in items if r["name"] == self.PROBE]
+        assert len(mine) == 1
+        assert mine[0]["code_name"] == "AAA"
+        assert isinstance(mine[0]["id"], int)
+
+    def test_unauthenticated_401(self, client) -> None:
+        resp = client.get(RELIGIONS)
+        assert resp.status_code == 401
+        _assert_envelope(resp.json(), code="unauthenticated")
+
+    def test_sorted_by_name_not_by_id(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The ids are the client's insertion order. A dropdown in insertion order is a
+        dropdown a human has to read all of to use.
+
+        The probe is inserted LAST, so it holds the highest id; if the endpoint sorted by
+        id it would come last, and its name sorts it first.
+        """
+        self._add(db_session, self.PROBE, "AAA")
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        )
+        assert resp.status_code == 200, resp.text
+        names = [r["name"] for r in resp.json()["items"]]
+        assert names == sorted(names)
+        assert names[0] == self.PROBE
+
+    def test_the_client_audit_columns_are_not_exposed(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`createdon` / `createdby` are mapped on the model so it describes the real
+        table, but they are the client's bookkeeping and no screen shows them."""
+        self._add(db_session, self.PROBE)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        )
+        assert resp.status_code == 200, resp.text
+        assert set(resp.json()["items"][0].keys()) == {"id", "name", "code_name"}
+
+    def test_there_is_no_write_verb(self, client, make_user, auth_headers) -> None:
+        """The vocabulary is client-owned. If a POST ever starts returning something
+        other than 405, someone has added a write path — and the table's non-house
+        shape (int PK, `createdby` as a username rather than a FK) was only accepted on
+        the understanding that this application would never write it."""
+        principal = make_user(role=Role.PRINCIPAL)
+        h = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        assert client.post(RELIGIONS, headers=h, json={"name": "X"}).status_code == 405
+        assert client.delete(f"{RELIGIONS}/1", headers=h).status_code in (404, 405)

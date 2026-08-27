@@ -11,6 +11,8 @@ import type {
   CreditTransferWritePayload,
   DocumentRow,
   EducationRow,
+  PendingApplicationWritePayload,
+  PendingApplicationsListParams,
 } from '../types';
 
 export const admissionKeys = {
@@ -210,5 +212,83 @@ export function useDecideCreditTransfer() {
       body: CreditTransferDecisionPayload;
     }) => api.decideCreditTransfer(transferId, body),
     onSuccess: invalidate,
+  });
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * D38 · pending forms
+ *
+ * These invalidate rather than set. A pending write returns the pending row, but the
+ * thing that changed for the USER is which list it appears in — and a promotion moves a
+ * row out of `pending` and into `applications` entirely, so both caches are stale after
+ * it. Setting one entry would leave the other list showing a form that is no longer there.
+ * ──────────────────────────────────────────────────────────────────────────── */
+export const pendingKeys = {
+  all: ['pending-applications'] as const,
+  list: (params: PendingApplicationsListParams) => [...pendingKeys.all, 'list', params] as const,
+  detail: (id: string) => [...pendingKeys.all, 'detail', id] as const,
+};
+
+export function usePendingApplications(params: PendingApplicationsListParams) {
+  return useQuery({
+    queryKey: pendingKeys.list(params),
+    queryFn: ({ signal }) => api.listPendingApplications(params, signal),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function usePendingApplication(id: string | undefined) {
+  return useQuery({
+    queryKey: pendingKeys.detail(id ?? ''),
+    queryFn: ({ signal }) => api.getPendingApplication(id!, signal),
+    enabled: Boolean(id),
+  });
+}
+
+function useInvalidatePending() {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: pendingKeys.all, exact: false });
+  };
+}
+
+export function useCreatePendingApplication() {
+  const invalidate = useInvalidatePending();
+  return useMutation({
+    mutationFn: (body: PendingApplicationWritePayload) => api.createPendingApplication(body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdatePendingApplication() {
+  const invalidate = useInvalidatePending();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: PendingApplicationWritePayload }) =>
+      api.updatePendingApplication(id, body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeletePendingApplication() {
+  const invalidate = useInvalidatePending();
+  return useMutation({
+    mutationFn: (id: string) => api.deletePendingApplication(id),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * *Save and submit*. Invalidates BOTH caches: the row leaves the pending table and
+ * arrives in the admissions list, so either one alone would be showing a lie.
+ */
+export function useSubmitPendingApplication() {
+  const qc = useQueryClient();
+  const apply = useApplyApplication();
+  return useMutation({
+    mutationFn: (id: string) => api.submitPendingApplication(id),
+    onSuccess: (application) => {
+      apply(application);
+      void qc.invalidateQueries({ queryKey: pendingKeys.all, exact: false });
+    },
   });
 }

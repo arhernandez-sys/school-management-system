@@ -116,6 +116,8 @@ export function StudentFiltersDialog({
             gap: 2,
           }}
         >
+          {/* D38 — `allowAll` so the directory can show the whole register rather than
+              only the selected year's students. */}
           <YearSelect
             value={draft.yearId}
             onChange={(id) => set('yearId', id)}
@@ -123,6 +125,7 @@ export function StudentFiltersDialog({
             activeYearId={activeYearId}
             isLoading={yearsLoading}
             fullWidth
+            allowAll
           />
 
           <TextField
