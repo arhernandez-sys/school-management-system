@@ -52,7 +52,7 @@ from app.common.enums import (
     YearOfStudy,
 )
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
-from app.db.types import GUID, enum_col
+from app.db.types import GUID, JSONType, enum_col
 
 
 class Application(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
@@ -399,3 +399,140 @@ class CreditTransferRequest(Base, TimestampMixin, AuditMixin):
         Index("ix_cta_application", "application_id"),
         Index("ix_cta_status", "status"),
     )
+
+
+class ApplicationTemp(Base, TimestampMixin, AuditMixin):
+    """A form the Registrar has saved but NOT submitted — D38's holding table.
+
+    **Why a second table rather than `applications.status = 'draft'`.** The wizard used to
+    PATCH `applications` on every step, so a half-typed form was already an admissions
+    record: it appeared in the directory, it was counted, and the Dean saw it. The client
+    wanted the opposite — nothing enters the admissions record until it is deliberately
+    saved, and an unsubmitted form belongs to whoever is typing it. That is a different
+    ownership rule from `applications`, which is a shared record, so it is a different
+    table. `applications.draft` survives for rows filed before D38.
+
+    **`created_by` is load-bearing here, not just audit.** It is the scope: the Registrar
+    who filed a pending form is the only person who can see it, apart from the Dean, who
+    sees all of them. On `applications` the same column is provenance and nothing more.
+
+    **Sections B and F ride as JSON.** On `applications` they are `application_education`
+    and `application_documents`, keyed by an application id that a pending form has not
+    got. Duplicating both child tables to hold rows nobody may query by institution or
+    document type would be three tables to express one saved form, so they are stored as
+    the arrays they are and expanded into the real child tables at promotion
+    (`service.submit_pending_application`).
+
+    **What is deliberately NOT mirrored.** `date_accepted`, `student_code`,
+    `decided_by_user_id`, `decided_at` and `student_id` are written by the ACCEPT
+    transition. A pending form has no decision and no student, so mirroring them would add
+    an FK to `student_profiles` that can never be satisfied. Every column a client may
+    WRITE is here; the columns the system writes about a decision are not.
+
+    Hard-deleted, unlike `applications`. There is no record to keep: the row either became
+    an application or the Registrar abandoned it.
+    """
+
+    __tablename__ = "student_profile_temp"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    #: Always `pending`. A plain string, NOT `ApplicationStatus`: adding a `pending` member
+    #: to that enum would widen the vocabulary of the real `applications.status` column,
+    #: where `draft`/`submitted`/… are the states the decision queue is built on.
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'pending'")
+    )
+    school_year: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # ── Section A · Personal information ──────────────────────────────────────
+    # Same unprefixed column spellings as `applications`, so the promotion INSERT is a
+    # straight attribute-for-attribute copy rather than a mapping table.
+    first_name: Mapped[str] = mapped_column("firstname", String(50), nullable=False)
+    middle_name: Mapped[str | None] = mapped_column(
+        "middlename", String(50), nullable=True
+    )
+    last_name: Mapped[str] = mapped_column("lastname", String(50), nullable=False)
+    date_of_birth: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    ssno: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    civil_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    religion: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    has_health_condition: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default=text("false")
+    )
+    health_condition_note: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    street: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    city_town_village: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    district: Mapped[District | None] = mapped_column(enum_col(District), nullable=True)
+    mother_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    father_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    nok_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    nok_relationship: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    nok_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # ── Section B · Educational background ────────────────────────────────────
+    atlib_exam: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default=text("false")
+    )
+    num_csec: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
+    #: Section B's institution table, as the array the form shows. Shaped like
+    #: `schemas.EducationRow` minus `id` — a pending row has no identity to preserve.
+    education_json: Mapped[list | None] = mapped_column(JSONType(), nullable=True)
+
+    # ── Section C · Financial information ─────────────────────────────────────
+    finance_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    finance_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    finance_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+
+    # ── Section D · Recommendation ────────────────────────────────────────────
+    recommendation_received: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default=text("false")
+    )
+
+    # ── Section E · Programme of study ────────────────────────────────────────
+    program_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("programs.id", ondelete="SET NULL", name="fk_apptemp_program"),
+        nullable=True,
+    )
+    year_of_study: Mapped[YearOfStudy | None] = mapped_column(
+        enum_col(YearOfStudy), nullable=True
+    )
+    enrollment_load: Mapped[EnrollmentLoad | None] = mapped_column(
+        enum_col(EnrollmentLoad), nullable=True
+    )
+
+    # ── Section F · Documents to submit ───────────────────────────────────────
+    #: Shaped like `schemas.DocumentRow` minus `id`.
+    documents_json: Mapped[list | None] = mapped_column(JSONType(), nullable=True)
+
+    # ── Section G · Agreement ─────────────────────────────────────────────────
+    applicant_signed_at: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    guardian_signed_at: Mapped[date | None] = mapped_column(Date(), nullable=True)
+
+    # ── FOR OFFICIAL USE ONLY — the client-writable half only ─────────────────
+    academic_year_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("academic_years.id", ondelete="SET NULL", name="fk_apptemp_year"),
+        nullable=True,
+    )
+    enrolment_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    comments: Mapped[str | None] = mapped_column(Text(), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "num_csec IS NULL OR num_csec BETWEEN 0 AND 20",
+            name="ck_apptemp_num_csec",
+        ),
+        # The list is "my pending forms, surname first" for a Registrar and "everyone's"
+        # for the Dean, so `created_by` leads the index and the name pair follows it.
+        Index("ix_apptemp_created_by", "created_by", "lastname", "firstname"),
+    )
+
+    @property
+    def full_name(self) -> str:
+        return " ".join(
+            part for part in (self.first_name, self.middle_name, self.last_name) if part
+        )

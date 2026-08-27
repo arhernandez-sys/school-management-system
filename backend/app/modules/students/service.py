@@ -833,7 +833,6 @@ def create_student(
         **{f: getattr(payload, f) for f in ADMISSION_PROFILE_FIELDS},
         program_id=payload.program_id,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(student)
     db.flush()  # assign student.id
@@ -851,7 +850,6 @@ def create_student(
                 started_at=payload.enrollment_date,
                 reason="Registered",
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
 
@@ -927,7 +925,6 @@ def _enroll_into_section(
             student_id=student.id,
             semester_id=semester_id,
             created_by=actor.id,
-            updated_by=actor.id,
         )
     )
     return semester_id

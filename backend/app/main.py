@@ -51,6 +51,7 @@ from app.modules.grades.router import revisions_router as grade_revisions_router
 from app.modules.grades.router import router as grades_router
 from app.modules.admissions.router import (
     credit_transfers_router,
+    pending_applications_router,
     router as applications_router,
 )
 from app.modules.prerequisites.router import router as prerequisites_router
@@ -78,6 +79,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
     applications_router,  # D30 4 — /api/v1/applications/* (admissions, §D11)
     credit_transfers_router,  # D30 4 — /api/v1/credit-transfers/* (Dean decides, brief §13)
+    pending_applications_router,  # D38 — /api/v1/pending-applications/* (saved, unsubmitted)
     teachers_router,  # 7.3 — serves /api/v1/teachers/* (api-spec §5 Module 4)
     offerings_router,  # D31 — serves /api/v1/offerings/* (api-spec §5 Module 5)
     assessments_router,  # 7.5 — serves /api/v1/assessments/* (api-spec §6)

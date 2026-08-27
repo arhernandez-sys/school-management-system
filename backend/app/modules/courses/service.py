@@ -113,16 +113,28 @@ def _assert_code_unique(
 
 
 def list_courses(
-    db: Session, *, params: PageParams, search: str | None, is_active: bool | None
+    db: Session,
+    *,
+    params: PageParams,
+    search: str | None,
+    is_active: bool | None,
+    include_retired: bool = False,
 ):
     """GET /courses (authenticated). Page[CourseListItem]; default is_active=true
-    (the picker hides retired courses); default sort name."""
+    (the picker hides retired courses); default sort name.
+
+    `?include_retired=true` returns active AND retired — see `programs.service`
+    for the same fix and the same reason. The comment below used to say `is_active=false`
+    "opts into the full catalog", which it does not: it is an equality filter, so it
+    returns retired only. The Courses screen's "Show retired" switch was dead for exactly
+    that reason.
+    """
     stmt = select(Course).where(Course.deleted_at.is_(None))
 
-    # Default to active-only (the picker), per §5b. An explicit ?is_active=false
-    # opts into the full catalog/retired view.
-    effective_active = True if is_active is None else is_active
-    stmt = stmt.where(Course.is_active.is_(effective_active))
+    # Default to active-only (the picker), per §5b.
+    if not include_retired:
+        effective_active = True if is_active is None else is_active
+        stmt = stmt.where(Course.is_active.is_(effective_active))
 
     if search:
         like = f"%{search.strip()}%"
@@ -159,7 +171,6 @@ def create_course(
         prerequisites_text=payload.prerequisites_text,
         is_active=True,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(course)
     db.flush()

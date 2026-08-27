@@ -44,6 +44,7 @@ from app.modules.admissions.models import (
     Application,
     ApplicationDocument,
     ApplicationEducation,
+    ApplicationTemp,
     CreditTransferRequest,
 )
 from app.modules.admissions.schemas import (
@@ -63,6 +64,10 @@ from app.modules.admissions.schemas import (
     DocumentRow,
     EducationReplaceRequest,
     EducationRow,
+    PendingApplicationDetail,
+    PendingApplicationListItem,
+    PendingApplicationPage,
+    PendingApplicationWrite,
     ProgramRef,
 )
 from app.modules.offerings.models import Course
@@ -305,7 +310,7 @@ def _age_on(dob: date | None, on: date) -> int | None:
     return years
 
 
-def submission_issues(app_row: Application) -> list[str]:
+def submission_issues(app_row: Application | ApplicationTemp) -> list[str]:
     """What stops this application being SUBMITTED. `[]` = submittable.
 
     Submission is the applicant's form being complete enough to be considered, so the
@@ -315,6 +320,12 @@ def submission_issues(app_row: Application) -> list[str]:
     parent or guardian signature only when the applicant is under 18, which is a fact
     about the applicant's age at the time they sign — knowable here, and not expressible
     as a column constraint.
+
+    **`ApplicationTemp` is accepted too, and that is the point of the union** (D38). A
+    pending form has to be judged by exactly the rules its promotion will be judged by, or
+    the list would advertise "ready to submit" on a form the submit then refuses. Only
+    columns both tables carry are read, which is what makes the one implementation safe
+    for both.
     """
     issues: list[str] = []
     if not (app_row.first_name or "").strip() or not (app_row.last_name or "").strip():
@@ -526,7 +537,6 @@ def create_application(
     row = Application(
         status=ApplicationStatus.DRAFT,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     supplied = payload.model_dump(exclude_unset=True)
     for name in _WRITABLE:
@@ -829,7 +839,6 @@ def accept_application(
         is_active=True,
         must_change_password=True,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(login)
     db.flush()
@@ -885,7 +894,6 @@ def accept_application(
         guardian_name=row.nok_name or row.mother_name or row.father_name,
         guardian_phone=row.nok_phone,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(student)
     db.flush()
@@ -899,7 +907,6 @@ def accept_application(
                 started_at=accepted_on,
                 reason="Admitted",
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
 
@@ -1180,7 +1187,6 @@ def create_credit_transfer(
         status=CreditTransferStatus.PENDING,
         note=payload.note,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(transfer)
     db.flush()
@@ -1355,3 +1361,407 @@ def decide_credit_transfer(
     )
     db.commit()
     return _transfer_read(db, transfer)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D38 · PENDING forms (`student_profile_temp`)
+#
+# The wizard no longer writes on every step. A form reaches the database only when the
+# Registrar presses *Save and close* — into this holding table, owned by whoever typed it
+# — or *Save and submit*, which promotes it into `applications` and deletes it from here.
+#
+# **The scope is `created_by`, and it is enforced in EVERY function below, not just the
+# list.** A Registrar who guessed another Registrar's temp id would otherwise be able to
+# read, overwrite or submit a form that is not theirs; scoping only the list would make
+# that a real hole rather than a theoretical one, since ids travel in URLs.
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Every field a client may write onto a pending form. Identical to `_WRITABLE` by
+#: construction — the temp table mirrors the client-writable half of `applications` — and
+#: aliased rather than re-listed so the two cannot drift apart.
+_TEMP_WRITABLE = _WRITABLE
+
+
+def _may_see_all_pending(actor: User) -> bool:
+    """The Dean sees every pending form; everyone else sees only their own.
+
+    `Role.PRINCIPAL` is the Dean in this deployment (D30 renamed the label, not the enum).
+    """
+    return actor.role == Role.PRINCIPAL
+
+
+def _pending_or_404(db: Session, *, actor: User, temp_id: uuid.UUID) -> ApplicationTemp:
+    """Load a pending form the actor is allowed to touch.
+
+    A row that exists but belongs to someone else raises the SAME 404 as one that does
+    not exist. A 403 would confirm that a form with that id is out there and whose it is
+    — which is the fact the scope is meant to withhold.
+    """
+    stmt = select(ApplicationTemp).where(ApplicationTemp.id == temp_id)
+    if not _may_see_all_pending(actor):
+        stmt = stmt.where(ApplicationTemp.created_by == actor.id)
+    row = db.scalar(stmt)
+    if row is None:
+        raise NotFound("Pending application not found.", code="not_found")
+    return row
+
+
+def _author_names(db: Session, rows: list[ApplicationTemp]) -> dict[uuid.UUID, str]:
+    """`created_by` -> full name, for the Dean's view of a shared queue. One query."""
+    ids = {r.created_by for r in rows if r.created_by is not None}
+    if not ids:
+        return {}
+    return {
+        uid: name
+        for uid, name in db.execute(
+            select(User.id, User.full_name).where(User.id.in_(ids))
+        ).all()
+    }
+
+
+def _temp_education(row: ApplicationTemp) -> list[EducationRow]:
+    """Section B out of `education_json`, in the shape the real table reads in.
+
+    Tolerant of a malformed element rather than raising: a pending form is the Registrar's
+    work in progress, and refusing to render one because a stored row is unreadable would
+    strand the whole form instead of the one line that is wrong.
+    """
+    out: list[EducationRow] = []
+    for order, item in enumerate(row.education_json or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(EducationRow.model_validate({**item, "id": None, "sort_order": order}))
+        except Exception:
+            continue
+    return out
+
+
+def _temp_documents(row: ApplicationTemp) -> list[DocumentRow]:
+    """Section F out of `documents_json`. Same tolerance, same reason."""
+    out: list[DocumentRow] = []
+    for item in row.documents_json or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.append(DocumentRow.model_validate({**item, "id": None}))
+        except Exception:
+            continue
+    return out
+
+
+def _pending_list_item(
+    row: ApplicationTemp, *, author: str | None
+) -> PendingApplicationListItem:
+    return PendingApplicationListItem(
+        id=row.id,
+        status=row.status,
+        full_name=row.full_name,
+        first_name=row.first_name,
+        middle_name=row.middle_name,
+        last_name=row.last_name,
+        school_year=row.school_year,
+        program=None,
+        year_of_study=row.year_of_study,
+        enrollment_load=row.enrollment_load,
+        email=row.email,
+        phone=row.phone,
+        gender=row.gender,
+        created_by=row.created_by,
+        created_by_name=author,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        # The same completeness rules the real submit runs, reported on the READ so the
+        # list can say "ready to submit" without anyone opening the wizard to find out.
+        blocking_issues=submission_issues(row),
+    )
+
+
+def _pending_detail(db: Session, row: ApplicationTemp) -> PendingApplicationDetail:
+    author = _author_names(db, [row]).get(row.created_by) if row.created_by else None
+    base = _pending_list_item(row, author=author)
+    return PendingApplicationDetail(
+        **base.model_dump(),
+        date_of_birth=row.date_of_birth,
+        ssno=row.ssno,
+        civil_status=row.civil_status,
+        religion=row.religion,
+        has_health_condition=row.has_health_condition,
+        health_condition_note=row.health_condition_note,
+        street=row.street,
+        city_town_village=row.city_town_village,
+        district=row.district,
+        mother_name=row.mother_name,
+        father_name=row.father_name,
+        nok_name=row.nok_name,
+        nok_relationship=row.nok_relationship,
+        nok_phone=row.nok_phone,
+        atlib_exam=row.atlib_exam,
+        num_csec=row.num_csec,
+        finance_name=row.finance_name,
+        finance_phone=row.finance_phone,
+        finance_email=row.finance_email,
+        recommendation_received=row.recommendation_received,
+        applicant_signed_at=row.applicant_signed_at,
+        guardian_signed_at=row.guardian_signed_at,
+        academic_year_id=row.academic_year_id,
+        enrolment_status=row.enrolment_status,
+        comments=row.comments,
+        education=_temp_education(row),
+        documents=_temp_documents(row),
+    )
+
+
+def _apply_pending_fields(row: ApplicationTemp, payload: PendingApplicationWrite) -> None:
+    """Copy the whole form onto the row.
+
+    Whole-form rather than presence-based, unlike `update_application`: D38 removed
+    per-section saving, so the browser holds all seven sections and there is nothing on
+    the server that a full body could clobber. An omitted optional field genuinely means
+    empty here.
+    """
+    supplied = payload.model_dump(exclude_unset=True)
+    for name in _TEMP_WRITABLE:
+        if name not in supplied:
+            continue
+        value = supplied[name]
+        if name in ("has_health_condition", "atlib_exam", "recommendation_received"):
+            # NOT NULL columns: an explicit null means "false", not "unset".
+            setattr(row, name, bool(value))
+            continue
+        if isinstance(value, str):
+            value = value.strip() or None
+        if name == "gender":
+            value = normalise_gender(value)  # D37 -- one canonical vocabulary
+        setattr(row, name, value)
+
+    # The names are NOT NULL, and the strip above can turn "  " into None.
+    for field in ("first_name", "last_name"):
+        if not (getattr(row, field) or "").strip():
+            raise ValidationError(
+                "A pending application must have a first and last name.",
+                fields={field: ["Required."]},
+            )
+
+    for flag in ("has_health_condition", "atlib_exam", "recommendation_received"):
+        if getattr(row, flag, None) is None:
+            setattr(row, flag, False)
+
+    # Stored `mode="json"`, so dates land as ISO strings a JSON column can hold and the
+    # read path parses them straight back into the same Pydantic models.
+    row.education_json = [
+        item.model_dump(mode="json", exclude={"id"}) for item in payload.education
+    ]
+    row.documents_json = [
+        item.model_dump(mode="json", exclude={"id"}) for item in payload.documents
+    ]
+
+
+def list_pending_applications(
+    db: Session, *, actor: User, params: PageParams, search: str | None
+) -> PendingApplicationPage:
+    """The Pending forms list. Dean sees all; anyone else sees only what they filed."""
+    stmt = select(ApplicationTemp)
+    if not _may_see_all_pending(actor):
+        stmt = stmt.where(ApplicationTemp.created_by == actor.id)
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(
+            ApplicationTemp.last_name.ilike(like)
+            | ApplicationTemp.first_name.ilike(like)
+            | ApplicationTemp.email.ilike(like)
+        )
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = list(
+        db.scalars(
+            # Surname-first, the same ordering rule as every other directory (§D10).
+            stmt.order_by(
+                ApplicationTemp.last_name.asc(), ApplicationTemp.first_name.asc()
+            )
+            .limit(params.page_size)
+            .offset((params.page - 1) * params.page_size)
+        ).all()
+    )
+    authors = _author_names(db, rows)
+    from math import ceil
+
+    return PendingApplicationPage(
+        items=[
+            _pending_list_item(r, author=authors.get(r.created_by) if r.created_by else None)
+            for r in rows
+        ],
+        total=total,
+        page=params.page,
+        page_size=params.page_size,
+        total_pages=ceil(total / params.page_size) if params.page_size else 0,
+    )
+
+
+def get_pending_application(
+    db: Session, *, actor: User, temp_id: uuid.UUID
+) -> PendingApplicationDetail:
+    return _pending_detail(db, _pending_or_404(db, actor=actor, temp_id=temp_id))
+
+
+def create_pending_application(
+    db: Session, *, actor: User, payload: PendingApplicationWrite
+) -> PendingApplicationDetail:
+    """POST /pending-applications -- *Save and close* on a form not yet on disk."""
+    _assert_program_exists(db, payload.program_id)
+    _assert_year_exists(db, payload.academic_year_id)
+
+    row = ApplicationTemp(
+        status="pending",
+        first_name=payload.first_name.strip(),
+        last_name=payload.last_name.strip(),
+        created_by=actor.id,
+    )
+    _apply_pending_fields(row, payload)
+    db.add(row)
+    db.flush()
+    _audit(
+        db,
+        actor=actor,
+        action="application.pending.create",
+        entity_type="application_temp",
+        entity_id=row.id,
+        summary={"name": row.full_name},
+    )
+    db.commit()
+    return _pending_detail(db, row)
+
+
+def update_pending_application(
+    db: Session, *, actor: User, temp_id: uuid.UUID, payload: PendingApplicationWrite
+) -> PendingApplicationDetail:
+    """PATCH /pending-applications/{id} -- *Save and close* on a form already on disk."""
+    row = _pending_or_404(db, actor=actor, temp_id=temp_id)
+    _assert_program_exists(db, payload.program_id)
+    _assert_year_exists(db, payload.academic_year_id)
+
+    _apply_pending_fields(row, payload)
+    # `created_by` is NOT touched: it is the scope, so reassigning it on a Dean's edit
+    # would silently take the form away from the Registrar who filed it.
+    row.updated_by = actor.id
+    _audit(
+        db,
+        actor=actor,
+        action="application.pending.update",
+        entity_type="application_temp",
+        entity_id=row.id,
+    )
+    db.commit()
+    return _pending_detail(db, row)
+
+
+def delete_pending_application(db: Session, *, actor: User, temp_id: uuid.UUID) -> None:
+    """DELETE /pending-applications/{id} -- a HARD delete, unlike an application.
+
+    There is no admissions record to preserve: the row either becomes an application or
+    the Registrar abandoned a form they were typing.
+    """
+    row = _pending_or_404(db, actor=actor, temp_id=temp_id)
+    _audit(
+        db,
+        actor=actor,
+        action="application.pending.delete",
+        entity_type="application_temp",
+        entity_id=row.id,
+        summary={"name": row.full_name},
+    )
+    db.delete(row)
+    db.commit()
+
+
+def submit_pending_application(
+    db: Session, *, actor: User, temp_id: uuid.UUID
+) -> ApplicationDetail:
+    """POST /pending-applications/{id}/submit -- PROMOTE the pending form, then submit it.
+
+    The temp row becomes a real `applications` row, its two JSON arrays become
+    `application_education` and `application_documents` rows, and the temp row is deleted.
+    One transaction: a promotion that half-happened would leave the same form in both
+    tables, which is the one state nothing downstream is written to cope with.
+
+    **Completeness is checked before anything is staged.** An incomplete form must come
+    back with its reasons AND still be sitting in the pending list — a failed submit that
+    consumed the row would destroy the Registrar's work, which is exactly what D38's
+    save-only-when-asked model exists to prevent.
+
+    `created_by` is carried across, not overwritten with the actor: the Dean submitting a
+    Registrar's form does not make it the Dean's application.
+    """
+    temp = _pending_or_404(db, actor=actor, temp_id=temp_id)
+
+    issues = submission_issues(temp)
+    if issues:
+        raise ValidationError(
+            "This application is not complete enough to submit.",
+            code="application_incomplete",
+            fields={"application": issues},
+        )
+
+    education = _temp_education(temp)
+    documents = _temp_documents(temp)
+    for item in education:
+        if item.graduated and item.graduation_date is None:
+            raise ValidationError(
+                "A graduated institution needs a graduation date.",
+                fields={"graduation_date": [f"Required for {item.institution}."]},
+            )
+
+    row = Application(
+        status=ApplicationStatus.SUBMITTED,
+        created_by=temp.created_by,
+        # THE ONE INSERT THAT STILL STAMPS `updated_by` (D39). Everywhere else a new row
+        # leaves it NULL, because the creator has not yet EDITED anything. Here the actor
+        # is deliberately NOT the creator: `created_by` is carried across from the pending
+        # form so a Dean submitting a Registrar's work does not take it away from them
+        # (D38). That makes `updated_by` the only place on the row that records who
+        # actually performed the submit, so dropping it would lose the fact outright.
+        updated_by=actor.id,
+    )
+    for name in _WRITABLE:
+        setattr(row, name, getattr(temp, name))
+    db.add(row)
+    db.flush()
+
+    for order, item in enumerate(education, start=1):
+        db.add(
+            ApplicationEducation(
+                application_id=row.id,
+                institution=item.institution.strip(),
+                education_level=item.education_level,
+                graduated=item.graduated,
+                graduation_date=item.graduation_date,
+                sort_order=order,
+            )
+        )
+    for item in documents:
+        db.add(
+            ApplicationDocument(
+                application_id=row.id,
+                document_type=item.document_type,
+                file_name=item.file_name,
+                content_type=item.content_type,
+                size_bytes=item.size_bytes,
+                received=item.received,
+            )
+        )
+
+    db.delete(temp)
+    _audit(
+        db,
+        actor=actor,
+        action="application.pending.submit",
+        entity_id=row.id,
+        summary={
+            "name": row.full_name,
+            "promoted_from": str(temp_id),
+            "education_rows": len(education),
+            "document_rows": len(documents),
+        },
+    )
+    db.commit()
+    return _detail(db, row)

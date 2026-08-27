@@ -209,7 +209,6 @@ def add_prerequisite(
             program_id=payload.program_id,
             requirement_type=payload.requirement_type,
             created_by=actor.id,
-            updated_by=actor.id,
         )
     )
     _audit(

@@ -787,6 +787,33 @@ Append-only event log for sensitive mutations beyond the inline `AuditMixin` (§
 
 > **Why `bigint identity` for the audit log only (the §1.2 exception):** an internal, append-only, insert-heavy table never exposed by id in a URL — the enumeration/PII argument for UUID doesn't apply, and a monotonic `bigint` gives perfect insert locality and natural chronological ordering for the highest-write table. A deliberate, documented divergence; every *business* table stays UUID.
 
+#### `student_profile_temp` (D38)
+
+A **saved but UNSUBMITTED** admission form. Created by `012_application_temp.sql`; the wizard writes
+it on *Save and close*, and `POST /pending-applications/{id}/submit` promotes it into `applications`
+and deletes it. Full rationale in **`docs/d38-pending-applications-plan.md`** and in the migration's
+own header, which is the authority on the column list.
+
+Three properties are the reason it exists rather than another `applications.status`:
+
+- **`created_by` is the VISIBILITY, not just provenance.** A Registrar reaches only their own rows;
+  the Dean reaches all of them. `applications` is a shared record and has no such rule, and one table
+  cannot carry two ownership models. Enforced on *every* endpoint — someone else's row answers **404**,
+  never 403, since a 403 confirms the row exists and whose it is.
+- **Sections B and F ride as JSON** (`education_json`, `documents_json`, both `longtext` +
+  `json_valid` CHECK) instead of duplicating `application_education` / `application_documents`, which
+  are keyed by an application id a never-promoted form has not got.
+- **Hard-deleted** — no `deleted_at`. The row either became an application or was abandoned; there is
+  no admissions record to keep.
+
+Every *client-writable* column of `applications` is mirrored under the same spelling, so promotion is
+an attribute-for-attribute copy. The five the ACCEPT transition writes are deliberately absent
+(`date_accepted`, `student_code`, `decided_by_user_id`, `decided_at`, `student_id`) — a pending form
+has no decision and no student, so `student_id` would be an FK that could never be satisfied.
+
+> **`status` is `varchar(20)` DEFAULT `'pending'`, not the `applications.status` enum.** Adding a
+> `pending` member there would widen the vocabulary the decision queue is built on.
+
 ---
 
 ## 4. Relationships

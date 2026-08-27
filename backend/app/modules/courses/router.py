@@ -58,13 +58,19 @@ def list_courses(
     params: PageParams = Depends(page_params),
     search: Annotated[str | None, Query(max_length=120)] = None,
     is_active: Annotated[bool | None, Query()] = None,
+    include_retired: Annotated[bool, Query()] = False,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> Page[CourseListItem]:
     """Everyone may read the catalog (reference data, no PII). Default is_active
-    filter hides retired courses from the picker."""
+    filter hides retired courses from the picker; `include_retired=true` drops the
+    filter and returns both."""
     return service.list_courses(
-        db, params=params, search=search, is_active=is_active
+        db,
+        params=params,
+        search=search,
+        is_active=is_active,
+        include_retired=include_retired,
     )
 
 

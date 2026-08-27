@@ -123,6 +123,30 @@ provenance they have, so every pre-2026-08-20 grade and attendance row keeps a N
 permanently. Treat "`created_by IS NULL`" on those two tables as "written before the fix", not as
 "written by nobody".
 
+**SUPERSEDED IN PART BY D39 (2026-08-24) — `updated_by` IS NOW NULL ON INSERT.** Everything
+above about `created_by` still stands. What changed is its partner: an `AuditMixin` row used
+to be constructed with `created_by = updated_by = actor.id`, so a record nobody had ever
+edited still named a last editor — and "created and never touched" was indistinguishable
+from "created, then edited by the same person". **29 INSERT sites across 11 modules** now
+set `created_by` alone, and `updated_by IS NULL` means "never modified since creation".
+
+Two deliberate exceptions:
+
+- **The gradebook and attendance UPSERTS are unchanged.** `grades.upsert_grades` and
+  `attendance.upsert_register` set `row.updated_by = actor.id` by attribute assignment in a
+  shared tail, not as a constructor kwarg. There the row IS the mutation record — FR-GRD-06
+  and FR-ATT-04 require a mark to carry actor + timestamp — and two tests pin it
+  (`test_grades.py::test_graded_at_and_updated_by_are_stamped`,
+  `test_attendance.py::test_enrollment_semester_and_updated_by_are_stamped`).
+- **`admissions.submit_pending_application` still stamps it**, and is the only INSERT that
+  does. `created_by` there is carried across from the pending form so a Dean submitting a
+  Registrar's work does not take it away from them (D38), which makes `updated_by` the only
+  place on the row recording who actually performed the submit.
+
+Rows written before 2026-08-24 keep a non-NULL `updated_by` from creation, so — exactly as
+with `created_by` above — treat `updated_by = created_by` with `updated_at = created_at` on
+an old row as "possibly never edited", not as evidence of an edit.
+
 Two non-defects worth recording so they are not "fixed" later: `school_profile` and
 `assessment_policies` are singletons the seed creates and the app only ever *updates*, so their
 NULL `created_by` is correct; and `student_documents` has no application write path at all.

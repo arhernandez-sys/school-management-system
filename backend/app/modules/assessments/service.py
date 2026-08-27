@@ -362,7 +362,6 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
         allow_makeup=payload.allow_makeup,
         drop_lowest_count=payload.drop_lowest_count,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(a)
     db.flush()
@@ -734,7 +733,7 @@ def create_category(db: Session, *, actor: User, offering_id, payload):
     _assert_cat_name_unique(db, cs.id, payload.name)
     c = AssessmentCategory(
         offering_id=cs.id, name=payload.name.strip(), weight=payload.weight,
-        drop_lowest_count=payload.drop_lowest_count, created_by=actor.id, updated_by=actor.id,
+        drop_lowest_count=payload.drop_lowest_count, created_by=actor.id, 
     )
     db.add(c)
     db.flush()

@@ -141,18 +141,36 @@ def _curriculum_totals(
 
 
 def list_programs(
-    db: Session, *, params: PageParams, search: str | None, is_active: bool | None
+    db: Session,
+    *,
+    params: PageParams,
+    search: str | None,
+    is_active: bool | None,
+    include_retired: bool = False,
 ):
     """GET /programs (authenticated). Page[ProgramListItem]; default sort code.
 
     Defaults to ACTIVE only, like the course catalog: the common caller is a picker,
     and a retired programme in it is a way to enrol a student into a study the college
-    no longer runs. `?is_active=false` opts into the full list.
+    no longer runs.
+
+    **`?include_retired=true` is what returns BOTH.** The docstring here used to claim
+    `?is_active=false` did, and it never could: that is an equality filter, so it returns
+    only the RETIRED ones. The management screen's "Show retired" switch had nothing to
+    call — it dropped the parameter, the default put it straight back, and the switch
+    moved nothing on screen. `is_active` keeps its exact meaning; the new flag says
+    "do not filter on this column at all", which is a different question and now has its
+    own parameter to ask it with.
+
+    `include_retired` wins over `is_active` when both arrive: the caller has asked for
+    everything, and silently intersecting that with an equality filter would hand back a
+    narrower list than either parameter alone describes.
     """
     stmt = select(Program).where(Program.deleted_at.is_(None))
 
-    effective_active = True if is_active is None else is_active
-    stmt = stmt.where(Program.is_active.is_(effective_active))
+    if not include_retired:
+        effective_active = True if is_active is None else is_active
+        stmt = stmt.where(Program.is_active.is_(effective_active))
 
     if search:
         like = f"%{search.strip()}%"
@@ -254,7 +272,6 @@ def create_program(
         min_passing_grade_point=payload.min_passing_grade_point,
         is_active=True,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(program)
     db.flush()
@@ -403,7 +420,6 @@ def add_program_course(
             term_order=payload.term_order,
             is_required=payload.is_required,
             created_by=actor.id,
-            updated_by=actor.id,
         )
     )
     _audit(

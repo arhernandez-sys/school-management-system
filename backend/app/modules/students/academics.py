@@ -198,7 +198,6 @@ def set_program(
             started_at=effective,
             reason=payload.reason,
             created_by=actor.id,
-            updated_by=actor.id,
         )
     )
     previous = student.program_id

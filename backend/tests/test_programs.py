@@ -144,6 +144,48 @@ class TestListPrograms:
         }
         assert str(retired.id) in ids
 
+    def test_include_retired_returns_both(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """REGRESSION (D39). The Programmes screen's "Show retired" switch turned the
+        filter OFF by omitting `is_active` — and omitting it is exactly what triggers the
+        active-only default, so the switch moved nothing on screen. `is_active=false`
+        could not stand in either: it is an equality filter, so it hides the ACTIVE ones.
+        `include_retired=true` is the only parameter that returns both.
+        """
+        live = _make_program(db_session)
+        retired = _make_program(db_session, is_active=False)
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+
+        ids = {
+            i["id"]
+            for i in client.get(
+                PROGRAMS, headers=H, params={"include_retired": "true", "page_size": 200}
+            ).json()["items"]
+        }
+        assert str(live.id) in ids
+        assert str(retired.id) in ids
+
+    def test_include_retired_beats_is_active(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Both parameters at once: "everything" wins. Intersecting them would return a
+        narrower list than either one alone describes."""
+        live = _make_program(db_session)
+        retired = _make_program(db_session, is_active=False)
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        ids = {
+            i["id"]
+            for i in client.get(
+                PROGRAMS,
+                headers=H,
+                params={"include_retired": "true", "is_active": "true", "page_size": 200},
+            ).json()["items"]
+        }
+        assert {str(live.id), str(retired.id)} <= ids
+
     def test_search_matches_code_name_and_award(
         self, client, make_user, auth_headers, db_session
     ) -> None:

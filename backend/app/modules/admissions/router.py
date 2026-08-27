@@ -3,8 +3,10 @@
 Thin transport; the service owns DB + transactions. Two routers are exported and mounted
 under `/api/v1`:
 
-  * `router`                  prefix `/applications`     — the admission record
-  * `credit_transfers_router` prefix `/credit-transfers`  — decisions on ONE request
+  * `router`                       prefix `/applications`        — the admission record
+  * `credit_transfers_router`      prefix `/credit-transfers`     — decisions on ONE request
+  * `pending_applications_router`  prefix `/pending-applications` — SAVED-but-unsubmitted
+                                                                    forms (D38)
 
 The second router exists because a credit transfer is addressed by its OWN id once filed
 — the Dean works a queue across applications and should not have to know which application
@@ -41,6 +43,16 @@ Endpoints:
   DELETE /credit-transfers/{id}                     P/S   -> 204
   POST   /credit-transfers/{id}/decision            Dean  -> CreditTransferRead
 
+D38 — the pending form. Row-level scope: a Registrar reaches only what they filed, the
+Dean reaches everything. Someone else's row answers 404, never 403.
+
+  GET    /pending-applications                      P/S   -> PendingApplicationPage
+  POST   /pending-applications                      P/S   -> PendingApplicationDetail (201)
+  GET    /pending-applications/{id}                 P/S   -> PendingApplicationDetail
+  PATCH  /pending-applications/{id}                 P/S   -> PendingApplicationDetail
+  DELETE /pending-applications/{id}                 P/S   -> 204 (HARD)
+  POST   /pending-applications/{id}/submit          P/S   -> ApplicationDetail (201)
+
 The transitions are POSTs to named sub-paths rather than a PATCH of `status`, because each
 one does more than set a field — accept creates a user, a student and an ID — and a client
 that could write `status` directly would be able to skip all of it.
@@ -73,11 +85,19 @@ from app.modules.admissions.schemas import (
     CreditTransferUpdateRequest,
     DocumentReplaceRequest,
     EducationReplaceRequest,
+    PendingApplicationDetail,
+    PendingApplicationPage,
+    PendingApplicationWrite,
 )
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/applications", tags=["admissions"])
 credit_transfers_router = APIRouter(prefix="/credit-transfers", tags=["admissions"])
+#: D38 — saved-but-unsubmitted forms (`student_profile_temp`). Its own prefix so the
+#: literal `pending` can never be parsed as an application UUID; see the section below.
+pending_applications_router = APIRouter(
+    prefix="/pending-applications", tags=["admissions"]
+)
 
 _ERR = {"model": ErrorResponse}
 #: Registrar + Dean. Admission is administration (§D14).
@@ -421,3 +441,125 @@ def decide_credit_transfer(
     return service.decide_credit_transfer(
         db, actor=actor, transfer_id=transfer_id, payload=payload
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D38 · PENDING forms — `/pending-applications`
+#
+# **Its own prefix, deliberately, rather than `/applications/pending`.** Under the
+# `/applications` router the literal segment would have to be declared before
+# `/{application_id}` or FastAPI would try to parse "pending" as a UUID and answer 422 —
+# a route-ordering trap that survives exactly until someone adds an endpoint above it.
+# A separate router cannot be broken that way, and it is the same pattern
+# `credit_transfers_router` already uses for the same reason.
+#
+# The role gate is the SAME `_admissions` as the applications router: filing an admission
+# form is administration. The per-row scope (a Registrar sees only what they filed, the
+# Dean sees everything) is enforced in the service, not here — it depends on the row.
+# ══════════════════════════════════════════════════════════════════════════════
+@pending_applications_router.get(
+    "",
+    response_model=PendingApplicationPage,
+    summary="Pending forms — own rows for a Registrar, ALL rows for the Dean",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_pending_applications(
+    search: Annotated[str | None, Query(max_length=100)] = None,
+    params: PageParams = Depends(page_params),
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationPage:
+    """Saved-but-unsubmitted forms. Each row carries `blocking_issues`, so the list can
+    say what a form still needs without anyone re-opening the wizard."""
+    return service.list_pending_applications(
+        db, actor=actor, params=params, search=search
+    )
+
+
+@pending_applications_router.post(
+    "",
+    response_model=PendingApplicationDetail,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Save a form as pending (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def create_pending_application(
+    payload: PendingApplicationWrite,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """The WHOLE form in one body, including Sections B and F — D38 removed per-step
+    saving, so the browser holds all seven sections until *Save and close*."""
+    return service.create_pending_application(db, actor=actor, payload=payload)
+
+
+@pending_applications_router.get(
+    "/{temp_id}",
+    response_model=PendingApplicationDetail,
+    summary="Re-open a pending form (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """404 — not 403 — for someone else's form. A 403 would confirm the row exists."""
+    return service.get_pending_application(db, actor=actor, temp_id=temp_id)
+
+
+@pending_applications_router.patch(
+    "/{temp_id}",
+    response_model=PendingApplicationDetail,
+    summary="Re-save a pending form (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def update_pending_application(
+    temp_id: uuid.UUID,
+    payload: PendingApplicationWrite,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """Whole-form, not per-section: there is nothing on the server a full body could
+    clobber. `created_by` is never reassigned — it is the scope."""
+    return service.update_pending_application(
+        db, actor=actor, temp_id=temp_id, payload=payload
+    )
+
+
+@pending_applications_router.delete(
+    "/{temp_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    summary="Discard a pending form — HARD (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def delete_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> Response:
+    """Hard, unlike an application: there is no admissions record to keep — the form
+    either became an application or was abandoned."""
+    service.delete_pending_application(db, actor=actor, temp_id=temp_id)
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+
+@pending_applications_router.post(
+    "/{temp_id}/submit",
+    response_model=ApplicationDetail,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Promote a pending form into an application and submit it",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def submit_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """One transaction: the temp row becomes an `applications` row, its two JSON arrays
+    become the real child rows, and the temp row is deleted.
+
+    Returns the **application**, not the pending form — the pending form no longer exists.
+    422 `application_incomplete` lists everything missing at once AND leaves the pending
+    row untouched, so a refused submit never costs the Registrar their typing."""
+    return service.submit_pending_application(db, actor=actor, temp_id=temp_id)

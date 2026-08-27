@@ -412,3 +412,101 @@ class ApplicationAcceptResponse(BaseModel):
     #: code. Reported because it is the one part of acceptance that changes what the
     #: student still has to study, and it is otherwise invisible.
     transferred_course_codes: list[str] = Field(default_factory=list)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# D38 · the PENDING form (`student_profile_temp`)
+# ──────────────────────────────────────────────────────────────────────────────
+class PendingApplicationWrite(_ApplicationFields):
+    """POST / PATCH `/pending-applications` — the WHOLE form in one body.
+
+    Unlike `ApplicationUpdateRequest` this is not a per-section patch, because D38 removed
+    per-section saving: the wizard holds all seven sections in the browser and writes them
+    once, when the Registrar presses *Save and close* or *Save and submit*. Sending the
+    whole form is therefore correct rather than wasteful — there are no other sections
+    sitting on the server that a full body could clobber.
+
+    The names stay required. A pending form with no name on it cannot be found again in a
+    list, which is the only thing the table is for.
+    """
+
+    first_name: str = Field(min_length=1, max_length=50)
+    last_name: str = Field(min_length=1, max_length=50)
+    #: Section B's institution table. Whole-set, like `PUT .../education`.
+    education: list[EducationRow] = Field(default_factory=list, max_length=20)
+    #: Section F's checklist. Whole-set, like `PUT .../documents`.
+    documents: list[DocumentRow] = Field(default_factory=list, max_length=40)
+
+
+class PendingApplicationListItem(BaseModel):
+    """A row in the Pending forms list.
+
+    `created_by_name` is here because the Dean sees everyone's rows and "whose form is
+    this?" is the first question a shared queue raises. A Registrar sees only their own,
+    so for them the column is constant and the frontend hides it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    status: str = "pending"
+    full_name: str
+    first_name: str
+    middle_name: str | None = None
+    last_name: str
+    school_year: str | None = None
+    program: ProgramRef | None = None
+    year_of_study: YearOfStudy | None = None
+    enrollment_load: EnrollmentLoad | None = None
+    email: str | None = None
+    phone: str | None = None
+    gender: str | None = None
+    created_by: UUID | None = None
+    created_by_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    #: What would stop this form being submitted, so the list can say "ready" or "3 things
+    #: missing" without opening the wizard. Same function as `ApplicationDetail`'s.
+    blocking_issues: list[str] = Field(default_factory=list)
+
+
+class PendingApplicationDetail(PendingApplicationListItem):
+    """The whole pending form, as the wizard re-opens it."""
+
+    date_of_birth: date | None = None
+    ssno: str | None = None
+    civil_status: str | None = None
+    religion: str | None = None
+    has_health_condition: bool = False
+    health_condition_note: str | None = None
+    street: str | None = None
+    city_town_village: str | None = None
+    district: District | None = None
+    mother_name: str | None = None
+    father_name: str | None = None
+    nok_name: str | None = None
+    nok_relationship: str | None = None
+    nok_phone: str | None = None
+    atlib_exam: bool = False
+    num_csec: int | None = None
+    finance_name: str | None = None
+    finance_phone: str | None = None
+    finance_email: str | None = None
+    recommendation_received: bool = False
+    applicant_signed_at: date | None = None
+    guardian_signed_at: date | None = None
+    academic_year_id: UUID | None = None
+    enrolment_status: str | None = None
+    comments: str | None = None
+
+    #: Read back from `education_json` / `documents_json`, in the same shape the real
+    #: child tables are read in, so the wizard has one rendering path for both sources.
+    education: list[EducationRow] = Field(default_factory=list)
+    documents: list[DocumentRow] = Field(default_factory=list)
+
+
+class PendingApplicationPage(BaseModel):
+    items: list[PendingApplicationListItem] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 25
+    total_pages: int = 0

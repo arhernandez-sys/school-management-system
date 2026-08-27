@@ -534,7 +534,6 @@ def create_announcement(
         published_at=published_at,
         expires_at=payload.expires_at,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(row)
     db.flush()

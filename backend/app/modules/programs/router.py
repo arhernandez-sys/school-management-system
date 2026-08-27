@@ -66,12 +66,22 @@ def list_programs(
     params: PageParams = Depends(page_params),
     search: Annotated[str | None, Query(max_length=120)] = None,
     is_active: Annotated[bool | None, Query()] = None,
+    include_retired: Annotated[bool, Query()] = False,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> Page[ProgramListItem]:
-    """Default `is_active` filter hides retired programmes from pickers."""
+    """Default `is_active` filter hides retired programmes from pickers.
+
+    `include_retired=true` drops the filter entirely and returns active AND retired —
+    what the Programmes screen's "Show retired" switch needs. `is_active` stays an
+    equality filter, so `is_active=false` still means "retired only".
+    """
     return service.list_programs(
-        db, params=params, search=search, is_active=is_active
+        db,
+        params=params,
+        search=search,
+        is_active=is_active,
+        include_retired=include_retired,
     )
 
 

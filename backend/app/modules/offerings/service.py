@@ -773,7 +773,6 @@ def create_offering(db: Session, *, actor: User, payload):
         capacity=payload.capacity,
         is_archived=False,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(offering)
     db.flush()
@@ -785,7 +784,6 @@ def create_offering(db: Session, *, actor: User, payload):
                 teacher_id=tid,
                 is_lead=(tid == lead),
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
     for want in payload.meetings:
@@ -797,7 +795,6 @@ def create_offering(db: Session, *, actor: User, payload):
                 end_time=want.end_time,
                 room=(want.room or None),
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
 
@@ -918,7 +915,6 @@ def assign_teachers(db: Session, *, actor: User, offering_id: uuid.UUID, payload
                 teacher_id=tid,
                 is_lead=(tid == lead),
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
     _audit(
@@ -1124,7 +1120,6 @@ def enroll_students(db: Session, *, actor: User, offering_id: uuid.UUID, payload
                 # to `enrolled`, so every pre-D35 caller is unchanged.
                 enrollment_status=payload.enrollment_status,
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
 
@@ -1343,7 +1338,6 @@ def replace_meetings(db: Session, *, actor: User, offering_id: uuid.UUID, payloa
                 end_time=want.end_time,
                 room=(want.room.strip() or None) if want.room else None,
                 created_by=actor.id,
-                updated_by=actor.id,
             )
         )
 
