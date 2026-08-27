@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import {
   Alert,
   AlertTitle,
@@ -265,7 +266,7 @@ export function ApplicationReviewScreen() {
         <Section title="Section A · Personal information">
           <Stack spacing={2}>
             <Box sx={grid}>
-              <Field label="Date of birth" value={app.date_of_birth} />
+              <Field label="Date of birth" value={formatSchoolDate(app.date_of_birth)} />
               <Field label="Gender" value={app.gender} />
               <Field label="Civil status" value={app.civil_status} />
               <Field label="Religion" value={app.religion} />
@@ -317,7 +318,9 @@ export function ApplicationReviewScreen() {
                     kind={row.education_level === 'Tertiary' ? 'info' : 'neutral'}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    {row.graduated ? `Graduated ${row.graduation_date ?? ''}` : 'Not graduated'}
+                    {row.graduated
+                      ? `Graduated ${formatSchoolDate(row.graduation_date)}`.trim()
+                      : 'Not graduated'}
                   </Typography>
                 </Box>
               ))}

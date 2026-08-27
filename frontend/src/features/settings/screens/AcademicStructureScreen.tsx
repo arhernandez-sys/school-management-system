@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import {
   Alert,
   Box,
@@ -407,7 +408,7 @@ export function AcademicStructureScreen() {
                     )}
                   </Stack>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    {year.start_date} → {year.end_date}
+                    {formatSchoolDate(year.start_date)} → {formatSchoolDate(year.end_date)}
                   </Typography>
                   <Divider sx={{ mb: 1 }} />
                   {isMobile ? (
@@ -457,7 +458,7 @@ export function AcademicStructureScreen() {
                                   Dates
                                 </Typography>
                                 <Typography variant="body2">
-                                  {sem.start_date} → {sem.end_date}
+                                  {formatSchoolDate(sem.start_date)} → {formatSchoolDate(sem.end_date)}
                                 </Typography>
                               </Box>
                               <Box
@@ -517,7 +518,7 @@ export function AcademicStructureScreen() {
                               {sem.term_type}
                             </TableCell>
                             <TableCell>
-                              {sem.start_date} → {sem.end_date}
+                              {formatSchoolDate(sem.start_date)} → {formatSchoolDate(sem.end_date)}
                               {/* D30 §D6 — a closed grade window is the reason a Lecturer
                                   cannot save, so it belongs on the term row rather than
                                   only inside the edit dialog. */}

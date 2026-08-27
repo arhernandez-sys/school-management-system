@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { Box, Chip, Link as MuiLink, Paper, Stack, Typography } from '@mui/material';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import ClassOutlinedIcon from '@mui/icons-material/ClassOutlined';
@@ -106,7 +107,7 @@ export function StudentEnrollmentPanel({
         />
         <ProfileStatTile
           icon={<CalendarMonthOutlinedIcon fontSize="small" />}
-          value={student.enrollment_date || '—'}
+          value={formatSchoolDate(student.enrollment_date) || '—'}
           label="Enrolled since"
           color="primary"
         />

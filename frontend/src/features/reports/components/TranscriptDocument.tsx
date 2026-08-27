@@ -147,7 +147,7 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
           {student.full_name}
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          DOB {student.date_of_birth} · Status: {student.status}
+          DOB {formatSchoolDate(student.date_of_birth)} · Status: {student.status}
           {student.year_of_study ? ` · ${student.year_of_study}` : ''}
         </Typography>
         {/* D39 (Meeting #2 item 7) — the programme. Without it the course list is

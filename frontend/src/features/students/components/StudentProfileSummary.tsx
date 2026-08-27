@@ -1,4 +1,5 @@
 import { Box, Card, CardContent, Divider, Stack, Typography } from '@mui/material';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { alpha } from '@mui/material/styles';
 import CakeOutlinedIcon from '@mui/icons-material/CakeOutlined';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
@@ -170,7 +171,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
     },
     { label: 'Year of study', value: student.year_of_study || '—' },
     { label: 'Study load', value: student.enrollment_load || '—' },
-    { label: 'Enrolled', value: student.enrollment_date || '—' },
+    { label: 'Enrolled', value: formatSchoolDate(student.enrollment_date) || '—' },
     { label: 'Status', value: STUDENT_STATUS_LABEL[student.status] },
     // Only for a student who came through admissions; a paper registration has none, and
     // the row is dropped rather than saying "none".
@@ -191,7 +192,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
   const comments = student.comments?.trim() || null;
 
   const personalRows = present([
-    { label: 'Date of birth', value: student.date_of_birth || '—' },
+    { label: 'Date of birth', value: formatSchoolDate(student.date_of_birth) || '—' },
     // D37 — `genderLabel`, not a ternary. `gender === 'female' ? 'Female' : 'Male'`
     // showed "Male" for a stored 'Female' (capital F falls to the else branch) and for
     // any other value too. Live data already had 'Male' on the applications table.
