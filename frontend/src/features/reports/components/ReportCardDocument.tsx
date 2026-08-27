@@ -12,7 +12,6 @@ import {
 } from '@mui/material';
 import { PrintLayout, EmptyState } from '@shared/components';
 import { formatSchoolDate } from '@shared/utils/schoolDate';
-import { GradeLetter } from './GradeLetter';
 import type { ReportCard } from '../types';
 
 /**
@@ -194,13 +193,19 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
                           rather than a placeholder, and the row is still here so the
                           credits are visibly part of the GPA denominator.
 
-                          D39 (Meeting #2): the letter is PLAIN TEXT here, not a
-                          `GradeLetter` chip. The chip colour-codes the band (A green,
-                          F red), which reads as an on-screen status pill rather than an
-                          official mark — and printed, the outline and tint cost ink to
-                          say nothing the letter has not already said. `GradeLetter` is
-                          deliberately kept for `Session average` below and on screen
-                          elsewhere; only this column changed. */}
+                          D39 (Meeting #2): the letter is PLAIN TEXT here, and so is
+                          `Session average` below — this document renders no grade chips
+                          at all. The chip colour-coded the band (A green, F red), which
+                          reads as an on-screen status pill rather than an official mark,
+                          and printed, the outline and tint cost ink to say nothing the
+                          letter has not already said.
+
+                          Removing the last of them left `./GradeLetter` with no call
+                          sites anywhere. It is kept rather than deleted because the
+                          screens that DO want a coloured letter (the student dashboard,
+                          the gradebook cell) currently each carry their own copy of the
+                          letter-to-colour mapping, and this is the component they should
+                          converge on. If that never happens, delete it. */}
                       {row.status === 'pending' || !row.letter ? (
                         <Typography variant="body2" color="text.secondary" component="span">
                           —
@@ -266,7 +271,11 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
                 <Typography variant="h5" component="span">
                   {term_average != null ? term_average.toFixed(1) : '—'}
                 </Typography>
-                {term_average_letter && <GradeLetter letter={term_average_letter} />}
+                {term_average_letter && (
+                  <Typography variant="h6" component="span" sx={{ fontWeight: 600 }}>
+                    {term_average_letter}
+                  </Typography>
+                )}
               </Stack>
             </Box>
           </Stack>
