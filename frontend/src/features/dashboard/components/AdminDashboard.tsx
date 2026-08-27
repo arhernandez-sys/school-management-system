@@ -70,7 +70,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
           value={stats.new_students_term ?? 0}
           icon={<PersonAddAlt1Icon />}
           color="info"
-          helperText="New to school this term"
+          helperText="New to school this session"
           to={ROUTES.students}
         />
       </Grid>
@@ -91,7 +91,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
           icon={<EventAvailableIcon />}
           color="success"
           progress={stats.attendance_rate}
-          progressLabel="School-wide, current term"
+          progressLabel="School-wide, current session"
           to={ROUTES.attendance}
         />
       </Grid>
@@ -120,7 +120,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
           title="Enrollment trend"
           type="line"
           data={trendData}
-          categoryLabel="Term"
+          categoryLabel="Session"
           valueLabel="Students"
         />
       </Grid>

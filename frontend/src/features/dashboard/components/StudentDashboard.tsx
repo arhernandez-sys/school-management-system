@@ -10,6 +10,7 @@ import {
   Typography,
 } from '@mui/material';
 import GradeIcon from '@mui/icons-material/Grade';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import SchoolIcon from '@mui/icons-material/School';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import UpcomingIcon from '@mui/icons-material/Upcoming';
@@ -25,9 +26,10 @@ export interface StudentDashboardProps {
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'TBD';
-  const d = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  // `iso` here is a date-only `YYYY-MM-DD`, which the formatter reads as a calendar date
+  // rather than as UTC midnight — the reason the old `T00:00:00Z` suffix is gone.
+  return formatSchoolDayMonth(iso);
 }
 
 /** Map a letter grade to a status kind (passing letters read as success, F as error). */
@@ -60,7 +62,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
       {/* Stat row — four tiles, so sm halves and md quarters rather than thirds. */}
       <Grid item xs={12} sm={6} md={3}>
         <StatCard
-          label="Term GPA"
+          label="Session GPA"
           value={stats.gpa != null ? stats.gpa.toFixed(2) : '—'}
           icon={<SchoolIcon />}
           color="primary"
@@ -76,7 +78,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
       </Grid>
       <Grid item xs={12} sm={6} md={3}>
         <StatCard
-          label="Term average"
+          label="Session average"
           value={averageDisplay}
           icon={<GradeIcon />}
           color="info"
@@ -116,7 +118,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
               <EmptyState
                 icon={<MenuBookIcon fontSize="inherit" />}
                 title="No classes yet"
-                description="You aren't enrolled in any courses this term."
+                description="You aren't enrolled in any courses this session."
                 variant="card"
               />
             ) : (
@@ -155,7 +157,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
               <EmptyState
                 icon={<GradeIcon fontSize="inherit" />}
                 title="No released grades"
-                description="Grades appear here once your teachers release them."
+                description="Grades appear here once your lecturers release them."
                 variant="card"
               />
             ) : (

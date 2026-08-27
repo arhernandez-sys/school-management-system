@@ -26,14 +26,14 @@ const ERROR_COPY: Record<string, string> = {
   // means that exact combination exists — not that the course is taken. Leaving the
   // section blank counts as a section, which is why a second blank one also collides.
   duplicate_offering:
-    'This course is already offered in that term with the same section code. Use a different section code.',
+    'This course is already offered in that session with the same section code. Use a different section code.',
   offering_not_found: 'That course offering no longer exists, or you do not have access to it.',
   offering_has_history:
     'This offering already has assessments or attendance recorded. Archive it instead of deleting it.',
   course_not_found: 'That course is no longer in the catalog. Pick another one.',
-  semester_not_found: 'That term no longer exists. Pick another one.',
+  semester_not_found: 'That session no longer exists. Pick another one.',
   year_archived: 'That academic year is archived and cannot be changed.',
-  semester_mismatch: 'That offering runs in a different term from the enrolment you are making.',
+  semester_mismatch: 'That offering runs in a different session from the enrolment you are making.',
   // Academic structure
   active_year_exists: 'An active academic year already exists. Archive it before creating a new one.',
   year_already_archived: 'This academic year is already archived.',

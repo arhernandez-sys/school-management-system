@@ -11,6 +11,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PrintLayout, EmptyState } from '@shared/components';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { GradeLetter } from './GradeLetter';
 import type { ReportCard } from '../types';
 
@@ -48,23 +49,6 @@ import type { ReportCard } from '../types';
 export interface ReportCardDocumentProps {
   data: ReportCard;
   variant?: 'mid-semester' | 'end-of-semester';
-}
-
-/**
- * A freeze instant in the reader's own timezone, to the day.
- *
- * To the DAY, not the minute: "the marks as they stood on 12 October" is what a reader
- * needs from a report card, and a timestamp would imply a precision the grading process
- * does not have.
- */
-function formatFrozenAt(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
 }
 
 /** The label block under the letterhead: Student ID · Name · Program · Semester · Period · Block. */
@@ -158,7 +142,10 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
           color="text.secondary"
           sx={{ textAlign: 'center', mb: 3 }}
         >
-          Grades as recorded on {formatFrozenAt(frozen_at)}
+          {/* To the DAY, not the minute: "the marks as they stood on 24/08/2026" is what
+              a reader needs from a report card, and a timestamp would imply a precision
+              the grading process does not have. D39 made the format dd/mm/yyyy. */}
+          Grades as recorded on {formatSchoolDate(frozen_at)}
         </Typography>
       )}
       {!frozen_at && <Box sx={{ mb: 2 }} />}

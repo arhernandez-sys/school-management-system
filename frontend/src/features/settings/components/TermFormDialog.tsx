@@ -17,7 +17,7 @@ export interface TermFormValues {
    */
   grade_submission_deadline: string | null;
   /**
-   * The mid-term grading window (D32). Same always-sent contract as the deadline. Both
+   * The mid-session grading window (D32). Same always-sent contract as the deadline. Both
    * null clears the window; the server rejects one without the other with a 422, which
    * `midtermHalfSet` below catches first so the Dean never sees it.
    */
@@ -134,8 +134,8 @@ export function TermFormDialog({
   return (
     <FormDialog
       open={open}
-      title={editing ? 'Edit term' : `Add a term to ${yearName}`}
-      submitLabel={editing ? 'Save changes' : 'Add term'}
+      title={editing ? 'Edit session' : `Add a session to ${yearName}`}
+      submitLabel={editing ? 'Save changes' : 'Add session'}
       submitting={submitting}
       submitDisabled={
         name.trim().length === 0 || !seqValid || seqTaken || !datesValid || !midtermValid
@@ -158,13 +158,13 @@ export function TermFormDialog({
       <Stack spacing={2} sx={{ mt: 1 }}>
         {!editing && (
           <Alert severity="info">
-            The term is added inactive. Activating it moves the school&apos;s current term,
-            so that stays a separate, deliberate action.
+            The session is added inactive. Activating it moves the school&apos;s current
+            session, so that stays a separate, deliberate action.
           </Alert>
         )}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
-            label="Term name"
+            label="Session name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -176,7 +176,7 @@ export function TermFormDialog({
           />
           <TextField
             select
-            label="Kind"
+            label="Session type"
             value={termType}
             onChange={(e) => setTermType(e.target.value as TermType)}
             fullWidth
@@ -199,7 +199,7 @@ export function TermFormDialog({
           error={Boolean(fieldErrors?.sequence) || seqTaken}
           helperText={
             seqTaken
-              ? 'Another term in this year already uses that number.'
+              ? 'Another session in this year already uses that number.'
               : (fieldErrors?.sequence?.join(' ') ?? 'Unique within the academic year.')
           }
         />
@@ -229,7 +229,7 @@ export function TermFormDialog({
           />
         </Stack>
         <TextField
-          label="End-term grade submission deadline"
+          label="End-session grade submission deadline"
           type="datetime-local"
           value={deadline}
           onChange={(e) => setDeadline(e.target.value)}
@@ -239,19 +239,19 @@ export function TermFormDialog({
           helperText={
             fieldErrors?.grade_submission_deadline?.join(' ') ??
             (deadline
-              ? 'After this, lecturers can no longer enter grades for this term.'
+              ? 'After this, lecturers can no longer enter grades for this session.'
               : 'Leave blank to keep grade entry open indefinitely.')
           }
         />
 
         <Divider />
-        <Typography variant="subtitle2">Mid-term freeze</Typography>
+        <Typography variant="subtitle2">Mid-session freeze</Typography>
         <Typography variant="body2" color="text.secondary">
-          {/* D33 ask 7 — this copy used to read "the period lecturers submit mid-term marks
+          {/* D33 ask 7 — this copy used to read "the period lecturers submit mid-session marks
               in", which was true of the D32 behaviour and is now the opposite of it. The
               Dean sets these two dates and needs to know what they DO. */}
-          <strong>Grade entry is frozen between these two dates</strong>, so the mid-term
-          figures cannot move while the mid-term report is being produced. Marks go in{' '}
+          <strong>Grade entry is frozen between these two dates</strong>, so the mid-session
+          figures cannot move while the mid-session report is being produced. Marks go in{' '}
           <em>before</em> the freeze starts. After it ends, entry reopens: a new mark is
           entered as normal, and changing one that was already recorded needs a revision
           you approve.
@@ -288,19 +288,19 @@ export function TermFormDialog({
         </Stack>
         {midtermHalfSet && (
           <Alert severity="warning">
-            Set both mid-term dates, or clear both. A half-configured window cannot be
-            used to decide which assessments belong to the mid-term period.
+            Set both mid-session dates, or clear both. A half-configured window cannot be
+            used to decide which assessments belong to the mid-session period.
           </Alert>
         )}
         {!midStart && !midEnd && (
           <Alert severity="info" variant="outlined">
-            Leave both blank if this term has no mid-term period. Nothing is frozen, and
-            mid-term reports and grade revisions stay unavailable for it.
+            Leave both blank if this session has no mid-session period. Nothing is frozen, and
+            mid-session reports and grade revisions stay unavailable for it.
           </Alert>
         )}
         <Alert severity="info" variant="outlined">
-          A term may fall outside its academic year&apos;s dates — BAJC&apos;s Summer block
-          legitimately does, and the report card prints it that way.
+          A session may fall outside its academic year&apos;s dates — BAJC&apos;s Summer
+          block legitimately does, and the report card prints it that way.
         </Alert>
       </Stack>
     </FormDialog>

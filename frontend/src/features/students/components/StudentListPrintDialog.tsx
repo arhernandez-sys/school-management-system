@@ -1,4 +1,5 @@
 import { Dialog, DialogContent, IconButton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import CloseIcon from '@mui/icons-material/Close';
 import { PrintLayout, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { surnameFirst } from '@shared/utils/names';
@@ -71,7 +72,7 @@ export function StudentListPrintDialog({
                 <div>
                   {total} student{total === 1 ? '' : 's'}
                 </div>
-                <div>{new Date().toLocaleDateString()}</div>
+                <div>{formatSchoolDate(new Date())}</div>
               </>
             }
           >

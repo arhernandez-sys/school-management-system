@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { Button, Chip, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -129,7 +130,7 @@ export function PendingApplicationsScreen() {
         hideOnMobile: true,
         render: (row) => (
           <Typography variant="body2">
-            {new Date(row.updated_at).toLocaleDateString()}
+            {formatSchoolDate(row.updated_at)}
           </Typography>
         ),
       },

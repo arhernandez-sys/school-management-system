@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import { useSearchParams } from 'react-router-dom';
 import { Box, Grid, Paper, Typography } from '@mui/material';
 import {
@@ -19,10 +20,9 @@ import type { PerStudentAttendance } from '../types';
 
 /** Format an ISO date (YYYY-MM-DD) as a short weekday+day label for the trend axis. */
 function shortDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00`);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): one table column per day,
+  // so a full dd/mm/yyyy would wrap the header.
+  return formatSchoolDayMonth(iso);
 }
 
 /**

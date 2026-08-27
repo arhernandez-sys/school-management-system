@@ -99,7 +99,7 @@ export function RequestRevisionDialog({
       <Stack spacing={2} sx={{ mt: 1 }}>
         <Alert severity="info">
           {windowClosed
-            ? 'Grade submission has closed for this term, so the mark cannot be edited directly — but a revision can still be requested. The Dean decides, and an approval takes effect even after the deadline.'
+            ? 'Grade submission has closed for this session, so the mark cannot be edited directly — but a revision can still be requested. The Dean decides, and an approval takes effect even after the deadline.'
             : 'The Dean decides. Nothing changes until they approve it, and the original mark is kept either way.'}
         </Alert>
 

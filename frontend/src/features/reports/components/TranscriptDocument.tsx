@@ -11,6 +11,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PrintLayout, CollapsibleSection, EmptyState } from '@shared/components';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import type { Transcript, TranscriptSemester } from '../types';
 
 /**
@@ -31,13 +32,6 @@ import type { Transcript, TranscriptSemester } from '../types';
  */
 export interface TranscriptDocumentProps {
   data: Transcript;
-}
-
-function formatIssued(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
@@ -143,7 +137,7 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
       meta={
         <>
           <div>Student No. {student.student_number}</div>
-          <div>Issued {formatIssued(issued_at)}</div>
+          <div>Issued {formatSchoolDate(issued_at)}</div>
         </>
       }
     >

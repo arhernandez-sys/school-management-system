@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -31,10 +32,8 @@ import { ATTENDANCE_STATUS_META, DEFAULT_STATUS } from '../attendanceStatus';
 type Draft = Record<string, AttendanceStatus>;
 
 function formatRecordedAt(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy.
+  return formatSchoolDate(iso);
 }
 
 /**

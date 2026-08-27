@@ -61,9 +61,11 @@ export function CoursesPage() {
   const params = useMemo(
     () => ({
       search: debouncedSearch || undefined,
-      // Default (active-only) is the backend default when `is_active` is omitted.
-      // "Show retired" lists ALL courses (active + retired) by omitting the filter.
+      // Default (active-only) is the backend default when `is_active` is omitted —
+      // which is precisely why omitting it could never show BOTH. `include_retired`
+      // drops the filter; see `useCourses.CoursesListParams`.
       is_active: showRetired ? undefined : true,
+      include_retired: showRetired || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
       sort: 'name',
@@ -72,6 +74,11 @@ export function CoursesPage() {
   );
 
   const query = useCoursesList(params);
+
+  /** Same probe as the Programmes screen: `is_active: false` is "retired only", and its
+   *  `total` decides whether the switch is worth rendering at all. */
+  const retiredProbe = useCoursesList({ is_active: false, page: 1, page_size: 1 });
+  const hasRetired = (retiredProbe.data?.total ?? 0) > 0;
   const createMut = useCreateCourse();
   const updateMut = useUpdateCourse();
   const deleteMut = useDeleteCourse();
@@ -129,7 +136,17 @@ export function CoursesPage() {
   };
 
   const handleToggleActive = (course: CourseListItem) => {
-    updateMut.mutate({ courseId: course.id, data: { is_active: !course.is_active } });
+    updateMut.mutate(
+      { courseId: course.id, data: { is_active: !course.is_active } },
+      {
+        // Restoring the LAST retired course hides the switch; drop the filter with it so
+        // the list is not pinned to a view whose control has just disappeared.
+        onSuccess: () => {
+          void retiredProbe.refetch();
+          if (!course.is_active) setShowRetired(false);
+        },
+      },
+    );
   };
 
   const handleDelete = () => {
@@ -273,18 +290,21 @@ export function CoursesPage() {
         }}
         searchPlaceholder="Search courses…"
         trailing={
-          <FormControlLabel
-            control={
-              <Switch
-                checked={showRetired}
-                onChange={(e) => {
-                  setShowRetired(e.target.checked);
-                  setPage(0);
-                }}
-              />
-            }
-            label="Show retired"
-          />
+          // Only when there IS something retired to reveal - see `hasRetired`.
+          hasRetired ? (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showRetired}
+                  onChange={(e) => {
+                    setShowRetired(e.target.checked);
+                    setPage(0);
+                  }}
+                />
+              }
+              label="Show retired"
+            />
+          ) : undefined
         }
       />
 

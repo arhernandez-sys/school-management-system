@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import {
   Box,
   Button,
@@ -28,9 +29,10 @@ export interface TeacherDashboardProps {
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'TBD';
-  const d = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  // `iso` here is a date-only `YYYY-MM-DD`, which the formatter reads as a calendar date
+  // rather than as UTC midnight — the reason the old `T00:00:00Z` suffix is gone.
+  return formatSchoolDayMonth(iso);
 }
 
 /**
@@ -113,7 +115,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               <EmptyState
                 icon={<ClassIcon fontSize="inherit" />}
                 title="No classes assigned"
-                description="You have no course offerings in the active term yet."
+                description="You have no course offerings in the active session yet."
                 variant="card"
               />
             ) : (

@@ -5,6 +5,7 @@
  * label always carries the meaning; color is never the only signal).
  */
 import type { Role } from '@shared/types/enums';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { strings } from '@i18n/strings';
 import type { AnnouncementAudience } from './types';
 
@@ -73,9 +74,10 @@ export const AUDIENCE_KIND: Record<AnnouncementAudience, 'info' | 'success' | 'w
 /** Format an RFC3339 instant to a short date (e.g. "Oct 15, 2025"). */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '';
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy, school timezone, everywhere.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatSchoolDate(d);
 }
 
 /** Format an RFC3339 instant to date + time (detail view). */

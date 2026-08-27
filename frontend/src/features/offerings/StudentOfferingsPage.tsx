@@ -143,7 +143,7 @@ export function StudentOfferingsPage() {
         subtitle={
           isPast
             ? `The courses you took in ${selectedPeriod?.semesterName}, ${selectedPeriod?.yearName}.`
-            : 'Every course you are taking this term. Each has its own lecturer, room and times.'
+            : 'Every course you are taking this session. Each has its own lecturer, room and times.'
         }
         primaryAction={
           <Button

@@ -157,7 +157,7 @@ export function OfferingFormDialog({
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
             select
-            label="Term"
+            label="Session"
             value={semesterId}
             onChange={(e) => setSemesterId(e.target.value)}
             required
@@ -166,7 +166,7 @@ export function OfferingFormDialog({
             error={Boolean(fieldErrors?.semester_id)}
             helperText={
               fieldErrors?.semester_id?.join(' ') ??
-              'The same course can be offered again in another term.'
+              'The same course can be offered again in another session.'
             }
           >
             {semesterOptions.map((s) => (

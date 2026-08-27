@@ -135,7 +135,7 @@ export function OfferingGradesScreen({
       // request the server will reject with an error nobody can act on.
       if (!activeSemesterId) {
         setFormError(
-          'No active semester is set for the school. An administrator must set the active term before assessments can be created.',
+          'No active semester is set for the school. An administrator must set the active session before assessments can be created.',
         );
         return;
       }

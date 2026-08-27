@@ -42,15 +42,15 @@ import type { GradeEntry, RevisionBlockedReason } from './types';
  */
 const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
   no_midterm_window:
-    'This term has no mid-term grading period. The Dean sets one in Settings → Academic structure.',
+    'This session has no mid-session grading period. The Dean sets one in Settings → Academic structure.',
   // D33 — was "correct the mark directly instead", which the freeze made impossible: the
   // window is precisely when a Lecturer cannot type in a mark.
   midterm_window_open:
-    'Grades are frozen until the mid-term period closes. Revisions open then.',
+    'Grades are frozen until the mid-session period closes. Revisions open then.',
   assessment_after_window:
-    'This assessment was created after the mid-term period began, so it was never part of it.',
+    'This assessment was created after the mid-session period began, so it was never part of it.',
   grade_after_window:
-    'This result was first entered after the mid-term period began, so it was not part of the mid-term submission.',
+    'This result was first entered after the mid-session period began, so it was not part of the mid-session submission.',
   not_current_semester: 'Only the current semester accepts revisions.',
   not_graded: 'Only a recorded grade can be revised.',
 };
@@ -283,7 +283,7 @@ export function AssessmentGradingScreen() {
             />
             {windowClosed && <StatusBadge label="Grading closed" kind="warning" />}
             {midtermFrozen && !windowClosed && (
-              <StatusBadge label="Mid-term frozen" kind="warning" />
+              <StatusBadge label="Mid-session frozen" kind="warning" />
             )}
             {!canEdit && !windowClosed && !midtermFrozen && (
               <StatusBadge label="Read-only" kind="neutral" />
@@ -300,7 +300,7 @@ export function AssessmentGradingScreen() {
               Without this the save bar simply refuses and the only feedback is a 409. */}
           {windowClosed && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              <strong>Grade submission has closed for this term.</strong>{' '}
+              <strong>Grade submission has closed for this session.</strong>{' '}
               {deadline
                 ? `The deadline was ${formatDeadline(deadline)}.`
                 : 'The deadline has passed.'}{' '}
@@ -315,10 +315,10 @@ export function AssessmentGradingScreen() {
               banner above is the one that applies. */}
           {midtermFrozen && !windowClosed && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              <strong>Mid-term grades are frozen.</strong>{' '}
+              <strong>Mid-session grades are frozen.</strong>{' '}
               {midtermEnd
-                ? `Grade entry for this term reopens after ${formatDeadline(midtermEnd)}.`
-                : 'Grade entry for this term reopens once the mid-term period closes.'}{' '}
+                ? `Grade entry for this session reopens after ${formatDeadline(midtermEnd)}.`
+                : 'Grade entry for this session reopens once the mid-session period closes.'}{' '}
               After that you can enter new marks as normal, and request a revision to
               change one that was already recorded.
             </Alert>

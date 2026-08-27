@@ -187,7 +187,7 @@ export function AssessmentFormDialog({
             fullWidth
             inputProps={{ min: 0, step: 'any' }}
             error={Boolean(weightErrors) || (weight.trim() !== '' && !weightValid)}
-            helperText={weightErrors?.join(' ') ?? 'Relative weight in the term grade.'}
+            helperText={weightErrors?.join(' ') ?? 'Relative weight in the session grade.'}
           />
         </Stack>
       </Stack>

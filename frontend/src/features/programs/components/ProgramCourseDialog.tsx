@@ -155,12 +155,12 @@ export function ProgramCourseDialog({
           renderInput={(params) => (
             <TextField
               {...params}
-              label="Term block"
+              label="Session block"
               required
               error={Boolean(fieldErrors?.term_label)}
               helperText={
                 fieldErrors?.term_label?.join(' ') ??
-                'A position in the plan, not a calendar term — e.g. "Summer 1", "Semester 3", "Spring 2".'
+                'A position in the plan, not a calendar session — e.g. "Summer 1", "Semester 3", "Spring 2".'
               }
             />
           )}

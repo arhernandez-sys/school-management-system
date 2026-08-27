@@ -94,5 +94,11 @@ export interface ProgramsListParams {
   page_size?: number;
   sort?: string;
   search?: string;
+  /** Equality filter. `true` = active only, `false` = RETIRED only. Omitting it does
+   *  NOT mean "both" — the server defaults it to `true`, which is what made the
+   *  Programmes screen's "Show retired" switch inert. */
   is_active?: boolean;
+  /** Drop the `is_active` filter entirely and return active AND retired. This is what
+   *  "Show retired" needs; it wins over `is_active` when both are sent. */
+  include_retired?: boolean;
 }

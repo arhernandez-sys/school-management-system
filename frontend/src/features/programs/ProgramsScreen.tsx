@@ -62,7 +62,11 @@ export function ProgramsScreen() {
   const params = useMemo(
     () => ({
       search: debouncedSearch || undefined,
+      // Omitting `is_active` is NOT how you ask for both — the server defaults it back
+      // to `true`, so this switch used to redraw the identical list. `include_retired`
+      // is the parameter that drops the filter.
       is_active: showRetired ? undefined : true,
+      include_retired: showRetired || undefined,
       page: page + 1,
       page_size: pageSize,
       sort: 'code',
@@ -71,6 +75,18 @@ export function ProgramsScreen() {
   );
 
   const query = useProgramsList(params);
+
+  /**
+   * Is there anything to show? `is_active: false` is an EQUALITY filter, so this asks for
+   * retired programmes ONLY and `total` is their count. `page_size: 1` because nothing
+   * reads `items` - one row is the cheapest response that still carries a total.
+   *
+   * Deliberately NOT filtered by the search box: the switch is a property of the
+   * programme list as a whole, and having it appear and vanish as the Dean types would
+   * read as a glitch.
+   */
+  const retiredProbe = useProgramsList({ is_active: false, page: 1, page_size: 1 });
+  const hasRetired = (retiredProbe.data?.total ?? 0) > 0;
   const createMut = useCreateProgram();
   const updateMut = useUpdateProgram();
   const deleteMut = useDeleteProgram();
@@ -116,7 +132,18 @@ export function ProgramsScreen() {
   };
 
   const toggleActive = (program: ProgramListItem) =>
-    updateMut.mutate({ id: program.id, body: { is_active: !program.is_active } });
+    updateMut.mutate(
+      { id: program.id, body: { is_active: !program.is_active } },
+      {
+        // Restoring the LAST retired programme hides the switch. Turning it off here
+        // means the list falls back to the default view rather than staying pinned to a
+        // filter with no visible control to release it.
+        onSuccess: () => {
+          void retiredProbe.refetch();
+          if (program.is_active === false) setShowRetired(false);
+        },
+      },
+    );
 
   const handleDelete = () => {
     if (!deleteTarget) return;
@@ -266,18 +293,21 @@ export function ProgramsScreen() {
         }}
         searchPlaceholder="Search programmes…"
         trailing={
-          <FormControlLabel
-            control={
-              <Switch
-                checked={showRetired}
-                onChange={(e) => {
-                  setShowRetired(e.target.checked);
-                  setPage(0);
-                }}
-              />
-            }
-            label="Show retired"
-          />
+          // Only when there IS something retired to reveal - see `hasRetired`.
+          hasRetired ? (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showRetired}
+                  onChange={(e) => {
+                    setShowRetired(e.target.checked);
+                    setPage(0);
+                  }}
+                />
+              }
+              label="Show retired"
+            />
+          ) : undefined
         }
       />
 

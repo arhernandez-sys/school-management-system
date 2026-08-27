@@ -156,7 +156,7 @@ export function AcademicStructureScreen() {
   const [archiveTarget, setArchiveTarget] = useState<AcademicYearDetail | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
-  // D32 — the mid-term freeze reports back inline rather than through a dialog: it is
+  // D32 — the mid-session freeze reports back inline rather than through a dialog: it is
   // idempotent and non-destructive, so a confirm step would be ceremony. What it DOES
   // need is a visible outcome, because "23 report cards captured" and "the window is
   // still open" look identical if nothing is shown.
@@ -285,9 +285,9 @@ export function AcademicStructureScreen() {
   };
 
   /**
-   * D32 (brief §6) — capture the term's mid-term report cards.
+   * D32 (brief §6) — capture the term's mid-session report cards.
    *
-   * Pressing this is OPTIONAL: a mid-term report requested after the window closes
+   * Pressing this is OPTIONAL: a mid-session report requested after the window closes
    * freezes itself on first read. The button exists so the Dean chooses the moment, and
    * so a re-freeze after correcting a mark is a deliberate action rather than a side
    * effect of somebody opening a report.
@@ -300,7 +300,7 @@ export function AcademicStructureScreen() {
       {
         onSuccess: (res) =>
           setFreezeNotice(
-            `Mid-term report cards frozen for ${semesterName} — ${res.snapshots_written} ` +
+            `Mid-session report cards frozen for ${semesterName} — ${res.snapshots_written} ` +
               `student${res.snapshots_written === 1 ? '' : 's'}. Re-freeze after correcting a mark.`,
           ),
         onError: (err) => setFreezeError(apiErrorMessage(err)),
@@ -332,7 +332,7 @@ export function AcademicStructureScreen() {
     <>
       <PageHeader
         title="Academic structure"
-        subtitle="Academic years and the calendar terms in them. A year can hold as many terms as the college runs — semesters, Summer and Spring blocks."
+        subtitle="Academic years and the calendar sessions in them. A year can hold as many sessions as the college runs — semesters, Summer and Spring blocks."
         primaryAction={
           canManage ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -439,7 +439,7 @@ export function AcademicStructureScreen() {
                                 }}
                               >
                                 <Typography variant="caption" color="text.secondary">
-                                  Kind
+                                  Session type
                                 </Typography>
                                 <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
                                   {sem.term_type}
@@ -499,11 +499,11 @@ export function AcademicStructureScreen() {
                       ))}
                     </Stack>
                   ) : (
-                    <Table size="small" aria-label={`Terms for ${year.name}`}>
+                    <Table size="small" aria-label={`Sessions for ${year.name}`}>
                       <TableHead>
                         <TableRow>
-                          <TableCell>Term</TableCell>
-                          <TableCell>Kind</TableCell>
+                          <TableCell>Session</TableCell>
+                          <TableCell>Session type</TableCell>
                           <TableCell>Dates</TableCell>
                           <TableCell>Status</TableCell>
                           {canManage && !isArchived && <TableCell align="right" />}
@@ -530,9 +530,9 @@ export function AcademicStructureScreen() {
                                   Grades due {formatDeadline(sem.grade_submission_deadline)}
                                 </Typography>
                               )}
-                              {/* D32 — the mid-term window decides which assessments can
-                                  be revised and when the mid-term card can be frozen, so
-                                  it belongs beside the end-term deadline, not buried in
+                              {/* D32 — the mid-session window decides which assessments can
+                                  be revised and when the mid-session card can be frozen, so
+                                  it belongs beside the end-session deadline, not buried in
                                   the dialog. Both dates are set together or not at all. */}
                               {sem.midterm_submission_start && sem.midterm_submission_end && (
                                 <Typography
@@ -541,7 +541,7 @@ export function AcademicStructureScreen() {
                                   sx={{ display: 'block' }}
                                 >
                                   {/* D33 — it is a FREEZE, not a submission period. */}
-                                  Mid-term frozen{' '}
+                                  Mid-session frozen{' '}
                                   {formatDeadline(sem.midterm_submission_start)} →{' '}
                                   {formatDeadline(sem.midterm_submission_end)}
                                 </Typography>
@@ -566,10 +566,10 @@ export function AcademicStructureScreen() {
                                   </Button>
                                 )}
                                 {/* D32 — only offered where it can succeed: a term with
-                                    no mid-term window has nothing to freeze, and the
+                                    no mid-session window has nothing to freeze, and the
                                     server would answer 422. */}
                                 {sem.midterm_submission_end && (
-                                  <Tooltip title="Capture this term's mid-term report cards. Safe to repeat.">
+                                  <Tooltip title="Capture this session's mid-session report cards. Safe to repeat.">
                                     <span>
                                       <Button
                                         size="small"
@@ -577,12 +577,12 @@ export function AcademicStructureScreen() {
                                         onClick={() => handleFreezeMidterm(sem.id, sem.name)}
                                         disabled={freezeMut.isPending}
                                       >
-                                        Freeze mid-term
+                                        Freeze mid-session
                                       </Button>
                                     </span>
                                   </Tooltip>
                                 )}
-                                <Tooltip title="Edit term">
+                                <Tooltip title="Edit session">
                                   <IconButton
                                     size="small"
                                     aria-label={`Edit ${sem.name}`}
@@ -655,11 +655,11 @@ export function AcademicStructureScreen() {
 
           {/* D30 §D3 — terms are a LIST. This used to be two fixed blocks of fields,
               which is why BAJC's Summer and Spring blocks could not be entered. */}
-          <Divider>Terms</Divider>
+          <Divider>Sessions</Divider>
           {duplicateSequence && (
             <Alert severity="warning">
-              Two terms share an order number. Each term needs its own position within the
-              year.
+              Two sessions share an order number. Each session needs its own position within
+              the year.
             </Alert>
           )}
           {terms.map((term, index) => (
@@ -673,13 +673,13 @@ export function AcademicStructureScreen() {
                 alignItems="center"
                 sx={{ mb: 1 }}
               >
-                <Typography variant="subtitle2">Term {index + 1}</Typography>
+                <Typography variant="subtitle2">Session {index + 1}</Typography>
                 {terms.length > 1 && (
-                  <Tooltip title="Remove this term">
+                  <Tooltip title="Remove this session">
                     <IconButton
                       size="small"
                       color="error"
-                      aria-label={`Remove term ${index + 1}`}
+                      aria-label={`Remove session ${index + 1}`}
                       onClick={() => removeTermRow(term.key)}
                     >
                       <DeleteOutlineIcon fontSize="small" />
@@ -699,7 +699,7 @@ export function AcademicStructureScreen() {
                   />
                   <TextField
                     select
-                    label="Kind"
+                    label="Session type"
                     value={term.term_type}
                     onChange={(e) =>
                       patchTerm(term.key, { term_type: e.target.value as TermType })
@@ -780,7 +780,7 @@ export function AcademicStructureScreen() {
         title="Archive academic year?"
         destructive
         description={
-          archiveTarget ? `Archive "${archiveTarget.name}"? This ends the active term.` : undefined
+          archiveTarget ? `Archive "${archiveTarget.name}"? This ends the active session.` : undefined
         }
         warning="Archiving freezes the year: grades and report cards are snapshotted and the year becomes read-only. This cannot be undone."
         confirmLabel="Archive year"

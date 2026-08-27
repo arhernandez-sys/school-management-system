@@ -1,4 +1,5 @@
 import { Box, Card, CardContent, Divider, Stack, Typography } from '@mui/material';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { alpha } from '@mui/material/styles';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
@@ -27,8 +28,9 @@ function capitalize(value: string): string {
 }
 
 function formatDate(iso: string): string {
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy.
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
+  return Number.isNaN(d.getTime()) ? '—' : formatSchoolDate(d);
 }
 
 /** A single label/value row in the definition-list sections. */

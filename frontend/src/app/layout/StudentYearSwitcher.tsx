@@ -66,9 +66,9 @@ export function StudentYearSwitcher() {
                 }}
                 // The label is the meaning; "current term" is never colour-only
                 // (design-system §5 #12).
-                aria-label={`${p.label}${p.isActiveSemester ? ' (current term)' : ''}`}
+                aria-label={`${p.label}${p.isActiveSemester ? ' (current session)' : ''}`}
               >
-                {p.isActiveSemester ? `${p.semesterName} · current term` : p.semesterName}
+                {p.isActiveSemester ? `${p.semesterName} · current session` : p.semesterName}
               </MenuItem>
             )),
           ];

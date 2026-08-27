@@ -18,6 +18,7 @@ import {
   StatusBadge,
 } from '@shared/components';
 import type { StatusKind } from '@shared/components';
+import { formatSchoolDateWithWeekday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import { useSelectedYear } from '@app/providers/YearContext';
 import { useMyAttendance } from '../hooks/useAttendance';
@@ -31,10 +32,9 @@ const STATUS_TO_KIND: Record<AttendanceStatus, StatusKind> = {
 };
 
 function longDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00`);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy. The weekday stays: a student reading their own
+  // attendance is checking which day they missed.
+  return formatSchoolDateWithWeekday(iso, 'long');
 }
 
 /**
@@ -83,7 +83,7 @@ export function MyAttendanceScreen() {
       {history.length === 0 ? (
         <EmptyState
           title="No attendance recorded yet"
-          description="Your daily attendance will appear here once your teacher records it."
+          description="Your daily attendance will appear here once your lecturer records it."
         />
       ) : (
         <TableContainer

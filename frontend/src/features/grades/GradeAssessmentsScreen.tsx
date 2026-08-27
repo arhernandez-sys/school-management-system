@@ -186,13 +186,13 @@ export function GradeAssessmentsScreen() {
             <TextField
               select
               size="small"
-              label="Term"
+              label="Session"
               value={semesterId}
               onChange={(e) => setSemesterId(e.target.value)}
               disabled={semesters.length === 0}
               sx={{ minWidth: 160 }}
             >
-              <MenuItem value="">All terms</MenuItem>
+              <MenuItem value="">All sessions</MenuItem>
               {semesters.map((s) => (
                 <MenuItem key={s.id} value={s.id}>
                   {s.name}
@@ -230,7 +230,7 @@ export function GradeAssessmentsScreen() {
         <EmptyState
           variant="page"
           title="No offerings match these filters"
-          description="Try clearing the lecturer or term filter."
+          description="Try clearing the lecturer or session filter."
         />
       )}
 

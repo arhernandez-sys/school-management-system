@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import {
   Box,
   Button,
@@ -29,13 +30,14 @@ export interface SecretaryDashboardProps {
 }
 
 function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  return formatSchoolDayMonth(iso);
 }
 
 const QUICK_ACTIONS = [
-  { label: 'Add student', to: ROUTES.students, icon: <PersonAddAlt1Icon /> },
+  // D38 — a student is created by ACCEPTING an application, so this tile leads to
+  // Admissions rather than to the directory, which no longer has a create action.
+  { label: 'Add student', to: ROUTES.applications, icon: <PersonAddAlt1Icon /> },
   { label: 'Add teacher', to: ROUTES.teachers, icon: <SchoolIcon /> },
   { label: 'Create class', to: ROUTES.offerings, icon: <AddBusinessIcon /> },
   { label: 'Post announcement', to: ROUTES.announcements, icon: <CampaignIcon /> },
@@ -102,7 +104,7 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
           value={stats.unstaffed_subjects}
           icon={<WarningAmberIcon />}
           color={stats.unstaffed_subjects > 0 ? 'warning' : 'success'}
-          helperText={stats.unstaffed_subjects > 0 ? 'Assign a teacher' : 'All staffed'}
+          helperText={stats.unstaffed_subjects > 0 ? 'Assign a lecturer' : 'All staffed'}
           to={ROUTES.offerings}
         />
       </Grid>
