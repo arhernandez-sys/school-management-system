@@ -317,9 +317,14 @@ MIGRATIONS: list[tuple[str, str, list]] = [
         [
             # THE probes. Both read `subjects` when 005 has reverted 006, which is
             # exactly the regression that went unnoticed. See 005 §2b.
-            fk_targets_on_first_existing(
-                ["class_subjects", "class_subjects_legacy_pre_d31"], "subject_id", "courses"
-            ),
+            # `class_subjects` -> `courses` used to be probed here via
+            # `fk_targets_on_first_existing`, which already tolerated the table being
+            # renamed to `*_legacy_pre_d31` by 008. What it could not survive is 010
+            # DROPPING the legacy copy, which leaves neither name in existence and the
+            # probe permanently unverifiable - reporting 006 PARTIAL and failing the run.
+            #
+            # `term_grade_snapshots` is the surviving witness that 006 re-pointed the
+            # subject foreign keys at `courses`, and it is not going anywhere.
             fk_targets("term_grade_snapshots", "subject_id", "courses"),
         ],
     ),
@@ -356,8 +361,42 @@ MIGRATIONS: list[tuple[str, str, list]] = [
             table_absent("class_subjects"),
             table_absent("subjects"),
             column_absent("student_profiles", "year_group"),
-            table_exists("classes_legacy_pre_d31"),
-            table_exists("class_subjects_legacy_pre_d31"),
+            # The two `*_legacy_pre_d31` quarantine tables used to be probed here as
+            # `table_exists`. That went stale the moment 010_drop_legacy_pre_d31.sql ran:
+            # 010's whole job is to drop them once the D31 cut-over is confirmed, so on
+            # any database that is actually up to date this fingerprint reported 008 as
+            # PARTIAL and the script exited FAIL no matter what else was true.
+            #
+            # A fingerprint has to assert a LASTING effect of its own migration. The
+            # quarantine tables were always transitional, so they are not one; everything
+            # above this line is. Removed rather than inverted to `table_absent` - that
+            # would make 008 fail on a database sitting correctly between 008 and 010.
+        ],
+    ),
+    # NOTE THE GAP: 009 through 012 have no entry here. They were applied to live but
+    # never fingerprinted, so this script cannot report on them and `--expect 013` does
+    # not imply they ran. Worth backfilling; not done here because guessing a probe for
+    # a migration you did not write is how a fingerprint comes to assert the wrong thing.
+    (
+        "013_meeting2_schema.sql",
+        "D39 - lecturer fields, education -> academic_qualification, religions lookup",
+        [
+            # The four Meeting #2 item 10 columns.
+            column_exists("teacher_profiles", "ssno"),
+            column_exists("teacher_profiles", "licensenum"),
+            column_exists("teacher_profiles", "is_employed"),
+            column_exists("teacher_profiles", "academic_qualification"),
+            # A RENAME, not an add - if `education` is still here the rename was skipped
+            # and the two columns have been drifting apart since.
+            column_absent("teacher_profiles", "education"),
+            column_exists("teacher_profiles", "first_name"),
+            column_exists("teacher_profiles", "comments"),
+            table_exists("religions"),
+            # Deliberately NOT added - see header note (a) in the .sql. Probed as an
+            # ABSENCE so that if someone later applies the client's dump wholesale, this
+            # reports PARTIAL instead of quietly accepting a second, conflicting home for
+            # a fact `class_enrollments.enrollment_status` already owns.
+            column_absent("courses", "course_status"),
         ],
     ),
 ]
