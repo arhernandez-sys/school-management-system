@@ -137,6 +137,7 @@ export type {
   DemoAttendanceRecord,
   DemoAnnouncement,
   DemoApplication,
+  DemoApplicationTemp,
   DemoApplicationEducation,
   DemoApplicationDocument,
   DemoCreditTransferRequest,

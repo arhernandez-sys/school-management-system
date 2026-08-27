@@ -39,6 +39,7 @@ from app.modules.teachers.schemas import (
     ClassTaught,
     TeacherCreateRequest,
     TeacherDetail,
+    TeacherExpertise,
     TeacherListItem,
     TeacherStatusRequest,
     TeacherUpdateRequest,
@@ -152,9 +153,42 @@ def _audit_stamp(db: Session, teacher: TeacherProfile) -> AuditStamp:
     )
 
 
+def _clean(value: str | None) -> str | None:
+    """Trim an optional free-text field; whitespace-only becomes NULL.
+
+    A field holding only spaces is not a value — stored as-is it renders as a
+    mysteriously blank-but-present line on the profile card. Matches how the PATCH path
+    has always treated these.
+    """
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _sync_is_employed(teacher: TeacherProfile) -> None:
+    """Keep `is_employed` in step with `status` (D39, Meeting #2 item 10).
+
+    The client renamed their `IsPresent` column to `IsEmployed` and the DB person's dump
+    added it, but this schema already answers that question with
+    `status enum('active','inactive')`. Rather than migrate the application onto the new
+    column or expose both for editing, `status` stays authoritative and this mirrors it.
+
+    Called from teacher creation and from `change_teacher_status` — the only two places
+    `status` is written. `is_employed` is deliberately absent from both request schemas,
+    so there is no path by which a caller can set it out of step.
+    """
+    teacher.is_employed = teacher.status == TeacherStatus.ACTIVE
+
+
 def _detail(db: Session, teacher: TeacherProfile) -> TeacherDetail:
     detail = TeacherDetail.model_validate(teacher)
     detail.subject_specializations = teacher.subject_specializations or []
+    # Same reason as the line above: the column is NULL for every lecturer whose profile
+    # has never been filled in, and `model_validate` carries that NULL straight through
+    # a `default_factory` that only fires when the key is ABSENT.
+    detail.expertise = [
+        TeacherExpertise.model_validate(row) for row in (teacher.expertise or [])
+    ]
     detail.classes_taught = _classes_taught(db, teacher.id)
     detail.audit = _audit_stamp(db, teacher)
     return detail
@@ -330,7 +364,6 @@ def create_teacher(
             is_active=True,
             must_change_password=True,
             created_by=actor.id,
-            updated_by=actor.id,
         )
         db.add(login_user)
         db.flush()  # assign id for the profile linkage + audit
@@ -350,10 +383,24 @@ def create_teacher(
         email=contact_email,
         phone=payload.phone,
         status=payload.status,
+        # D39 — `is_employed` is DERIVED, never taken from the request. It is the
+        # client's spelling of the same fact `status` already carries (Meeting #2 item
+        # 10, "change IsPresent to IsEmployed"), and two independently-settable copies of
+        # one fact is how they come to disagree. `_sync_is_employed` is the only writer.
         subject_specializations=payload.subject_specializations or [],
         created_by=actor.id,
-        updated_by=actor.id,
+        first_name=_clean(payload.first_name),
+        last_name=_clean(payload.last_name),
+        ssno=_clean(payload.ssno),
+        licensenum=_clean(payload.licensenum),
+        hire_date=payload.hire_date,
+        end_date=payload.end_date,
+        academic_qualification=_clean(payload.academic_qualification),
+        designation=_clean(payload.designation),
+        address=_clean(payload.address),
+        comments=_clean(payload.comments),
     )
+    _sync_is_employed(teacher)
     db.add(teacher)
     db.flush()
 
@@ -400,6 +447,45 @@ def update_teacher(
     if payload.subject_specializations is not None:
         teacher.subject_specializations = payload.subject_specializations
 
+    # Extended profile (D39). Absent means "leave alone"; a blank string CLEARS, which is
+    # how the dialog erases a designation without a separate delete affordance. The free
+    # text fields are stripped so a field holding only spaces stores as NULL rather than
+    # rendering as a mysteriously blank-but-present line on the profile card.
+    for field in (
+        "avatar_url",
+        "bio",
+        "academic_qualification",
+        "designation",
+        "address",
+        # D39 (Meeting #2 item 10) — the employment record. `is_employed` is absent
+        # from `TeacherUpdateRequest` on purpose and so cannot appear here.
+        "first_name",
+        "last_name",
+        "ssno",
+        "licensenum",
+        "comments",
+    ):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(teacher, field, value.strip() or None)
+    if payload.gender is not None:
+        teacher.gender = payload.gender
+    # Dates are not strings and have no "blank clears it" spelling, so they follow the
+    # plain absent-means-leave-alone rule. Clearing a hire date is not an edit the form
+    # offers, and inventing a sentinel for it would be guessing at a workflow.
+    if payload.hire_date is not None:
+        teacher.hire_date = payload.hire_date
+    if payload.end_date is not None:
+        teacher.end_date = payload.end_date
+    if payload.expertise is not None:
+        # Stored as plain dicts: the column is JSON, and a Pydantic model handed to it
+        # would serialise through whatever the driver happens to do with an object.
+        teacher.expertise = [
+            {"area": row.area.strip(), "level": row.level}
+            for row in payload.expertise
+            if row.area.strip()
+        ]
+
     teacher.updated_by = actor.id
     _audit(db, actor=actor, action="teacher.update", entity_id=teacher.id)
     db.commit()
@@ -428,6 +514,10 @@ def change_teacher_status(
             )
 
     teacher.status = payload.status
+    # D39 — `is_employed` mirrors `status`, so it moves with it. This is the ONLY other
+    # place status changes, and letting the two drift would leave a deactivated lecturer
+    # reading as employed on the client's own reports.
+    _sync_is_employed(teacher)
     teacher.updated_by = actor.id
     _audit(
         db,

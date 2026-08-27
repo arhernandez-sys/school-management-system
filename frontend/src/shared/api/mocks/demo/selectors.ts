@@ -387,12 +387,17 @@ export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeac
 // ── Courses (catalog) ───────────────────────────────────────────────────────────
 export interface ListCoursesParams extends DemoListParams {
   is_active?: boolean | null;
+  /** Drop the active filter and return BOTH. Mirrors the server parameter — `is_active`
+   *  is an equality filter and has no value meaning "both". */
+  include_retired?: boolean;
 }
 export function listCourses(params: ListCoursesParams = {}): DemoPage<DemoCourse> {
   let rows = D.courses;
   // Default is active-only (picker hides retired courses) unless explicitly false.
   const wantActive = params.is_active ?? true;
-  if (wantActive !== null) rows = rows.filter((c) => c.is_active === wantActive);
+  if (!params.include_retired && wantActive !== null) {
+    rows = rows.filter((c) => c.is_active === wantActive);
+  }
   if (params.search) {
     const q = params.search;
     rows = rows.filter((c) => textIncludes(c.name, q) || textIncludes(c.code, q));

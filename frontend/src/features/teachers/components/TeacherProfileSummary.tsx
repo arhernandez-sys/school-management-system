@@ -80,8 +80,13 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
 
   const personalRows: Array<{ label: string; value: ReactNode }> = [
     ...(teacher.gender ? [{ label: 'Gender', value: capitalize(teacher.gender) }] : []),
-    ...(teacher.education ? [{ label: 'Education', value: teacher.education }] : []),
+    // D39 (Meeting #2 item 10) — relabelled from 'Education' along with the column.
+    ...(teacher.academic_qualification
+      ? [{ label: 'Academic qualification', value: teacher.academic_qualification }]
+      : []),
     ...(teacher.designation ? [{ label: 'Designation', value: teacher.designation }] : []),
+    ...(teacher.ssno ? [{ label: 'Social security no.', value: teacher.ssno }] : []),
+    ...(teacher.licensenum ? [{ label: 'Licence no.', value: teacher.licensenum }] : []),
     ...(teacher.email ? [{ label: 'Email', value: teacher.email }] : []),
     ...(teacher.phone ? [{ label: 'Phone', value: teacher.phone }] : []),
   ];

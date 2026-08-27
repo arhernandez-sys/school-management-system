@@ -468,7 +468,7 @@ export const dashboardHandlers = [
     const user = resolveUser(role);
     const semester = getActiveSemester();
     if (!semester) {
-      return errorResponse(409, 'no_active_semester', 'No active academic term is configured.');
+      return errorResponse(409, 'no_active_semester', 'No active academic session is configured.');
     }
     if (user.role === 'teacher') return HttpResponse.json(teacherPayload(user));
     if (user.role === 'student') return HttpResponse.json(studentPayload(user));

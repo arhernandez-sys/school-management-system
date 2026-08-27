@@ -100,7 +100,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
   }, [detail]);
 
   if (detailQuery.isLoading) {
-    return <LoadingState variant="page" label="Loading teacher" />;
+    return <LoadingState variant="page" label="Loading lecturer" />;
   }
   if (detailQuery.isError) {
     return <ErrorState onRetry={() => void detailQuery.refetch()} />;
@@ -110,10 +110,10 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
       <EmptyState
         variant="page"
         title="Lecturer not found"
-        description="This teacher may have been removed or you may not have access."
+        description="This lecturer may have been removed or you may not have access."
         action={
           mode === 'manage'
-            ? { label: 'Back to teachers', onClick: () => navigate(ROUTES.teachers) }
+            ? { label: 'Back to lecturers', onClick: () => navigate(ROUTES.teachers) }
             : undefined
         }
       />
@@ -124,7 +124,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
     mode === 'manage' ? (
       <Breadcrumbs aria-label="Breadcrumb">
         <MuiLink component={RouterLink} to={ROUTES.teachers} underline="hover" color="inherit">
-          Professors
+          Lecturers
         </MuiLink>
         <Typography color="text.primary" variant="body2">
           {detail.full_name}
@@ -291,15 +291,22 @@ function TeacherActions({
         subject_specializations: values.subject_specializations,
         bio: values.bio || undefined,
         gender: values.gender || undefined,
-        education: values.education || undefined,
+        academic_qualification: values.academic_qualification || undefined,
         designation: values.designation || undefined,
         address: values.address || undefined,
         expertise: values.expertise,
+        // Employment record (D39, Meeting #2 item 10). `is_employed` is absent — the
+        // server derives it from `status`, which this dialog does not edit.
+        ssno: values.ssno || undefined,
+        licensenum: values.licensenum || undefined,
+        hire_date: values.hire_date || undefined,
+        end_date: values.end_date || undefined,
+        comments: values.comments || undefined,
       },
       {
         onSuccess: () => {
           setEditOpen(false);
-          setToast(isManage ? 'Teacher updated.' : 'Profile updated.');
+          setToast(isManage ? 'Lecturer updated.' : 'Profile updated.');
         },
         onError: (err) => {
           setEditError(apiErrorMessage(err));
@@ -315,7 +322,7 @@ function TeacherActions({
     statusMut.mutate(nextStatus, {
       onSuccess: () => {
         setStatusOpen(false);
-        setToast(nextStatus === 'active' ? 'Teacher activated.' : 'Teacher deactivated.');
+        setToast(nextStatus === 'active' ? 'Lecturer activated.' : 'Lecturer deactivated.');
       },
       onError: (err) => {
         setStatusError(apiErrorMessage(err));
@@ -396,7 +403,7 @@ function TeacherActions({
         <>
           <ConfirmDialog
             open={statusOpen}
-            title={teacher.status === 'active' ? 'Deactivate teacher?' : 'Activate teacher?'}
+            title={teacher.status === 'active' ? 'Deactivate lecturer?' : 'Activate lecturer?'}
             description={
               teacher.status === 'active'
                 ? `Deactivate ${teacher.full_name}? They will no longer appear as active staff.`
@@ -413,7 +420,7 @@ function TeacherActions({
 
           <ConfirmDialog
             open={deleteOpen}
-            title="Delete teacher?"
+            title="Delete lecturer?"
             destructive
             description={`Permanently delete ${teacher.full_name}? This cannot be undone.`}
             warning={deleteRefs.length > 0 ? refList(deleteRefs) : undefined}

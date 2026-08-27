@@ -259,7 +259,7 @@ export const announcementsHandlers = [
       return errorResponse(
         403,
         'teacher_cannot_broadcast',
-        'Teachers can only post announcements to their own classes.',
+        'Lecturers can only post announcements to their own offerings.',
       );
     }
     if (!canCreate(user, audience, offeringId)) {
@@ -324,7 +324,7 @@ export const announcementsHandlers = [
       return errorResponse(
         403,
         'teacher_cannot_broadcast',
-        'Teachers can only post announcements to their own classes.',
+        'Lecturers can only post announcements to their own offerings.',
       );
     }
     const publishedAt = body.published_at ?? a.published_at;

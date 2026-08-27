@@ -36,10 +36,17 @@ export interface TeacherFormValues {
   // Extended profile fields (edit mode).
   bio: string;
   gender: '' | 'male' | 'female' | 'other';
-  education: string;
+  academic_qualification: string;
   designation: string;
   address: string;
   expertise: TeacherExpertiseRow[];
+  // Employment record (D39, Meeting #2 item 10). `is_employed` is NOT here — the server
+  // derives it from status, which is changed from the lecturer list, not this form.
+  ssno: string;
+  licensenum: string;
+  hire_date: string;
+  end_date: string;
+  comments: string;
 }
 
 export interface TeacherFormDialogProps {
@@ -84,7 +91,12 @@ export function TeacherFormDialog({
   const [loginEmail, setLoginEmail] = useState('');
   const [bio, setBio] = useState('');
   const [gender, setGender] = useState<TeacherFormValues['gender']>('');
-  const [education, setEducation] = useState('');
+  const [academicQualification, setAcademicQualification] = useState('');
+  const [ssno, setSsno] = useState('');
+  const [licensenum, setLicensenum] = useState('');
+  const [hireDate, setHireDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [comments, setComments] = useState('');
   const [designation, setDesignation] = useState('');
   const [address, setAddress] = useState('');
   const [expertise, setExpertise] = useState<TeacherExpertiseRow[]>([]);
@@ -100,7 +112,12 @@ export function TeacherFormDialog({
       setLoginEmail('');
       setBio(teacher?.bio ?? '');
       setGender(teacher?.gender ?? '');
-      setEducation(teacher?.education ?? '');
+      setAcademicQualification(teacher?.academic_qualification ?? '');
+      setSsno(teacher?.ssno ?? '');
+      setLicensenum(teacher?.licensenum ?? '');
+      setHireDate(teacher?.hire_date ?? '');
+      setEndDate(teacher?.end_date ?? '');
+      setComments(teacher?.comments ?? '');
       setDesignation(teacher?.designation ?? '');
       setAddress(teacher?.address ?? '');
       setExpertise((teacher?.expertise ?? []).map((e) => ({ area: e.area, level: e.level })));
@@ -124,12 +141,15 @@ export function TeacherFormDialog({
   return (
     <FormDialog
       open={open}
-      title={editing ? 'Edit teacher' : 'Add teacher'}
-      submitLabel={editing ? 'Save changes' : 'Create teacher'}
+      title={editing ? 'Edit lecturer' : 'Add lecturer'}
+      submitLabel={editing ? 'Save changes' : 'Create lecturer'}
       submitting={submitting}
       submitDisabled={
         editing
-          ? fullName.trim().length === 0
+          ? // Gender is REQUIRED on the profile (D39). A lecturer recorded before the
+            // Profile section existed has none on file, so the select opens blank and
+            // the Dean has to choose one before the rest of their edit will save.
+            fullName.trim().length === 0 || gender.length === 0
           : staffNumber.trim().length === 0 ||
             fullName.trim().length === 0 ||
             (createLogin && loginEmail.trim().length === 0)
@@ -147,7 +167,12 @@ export function TeacherFormDialog({
           login_email: loginEmail.trim(),
           bio: bio.trim(),
           gender,
-          education: education.trim(),
+          academic_qualification: academicQualification.trim(),
+          ssno: ssno.trim(),
+          licensenum: licensenum.trim(),
+          hire_date: hireDate,
+          end_date: endDate,
+          comments: comments.trim(),
           designation: designation.trim(),
           address: address.trim(),
           expertise: expertise
@@ -241,20 +266,75 @@ export function TeacherFormDialog({
               helperText="e.g. Senior Lecturer, Head of Department."
             />
             <TextField
-              label="Education (optional)"
-              value={education}
-              onChange={(e) => setEducation(e.target.value)}
+              label="Academic qualification (optional)"
+              value={academicQualification}
+              onChange={(e) => setAcademicQualification(e.target.value)}
               fullWidth
               helperText="e.g. M.Ed. Mathematics."
             />
+
+            {/* Employment record — D39, Meeting #2 item 10. There is deliberately no
+                "Employed" switch here: employment IS `status`, which is changed from the
+                lecturer list so that deactivating someone stays one audited action. A
+                second control writing the same fact would let the two disagree. */}
             <TextField
-              label="Gender (optional)"
+              label="Social security no. (optional)"
+              value={ssno}
+              onChange={(e) => setSsno(e.target.value)}
+              fullWidth
+              slotProps={{ htmlInput: { maxLength: 9 } }}
+              error={Boolean(fieldErrors?.ssno)}
+              helperText={fieldErrors?.ssno?.join(' ') ?? 'Up to 9 characters.'}
+            />
+            <TextField
+              label="Teacher licence no. (optional)"
+              value={licensenum}
+              onChange={(e) => setLicensenum(e.target.value)}
+              fullWidth
+              slotProps={{ htmlInput: { maxLength: 15 } }}
+              error={Boolean(fieldErrors?.licensenum)}
+              helperText={
+                fieldErrors?.licensenum?.join(' ') ??
+                // Spelled out because it looks like a number and is not: the Ministry's
+                // format is letters, digits and hyphens.
+                'Letters, digits and hyphens — e.g. OWD-2019-00035.'
+              }
+            />
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                label="Hire date (optional)"
+                type="date"
+                value={hireDate}
+                onChange={(e) => setHireDate(e.target.value)}
+                fullWidth
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                label="End date (optional)"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                fullWidth
+                slotProps={{ inputLabel: { shrink: true } }}
+                helperText="Leave blank while employed."
+              />
+            </Stack>
+            <TextField
+              label="Gender"
               select
               value={gender}
               onChange={(e) => setGender(e.target.value as TeacherFormValues['gender'])}
+              required
               fullWidth
+              error={Boolean(fieldErrors?.gender)}
+              helperText={
+                fieldErrors?.gender?.join(' ') ??
+                (gender ? undefined : 'Required — choose one to save this profile.')
+              }
             >
-              <MenuItem value="">Not specified</MenuItem>
+              {/* No "Not specified" row: the field is required, and an option that
+                  submits an empty value would be a way to defeat that from inside the
+                  control. A lecturer with nothing on file simply opens blank. */}
               <MenuItem value="male">Male</MenuItem>
               <MenuItem value="female">Female</MenuItem>
               <MenuItem value="other">Other</MenuItem>
@@ -267,6 +347,16 @@ export function TeacherFormDialog({
               multiline
               minRows={2}
               helperText="A short professional summary."
+            />
+            <TextField
+              label="Comments (optional)"
+              value={comments}
+              onChange={(e) => setComments(e.target.value)}
+              fullWidth
+              multiline
+              minRows={2}
+              slotProps={{ htmlInput: { maxLength: 500 } }}
+              helperText="Internal staff note. Not shown to students."
             />
             <TextField
               label="Address (optional)"

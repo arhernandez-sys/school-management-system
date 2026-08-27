@@ -184,7 +184,7 @@ export function TeachersListPage() {
                 setCreateOpen(true);
               }}
             >
-              Add teacher
+              Add Lecturer
             </Button>
           ) : undefined
         }
@@ -240,7 +240,7 @@ export function TeachersListPage() {
       />
 
       <DataTable<TeacherListItem>
-        caption="Teachers directory"
+        caption="Lecturers directory"
         columns={columns}
         rows={query.data?.items ?? []}
         getRowId={(t) => t.id}
@@ -259,13 +259,13 @@ export function TeachersListPage() {
         sortDirection="asc"
         emptyTitle={
           debouncedSearch || status || debouncedSpec
-            ? 'No teachers match your filters'
-            : 'No teachers yet'
+            ? 'No lecturers match your filters'
+            : 'No lecturers yet'
         }
         emptyDescription={
           debouncedSearch || status || debouncedSpec
             ? 'Try adjusting your search or filters.'
-            : 'Teachers will appear here once added.'
+            : 'Lecturers will appear here once added.'
         }
       />
 

@@ -118,6 +118,7 @@ export const programsHandlers = [
     const url = new URL(request.url);
     const { page = 1, page_size = 25, search } = listParamsFrom(url);
     const isActive = boolParam(url, 'is_active');
+    const includeRetired = boolParam(url, 'include_retired') === true;
 
     let rows = D.programs;
     // Default to active-only, like the course catalog: the common caller is a picker.
@@ -125,7 +126,13 @@ export const programsHandlers = [
     // `undefined` here made the unfiltered call — the one the admissions wizard's
     // programme picker sends — fall through to `p.is_active === null`, which is false for
     // every row, so the picker received an EMPTY list while the endpoint answered 200.
-    rows = rows.filter((p) => (isActive === null ? p.is_active : p.is_active === isActive));
+    // `include_retired` drops the filter outright — the only way to get BOTH, since
+    // `is_active` is an equality filter and its absence re-applies the active-only
+    // default. Mirrors the server, so demo mode cannot certify a switch the real
+    // backend leaves inert.
+    if (!includeRetired) {
+      rows = rows.filter((p) => (isActive === null ? p.is_active : p.is_active === isActive));
+    }
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(

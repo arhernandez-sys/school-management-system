@@ -218,10 +218,21 @@ export interface DemoTeacher {
   avatar_url?: string;
   bio?: string;
   gender?: 'male' | 'female' | 'other';
-  education?: string;
+  /** Renamed from `education` by D39 (Meeting #2 item 10). */
+  academic_qualification?: string;
   designation?: string;
   address?: string;
   expertise?: { area: string; level: number }[];
+  // Employment record (D39, Meeting #2 item 10). `is_employed` is NOT stored here — the
+  // handler derives it from `status` on read, mirroring what the server does, so the two
+  // cannot drift in the demo any more than they can in production.
+  first_name?: string;
+  last_name?: string;
+  ssno?: string;
+  licensenum?: string;
+  hire_date?: string | null;
+  end_date?: string | null;
+  comments?: string;
 }
 
 // ── Students ────────────────────────────────────────────────────────────────────
@@ -554,6 +565,29 @@ export interface DemoApplication {
 }
 
 /**
+ * D38 — a SAVED but UNSUBMITTED form (`student_profile_temp`).
+ *
+ * Not an application: it lives in its own table, `created_by` is its VISIBILITY (the
+ * Registrar who filed it, plus the Dean), and Sections B and F ride as arrays because a
+ * form that has never been promoted has no application id for the child tables to key on.
+ *
+ * Deliberately reuses `DemoApplication`'s Sections A–G and drops the five columns the
+ * ACCEPT transition writes — a pending form has no decision and no student.
+ */
+export interface DemoApplicationTemp
+  extends Omit<
+    DemoApplication,
+    'status' | 'date_accepted' | 'student_code' | 'decided_by_user_id' | 'decided_at' | 'student_id'
+  > {
+  status: 'pending';
+  /** THE SCOPE. A Registrar sees only their own rows; the Dean sees all of them. */
+  created_by: string;
+  created_by_name: string;
+  education: DemoApplicationEducation[];
+  documents: DemoApplicationDocument[];
+}
+
+/**
  * Section B's repeating institution table.
  *
  * The table that fixes a real defect: the source dump had a SINGLE-valued
@@ -685,6 +719,8 @@ export interface DemoDataset {
   users: DemoUser[];
   // D30 §D11/§D12 — admissions and the programme history acceptance opens.
   applications: DemoApplication[];
+  /** D38 — saved-but-unsubmitted forms, scoped by `created_by`. */
+  application_temp: DemoApplicationTemp[];
   application_education: DemoApplicationEducation[];
   application_documents: DemoApplicationDocument[];
   credit_transfer_requests: DemoCreditTransferRequest[];

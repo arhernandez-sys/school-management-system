@@ -337,7 +337,7 @@ export const offeringsHandlers = [
 
     const semesterId = body.semester_id || getActiveSemester()?.id || DEMO_IDS.activeSemesterId;
     if (!getSemester(semesterId)) {
-      return errorResponse(404, 'semester_not_found', 'Term not found.');
+      return errorResponse(404, 'semester_not_found', 'Session not found.');
     }
     const sectionCode = body.section_code?.trim() || null;
 
@@ -355,7 +355,7 @@ export const offeringsHandlers = [
       return errorResponse(
         409,
         'duplicate_offering',
-        'This course is already offered in that term with the same section.',
+        'This course is already offered in that session with the same section.',
       );
     }
 
@@ -442,7 +442,7 @@ export const offeringsHandlers = [
         return errorResponse(
           409,
           'duplicate_offering',
-          'This course is already offered in that term with the same section.',
+          'This course is already offered in that session with the same section.',
         );
       }
       offering.section_code = next;
@@ -648,7 +648,7 @@ export const offeringsHandlers = [
       return errorResponse(
         409,
         'semester_mismatch',
-        'This offering runs in a different term.',
+        'This offering runs in a different session.',
       );
     }
     const semesterId = offering.semester_id;

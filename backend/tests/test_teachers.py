@@ -242,6 +242,69 @@ class TestCreateTeacher:
         base.update(over)
         return base
 
+    def test_create_stamps_created_by_only_not_updated_by(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """D39. A brand-new lecturer has never been EDITED, so `updated_by` is NULL.
+
+        It used to be stamped with the creator alongside `created_by`, which left the
+        column unable to answer the one question it exists for: "has this been changed
+        since it was created, and by whom?" With both set, a record nobody had touched
+        and a record its creator had since edited looked identical.
+
+        The linked login row created in the same transaction follows the same rule.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            TEACHERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._payload(
+                create_login={"email": f"new-{uuid.uuid4().hex[:8]}@school.test"}
+            ),
+        )
+        assert resp.status_code == 201, resp.text
+        teacher_id = resp.json()["teacher"]["id"]
+
+        row = db_session.scalar(
+            select(TeacherProfile).where(TeacherProfile.id == uuid.UUID(teacher_id))
+        )
+        assert row.created_by == principal.id
+        assert row.updated_by is None, "a never-edited record must not claim a last editor"
+
+        login = db_session.scalar(select(User).where(User.id == row.user_id))
+        assert login.created_by == principal.id
+        assert login.updated_by is None
+
+    def test_updated_by_appears_only_after_a_real_edit(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The other half of the rule: PATCH is what fills `updated_by`, and it does not
+        disturb `created_by`. Without this, "NULL on insert" could be satisfied by never
+        stamping the column at all."""
+        principal = make_user(role=Role.PRINCIPAL)
+        created = client.post(
+            TEACHERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._payload(),
+        )
+        assert created.status_code == 201, created.text
+        teacher_id = uuid.UUID(created.json()["teacher"]["id"])
+
+        editor = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(teacher_id),
+            headers=auth_headers(user_id=editor.id, role=Role.PRINCIPAL),
+            json={"full_name": "Edited Name"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        db_session.expire_all()
+        row = db_session.scalar(
+            select(TeacherProfile).where(TeacherProfile.id == teacher_id)
+        )
+        assert row.created_by == principal.id, "the creator must survive an edit"
+        assert row.updated_by == editor.id
+
     def test_create_plain_profile_201_no_temp_password(
         self, client, make_user, auth_headers, db_session
     ) -> None:
@@ -427,6 +490,87 @@ class TestUpdateTeacher:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["subject_specializations"] == ["Physics", "Math"]
+
+    def test_patch_exact_edit_dialog_payload_200(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """REGRESSION (D39). This is byte-for-byte what `TeacherProfileView.handleEdit`
+        sends, and before the profile columns were mapped it was a 422 on EVERY save —
+        `expertise` is always present (an array, never undefined), so `extra="forbid"`
+        rejected it whether or not the Dean touched the Profile section.
+        """
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={
+                "full_name": "Maria Reyes",
+                "email": "maria.reyes@bajc.edu.bz",
+                "phone": "+501-6792782",
+                "subject_specializations": ["Pre-Calculus"],
+                "bio": "Twelve years in the lecture room.",
+                "gender": "female",
+                "academic_qualification": "M.Ed. Mathematics",
+                "designation": "Head of Department",
+                "address": "11 Ring Road, Belmopan",
+                "expertise": [{"area": "Pre-Calculus", "level": 94}],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["gender"] == "female"
+        assert body["designation"] == "Head of Department"
+        assert body["academic_qualification"] == "M.Ed. Mathematics"
+        assert body["bio"] == "Twelve years in the lecture room."
+        assert body["address"] == "11 Ring Road, Belmopan"
+        assert body["expertise"] == [{"area": "Pre-Calculus", "level": 94}]
+
+    def test_patch_empty_expertise_only_still_200(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The minimal reproduction: a Dean who edits ONLY the name still ships
+        `expertise: []`, because the dialog always emits the array."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"full_name": "Renamed", "expertise": []},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["expertise"] == []
+
+    def test_patch_unmapped_gender_rejected_422(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`teacher_profiles.gender` is a real DB enum, so the schema restates it rather
+        than folding like `normalise_gender` does for the free-text student column."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"gender": "Female"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_get_untouched_profile_returns_empty_expertise(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """A lecturer whose profile was never filled in has NULL in the JSON column.
+        `default_factory` does not cover that — `from_attributes` finds the attribute
+        holding None — so this read 500'd until the before-validator was added."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["expertise"] == []
+        assert body["gender"] is None
 
     def test_patch_status_field_rejected_422(self, client, make_user, auth_headers, db_session) -> None:
         """`status` is ABSENT from TeacherUpdateRequest (extra=forbid) → PATCH cannot
@@ -619,3 +763,115 @@ class TestDeleteTeacher:
             headers=auth_headers(user_id=teacher.id, role=Role.TEACHER),
         )
         assert resp.status_code == 403
+
+
+class TestEmploymentRecord:
+    """D39 / Meeting #2 item 10 — ss#, licence number, IsEmployed, Academic Qualification.
+
+    `TeacherCreateRequest` and `TeacherUpdateRequest` both set `extra="forbid"`, which is
+    the trap this module has fallen into once already (see
+    `test_patch_exact_edit_dialog_payload_200`): a column mapped on the model but missing
+    from the write schema turns every save into a 422. These tests send the fields.
+    """
+
+    def test_create_accepts_the_employment_fields(
+        self, client, make_user, auth_headers
+    ) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            TEACHERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={
+                "staff_number": "T-2001",
+                "full_name": "Lydia Lucas",
+                "first_name": "Lydia",
+                "last_name": "Lucas",
+                "ssno": "000256398",
+                "licensenum": "OWD-2019-00035",
+                "academic_qualification": "M.Sc. Business Management",
+                "designation": "Lecturer",
+                "address": "San Joaquin, Corozal",
+                "comments": "Transferred from the Corozal campus.",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        # POST /teachers wraps the profile so the one-time temporary password can ride
+        # alongside it; the profile itself is `TeacherDetail`, same as every other route.
+        body = resp.json()["teacher"]
+        assert body["ssno"] == "000256398"
+        assert body["licensenum"] == "OWD-2019-00035"
+        assert body["academic_qualification"] == "M.Sc. Business Management"
+        assert body["first_name"] == "Lydia"
+        assert body["comments"] == "Transferred from the Corozal campus."
+
+    def test_licence_number_is_alphanumeric_not_an_integer(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`OWD-2019-00035` is the client's own sample. Validating this as a number
+        would reject every real licence, which is why item 10 says "AlphaNumeric"."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"licensenum": "OWD-2019-00035"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["licensenum"] == "OWD-2019-00035"
+
+    def test_a_licence_number_with_spaces_is_refused(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"licensenum": "OWD 2019 00035"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_is_employed_is_derived_from_status_on_create(
+        self, client, make_user, auth_headers
+    ) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            TEACHERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"staff_number": "T-2002", "full_name": "Ada Pol", "status": "inactive"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["teacher"]["is_employed"] is False
+
+    def test_is_employed_follows_a_status_change(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The whole point of deriving it: a deactivated lecturer must not keep reading
+        as employed on the client's reports."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        h = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+
+        resp = client.post(f"{_teacher_path(t.id)}/status", headers=h, json={"status": "inactive"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_employed"] is False
+
+        resp = client.post(f"{_teacher_path(t.id)}/status", headers=h, json={"status": "active"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_employed"] is True
+
+    def test_is_employed_cannot_be_set_directly(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """It mirrors `status`. Accepting it on the wire would let a caller create an
+        inactive lecturer flagged as employed, which is exactly the disagreement having
+        one authoritative column was meant to prevent."""
+        t = _make_teacher_profile(db_session)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            _teacher_path(t.id),
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"is_employed": False},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "is_employed" in resp.json()["error"]["fields"]

@@ -71,13 +71,32 @@ export interface TeacherDetail {
   /** Short professional "About me" blurb. */
   bio?: string;
   gender?: 'male' | 'female' | 'other';
-  /** Highest relevant qualification, e.g. "M.Ed. Mathematics". */
-  education?: string;
+  /**
+   * Highest relevant qualification, e.g. "M.Ed. Mathematics".
+   * Renamed from `education` by D39 (Meeting #2 item 10).
+   */
+  academic_qualification?: string;
   /** Role title, e.g. "Head of Department". */
   designation?: string;
   address?: string;
   /** Rated subject-expertise areas (profile "Subject Expertise" bars). */
   expertise?: TeacherExpertise[];
+  /**
+   * Employment record (D39, Meeting #2 item 10).
+   *
+   * `first_name` / `last_name` are additive — `full_name` stays the display value.
+   * `is_employed` is READ-ONLY: the server derives it from `status`, and it is absent
+   * from both write bodies so the two can never disagree.
+   */
+  first_name?: string;
+  last_name?: string;
+  ssno?: string;
+  /** Alphanumeric, e.g. "OWD-2019-00035". Never a number. */
+  licensenum?: string;
+  is_employed?: boolean;
+  hire_date?: string | null;
+  end_date?: string | null;
+  comments?: string;
   /** Distinct students across this teacher's classes (directory convenience). */
   student_count?: number;
 }
@@ -92,6 +111,17 @@ export interface TeacherCreateBody {
   subject_specializations?: string[];
   /** When present, provisions a linked login and returns a one-time temp password. */
   create_login?: { email: string; role: 'teacher' } | null;
+  /** Employment record (D39). `is_employed` is absent by design — derived from status. */
+  first_name?: string;
+  last_name?: string;
+  ssno?: string;
+  licensenum?: string;
+  hire_date?: string | null;
+  end_date?: string | null;
+  academic_qualification?: string;
+  designation?: string;
+  address?: string;
+  comments?: string;
 }
 
 /** POST /teachers response envelope (temp password surfaced ONCE on create-with-login). */
@@ -108,10 +138,18 @@ export interface TeacherUpdateBody {
   subject_specializations?: string[];
   bio?: string;
   gender?: 'male' | 'female' | 'other';
-  education?: string;
+  academic_qualification?: string;
   designation?: string;
   address?: string;
   expertise?: TeacherExpertise[];
+  /** Employment record (D39). `is_employed` is absent by design — derived from status. */
+  first_name?: string;
+  last_name?: string;
+  ssno?: string;
+  licensenum?: string;
+  hire_date?: string | null;
+  end_date?: string | null;
+  comments?: string;
 }
 
 /** GET /teachers query params. */

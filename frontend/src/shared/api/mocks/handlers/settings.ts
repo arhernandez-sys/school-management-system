@@ -185,7 +185,7 @@ export const settingsHandlers = [
     const year = getActiveYear();
     const semester = getActiveSemester();
     if (!year || !semester) {
-      return errorResponse(409, 'no_active_semester', 'No active academic term is configured.');
+      return errorResponse(409, 'no_active_semester', 'No active academic session is configured.');
     }
     return HttpResponse.json({
       academic_year: { id: year.id, name: year.name, status: year.status },
@@ -253,7 +253,7 @@ export const settingsHandlers = [
     }
     if (!body.semesters?.length) {
       return errorResponse(422, 'validation_error', 'Some fields need attention.', {
-        semesters: ['At least one term is required.'],
+        semesters: ['At least one session is required.'],
       });
     }
     const sequences = body.semesters.map((t) => t.sequence);
@@ -330,7 +330,7 @@ export const settingsHandlers = [
     const year = D.academic_years.find((y) => y.id === body.academic_year_id);
     if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
     if (year.status === 'archived') {
-      return errorResponse(409, 'year_archived', 'Cannot change the terms of an archived year.');
+      return errorResponse(409, 'year_archived', 'Cannot change the sessions of an archived year.');
     }
     if (body.end_date <= body.start_date) {
       return errorResponse(422, 'validation_error', 'Some fields need attention.', {
@@ -343,7 +343,7 @@ export const settingsHandlers = [
     if ((newMidStart === null) !== (newMidEnd === null)) {
       return errorResponse(422, 'validation_error', 'Some fields need attention.', {
         [newMidEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
-          'Required when the other mid-term date is set.',
+          'Required when the other mid-session date is set.',
         ],
       });
     }
@@ -360,7 +360,7 @@ export const settingsHandlers = [
       return errorResponse(
         409,
         'duplicate_semester_sequence',
-        `Another term in this year already uses sequence ${body.sequence}.`,
+        `Another session in this year already uses sequence ${body.sequence}.`,
       );
     }
     const created: DemoSemester = {
@@ -411,7 +411,7 @@ export const settingsHandlers = [
       return errorResponse(
         409,
         'duplicate_semester_sequence',
-        `Another term in this year already uses sequence ${body.sequence}.`,
+        `Another session in this year already uses sequence ${body.sequence}.`,
       );
     }
     if (body.name !== undefined) term.name = body.name;
@@ -438,7 +438,7 @@ export const settingsHandlers = [
       if (halfSet) {
         return errorResponse(422, 'validation_error', 'Some fields need attention.', {
           [midEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
-            'Required when the other mid-term date is set.',
+            'Required when the other mid-session date is set.',
           ],
         });
       }

@@ -47,6 +47,7 @@
 import type {
   DemoAcademicYear,
   DemoApplication,
+  DemoApplicationTemp,
   DemoApplicationDocument,
   DemoApplicationEducation,
   DemoAnnouncement,
@@ -414,7 +415,14 @@ const teachers: DemoTeacher[] = teacherSeed.map(([full_name, specs, status, gend
     status,
     gender,
     designation,
-    education: `${TEACHER_DEGREES[designation]} ${specNames[0]}`,
+    academic_qualification: `${TEACHER_DEGREES[designation]} ${specNames[0]}`,
+    // D39 — the split names mirror what 013 backfilled in the real database.
+    first_name: full_name.split(' ')[0],
+    last_name: full_name.split(' ').slice(-1)[0],
+    // Only the lead lecturer carries an SS# and a licence, so the demo shows both the
+    // populated and the empty rendering of these fields rather than only one.
+    ssno: i === 0 ? '000256398' : undefined,
+    licensenum: i === 0 ? 'OWD-2019-00035' : undefined,
     bio: `${designation} with ${years} years of classroom experience teaching ${specNames[0]}. Committed to student-centred learning and measurable outcomes.`,
     address: `${randInt(rng, 1, 120)} ${pick(rng, BELIZE_STREETS)}, Belmopan, Cayo`,
     // Expertise derived from specializations; the lead subject rates highest.
@@ -843,7 +851,7 @@ const SEM1_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
 ];
 const SEM2_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
   { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', status: 'published', released: false },
-  { title: 'Midterm Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
+  { title: 'Mid-Session Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
 ];
 for (const off of offerings) {
   if (off.is_archived) continue;
@@ -976,7 +984,7 @@ const announcements: DemoAnnouncement[] = [
   {
     id: 'ann-2',
     title: 'Staff meeting — Thursday 3:30 PM',
-    body: 'All teaching staff should attend the term-planning meeting in the staff room. Department heads, please bring your assessment calendars.',
+    body: 'All teaching staff should attend the session-planning meeting in the staff room. Department heads, please bring your assessment calendars.',
     audience: 'teachers',
     offering_id: null,
     author_user_id: principalUserId,
@@ -986,8 +994,8 @@ const announcements: DemoAnnouncement[] = [
   },
   {
     id: 'ann-3',
-    title: 'Midterm exam schedule released',
-    body: 'The midterm timetable is now available. Review your subjects and prepare accordingly. Speak to your teachers about any clashes.',
+    title: 'Mid-session exam schedule released',
+    body: 'The mid-session timetable is now available. Review your subjects and prepare accordingly. Speak to your lecturers about any clashes.',
     audience: 'students',
     offering_id: null,
     author_user_id: 'user-secretary',
@@ -1085,8 +1093,8 @@ const events: DemoEvent[] = [
   },
   {
     id: 'evt-4',
-    title: 'Term Planning — Staff Meeting',
-    description: 'All teaching staff meet to review the mid-term timetable and assessment calendar.',
+    title: 'Session Planning — Staff Meeting',
+    description: 'All teaching staff meet to review the mid-session timetable and assessment calendar.',
     category: 'meeting',
     visibility: 'internal',
     start_date: addDays(DEMO_TODAY, 1),
@@ -1100,8 +1108,8 @@ const events: DemoEvent[] = [
   },
   {
     id: 'evt-5',
-    title: 'Midterm Examinations',
-    description: 'Midterm exams across all forms. Refer to the posted timetable for your subjects.',
+    title: 'Mid-Session Examinations',
+    description: 'Mid-session exams across all forms. Refer to the posted timetable for your subjects.',
     category: 'exam',
     visibility: 'global',
     start_date: addDays(DEMO_TODAY, 5),
@@ -1130,8 +1138,8 @@ const events: DemoEvent[] = [
   },
   {
     id: 'evt-7',
-    title: 'First-Term Report Cards Issued',
-    description: 'Report cards for the first term are released to students and guardians.',
+    title: 'First-Session Report Cards Issued',
+    description: 'Report cards for the first session are released to students and guardians.',
     category: 'other',
     visibility: 'global',
     start_date: addDays(DEMO_TODAY, 16),
@@ -1368,7 +1376,7 @@ const HIST_ASMT_TEMPLATES: ReadonlyArray<{
 }> = [
   { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -90 },
   { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -60 },
-  { title: 'Midterm Test', type: 'test', catSuffix: 't', max: 50, offsetDays: -30 },
+  { title: 'Mid-Session Test', type: 'test', catSuffix: 't', max: 50, offsetDays: -30 },
   { title: 'Final Project', type: 'assignment', catSuffix: null, max: 100, offsetDays: -10 },
 ];
 const histAssessments: DemoAssessment[] = [];
@@ -1719,6 +1727,144 @@ const applicationsSeed: DemoApplication[] = [
   },
 ];
 
+/**
+ * D38 — saved-but-unsubmitted forms.
+ *
+ * **Two rows, filed by two DIFFERENT people, on purpose.** The rule the client asked for is
+ * "a Registrar sees only their own; the Dean sees all", and a single row cannot show it: it
+ * would look identical whether the scope worked or did not. `temp-2` belongs to a registrar
+ * the demo cannot log in as, so signing in as the Registrar and seeing exactly one row —
+ * then as the Dean and seeing two — is the rule made visible.
+ *
+ * `temp-1` is deliberately INCOMPLETE (no programme, no signature), because that is the
+ * ordinary case: a form is left pending precisely because something is still missing.
+ * `temp-2` is complete, so "Ready to submit" has something to render.
+ */
+const application_temp: DemoApplicationTemp[] = [
+  {
+    id: 'temp-1',
+    status: 'pending',
+    school_year: '2026-2027',
+    first_name: 'Delphine',
+    middle_name: null,
+    last_name: 'Waight',
+    date_of_birth: '2008-03-21',
+    ssno: null,
+    gender: 'female',
+    civil_status: null,
+    religion: 'Catholic',
+    phone: '+501-6701188',
+    email: 'delphine.waight@example.bz',
+    has_health_condition: false,
+    health_condition_note: null,
+    street: '4 Mahogany Street',
+    city_town_village: 'Belmopan',
+    district: 'Cayo',
+    mother_name: 'Ivy Waight',
+    father_name: null,
+    nok_name: 'Ivy Waight',
+    nok_relationship: 'Mother',
+    nok_phone: '+501-6701189',
+    atlib_exam: false,
+    num_csec: 6,
+    finance_name: null,
+    finance_phone: null,
+    finance_email: null,
+    recommendation_received: false,
+    // Missing on purpose — these are what `blocking_issues` will report.
+    program_id: null,
+    year_of_study: null,
+    enrollment_load: null,
+    applicant_signed_at: null,
+    guardian_signed_at: null,
+    academic_year_id: null,
+    enrolment_status: null,
+    comments: null,
+    created_by: 'user-secretary',
+    created_by_name: 'Sofia Castillo',
+    created_at: '2026-07-30T09:15:00Z',
+    updated_at: '2026-08-04T14:40:00Z',
+    education: [
+      {
+        id: 'temp-1-edu-1',
+        application_id: 'temp-1',
+        institution: 'Belmopan Comprehensive School',
+        education_level: 'High School',
+        graduated: true,
+        graduation_date: '2026-06-26',
+        sort_order: 1,
+      },
+    ],
+    documents: [
+      {
+        id: 'temp-1-doc-1',
+        application_id: 'temp-1',
+        document_type: 'transcript',
+        file_name: null,
+        content_type: null,
+        size_bytes: null,
+        received: true,
+      },
+    ],
+  },
+  {
+    id: 'temp-2',
+    status: 'pending',
+    school_year: '2026-2027',
+    first_name: 'Rolando',
+    middle_name: 'A',
+    last_name: 'Zetina',
+    date_of_birth: '2005-01-09',
+    ssno: null,
+    gender: 'male',
+    civil_status: 'Single',
+    religion: null,
+    phone: '+501-6335512',
+    email: 'rolando.zetina@example.bz',
+    has_health_condition: false,
+    health_condition_note: null,
+    street: '77 Front Street',
+    city_town_village: 'Dangriga',
+    district: 'Stann Creek',
+    mother_name: null,
+    father_name: 'Neri Zetina',
+    nok_name: 'Neri Zetina',
+    nok_relationship: 'Father',
+    nok_phone: '+501-6335513',
+    atlib_exam: true,
+    num_csec: 8,
+    finance_name: 'Neri Zetina',
+    finance_phone: '+501-6335513',
+    finance_email: null,
+    recommendation_received: true,
+    program_id: programs[0]!.id,
+    year_of_study: 'First',
+    enrollment_load: 'Full Time',
+    applicant_signed_at: '2026-08-10',
+    guardian_signed_at: null,
+    academic_year_id: null,
+    enrolment_status: null,
+    comments: null,
+    // A Registrar the demo has no login for, so the scope rule is observable.
+    created_by: 'user-registrar-2',
+    created_by_name: 'Karen Requena',
+    created_at: '2026-08-11T08:05:00Z',
+    updated_at: '2026-08-11T08:52:00Z',
+    education: [
+      {
+        id: 'temp-2-edu-1',
+        application_id: 'temp-2',
+        institution: 'Ecumenical High School',
+        education_level: 'High School',
+        graduated: true,
+        graduation_date: '2023-06-30',
+        sort_order: 1,
+      },
+    ],
+    documents: [],
+  },
+];
+
 const application_education: DemoApplicationEducation[] = [
   {
     id: 'appedu-1',
@@ -1908,6 +2054,7 @@ export const DEMO_DATASET: DemoDataset = {
   assessment_policy,
   users,
   applications: applicationsSeed,
+  application_temp,
   application_education,
   application_documents,
   credit_transfer_requests,

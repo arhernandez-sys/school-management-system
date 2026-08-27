@@ -240,7 +240,7 @@ export const revisionsHandlers = [
         return errorResponse(
           422,
           'revision_not_eligible',
-          'This result was not part of the mid-term submission, so it cannot be revised.',
+          'This result was not part of the mid-session submission, so it cannot be revised.',
           { assessment_id: [eligibility.reason ?? 'not_eligible'] },
         );
       }

@@ -59,6 +59,7 @@ export const coursesHandlers = [
     const page = listCourses({
       ...listParamsFrom(url),
       is_active: boolParam(url, 'is_active'),
+      include_retired: boolParam(url, 'include_retired') === true,
     });
     return HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),

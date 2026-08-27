@@ -221,7 +221,7 @@ export const attendanceHandlers: RequestHandler[] = [
   http.put(`${API_BASE_URL}/attendance`, async ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== 'teacher') {
-      return errorResponse(403, 'forbidden', 'Only a class teacher can record attendance.');
+      return errorResponse(403, 'forbidden', 'Only an assigned lecturer can record attendance.');
     }
 
     const body = (await request.json()) as {

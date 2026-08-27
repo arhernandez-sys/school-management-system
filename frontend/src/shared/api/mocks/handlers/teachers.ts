@@ -123,10 +123,21 @@ function toDetail(t: DemoTeacher) {
     avatar_url: t.avatar_url,
     bio: t.bio,
     gender: t.gender,
-    education: t.education,
+    academic_qualification: t.academic_qualification,
     designation: t.designation,
     address: t.address,
     expertise: t.expertise,
+    // Employment record (D39, Meeting #2 item 10). `is_employed` is DERIVED from status
+    // here exactly as `service._sync_is_employed` derives it — the mock must not offer a
+    // way for the two to disagree that the real API does not have.
+    first_name: t.first_name,
+    last_name: t.last_name,
+    ssno: t.ssno,
+    licensenum: t.licensenum,
+    is_employed: t.status === 'active',
+    hire_date: t.hire_date ?? null,
+    end_date: t.end_date ?? null,
+    comments: t.comments,
     student_count: studentCountForTeacher(t.id),
   };
 }
@@ -167,7 +178,7 @@ export const teachersHandlers = [
   // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
   http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     return HttpResponse.json(toDetail(teacher));
   }),
 
@@ -193,11 +204,11 @@ export const teachersHandlers = [
       });
     }
     if (D.teachers.some((t) => t.staff_number.toLowerCase() === staffNumber.toLowerCase())) {
-      return errorResponse(409, 'duplicate_staff_number', 'A teacher with this staff number already exists.');
+      return errorResponse(409, 'duplicate_staff_number', 'A lecturer with this staff number already exists.');
     }
     const email = (body.email ?? '').trim();
     if (email && D.teachers.some((t) => t.email.toLowerCase() === email.toLowerCase())) {
-      return errorResponse(409, 'duplicate_email', 'A teacher with this email already exists.');
+      return errorResponse(409, 'duplicate_email', 'A lecturer with this email already exists.');
     }
 
     teacherSeq += 1;
@@ -252,7 +263,7 @@ export const teachersHandlers = [
   // PATCH /teachers/{id} — benign profile edits (NOT status; NOT role).
   http.patch(`${API_BASE_URL}/teachers/:teacherId`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const body = (await request.json()) as {
       full_name?: string;
       email?: string | null;
@@ -260,10 +271,18 @@ export const teachersHandlers = [
       subject_specializations?: string[] | null;
       bio?: string | null;
       gender?: DemoTeacher['gender'] | null;
-      education?: string | null;
+      academic_qualification?: string | null;
       designation?: string | null;
       address?: string | null;
       expertise?: { area: string; level: number }[] | null;
+      // D39. `is_employed` is deliberately absent, matching `TeacherUpdateRequest`.
+      first_name?: string | null;
+      last_name?: string | null;
+      ssno?: string | null;
+      licensenum?: string | null;
+      hire_date?: string | null;
+      end_date?: string | null;
+      comments?: string | null;
     };
 
     if (body.full_name !== undefined && body.full_name.trim().length === 0) {
@@ -278,7 +297,7 @@ export const teachersHandlers = [
         (t) => t.id !== teacher.id && t.email.toLowerCase() === email.toLowerCase(),
       )
     ) {
-      return errorResponse(409, 'duplicate_email', 'A teacher with this email already exists.');
+      return errorResponse(409, 'duplicate_email', 'A lecturer with this email already exists.');
     }
 
     if (body.full_name !== undefined) teacher.full_name = body.full_name.trim();
@@ -290,10 +309,32 @@ export const teachersHandlers = [
     // Extended profile edits (all optional; empty strings clear the field).
     if (body.bio !== undefined) teacher.bio = (body.bio ?? '').trim() || undefined;
     if (body.gender !== undefined) teacher.gender = body.gender ?? undefined;
-    if (body.education !== undefined) teacher.education = (body.education ?? '').trim() || undefined;
+    if (body.academic_qualification !== undefined)
+      teacher.academic_qualification = (body.academic_qualification ?? '').trim() || undefined;
     if (body.designation !== undefined)
       teacher.designation = (body.designation ?? '').trim() || undefined;
     if (body.address !== undefined) teacher.address = (body.address ?? '').trim() || undefined;
+    // D39 employment record. Same rule as the rest: absent leaves alone, blank clears.
+    if (body.first_name !== undefined)
+      teacher.first_name = (body.first_name ?? '').trim() || undefined;
+    if (body.last_name !== undefined)
+      teacher.last_name = (body.last_name ?? '').trim() || undefined;
+    if (body.ssno !== undefined) teacher.ssno = (body.ssno ?? '').trim() || undefined;
+    if (body.licensenum !== undefined) {
+      const licence = (body.licensenum ?? '').trim();
+      // Mirrors `LICENSE_PATTERN` in teachers/schemas.py. The mock validates because a
+      // form that passes here and 422s against the real API is worse than no mock.
+      if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          licensenum: ['Letters, digits and hyphens only.'],
+        });
+      }
+      teacher.licensenum = licence || undefined;
+    }
+    if (body.hire_date !== undefined) teacher.hire_date = body.hire_date || undefined;
+    if (body.end_date !== undefined) teacher.end_date = body.end_date || undefined;
+    if (body.comments !== undefined)
+      teacher.comments = (body.comments ?? '').trim() || undefined;
     if (body.expertise !== undefined) {
       teacher.expertise = (body.expertise ?? [])
         .map((e) => ({
@@ -309,7 +350,7 @@ export const teachersHandlers = [
   // has active assignments is blocked (409 teacher_has_active_assignments).
   http.post(`${API_BASE_URL}/teachers/:teacherId/status`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const body = (await request.json()) as { status: DemoTeacher['status'] };
 
     if (body.status === 'inactive') {
@@ -318,7 +359,7 @@ export const teachersHandlers = [
         return errorResponse(
           409,
           'teacher_has_active_assignments',
-          'This teacher is still assigned to active classes. Reassign those classes before deactivating.',
+          'This lecturer is still assigned to active offerings. Reassign those offerings before deactivating.',
           { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
         );
       }
@@ -330,13 +371,13 @@ export const teachersHandlers = [
   // DELETE /teachers/{id} — hard delete; blocked if assigned to any active class_subject.
   http.delete(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const active = activeAssignmentsOf(teacher.id);
     if (active.length > 0) {
       return errorResponse(
         409,
         'teacher_has_active_assignments',
-        'This teacher is assigned to one or more active classes and cannot be deleted. Reassign or deactivate those classes first.',
+        'This lecturer is assigned to one or more active offerings and cannot be deleted. Reassign or deactivate those offerings first.',
         { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
       );
     }

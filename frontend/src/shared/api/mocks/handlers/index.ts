@@ -16,7 +16,7 @@ import { coursesHandlers } from './courses';
 import { programsHandlers } from './programs';
 import { prerequisitesHandlers } from './prerequisites';
 import { studentsHandlers } from './students';
-import { admissionsHandlers } from './admissions';
+import { admissionsHandlers, pendingApplicationsHandlers } from './admissions';
 import { teachersHandlers } from './teachers';
 import { offeringsHandlers } from './offerings';
 import { assessmentsHandlers } from './assessments';
@@ -37,6 +37,9 @@ export const handlers = [
   ...prerequisitesHandlers,
   ...studentsHandlers,
   ...admissionsHandlers,
+  // D38 — declared AFTER the applications handlers, but the paths cannot collide: they are
+  // a separate prefix (`/pending-applications`), which is why the server uses one too.
+  ...pendingApplicationsHandlers,
   ...teachersHandlers,
   ...offeringsHandlers,
   ...assessmentsHandlers,

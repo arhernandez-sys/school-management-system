@@ -431,12 +431,22 @@ for i, (full_name, specs, status, gender) in enumerate(TEACHER_SEED):
     add("teacher_profiles", id=tid, user_id=user_id, staff_number=f"T-{1001 + i}",
         full_name=full_name, email=email, phone=f"+501-6{rng.randint(100000, 999999)}",
         status=status, subject_specializations=json.dumps(spec_names), gender=gender,
-        designation=designation, education=f"{DEGREES[designation]} {spec_names[0]}",
+        designation=designation,
+        # D39 (Meeting #2 item 10) — `education` was renamed by 013_meeting2_schema.sql.
+        academic_qualification=f"{DEGREES[designation]} {spec_names[0]}",
         bio=(f"{designation} with {years} years of lecture-room experience teaching "
              f"{spec_names[0]}. Committed to student-centred learning and measurable "
              f"outcomes."),
         address=f"{rng.randint(1, 120)} {rng.choice(STREETS)}, Belmopan, Cayo",
-        expertise=json.dumps(expertise), avatar_url=None)
+        expertise=json.dumps(expertise), avatar_url=None,
+        # The split names mirror what 013 backfilled; `full_name` stays authoritative.
+        first_name=full_name.split(" ")[0], last_name=full_name.split(" ")[-1],
+        # Derived from status, exactly as `teachers/service._sync_is_employed` does it.
+        is_employed=1 if status == "active" else 0,
+        # Only the lead lecturer gets these, so the demo shows both the populated and the
+        # empty rendering rather than making every row look uniformly filled in.
+        ssno="000256398" if i == 0 else None,
+        licensenum="OWD-2019-00035" if i == 0 else None)
 
 
 def teacher_for(code: str) -> int:

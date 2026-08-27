@@ -355,7 +355,7 @@ export const gradesHandlers = [
         return errorResponse(
           409,
           'grade_window_closed',
-          'The grade submission deadline for this term has passed.',
+          'The grade submission deadline for this session has passed.',
         );
       }
       // D33 ask 7 — checked AFTER the deadline for the reason the server documents: if
@@ -365,7 +365,7 @@ export const gradesHandlers = [
         return errorResponse(
           409,
           'midterm_frozen',
-          'The mid-term grading period is in progress, so grades for this term are frozen. ' +
+          'The mid-session grading period is in progress, so grades for this session are frozen. ' +
             'Entry reopens once the period closes.',
         );
       }
@@ -531,7 +531,7 @@ export const gradesHandlers = [
       return errorResponse(
         429,
         'rate_limited',
-        'This teacher was reminded recently. Try again later.',
+        'This lecturer was reminded recently. Try again later.',
         { retry_after_seconds: [String(retryAfter)] },
       );
     }

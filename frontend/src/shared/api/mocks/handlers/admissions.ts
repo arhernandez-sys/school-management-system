@@ -6,6 +6,7 @@ import type {
   DemoApplication,
   DemoApplicationDocument,
   DemoApplicationEducation,
+  DemoApplicationTemp,
   DemoCreditTransferRequest,
 } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
@@ -1026,5 +1027,349 @@ export const admissionsHandlers = [
     row.decided_at = `${DEMO_TODAY}T12:00:00Z`;
     if (body.note) row.note = row.note ? `${row.note}\n${body.note}` : body.note;
     return HttpResponse.json(transferRead(row));
+  }),
+];
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * D38 · PENDING forms — `/pending-applications`
+ *
+ * Mirrors the server rule for rule, because the two behaviours the UI depends on here are
+ * both invisible until they are wrong:
+ *
+ *   * **the `created_by` scope** — a Registrar reaches only their own rows, the Dean reaches
+ *     all of them, and someone else's row answers **404, not 403**;
+ *   * **a refused submit does not consume the row** — the pending form is still there after
+ *     a 422, which is the whole point of D38's save-only-when-asked model.
+ *
+ * The demo login carries only a role, so the acting user is resolved from it the same way
+ * handlers/students.ts resolves a teacher: `secretary` → `user-secretary`,
+ * `principal` → the Dean. `temp-2` is seeded against a registrar with no demo login, so
+ * signing in as the Registrar and seeing one row — then as the Dean and seeing two — is the
+ * scope rule made visible rather than asserted.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** The Dean sees every pending form; anyone else sees only their own. */
+const maySeeAllPending = (role: string) => role === 'principal';
+
+/** Role → the seeded user who acts. Mirrors the mapping in handlers/students.ts. */
+function actingUser(role: string): { id: string; name: string } {
+  if (role === 'principal') {
+    const dean = D.users.find((u) => u.role === 'principal');
+    return { id: dean?.id ?? 'user-principal', name: dean?.full_name ?? 'The Dean' };
+  }
+  const registrar = D.users.find((u) => u.id === 'user-secretary');
+  return { id: registrar?.id ?? 'user-secretary', name: registrar?.full_name ?? 'The Registrar' };
+}
+
+/**
+ * Scoped lookup. Returns `undefined` for a row that exists but is not the actor's, so the
+ * caller answers 404 — a 403 would confirm the row is out there and whose it is.
+ */
+function findTemp(id: string, role: string): DemoApplicationTemp | undefined {
+  const row = D.application_temp.find((t) => t.id === id);
+  if (!row) return undefined;
+  if (!maySeeAllPending(role) && row.created_by !== actingUser(role).id) return undefined;
+  return row;
+}
+
+/**
+ * `submissionIssues` reads only Sections A–G, which a pending row carries under the same
+ * names — so the completeness answer is computed by the SAME function the applications
+ * handlers use. Two implementations would be two chances to disagree with the server.
+ */
+const tempIssues = (row: DemoApplicationTemp): string[] =>
+  submissionIssues(row as unknown as DemoApplication);
+
+function pendingListItem(row: DemoApplicationTemp) {
+  return {
+    id: row.id,
+    status: row.status,
+    full_name: [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(' '),
+    first_name: row.first_name,
+    middle_name: row.middle_name,
+    last_name: row.last_name,
+    school_year: row.school_year,
+    program: programRef(row.program_id),
+    year_of_study: row.year_of_study,
+    enrollment_load: row.enrollment_load,
+    email: row.email,
+    phone: row.phone,
+    gender: row.gender,
+    created_by: row.created_by,
+    created_by_name: row.created_by_name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    blocking_issues: tempIssues(row),
+  };
+}
+
+function pendingDetail(row: DemoApplicationTemp) {
+  return {
+    ...pendingListItem(row),
+    date_of_birth: row.date_of_birth,
+    ssno: row.ssno,
+    civil_status: row.civil_status,
+    religion: row.religion,
+    has_health_condition: row.has_health_condition,
+    health_condition_note: row.health_condition_note,
+    street: row.street,
+    city_town_village: row.city_town_village,
+    district: row.district,
+    mother_name: row.mother_name,
+    father_name: row.father_name,
+    nok_name: row.nok_name,
+    nok_relationship: row.nok_relationship,
+    nok_phone: row.nok_phone,
+    atlib_exam: row.atlib_exam,
+    num_csec: row.num_csec,
+    finance_name: row.finance_name,
+    finance_phone: row.finance_phone,
+    finance_email: row.finance_email,
+    recommendation_received: row.recommendation_received,
+    applicant_signed_at: row.applicant_signed_at,
+    guardian_signed_at: row.guardian_signed_at,
+    academic_year_id: row.academic_year_id,
+    enrolment_status: row.enrolment_status,
+    comments: row.comments,
+    education: [...row.education].sort((a, b) => a.sort_order - b.sort_order),
+    documents: row.documents,
+  };
+}
+
+/**
+ * Section B / F out of the request body. `sort_order` is renumbered from the submitted
+ * ORDER, exactly as the server does, so the client never has to keep it consistent while
+ * inserting and removing rows.
+ */
+function tempChildren(tempId: string, body: Record<string, unknown>) {
+  const education = (Array.isArray(body.education) ? body.education : []).map(
+    (item, index) =>
+      ({
+        ...(item as object),
+        id: `${tempId}-edu-${index + 1}`,
+        application_id: tempId,
+        sort_order: index + 1,
+      }) as DemoApplicationEducation,
+  );
+  const documents = (Array.isArray(body.documents) ? body.documents : []).map(
+    (item, index) =>
+      ({
+        ...(item as object),
+        id: `${tempId}-doc-${index + 1}`,
+        application_id: tempId,
+      }) as DemoApplicationDocument,
+  );
+  return { education, documents };
+}
+
+export const pendingApplicationsHandlers = [
+  // ── GET /pending-applications ───────────────────────────────────────────────
+  http.get(`${API_BASE_URL}/pending-applications`, ({ request, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+
+    const role = sessionRole(cookies);
+    const url = new URL(request.url);
+    const params = listParamsFrom(url);
+    const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
+
+    let rows = maySeeAllPending(role)
+      ? [...D.application_temp]
+      : D.application_temp.filter((t) => t.created_by === actingUser(role).id);
+
+    if (search) {
+      rows = rows.filter((t) =>
+        [t.first_name, t.last_name, t.email]
+          .filter(Boolean)
+          .some((field) => String(field).toLowerCase().includes(search)),
+      );
+    }
+    // Surname-first, the same rule as every other directory (§D10).
+    rows.sort(
+      (a, b) =>
+        a.last_name.localeCompare(b.last_name) || a.first_name.localeCompare(b.first_name),
+    );
+
+    const page = params.page ?? 1;
+    const pageSize = params.page_size ?? 25;
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      items: rows.slice(start, start + pageSize).map(pendingListItem),
+      total: rows.length,
+      page,
+      page_size: pageSize,
+      total_pages: pageSize ? Math.ceil(rows.length / pageSize) : 0,
+    });
+  }),
+
+  // ── POST /pending-applications ──────────────────────────────────────────────
+  http.post(`${API_BASE_URL}/pending-applications`, async ({ request, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as Record<string, unknown>;
+
+    const first = String(body.first_name ?? '').trim();
+    const last = String(body.last_name ?? '').trim();
+    if (!first || !last) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        last_name: ['Required.'],
+      });
+    }
+    if (body.program_id && !D.programs.some((p) => p.id === body.program_id)) {
+      return errorResponse(422, 'validation_error', 'Programme not found.', {
+        program_id: ['Unknown programme.'],
+      });
+    }
+
+    const actor = actingUser(sessionRole(cookies));
+    const id = nextId('temp');
+    const { education, documents } = tempChildren(id, body);
+    const row: DemoApplicationTemp = {
+      id,
+      status: 'pending',
+      school_year: null,
+      first_name: first,
+      middle_name: null,
+      last_name: last,
+      date_of_birth: null,
+      ssno: null,
+      gender: null,
+      civil_status: null,
+      religion: null,
+      phone: null,
+      email: null,
+      has_health_condition: false,
+      health_condition_note: null,
+      street: null,
+      city_town_village: null,
+      district: null,
+      mother_name: null,
+      father_name: null,
+      nok_name: null,
+      nok_relationship: null,
+      nok_phone: null,
+      atlib_exam: false,
+      num_csec: null,
+      finance_name: null,
+      finance_phone: null,
+      finance_email: null,
+      recommendation_received: false,
+      program_id: null,
+      year_of_study: null,
+      enrollment_load: null,
+      applicant_signed_at: null,
+      guardian_signed_at: null,
+      academic_year_id: null,
+      enrolment_status: null,
+      comments: null,
+      created_by: actor.id,
+      created_by_name: actor.name,
+      created_at: `${DEMO_TODAY}T12:00:00Z`,
+      updated_at: `${DEMO_TODAY}T12:00:00Z`,
+      education,
+      documents,
+    };
+    // Reuses the applications writer: the writable set is identical by construction.
+    applyWritable(row as unknown as DemoApplication, body);
+    D.application_temp.push(row);
+    return HttpResponse.json(pendingDetail(row), { status: 201 });
+  }),
+
+  // ── GET /pending-applications/{id} ──────────────────────────────────────────
+  http.get(`${API_BASE_URL}/pending-applications/:tempId`, ({ params, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const row = findTemp(String(params.tempId), sessionRole(cookies));
+    if (!row) return errorResponse(404, 'not_found', 'Pending application not found.');
+    return HttpResponse.json(pendingDetail(row));
+  }),
+
+  // ── PATCH /pending-applications/{id} ────────────────────────────────────────
+  http.patch(`${API_BASE_URL}/pending-applications/:tempId`, async ({ params, request, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const row = findTemp(String(params.tempId), sessionRole(cookies));
+    if (!row) return errorResponse(404, 'not_found', 'Pending application not found.');
+
+    const body = (await request.json()) as Record<string, unknown>;
+    if (body.program_id && !D.programs.some((p) => p.id === body.program_id)) {
+      return errorResponse(422, 'validation_error', 'Programme not found.', {
+        program_id: ['Unknown programme.'],
+      });
+    }
+    applyWritable(row as unknown as DemoApplication, body);
+    const { education, documents } = tempChildren(row.id, body);
+    row.education = education;
+    row.documents = documents;
+    // `created_by` is NOT reassigned: it is the scope, so a Dean's edit must not take the
+    // form away from the Registrar who filed it.
+    return HttpResponse.json(pendingDetail(row));
+  }),
+
+  // ── DELETE /pending-applications/{id} — HARD ────────────────────────────────
+  http.delete(`${API_BASE_URL}/pending-applications/:tempId`, ({ params, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const row = findTemp(String(params.tempId), sessionRole(cookies));
+    if (!row) return errorResponse(404, 'not_found', 'Pending application not found.');
+    D.application_temp.splice(D.application_temp.indexOf(row), 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ── POST /pending-applications/{id}/submit — PROMOTE ────────────────────────
+  http.post(`${API_BASE_URL}/pending-applications/:tempId/submit`, ({ params, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const row = findTemp(String(params.tempId), sessionRole(cookies));
+    if (!row) return errorResponse(404, 'not_found', 'Pending application not found.');
+
+    const issues = tempIssues(row);
+    if (issues.length > 0) {
+      // THE ROW STAYS. A refused submit that consumed it would destroy exactly the work
+      // D38's save-only-when-asked model exists to protect.
+      return errorResponse(
+        422,
+        'application_incomplete',
+        'This application is not complete enough to submit.',
+        { application: issues },
+      );
+    }
+
+    const graduatedWithoutDate = row.education.find((e) => e.graduated && !e.graduation_date);
+    if (graduatedWithoutDate) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        graduation_date: [`Required for ${graduatedWithoutDate.institution}.`],
+      });
+    }
+
+    const appId = nextId('app');
+    const app: DemoApplication = {
+      ...(row as unknown as DemoApplication),
+      id: appId,
+      status: 'submitted',
+      date_accepted: null,
+      student_code: null,
+      decided_by_user_id: null,
+      decided_at: null,
+      student_id: null,
+      updated_at: `${DEMO_TODAY}T12:00:00Z`,
+    };
+    // Strip the four fields that exist only on a pending row. The spread above copied
+    // them, and leaving them on a `DemoApplication` would put properties in the demo store
+    // that its own type does not have — which is how a demo drifts from the server it is
+    // supposed to be standing in for.
+    for (const key of ['education', 'documents', 'created_by', 'created_by_name']) {
+      delete (app as unknown as Record<string, unknown>)[key];
+    }
+    D.applications.push(app);
+    row.education.forEach((e, index) =>
+      D.application_education.push({ ...e, id: `${appId}-edu-${index + 1}`, application_id: appId }),
+    );
+    row.documents.forEach((d, index) =>
+      D.application_documents.push({ ...d, id: `${appId}-doc-${index + 1}`, application_id: appId }),
+    );
+    D.application_temp.splice(D.application_temp.indexOf(row), 1);
+
+    return HttpResponse.json(detail(app), { status: 201 });
   }),
 ];
