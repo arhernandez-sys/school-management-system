@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS `academic_years` (
   `drop_lowest_count` smallint(6) DEFAULT NULL,
   `active_flag` varchar(6) GENERATED ALWAYS AS (if(`status` = 'active','active',NULL)) STORED,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS `announcements` (
   `expires_at` datetime DEFAULT NULL COMMENT 'Optional expiry',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `offering_id` uuid DEFAULT NULL COMMENT 'FK -> course_offerings; required iff audience=''class''. NULL = school-wide (D31; was class_id).',
@@ -122,22 +122,29 @@ CREATE TABLE IF NOT EXISTS `application_documents` (
   `size_bytes` bigint(20) DEFAULT NULL,
   `received` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Ticked even when no file is uploaded (paper submission)',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `ix_application_documents_application` (`application_id`),
   CONSTRAINT `fk_application_documents_application` FOREIGN KEY (`application_id`) REFERENCES `applications` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.application_documents: ~8 rows (approximately)
+-- Dumping data for table sims.application_documents: ~15 rows (approximately)
 INSERT INTO `application_documents` (`id`, `application_id`, `document_type`, `file_name`, `storage_key`, `content_type`, `size_bytes`, `received`, `created_at`, `updated_at`) VALUES
 	('7abe3a61-d23c-4b9d-a241-21dc7908c5c8', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'social_security_card', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
 	('d9e78665-4052-45f1-8974-5ae5657d8c9a', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'hs_diploma', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
 	('955a6682-e5a1-4efd-95a8-76cb4b0c2d0f', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'other', NULL, NULL, NULL, NULL, 0, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
 	('aecd543d-0045-446a-aa11-79bd78f6018f', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'passport_photo', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
+	('b5ef93b1-0859-4e34-b7f4-865798f020b5', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'hs_diploma', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
+	('553c7d74-dd54-4fa4-aa12-a08819dbd69f', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'transcript', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
 	('9dc6b0c3-a0ca-429b-9787-a38ec4d90010', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'recommendation_form', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
+	('7fa60f6a-7a59-46a4-b379-a6baac913874', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'recommendation_form', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
+	('12d391ad-a8a8-4c41-b2f9-a9c784cb4e1f', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'cta', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
 	('40ad4380-cd6b-419f-ba36-b7c550e44b7b', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'transcript', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
+	('3b88f4db-4e86-4fcb-b35c-c3601379dee1', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'course_outline', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
 	('92246057-229b-4701-a3dc-d7211a6b5601', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'course_outline', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
-	('5d1ef6fe-a7f7-4282-8a24-db4d4088d4fa', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'cta', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33');
+	('5d1ef6fe-a7f7-4282-8a24-db4d4088d4fa', 'afd18f01-6380-4541-ad61-ecb047cbaeeb', 'cta', NULL, NULL, NULL, NULL, 1, '2026-08-23 15:09:33', '2026-08-23 15:09:33'),
+	('685ffa04-ff32-4918-bb2e-dbec1b666656', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'social_security_card', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34'),
+	('3f67ff1a-3068-4e23-97fe-e59c058f9add', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'passport_photo', NULL, NULL, NULL, NULL, 1, '2026-08-25 04:45:34', '2026-08-25 04:45:34');
 
 -- Dumping structure for table sims.application_education
 CREATE TABLE IF NOT EXISTS `application_education` (
@@ -149,7 +156,7 @@ CREATE TABLE IF NOT EXISTS `application_education` (
   `graduation_date` date DEFAULT NULL,
   `sort_order` smallint(6) NOT NULL DEFAULT 1,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `ix_application_education_application` (`application_id`),
   CONSTRAINT `fk_application_education_application` FOREIGN KEY (`application_id`) REFERENCES `applications` (`id`) ON DELETE CASCADE
@@ -203,7 +210,7 @@ CREATE TABLE IF NOT EXISTS `applications` (
   `student_id` uuid DEFAULT NULL COMMENT 'FK -> student_profiles; set on acceptance',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -224,8 +231,9 @@ CREATE TABLE IF NOT EXISTS `applications` (
   CONSTRAINT `ck_applications_num_csec` CHECK (`num_csec` is null or `num_csec` between 0 and 20)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.applications: ~1 rows (approximately)
+-- Dumping data for table sims.applications: ~2 rows (approximately)
 INSERT INTO `applications` (`id`, `status`, `school_year`, `firstname`, `middlename`, `lastname`, `date_of_birth`, `ssno`, `gender`, `civil_status`, `religion`, `phone`, `email`, `has_health_condition`, `health_condition_note`, `street`, `city_town_village`, `district`, `mother_name`, `father_name`, `nok_name`, `nok_relationship`, `nok_phone`, `atlib_exam`, `num_csec`, `finance_name`, `finance_phone`, `finance_email`, `recommendation_received`, `program_id`, `year_of_study`, `enrollment_load`, `applicant_signed_at`, `guardian_signed_at`, `date_accepted`, `academic_year_id`, `enrolment_status`, `student_code`, `comments`, `decided_by_user_id`, `decided_at`, `student_id`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
+	('405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'denied', '2026-2027', 'Arturo', NULL, 'Hernandez', '2004-08-25', '000854433', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 5, NULL, NULL, NULL, 1, '22a02920-dc1e-4572-9da3-4ee738f8f42f', 'First', 'Full Time', '2026-08-26', '2026-08-20', NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-25 04:45:44', NULL, NULL, '2026-08-25 04:45:34', '2026-08-25 04:45:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('afd18f01-6380-4541-ad61-ecb047cbaeeb', 'accepted', '2026-2027', 'Arturo', NULL, 'Hernandez', '2003-06-23', '000123456', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 20, 'Arturo Hernandez', '6118374', 'art.hdz25@gmail.com', 1, 'bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'First', 'Full Time', '2026-08-27', '2026-08-25', '2026-08-23', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Full Time', '202608006', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-23 15:10:54', '7c6e08c4-7100-428a-8f33-69498a45f4ed', NULL, '2026-08-23 15:03:29', '2026-08-23 14:02:41', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b');
 
 -- Dumping structure for table sims.assessment_categories
@@ -238,7 +246,7 @@ CREATE TABLE IF NOT EXISTS `assessment_categories` (
   `allow_makeup` tinyint(1) DEFAULT NULL COMMENT 'Category-level override; NULL = inherit',
   `drop_lowest_count` smallint(6) DEFAULT NULL COMMENT 'Category-level override; NULL = inherit',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -313,7 +321,7 @@ CREATE TABLE IF NOT EXISTS `assessment_grades` (
   `graded_at` datetime DEFAULT NULL COMMENT 'When score entered (status → graded)',
   `max_score` int(11) DEFAULT NULL COMMENT 'Legacy/extra; not in ORM',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -1780,7 +1788,7 @@ CREATE TABLE IF NOT EXISTS `assessment_policies` (
   `allow_makeup` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'School default',
   `drop_lowest_count` smallint(6) NOT NULL DEFAULT 0 COMMENT 'School default; drop none',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `students_can_view_grades` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'D32: when 0, students cannot reach any grade surface (403 grades_hidden). Dean-controlled. Never exposes revision state either way.',
@@ -1816,7 +1824,7 @@ CREATE TABLE IF NOT EXISTS `assessments` (
   `drop_lowest_count` smallint(6) DEFAULT NULL COMMENT 'Per-assessment override; NULL = inherit',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -1933,7 +1941,7 @@ CREATE TABLE IF NOT EXISTS `attendance_records` (
   `attendance_date` date NOT NULL COMMENT 'The day',
   `status` enum('present','absent','late','excused') NOT NULL DEFAULT 'present' COMMENT 'present / absent / late / excused',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -1952,7 +1960,7 @@ CREATE TABLE IF NOT EXISTS `attendance_records` (
   CONSTRAINT `fk_attendance_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.attendance_records: ~3,254 rows (approximately)
+-- Dumping data for table sims.attendance_records: ~3,248 rows (approximately)
 INSERT INTO `attendance_records` (`id`, `offering_id`, `student_id`, `enrollment_id`, `semester_id`, `attendance_date`, `status`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
 	('aaff169d-5bbc-596d-a062-001508d64c34', '232c85d2-851f-5a36-8597-324653bf351e', 'ea82855b-a79f-55eb-8210-4ce9ffd29014', 'fec3fe2c-f1a3-5cbd-bfef-8d423d575e93', '756892b2-e688-5568-9c56-329b21ba1007', '2025-10-10', 'present', '2026-08-20 08:24:24', '2026-08-20 08:24:24', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', NULL),
 	('79d7967e-dd2b-5eb1-8942-00348d23b7a1', 'b3b24122-f350-5bfc-b828-e61a2ee0a8a5', '96f72fca-2d66-5bc4-bc88-bbb57275407e', '2d3dc06d-e676-5c50-b890-8a5d65c91e03', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '2025-01-07', 'present', '2026-08-20 08:24:24', '2026-08-20 08:24:24', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', NULL),
@@ -5229,9 +5237,9 @@ CREATE TABLE IF NOT EXISTS `audit_log` (
   KEY `k_audit_actor` (`actor_user_id`),
   CONSTRAINT `k_audit_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION,
   CONSTRAINT `summary` CHECK (json_valid(`summary`))
-) ENGINE=InnoDB AUTO_INCREMENT=29220 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=39967 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.audit_log: ~26 rows (approximately)
+-- Dumping data for table sims.audit_log: ~38 rows (approximately)
 INSERT INTO `audit_log` (`id`, `actor_user_id`, `action`, `entity_type`, `entity_id`, `summary`, `created_at`) VALUES
 	(16475, '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'application.create', 'application', '4c0f57ce-be90-4bde-a19f-c7abed27d621', '{"name": "Probe Tester", "status": "draft"}', '2026-08-21 03:15:06'),
 	(16476, '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'application.update', 'application', '4c0f57ce-be90-4bde-a19f-c7abed27d621', 'null', '2026-08-21 03:15:06'),
@@ -5258,7 +5266,19 @@ INSERT INTO `audit_log` (`id`, `actor_user_id`, `action`, `entity_type`, `entity
 	(21242, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'semester.update', 'semester', '756892b2-e688-5568-9c56-329b21ba1007', 'null', '2026-08-23 15:16:10'),
 	(21243, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'semester.update', 'semester', '756892b2-e688-5568-9c56-329b21ba1007', 'null', '2026-08-23 15:17:31'),
 	(21244, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'report_card.freeze_midterm', 'semester', '756892b2-e688-5568-9c56-329b21ba1007', '{"semester_name": "Semester 1", "academic_year": "2025-2026", "students": 43}', '2026-08-23 15:17:35'),
-	(22941, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'report_card.freeze_midterm', 'semester', '756892b2-e688-5568-9c56-329b21ba1007', '{"semester_name": "Semester 1", "academic_year": "2025-2026", "students": 43}', '2026-08-23 16:14:17');
+	(22941, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'report_card.freeze_midterm', 'semester', '756892b2-e688-5568-9c56-329b21ba1007', '{"semester_name": "Semester 1", "academic_year": "2025-2026", "students": 43}', '2026-08-23 16:14:17'),
+	(33327, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'teacher.update', 'teacher', 'e50067bd-37b7-5a22-85f4-2164dfd201f2', 'null', '2026-08-25 04:39:27'),
+	(33328, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'null', '2026-08-25 04:40:34'),
+	(33329, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.create', 'application_temp', '63f0b394-6afe-484e-b361-e00a8cb8a157', '{"name": "Arturo Hernandez"}', '2026-08-25 04:44:02'),
+	(33330, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.update', 'application_temp', '63f0b394-6afe-484e-b361-e00a8cb8a157', 'null', '2026-08-25 04:45:20'),
+	(33331, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.update', 'application_temp', '63f0b394-6afe-484e-b361-e00a8cb8a157', 'null', '2026-08-25 04:45:34'),
+	(33332, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.submit', 'application', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', '{"name": "Arturo Hernandez", "promoted_from": "63f0b394-6afe-484e-b361-e00a8cb8a157", "education_rows": 0, "document_rows": 7}', '2026-08-25 04:45:34'),
+	(33333, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.deny', 'application', '405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'null', '2026-08-25 04:45:44'),
+	(33334, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'teacher.create', 'teacher', 'dfae9dc8-32d8-4e6c-af4f-5dc4eb40b8aa', '{"staff_number": "096543", "linked_login": false}', '2026-08-25 04:47:23'),
+	(35108, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'null', '2026-08-25 05:22:42'),
+	(38412, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'teacher.update', 'teacher', 'e50067bd-37b7-5a22-85f4-2164dfd201f2', 'null', '2026-08-27 06:27:33'),
+	(39965, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.create', 'program', 'c36f18d9-581c-404c-9794-9fac31d36cbe', '{"code": "ICTS", "name": "Information Tech"}', '2026-08-28 03:00:29'),
+	(39966, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'c36f18d9-581c-404c-9794-9fac31d36cbe', 'null', '2026-08-28 03:00:44');
 
 -- Dumping structure for table sims.class_enrollments
 CREATE TABLE IF NOT EXISTS `class_enrollments` (
@@ -5270,7 +5290,7 @@ CREATE TABLE IF NOT EXISTS `class_enrollments` (
   `unenrolled_at` datetime DEFAULT NULL COMMENT 'Non-null = removed (kept for history)',
   `enrollment_status` enum('enrolled','audit','withdraw_passing','withdraw_failing') NOT NULL DEFAULT 'enrolled' COMMENT 'Per-student outcome for this offering. Was courses.coursestatus, which was on the wrong table.',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `enroll_active_flag` tinyint(1) GENERATED ALWAYS AS (if(`unenrolled_at` is null,1,NULL)) STORED,
@@ -5692,7 +5712,7 @@ CREATE TABLE IF NOT EXISTS `class_meetings` (
   `end_time` time NOT NULL,
   `room` text DEFAULT NULL COMMENT 'Free text, e.g. "Room A" / "Lab 1"',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `deleted_at` datetime DEFAULT NULL,
@@ -5738,7 +5758,7 @@ CREATE TABLE IF NOT EXISTS `class_teachers` (
   `is_lead` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Display marker only; does not affect edit rights',
   `assigned_at` datetime NOT NULL DEFAULT current_timestamp(),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -5788,7 +5808,7 @@ CREATE TABLE IF NOT EXISTS `course_offerings` (
   `is_archived` tinyint(1) NOT NULL DEFAULT 0,
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `active_section` varchar(10) GENERATED ALWAYS AS (if(`deleted_at` is null,coalesce(`section_code`,''),NULL)) STORED,
@@ -5837,7 +5857,7 @@ CREATE TABLE IF NOT EXISTS `course_prerequisites` (
   `program_id` uuid DEFAULT NULL COMMENT 'FK -> programs; NULL = applies in every programme',
   `requirement_type` enum('course','all_program_courses') NOT NULL DEFAULT 'course',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -5935,7 +5955,7 @@ CREATE TABLE IF NOT EXISTS `courses` (
   `is_active` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Retire flag, distinct from soft-delete (mirrors subjects.is_active, see 003)',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `active_code` varchar(70) GENERATED ALWAYS AS (if(`deleted_at` is null,`code`,NULL)) STORED,
@@ -6097,7 +6117,7 @@ CREATE TABLE IF NOT EXISTS `credit_transfer_requests` (
   `decided_at` datetime DEFAULT NULL,
   `note` text DEFAULT NULL COMMENT 'Dean assessment of knowledge/skills equivalency',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -6139,7 +6159,7 @@ CREATE TABLE IF NOT EXISTS `events` (
   `location` varchar(200) DEFAULT NULL,
   `created_by_user_id` uuid NOT NULL COMMENT 'FK -> users (author)',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `ix_events_start_date` (`start_date`),
   KEY `ix_events_date_range` (`start_date`,`end_date`),
@@ -6172,7 +6192,7 @@ CREATE TABLE IF NOT EXISTS `grade_revision_requests` (
   `decided_at` datetime DEFAULT NULL,
   `decision_note` text DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `pending_flag` tinyint(1) GENERATED ALWAYS AS (if(`status` = 'pending',1,NULL)) STORED,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_grade_revision_open` (`assessment_grade_id`,`pending_flag`),
@@ -6199,7 +6219,7 @@ CREATE TABLE IF NOT EXISTS `grading_scale_bands` (
   `is_passing` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Convenience flag',
   `sort_order` smallint(6) NOT NULL COMMENT 'Display order',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_bands_scale_letter` (`grading_scale_id`,`letter`),
   CONSTRAINT `fk_bands_scale` FOREIGN KEY (`grading_scale_id`) REFERENCES `grading_scales` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION,
@@ -6230,7 +6250,7 @@ CREATE TABLE IF NOT EXISTS `grading_scales` (
   `pass_mark` decimal(5,2) NOT NULL DEFAULT 60.00 COMMENT 'Pass/fail boundary',
   `is_frozen` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Set true when the year archives',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -6261,8 +6281,9 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
   CONSTRAINT `fk_login_attempts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.login_attempts: ~8 rows (approximately)
+-- Dumping data for table sims.login_attempts: ~17 rows (approximately)
 INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `ip_address`, `attempted_at`) VALUES
+	('7e309cdd-a782-4394-a940-2af0dfb8bd77', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-25 04:15:04'),
 	('3f455c1e-a684-4e76-a317-3801de41d696', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:34:00'),
 	('ff045f38-3bbd-4139-9f38-4bc879eab440', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:13:07'),
 	('c8a556c9-59a9-43fd-bc1a-6010b572fb45', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:14:04'),
@@ -6273,8 +6294,10 @@ INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `
 	('1bdd79f3-27dc-40ac-b958-b789a2b548c1', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:29:38'),
 	('6142f457-8843-4a18-b8c8-b9e3339062b0', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 17:22:53'),
 	('c4dd698f-074a-44df-8a95-be40f4df32aa', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 19:51:05'),
+	('fd517a5e-e80a-4f73-85be-bf99959b6991', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 02:59:12'),
 	('30c06241-30d6-4dab-a90e-c6ade4278f90', 'art.hdz25@gmail.com', '8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 0, '::ffff:127.0.0.1', '2026-08-23 19:50:43'),
 	('c1dc7263-2cee-4669-bdd8-e839682a38c4', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:31:56'),
+	('6e7bda08-3343-4aad-ade0-f2c2e976f72b', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-27 06:23:22'),
 	('7c356c86-9843-49ca-9496-f4cf4af39f54', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 14:57:32'),
 	('40d9e349-c8f4-45df-a912-fd986fac2d7d', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:15:06');
 
@@ -6287,7 +6310,7 @@ CREATE TABLE IF NOT EXISTS `password_reset_tokens` (
   `used_at` datetime DEFAULT NULL COMMENT 'Non-null = consumed (single-use)',
   `created_by` uuid DEFAULT NULL COMMENT 'The admin who initiated',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_pwreset_token_hash` (`token_hash`) USING HASH,
   KEY `fk_pwreset_user` (`user_id`),
@@ -6307,7 +6330,7 @@ CREATE TABLE IF NOT EXISTS `program_courses` (
   `term_order` smallint(6) NOT NULL COMMENT 'Display/sequence order of the block within the programme (1-based)',
   `is_required` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -6580,7 +6603,7 @@ CREATE TABLE IF NOT EXISTS `programs` (
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `active_code` varchar(10) GENERATED ALWAYS AS (if(`deleted_at` is null,`code`,NULL)) STORED,
@@ -6595,14 +6618,15 @@ CREATE TABLE IF NOT EXISTS `programs` (
   CONSTRAINT `ck_programs_pass_gp` CHECK (`min_passing_grade_point` between 0 and 4)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.programs: ~8 rows (approximately)
+-- Dumping data for table sims.programs: ~9 rows (approximately)
 INSERT INTO `programs` (`id`, `code`, `name`, `award`, `total_credits`, `min_passing_grade_point`, `is_active`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	('bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'BIOL', 'Biology', 'Associate of Science', 88, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'BIOL', 'Biology', 'Associate of Science', 88, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-24 22:31:33', NULL, NULL),
 	('0f7e8bdf-44bd-45bf-b56d-3ec386fa3cb4', 'GNST', 'General Studies', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('22a02920-dc1e-4572-9da3-4ee738f8f42f', 'EDUC', 'Primary Education', 'Associate of Arts', 102, 2.00, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('7983a1a7-d9cd-4d7f-a840-64351795ba54', 'ITEC', 'Information Technology', 'Associate of Science', 90, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'BMAD', 'Business Management', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'BMAD', 'Business Management', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-25 05:22:42', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('72d40672-f70d-40ef-833d-9d49e44faeb1', 'RELG', 'Religion', 'Associate of Arts', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('c36f18d9-581c-404c-9794-9fac31d36cbe', 'ICTS', 'Information Tech', NULL, 87, 2.50, 1, NULL, '2026-08-28 03:00:29', '2026-08-28 03:00:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('6229e7e2-7b97-4885-963c-b6c277229ae8', 'AGRI', 'Applied Agriculture', 'Associate of Science', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('c32f920e-1d87-4dcf-b916-d59afc647dee', 'MATH', 'Mathematics', 'Associate of Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL);
 
@@ -6619,29 +6643,53 @@ CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   `user_agent` text DEFAULT NULL COMMENT 'Diagnostic',
   `ip_address` inet6 DEFAULT NULL COMMENT 'Diagnostic (inet type)',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_refresh_sessions_token_hash` (`token_hash`),
   KEY `fk_refresh_sessions_user` (`user_id`),
   CONSTRAINT `fk_refresh_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.refresh_sessions: ~11 rows (approximately)
+-- Dumping data for table sims.refresh_sessions: ~21 rows (approximately)
 INSERT INTO `refresh_sessions` (`id`, `user_id`, `token_hash`, `issued_at`, `last_used_at`, `expires_at`, `is_revoked`, `revoked_at`, `user_agent`, `ip_address`, `created_at`, `updated_at`) VALUES
+	('66cae009-144c-41eb-b22b-0b0dbcd3bf5b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'bd2ba70e5d9719e5e2689c15bd389872cda21be9fe4108d3fa581650494e26d6', '2026-08-28 02:59:12', '2026-08-28 02:59:12', '2026-09-04 02:59:12', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 02:59:12', NULL),
 	('340dab0f-1bbd-4baf-a36b-2382d097fe45', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0055eae446c7ab315a7682b792f27f5ef3cba685a00c065238f49ee8fe7e653d', '2026-08-23 19:51:05', '2026-08-23 19:51:05', '2026-08-30 19:51:05', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 19:51:05', '2026-08-23 19:51:05'),
 	('13eae27b-e3e0-4dd4-9c06-34f6f6c40a4c', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '0a53f122bc73fa6904226ddb3d4b17dbdbc6a0fcf404b6cb11bc4eac01b9b8b1', '2026-08-21 03:13:07', '2026-08-21 03:13:07', '2026-08-28 03:13:07', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:13:07', '2026-08-23 18:03:11'),
 	('109c1072-a98a-46be-b240-35e1487bf391', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '67a3c0c47cc9752e05ecaff91a983f4fe6920e32dcb8534dbfa7b3b2cfcc625c', '2026-08-23 14:57:32', '2026-08-23 14:57:32', '2026-08-30 14:57:32', 1, '2026-08-23 15:12:55', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 14:57:32', '2026-08-23 15:12:55'),
+	('021301b5-e784-4bd5-b067-36fcd3f42f81', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '18124020ab4cc6bea72295474ca9dabeb5249e4ebab2507a0ca41e5a6d1d6f6f', '2026-08-27 06:23:22', '2026-08-27 06:23:22', '2026-09-03 06:23:22', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-27 06:23:22', '2026-08-27 06:23:22'),
 	('dc89a1fd-b96f-4317-9593-48bbaced85ef', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'a022cb624a5c46f01e35d718d6d7a32e6a56fda2f95d2aa08bf0fc1e5cba55bb', '2026-08-23 15:43:29', '2026-08-23 15:43:29', '2026-08-30 15:43:29', 1, '2026-08-23 15:44:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:43:29', '2026-08-23 15:44:17'),
 	('9d79b603-6696-4d65-942d-4f31a9d3998a', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '34122bc2730f56f66289e08fcd8c72abd243ebd8da029284675d2f000228a5a0', '2026-08-23 15:14:54', '2026-08-23 15:14:54', '2026-08-30 15:14:54', 1, '2026-08-23 15:16:20', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:14:54', '2026-08-23 15:16:20'),
 	('71056b5d-1de3-41ab-811a-55e3dbaa49cd', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'b173b633835e96e73d6545327d1924a19bb5b54b97f2b374e25fb2b81f2a0da3', '2026-08-21 03:14:04', '2026-08-21 03:14:04', '2026-08-28 03:14:04', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:14:04', '2026-08-23 18:03:11'),
 	('2270e7ec-a8d0-491a-9675-77d54126c0c0', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '364b217e7b112cc9ed9d63f0eaa35620255dda2c1099912ffb3669b3d02c5a61', '2026-08-21 03:15:06', '2026-08-21 03:15:06', '2026-08-28 03:15:06', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:15:06', '2026-08-23 18:03:11'),
+	('ad97abbc-4ac6-4819-9f5c-8334aad52ad2', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '6a6fa3b40a3e2ad46491baa46af4817a8106b9a8c2c804833c0870198778683c', '2026-08-25 04:42:19', '2026-08-25 04:42:19', '2026-09-01 04:42:19', 1, '2026-08-25 04:59:43', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:42:19', '2026-08-25 04:59:43'),
 	('e0e4efb6-9394-40b8-842f-83d8f46953fd', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '879c8a8f1676a67454323107d2ff256159a757b201461e0ad31cbcb285afe12c', '2026-08-23 16:12:40', '2026-08-23 16:12:40', '2026-08-30 16:12:40', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 16:12:40', '2026-08-23 16:12:40'),
+	('b687fc84-4b35-4b52-8470-95b7351ce032', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '46eed42248b0ed5b0819fbaaa520fe1c894f6c37b0eb5f71d124993e7710ff57', '2026-08-25 04:39:16', '2026-08-25 04:39:16', '2026-09-01 04:39:16', 1, '2026-08-25 04:42:19', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:39:16', '2026-08-25 04:42:19'),
 	('78cf3450-27de-4986-839e-a4e86f655d1b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '4c28a6e3cb6be1ea8e360789d4b51e935eaf3805fc3fc7805945c2b6bb2eedbb', '2026-08-23 15:16:20', '2026-08-23 15:16:20', '2026-08-30 15:16:20', 1, '2026-08-23 15:28:10', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:16:20', '2026-08-23 15:28:10'),
 	('10f16d6f-fb10-43ab-bfa3-bd1eea66e300', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'e470249ef32d817a03e660547f25d7c428d9862bb3e19e5c5c5246ec34fffe92', '2026-08-23 15:12:55', '2026-08-23 15:12:55', '2026-08-30 15:12:55', 1, '2026-08-23 15:14:54', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:12:55', '2026-08-23 15:14:54'),
+	('21d19754-81d7-4764-b3fc-c1e409adb7c9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '89fa8e2611a74e830a28ce8bfd7d212cdef80762fe917d98b41a0a829d13cd62', '2026-08-25 05:22:35', '2026-08-25 05:22:35', '2026-09-01 05:22:35', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 05:22:35', '2026-08-25 05:22:35'),
 	('85f9647e-e62f-4708-ad34-cfbb9e92d5d9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '4117b10d267d8d10de9f2899fb270bb32ab74ae5a09b6fd5b012c3b0c19d000c', '2026-08-23 17:22:53', '2026-08-23 17:22:53', '2026-08-30 17:22:53', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 17:22:53', '2026-08-23 17:22:53'),
+	('b7606fec-8115-49ee-b37f-d02223d6967b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '469f0acb8931450283aeaab4da8b3463fad4adc1c66401652e98748667b4fdce', '2026-08-25 04:15:04', '2026-08-25 04:15:04', '2026-09-01 04:15:04', 1, '2026-08-25 04:39:16', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:15:04', '2026-08-25 04:39:16'),
 	('eb1162a7-ce44-49f1-933b-d12aa9367f18', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'f437b6eb07d4328135c1a1c5ed1bf633ecf502414d3d922e936b4fd6385e4884', '2026-08-23 15:44:17', '2026-08-23 15:44:17', '2026-08-30 15:44:17', 1, '2026-08-23 16:12:40', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:44:17', '2026-08-23 16:12:40'),
 	('9bd01363-3627-4b8e-adfc-e4878382f2c9', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'e5045e4ba12b2d4f69479256fbf85968107b623e1337e009472062fa66d6b2f5', '2026-08-23 18:02:52', '2026-08-23 18:02:52', '2026-08-30 18:02:52', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 18:02:52', '2026-08-23 18:02:52'),
+	('c5934e5f-6fb0-481e-8ebe-e4a43cd2a3e4', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'c8b4e148fca51db883d795622cfcead1cfc53205084d146fa72fecafe9354f7f', '2026-08-25 04:59:43', '2026-08-25 04:59:43', '2026-09-01 04:59:43', 1, '2026-08-25 05:22:35', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:59:43', '2026-08-25 05:22:35'),
 	('01b65d1b-b15d-4981-b9ed-fe291a30d9f6', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '3b1f79b9d1bdadb054f956ec7ec06fc45ca0cdbde0172b419e9405c5ef88a073', '2026-08-23 15:28:10', '2026-08-23 15:28:10', '2026-08-30 15:28:10', 1, '2026-08-23 15:43:29', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:28:10', '2026-08-23 15:43:29');
+
+-- Dumping structure for table sims.religions
+CREATE TABLE IF NOT EXISTS `religions` (
+  `id` int(9) NOT NULL AUTO_INCREMENT,
+  `name` varchar(150) NOT NULL,
+  `code_name` varchar(10) DEFAULT NULL,
+  `createdon` datetime NOT NULL,
+  `createdby` varchar(50) NOT NULL,
+  `editedby` varchar(50) DEFAULT NULL,
+  `editedon` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='D39 (Meeting #2 item 8). Read-only vocabulary for the Religion dropdown. Client-owned; NOT referenced by a FK - student_profiles.religion stays free text.';
+
+-- Dumping data for table sims.religions: ~2 rows (approximately)
+INSERT INTO `religions` (`id`, `name`, `code_name`, `createdon`, `createdby`, `editedby`, `editedon`) VALUES
+	(1, 'Catholic', 'CATH', '2026-08-24 18:59:48', 'admin', NULL, NULL),
+	(2, 'Seventh Day Adventist', 'SDA', '2026-08-24 19:00:26', 'admin', NULL, NULL);
 
 -- Dumping structure for table sims.report_card_snapshots
 CREATE TABLE IF NOT EXISTS `report_card_snapshots` (
@@ -6653,7 +6701,7 @@ CREATE TABLE IF NOT EXISTS `report_card_snapshots` (
   `storage_key` text DEFAULT NULL COMMENT 'Optional pointer to a generated PDF',
   `frozen_at` datetime NOT NULL DEFAULT current_timestamp(),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_report_card_snapshot` (`student_id`,`semester_id`,`kind`),
   KEY `fk_report_card_semester` (`semester_id`),
@@ -6718,9 +6766,10 @@ CREATE TABLE IF NOT EXISTS `school_profile` (
   `color_primary` varchar(9) DEFAULT NULL COMMENT 'Brand primary color (hex), DemoSchoolProfile.colors.primary',
   `color_secondary` varchar(9) DEFAULT NULL COMMENT 'Brand secondary color (hex), DemoSchoolProfile.colors.secondary',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
+  `post_graduation_access_days` smallint(6) DEFAULT 90 COMMENT 'D39 (Meeting #2 item 6). Days a graduated student keeps grade/online access, counted from graduation_date. NULL = never expires; 0 = access ends on graduation day. Default 90 = the client''s recommended 3 months.',
   PRIMARY KEY (`id`),
   KEY `fk_school_profile_created_by` (`created_by`),
   KEY `fk_school_profile_updated_by` (`updated_by`),
@@ -6730,8 +6779,8 @@ CREATE TABLE IF NOT EXISTS `school_profile` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 -- Dumping data for table sims.school_profile: ~1 rows (approximately)
-INSERT INTO `school_profile` (`id`, `name`, `logo_storage_key`, `address`, `contact_email`, `contact_phone`, `color_primary`, `color_secondary`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	(1, 'Belize Adventist Junior College', '/logo.jpeg', 'Corozal Town, Corozal District, Belize', 'office@bajc.edu.bz', '+501-422-2015', '#1E3A6E', '#C21F30', '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL);
+INSERT INTO `school_profile` (`id`, `name`, `logo_storage_key`, `address`, `contact_email`, `contact_phone`, `color_primary`, `color_secondary`, `created_at`, `updated_at`, `created_by`, `updated_by`, `post_graduation_access_days`) VALUES
+	(1, 'Belize Adventist Junior College', '/logo.jpeg', 'Corozal Town, Corozal District, Belize', 'office@bajc.edu.bz', '+501-422-2015', '#1E3A6E', '#C21F30', '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, 90);
 
 -- Dumping structure for table sims.semesters
 CREATE TABLE IF NOT EXISTS `semesters` (
@@ -6748,7 +6797,7 @@ CREATE TABLE IF NOT EXISTS `semesters` (
   `is_active` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Exactly one true globally',
   `active_unique_helper` int(11) GENERATED ALWAYS AS (if(`is_active` = 1,1,NULL)) STORED,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_semesters_year_seq` (`academic_year_id`,`sequence`),
   UNIQUE KEY `uq_semesters_one_active` (`active_unique_helper`),
@@ -6775,7 +6824,7 @@ CREATE TABLE IF NOT EXISTS `student_documents` (
   `document_type` varchar(100) DEFAULT NULL COMMENT 'e.g. ''birth_certificate',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -6803,6 +6852,67 @@ CREATE TABLE IF NOT EXISTS `student_number_sequences` (
 -- Dumping data for table sims.student_number_sequences: ~1 rows (approximately)
 INSERT INTO `student_number_sequences` (`year_month`, `last_seq`, `created_at`, `updated_at`) VALUES
 	('202608', 6, '2026-08-18 04:07:44', '2026-08-23 15:10:54');
+
+-- Dumping structure for table sims.student_profile_temp
+CREATE TABLE IF NOT EXISTS `student_profile_temp` (
+  `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
+  `status` varchar(20) NOT NULL DEFAULT 'pending',
+  `school_year` varchar(20) DEFAULT NULL COMMENT 'Form header: School year',
+  `firstname` varchar(50) NOT NULL,
+  `middlename` varchar(50) DEFAULT NULL,
+  `lastname` varchar(50) NOT NULL,
+  `date_of_birth` date DEFAULT NULL,
+  `ssno` varchar(9) DEFAULT NULL COMMENT 'Social Security No.',
+  `gender` varchar(25) DEFAULT NULL,
+  `civil_status` varchar(50) DEFAULT NULL,
+  `religion` varchar(100) DEFAULT NULL,
+  `phone` varchar(50) DEFAULT NULL,
+  `email` varchar(254) DEFAULT NULL,
+  `has_health_condition` tinyint(1) NOT NULL DEFAULT 0,
+  `health_condition_note` text DEFAULT NULL,
+  `street` varchar(200) DEFAULT NULL,
+  `city_town_village` varchar(200) DEFAULT NULL,
+  `district` enum('Corozal','Orange Walk','Belize','Cayo','Stann Creek','Toledo') DEFAULT NULL,
+  `mother_name` varchar(200) DEFAULT NULL,
+  `father_name` varchar(200) DEFAULT NULL,
+  `nok_name` varchar(200) DEFAULT NULL,
+  `nok_relationship` varchar(100) DEFAULT NULL,
+  `nok_phone` varchar(50) DEFAULT NULL,
+  `atlib_exam` tinyint(1) NOT NULL DEFAULT 0,
+  `num_csec` smallint(6) DEFAULT NULL COMMENT 'Number of CSEC Exams (1-8+)',
+  `education_json` longtext DEFAULT NULL COMMENT 'Section B institutions; expanded into application_education on submit',
+  `finance_name` varchar(200) DEFAULT NULL,
+  `finance_phone` varchar(50) DEFAULT NULL,
+  `finance_email` varchar(254) DEFAULT NULL,
+  `recommendation_received` tinyint(1) NOT NULL DEFAULT 0,
+  `program_id` uuid DEFAULT NULL COMMENT 'FK -> programs',
+  `year_of_study` enum('First','Second') DEFAULT NULL,
+  `enrollment_load` enum('Part Time','Full Time','Transient') DEFAULT NULL,
+  `documents_json` longtext DEFAULT NULL COMMENT 'Section F checklist; expanded into application_documents on submit',
+  `applicant_signed_at` date DEFAULT NULL,
+  `guardian_signed_at` date DEFAULT NULL COMMENT 'Required only if the applicant is under 18',
+  `academic_year_id` uuid DEFAULT NULL COMMENT 'FK -> academic_years',
+  `enrolment_status` varchar(50) DEFAULT NULL,
+  `comments` text DEFAULT NULL COMMENT 'Comments/Observations',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
+  `created_by` uuid DEFAULT NULL,
+  `updated_by` uuid DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix_apptemp_created_by` (`created_by`,`lastname`,`firstname`),
+  KEY `fk_apptemp_program` (`program_id`),
+  KEY `fk_apptemp_year` (`academic_year_id`),
+  KEY `fk_apptemp_updated_by` (`updated_by`),
+  CONSTRAINT `fk_apptemp_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_apptemp_program` FOREIGN KEY (`program_id`) REFERENCES `programs` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_apptemp_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_apptemp_year` FOREIGN KEY (`academic_year_id`) REFERENCES `academic_years` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `ck_apptemp_num_csec` CHECK (`num_csec` is null or `num_csec` between 0 and 20),
+  CONSTRAINT `ck_apptemp_education_json` CHECK (`education_json` is null or json_valid(`education_json`)),
+  CONSTRAINT `ck_apptemp_documents_json` CHECK (`documents_json` is null or json_valid(`documents_json`))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- Dumping data for table sims.student_profile_temp: ~0 rows (approximately)
 
 -- Dumping structure for table sims.student_profiles
 CREATE TABLE IF NOT EXISTS `student_profiles` (
@@ -6845,7 +6955,7 @@ CREATE TABLE IF NOT EXISTS `student_profiles` (
   `deleted_at` timestamp NULL DEFAULT NULL,
   `is_active_number` varchar(50) GENERATED ALWAYS AS (if(`deleted_at` is null,`student_number`,NULL)) VIRTUAL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `has_health_condition` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Form: health or learning condition we should know about',
@@ -6933,7 +7043,7 @@ CREATE TABLE IF NOT EXISTS `student_program_history` (
   `ended_at` date DEFAULT NULL COMMENT 'NULL = the student is currently in this programme',
   `reason` varchar(255) DEFAULT NULL COMMENT 'Why the programme changed',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `open_flag` tinyint(1) GENERATED ALWAYS AS (if(`ended_at` is null,1,NULL)) STORED,
@@ -7006,23 +7116,31 @@ CREATE TABLE IF NOT EXISTS `teacher_profiles` (
   `user_id` uuid DEFAULT NULL COMMENT 'FK → users; the login this teacher is',
   `staff_number` text NOT NULL COMMENT 'Human staff ID (unique)',
   `full_name` varchar(250) NOT NULL,
+  `first_name` varchar(250) DEFAULT NULL COMMENT 'D39. Backfilled from full_name in §3. Teachers kept a single full_name where students were split by 007; the client dump splits them, and a register sorted by surname needs the parts.',
+  `last_name` varchar(250) DEFAULT NULL COMMENT 'D39. Backfilled from full_name in §3.',
+  `ssno` varchar(9) DEFAULT NULL COMMENT 'D39 (Meeting #2 item 10, "ss#"). Belize social security number. Same width as student_profiles.ssno.',
   `email` varchar(254) DEFAULT NULL COMMENT 'Contact; login email lives on users',
+  `licensenum` varchar(15) DEFAULT NULL COMMENT 'D39 (Meeting #2 item 10, "TeacherLicense#"). ALPHANUMERIC - the sample is OWD-2019-00035, so this is never an integer.',
   `phone` text DEFAULT NULL,
   `status` enum('active','inactive') NOT NULL COMMENT 'active / inactive',
+  `is_employed` tinyint(1) DEFAULT NULL COMMENT 'D39 (Meeting #2 item 10, "change IsPresent to IsEmployed"). Backfilled from status in §4. `status` remains what the application filters on; this mirrors it for the client''s own reports.',
+  `hire_date` datetime DEFAULT NULL COMMENT 'D39. NULL default, not current_timestamp() as the dump has it - defaulting to now would assert every existing lecturer was hired the day this migration ran.',
+  `end_date` datetime DEFAULT NULL COMMENT 'D39. NULL while employed. Same reasoning as hire_date on the default.',
   `subject_specializations` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'Postgres array of subject labels (GIN-indexed)' CHECK (json_valid(`subject_specializations`)),
   `deleted_at` datetime DEFAULT NULL,
   `is_active` int(11) GENERATED ALWAYS AS (if(`deleted_at` is null,1,NULL)) VIRTUAL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `avatar_url` varchar(500) DEFAULT NULL,
   `bio` text DEFAULT NULL,
   `gender` enum('male','female','other') DEFAULT NULL,
-  `education` varchar(255) DEFAULT NULL,
+  `academic_qualification` varchar(255) DEFAULT NULL COMMENT 'D39 (Meeting #2 item 10, "change column Degree/Education to Academic Qualification"). Renamed from `education`; width kept at 255 because four live values are 31 chars and the client dump''s varchar(30) had already truncated them.',
   `designation` varchar(150) DEFAULT NULL,
   `address` text DEFAULT NULL,
   `expertise` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'JSON array of {area, level} (DemoTeacher.expertise)',
+  `comments` varchar(500) DEFAULT NULL COMMENT 'D39. Free-text staff note.',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_teacher_profiles_user` (`user_id`),
   UNIQUE KEY `uq_teacher_profiles_number` (`staff_number`,`is_active`) USING HASH,
@@ -7036,19 +7154,19 @@ CREATE TABLE IF NOT EXISTS `teacher_profiles` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 -- Dumping data for table sims.teacher_profiles: ~12 rows (approximately)
-INSERT INTO `teacher_profiles` (`id`, `user_id`, `staff_number`, `full_name`, `email`, `phone`, `status`, `subject_specializations`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`, `avatar_url`, `bio`, `gender`, `education`, `designation`, `address`, `expertise`) VALUES
-	('7f9e0349-b8cc-5845-9184-063d003c3831', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'T-1001', 'Maria Reyes', 'maria.reyes@belmopancomp.edu.bz', '+501-6792782', 'active', '["Intermediate Algebra", "Pre-Calculus"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Head of Department with 12 years of lecture-room experience teaching Intermediate Algebra. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Intermediate Algebra', 'Head of Department', '11 Ring Road, Belmopan, Cayo', '[{"area": "Intermediate Algebra", "level": 94}, {"area": "Pre-Calculus", "level": 63}]'),
-	('5274aa7b-f1d9-51c0-ab78-1ed17134fd26', 'ead1c01b-c10d-514c-92d4-88045472a984', 'T-1010', 'Marlon Pou', 'marlon.pou@belmopancomp.edu.bz', '+501-6954568', 'active', '["Business Management", "Intermediate Algebra"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 11 years of lecture-room experience teaching Business Management. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. Business Management', 'Senior Lecturer', '28 Forest Drive, Belmopan, Cayo', '[{"area": "Business Management", "level": 88}, {"area": "Intermediate Algebra", "level": 80}]'),
-	('e50067bd-37b7-5a22-85f4-2164dfd201f2', '57eb7c25-18b2-5789-a329-39a99e277c9a', 'T-1003', 'Alicia Cano', 'alicia.cano@belmopancomp.edu.bz', '+501-6604312', 'active', '["Foundations of Biology", "Fundamentals of Chemistry"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 13 years of lecture-room experience teaching Foundations of Biology. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Sc. Foundations of Biology', 'Senior Lecturer', '9 Hummingbird Avenue, Belmopan, Cayo', '[{"area": "Foundations of Biology", "level": 92}, {"area": "Fundamentals of Chemistry", "level": 72}]'),
-	('5b58cb5b-fcd0-595c-bf22-35748bed4712', '1bfdef77-f486-5d18-a5ab-ffd47890db1c', 'T-1006', 'Rodwell Bailey', 'rodwell.bailey@belmopancomp.edu.bz', '+501-6604989', 'active', '["Introduction to Sociology", "Belizean History"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 16 years of lecture-room experience teaching Introduction to Sociology. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. Introduction to Sociology', 'Senior Lecturer', '80 Constitution Drive, Belmopan, Cayo', '[{"area": "Introduction to Sociology", "level": 95}, {"area": "Belizean History", "level": 77}]'),
-	('09e14c12-af0e-5dc0-accd-3ca1860b547a', 'cdddeff7-3066-595f-8e23-fc583408d6fa', 'T-1007', 'Yolanda Cruz', 'yolanda.cruz@belmopancomp.edu.bz', '+501-6484446', 'active', '["Fundamentals of Chemistry", "Foundations of Biology"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 5 years of lecture-room experience teaching Fundamentals of Chemistry. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Sc. Fundamentals of Chemistry', 'Senior Lecturer', '10 Ring Road, Belmopan, Cayo', '[{"area": "Fundamentals of Chemistry", "level": 91}, {"area": "Foundations of Biology", "level": 85}]'),
-	('8178617a-767d-581c-abe5-41b20b58e991', '9167ab7e-9fa6-5f2d-914b-318f6733b3d6', 'T-1008', 'Egbert Grinage', 'egbert.grinage@belmopancomp.edu.bz', '+501-6403477', 'active', '["Health Principles"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Lecturer with 17 years of lecture-room experience teaching Health Principles. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Health Principles', 'Lecturer', '37 Bliss Parade, Belmopan, Cayo', '[{"area": "Health Principles", "level": 84}]'),
-	('b9c5b198-f5ca-5603-be2f-4bf743440c3f', '3f90c656-a26c-529d-a168-f4e93a71fa0e', 'T-1009', 'Nadia Rhaburn', 'nadia.rhaburn@belmopancomp.edu.bz', '+501-6900261', 'active', '["Introduction to Computers"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Head of Department with 6 years of lecture-room experience teaching Introduction to Computers. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Introduction to Computers', 'Head of Department', '6 Melhado Parade, Belmopan, Cayo', '[{"area": "Introduction to Computers", "level": 84}]'),
-	('589975e7-9fc4-5901-bbba-4edbf2de746e', 'c9661cb4-d005-52c5-9f7e-8ad3fcdb1bbc', 'T-1002', 'Carlos Mendez', 'carlos.mendez@belmopancomp.edu.bz', '+501-6711828', 'active', '["College English 1", "Belizean History"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 18 years of lecture-room experience teaching College English 1. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. College English 1', 'Senior Lecturer', '20 Bliss Parade, Belmopan, Cayo', '[{"area": "College English 1", "level": 86}, {"area": "Belizean History", "level": 63}]'),
-	('e4a09116-20bb-54f5-a06d-81c4336e0c4e', '7f80de88-8724-590b-a2be-5b94dc0b72af', 'T-1011', 'Kayla Waight', 'kayla.waight@belmopancomp.edu.bz', '+501-6793867', 'active', '["College English 1", "Introduction to Computers"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Senior Lecturer with 19 years of lecture-room experience teaching College English 1. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Sc. College English 1', 'Senior Lecturer', '35 Melhado Parade, Belmopan, Cayo', '[{"area": "College English 1", "level": 83}, {"area": "Introduction to Computers", "level": 79}]'),
-	('50eebce9-8fc1-579a-a78f-a07973a28463', '83d7ae01-93a2-5684-ad47-21d0ea5dfcbc', 'T-1004', 'Devon Flowers', 'devon.flowers@belmopancomp.edu.bz', '+501-6404483', 'active', '["Pre-Calculus", "Intermediate Algebra"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Lecturer with 6 years of lecture-room experience teaching Pre-Calculus. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Pre-Calculus', 'Lecturer', '58 Forest Drive, Belmopan, Cayo', '[{"area": "Pre-Calculus", "level": 92}, {"area": "Intermediate Algebra", "level": 62}]'),
-	('a5cea265-7f68-507e-a12e-b44fe29db7fb', 'bf5e8b60-8758-594e-be41-d6ce2b325038', 'T-1005', 'Sonia Choc', 'sonia.choc@belmopancomp.edu.bz', '+501-6822073', 'active', '["Intermediate Spanish", "College English 1"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Head of Department with 14 years of lecture-room experience teaching Intermediate Spanish. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Intermediate Spanish', 'Head of Department', '107 Ring Road, Belmopan, Cayo', '[{"area": "Intermediate Spanish", "level": 88}, {"area": "College English 1", "level": 79}]'),
-	('4d6305c3-2507-58f8-91bf-ff291c149861', NULL, 'T-1012', 'Trevor Neal', 'trevor.neal@belmopancomp.edu.bz', '+501-6515698', 'inactive', '["Introduction to Sociology", "Health Principles"]', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL, NULL, 'Lecturer with 19 years of lecture-room experience teaching Introduction to Sociology. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Introduction to Sociology', 'Lecturer', '17 Forest Drive, Belmopan, Cayo', '[{"area": "Introduction to Sociology", "level": 88}, {"area": "Health Principles", "level": 82}]');
+INSERT INTO `teacher_profiles` (`id`, `user_id`, `staff_number`, `full_name`, `first_name`, `last_name`, `ssno`, `email`, `licensenum`, `phone`, `status`, `is_employed`, `hire_date`, `end_date`, `subject_specializations`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`, `avatar_url`, `bio`, `gender`, `academic_qualification`, `designation`, `address`, `expertise`, `comments`) VALUES
+	('7f9e0349-b8cc-5845-9184-063d003c3831', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'T-1001', 'Maria Reyes', 'Maria', 'Reyes', NULL, 'maria.reyes@belmopancomp.edu.bz', NULL, '+501-6792782', 'active', 1, NULL, NULL, '["Intermediate Algebra", "Pre-Calculus"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Head of Department with 12 years of lecture-room experience teaching Intermediate Algebra. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Intermediate Algebra', 'Head of Department', '11 Ring Road, Belmopan, Cayo', '[{"area": "Intermediate Algebra", "level": 94}, {"area": "Pre-Calculus", "level": 63}]', NULL),
+	('5274aa7b-f1d9-51c0-ab78-1ed17134fd26', 'ead1c01b-c10d-514c-92d4-88045472a984', 'T-1010', 'Marlon Pou', 'Marlon', 'Pou', NULL, 'marlon.pou@belmopancomp.edu.bz', NULL, '+501-6954568', 'active', 1, NULL, NULL, '["Business Management", "Intermediate Algebra"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Senior Lecturer with 11 years of lecture-room experience teaching Business Management. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. Business Management', 'Senior Lecturer', '28 Forest Drive, Belmopan, Cayo', '[{"area": "Business Management", "level": 88}, {"area": "Intermediate Algebra", "level": 80}]', NULL),
+	('e50067bd-37b7-5a22-85f4-2164dfd201f2', '57eb7c25-18b2-5789-a329-39a99e277c9a', 'T-1003', 'Alicia Cano', 'Alicia', 'Cano', NULL, 'alicia.cano@belmopancomp.edu.bz', '286733', '+501-6604312', 'active', 1, NULL, NULL, '["Foundations of Biology", "Fundamentals of Chemistry"]', NULL, '2026-08-20 08:24:23', '2026-08-27 06:27:33', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', NULL, 'Senior Lecturer with 13 years of lecture-room experience teaching Foundations of Biology. Committed to student-centred learning and measurable outcomes.', 'other', 'M.Sc. Foundations of Biology', 'Senior Lecturer', '9 Hummingbird Avenue, Belmopan, Cayo', '[{"area": "Foundations of Biology", "level": 92}, {"area": "Fundamentals of Chemistry", "level": 72}]', NULL),
+	('5b58cb5b-fcd0-595c-bf22-35748bed4712', '1bfdef77-f486-5d18-a5ab-ffd47890db1c', 'T-1006', 'Rodwell Bailey', 'Rodwell', 'Bailey', NULL, 'rodwell.bailey@belmopancomp.edu.bz', NULL, '+501-6604989', 'active', 1, NULL, NULL, '["Introduction to Sociology", "Belizean History"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Senior Lecturer with 16 years of lecture-room experience teaching Introduction to Sociology. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. Introduction to Sociology', 'Senior Lecturer', '80 Constitution Drive, Belmopan, Cayo', '[{"area": "Introduction to Sociology", "level": 95}, {"area": "Belizean History", "level": 77}]', NULL),
+	('09e14c12-af0e-5dc0-accd-3ca1860b547a', 'cdddeff7-3066-595f-8e23-fc583408d6fa', 'T-1007', 'Yolanda Cruz', 'Yolanda', 'Cruz', NULL, 'yolanda.cruz@belmopancomp.edu.bz', NULL, '+501-6484446', 'active', 1, NULL, NULL, '["Fundamentals of Chemistry", "Foundations of Biology"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Senior Lecturer with 5 years of lecture-room experience teaching Fundamentals of Chemistry. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Sc. Fundamentals of Chemistry', 'Senior Lecturer', '10 Ring Road, Belmopan, Cayo', '[{"area": "Fundamentals of Chemistry", "level": 91}, {"area": "Foundations of Biology", "level": 85}]', NULL),
+	('8178617a-767d-581c-abe5-41b20b58e991', '9167ab7e-9fa6-5f2d-914b-318f6733b3d6', 'T-1008', 'Egbert Grinage', 'Egbert', 'Grinage', NULL, 'egbert.grinage@belmopancomp.edu.bz', NULL, '+501-6403477', 'active', 1, NULL, NULL, '["Health Principles"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Lecturer with 17 years of lecture-room experience teaching Health Principles. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Health Principles', 'Lecturer', '37 Bliss Parade, Belmopan, Cayo', '[{"area": "Health Principles", "level": 84}]', NULL),
+	('b9c5b198-f5ca-5603-be2f-4bf743440c3f', '3f90c656-a26c-529d-a168-f4e93a71fa0e', 'T-1009', 'Nadia Rhaburn', 'Nadia', 'Rhaburn', NULL, 'nadia.rhaburn@belmopancomp.edu.bz', NULL, '+501-6900261', 'active', 1, NULL, NULL, '["Introduction to Computers"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Head of Department with 6 years of lecture-room experience teaching Introduction to Computers. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Introduction to Computers', 'Head of Department', '6 Melhado Parade, Belmopan, Cayo', '[{"area": "Introduction to Computers", "level": 84}]', NULL),
+	('589975e7-9fc4-5901-bbba-4edbf2de746e', 'c9661cb4-d005-52c5-9f7e-8ad3fcdb1bbc', 'T-1002', 'Carlos Mendez', 'Carlos', 'Mendez', NULL, 'carlos.mendez@belmopancomp.edu.bz', NULL, '+501-6711828', 'active', 1, NULL, NULL, '["College English 1", "Belizean History"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Senior Lecturer with 18 years of lecture-room experience teaching College English 1. Committed to student-centred learning and measurable outcomes.', 'male', 'M.Sc. College English 1', 'Senior Lecturer', '20 Bliss Parade, Belmopan, Cayo', '[{"area": "College English 1", "level": 86}, {"area": "Belizean History", "level": 63}]', NULL),
+	('e4a09116-20bb-54f5-a06d-81c4336e0c4e', '7f80de88-8724-590b-a2be-5b94dc0b72af', 'T-1011', 'Kayla Waight', 'Kayla', 'Waight', NULL, 'kayla.waight@belmopancomp.edu.bz', NULL, '+501-6793867', 'active', 1, NULL, NULL, '["College English 1", "Introduction to Computers"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Senior Lecturer with 19 years of lecture-room experience teaching College English 1. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Sc. College English 1', 'Senior Lecturer', '35 Melhado Parade, Belmopan, Cayo', '[{"area": "College English 1", "level": 83}, {"area": "Introduction to Computers", "level": 79}]', NULL),
+	('50eebce9-8fc1-579a-a78f-a07973a28463', '83d7ae01-93a2-5684-ad47-21d0ea5dfcbc', 'T-1004', 'Devon Flowers', 'Devon', 'Flowers', NULL, 'devon.flowers@belmopancomp.edu.bz', NULL, '+501-6404483', 'active', 1, NULL, NULL, '["Pre-Calculus", "Intermediate Algebra"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Lecturer with 6 years of lecture-room experience teaching Pre-Calculus. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Pre-Calculus', 'Lecturer', '58 Forest Drive, Belmopan, Cayo', '[{"area": "Pre-Calculus", "level": 92}, {"area": "Intermediate Algebra", "level": 62}]', NULL),
+	('a5cea265-7f68-507e-a12e-b44fe29db7fb', 'bf5e8b60-8758-594e-be41-d6ce2b325038', 'T-1005', 'Sonia Choc', 'Sonia', 'Choc', NULL, 'sonia.choc@belmopancomp.edu.bz', NULL, '+501-6822073', 'active', 1, NULL, NULL, '["Intermediate Spanish", "College English 1"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Head of Department with 14 years of lecture-room experience teaching Intermediate Spanish. Committed to student-centred learning and measurable outcomes.', 'female', 'M.Ed. Intermediate Spanish', 'Head of Department', '107 Ring Road, Belmopan, Cayo', '[{"area": "Intermediate Spanish", "level": 88}, {"area": "College English 1", "level": 79}]', NULL),
+	('4d6305c3-2507-58f8-91bf-ff291c149861', NULL, 'T-1012', 'Trevor Neal', 'Trevor', 'Neal', NULL, 'trevor.neal@belmopancomp.edu.bz', NULL, '+501-6515698', 'inactive', 0, NULL, NULL, '["Introduction to Sociology", "Health Principles"]', NULL, '2026-08-20 08:24:23', '2026-08-26 22:38:37', NULL, NULL, NULL, 'Lecturer with 19 years of lecture-room experience teaching Introduction to Sociology. Committed to student-centred learning and measurable outcomes.', 'male', 'B.Ed. Introduction to Sociology', 'Lecturer', '17 Forest Drive, Belmopan, Cayo', '[{"area": "Introduction to Sociology", "level": 88}, {"area": "Health Principles", "level": 82}]', NULL);
 
 -- Dumping structure for table sims.term_grade_snapshots
 CREATE TABLE IF NOT EXISTS `term_grade_snapshots` (
@@ -7066,7 +7184,7 @@ CREATE TABLE IF NOT EXISTS `term_grade_snapshots` (
   `effective_policy` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'Resolved grading policy in force at freeze' CHECK (json_valid(`effective_policy`)),
   `frozen_at` datetime NOT NULL DEFAULT current_timestamp(),
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_term_snapshot` (`student_id`,`offering_id`,`semester_id`),
   KEY `fk_term_snapshot_semester` (`semester_id`),
@@ -7089,7 +7207,7 @@ CREATE TABLE IF NOT EXISTS `user_preferences` (
   `date_format` text DEFAULT NULL COMMENT 'Optional override',
   `default_page_size` smallint(6) NOT NULL DEFAULT 25 COMMENT 'List density preference',
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   PRIMARY KEY (`user_id`),
   CONSTRAINT `fk_user_preferences_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION,
   CONSTRAINT `ck_user_preferences_page_size` CHECK (`default_page_size` between 5 and 200)
@@ -7133,7 +7251,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `deleted_at` timestamp NULL DEFAULT NULL,
   `active_username` varchar(255) GENERATED ALWAYS AS (if(`deleted_at` is null,`username`,NULL)) STORED,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   `active_email` varchar(254) GENERATED ALWAYS AS (if(`deleted_at` is null,`email`,NULL)) STORED,
@@ -7156,7 +7274,7 @@ INSERT INTO `users` (`id`, `email`, `username`, `password_hash`, `role`, `full_n
 	('9167ab7e-9fa6-5f2d-914b-318f6733b3d6', 'egbert.grinage@belmopancomp.edu.bz', 'egbert.grinage', '$argon2id$v=19$m=65536,t=3,p=4$MqV7KlSmxWEABLBToeZOCQ$iPlubPuGclVA7YyQ/v1t35z5QDhvCrVENjtmgXVA1Ek', 'teacher', 'Egbert Grinage', 1, 1, 0, NULL, '2025-10-15 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('4d257b0f-37b8-54d0-97c9-3395d4f36635', 's-25002@student.belmopancomp.edu.bz', 's-25002', '$argon2id$v=19$m=65536,t=3,p=4$KUfjccVwlSOIx60AYpcy2g$RP2pkbH7w3PmArjEur6FoYLp6Le1jpfpcX2W7FicZUw', 'student', 'John Garcia', 1, 1, 0, NULL, '2025-10-08 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('57eb7c25-18b2-5789-a329-39a99e277c9a', 'alicia.cano@belmopancomp.edu.bz', 'alicia.cano', '$argon2id$v=19$m=65536,t=3,p=4$fP6f/MmEx2KA5Wee52ytTg$uA8G/+R6Aqb70HsZ6H0sXReoLWKTT8JtU8WVVZqGqX8', 'teacher', 'Alicia Cano', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-08-23 19:51:05', NULL, '2026-08-20 08:24:23', '2026-08-23 19:51:05', NULL, NULL),
+	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-08-28 02:59:12', NULL, '2026-08-20 08:24:23', '2026-08-28 02:59:12', NULL, NULL),
 	('7f80de88-8724-590b-a2be-5b94dc0b72af', 'kayla.waight@belmopancomp.edu.bz', 'kayla.waight', '$argon2id$v=19$m=65536,t=3,p=4$p9tc+xIxD/oOVguRDMWgBw$lkh3vtr/nRZEFZJedEiBvUUhnTRJ3O3Z9kpbEQnQj/s', 'teacher', 'Kayla Waight', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('e485d3ff-0e08-5ebc-b2f4-62a1a9b3031a', 's-25006@student.belmopancomp.edu.bz', 's-25006', '$argon2id$v=19$m=65536,t=3,p=4$+6vZgd4IqdaGSW9wS0DsjA$4mq2pTFQA0uhKORL9U+O+Mgmo6T8HBhNIvfVu5cXq54', 'student', 'Marco Cacho', 1, 1, 0, NULL, '2025-10-13 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 'art.hdz25@gmail.com', NULL, '$argon2id$v=19$m=65536,t=3,p=4$7D2fZT1Eab2riyMzTJBjBQ$dH0JeEbDzIfGcNEzv4eJtkW2X/dgkbn53rXrDHj7bXM', 'student', 'Arturo Hernandez', 1, 1, 2, NULL, NULL, NULL, '2026-08-23 15:10:54', '2026-08-23 19:50:55', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
