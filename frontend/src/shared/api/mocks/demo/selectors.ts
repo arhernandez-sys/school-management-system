@@ -36,14 +36,21 @@ const D = DEMO_DATASET;
 /**
  * Paginate + sort an already-filtered array. `sort` is "field" (asc) or "-field"
  * (desc); an `id` tiebreaker keeps pages stable. `page` is 1-based; `page_size`
- * clamps to [1, 100]. Returns the `Page[T]` envelope shape.
+ * clamps to [1, 200]. Returns the `Page[T]` envelope shape.
+ *
+ * **D43 — the ceiling was 100 here and 200 on the server.** `MAX_PAGE_SIZE` in
+ * `backend/app/core/pagination.py` is 200, so a request for 200 that the real API
+ * answers in full came back silently truncated in the demo. The print sheets ask for
+ * exactly 200, so the divergence showed up as a catalog sheet that printed 100 of 114
+ * courses under a heading saying "Course catalog" — the demo certifying behaviour the
+ * backend does not have, which is the failure mode this mock layer has produced before.
  */
 export function paginate<T extends Record<string, unknown>>(
   items: T[],
   params: DemoListParams = {},
 ): DemoPage<T> {
   const page = Math.max(1, params.page ?? 1);
-  const pageSize = Math.min(100, Math.max(1, params.page_size ?? 25));
+  const pageSize = Math.min(200, Math.max(1, params.page_size ?? 25));
 
   let sorted = items;
   if (params.sort) {
@@ -244,7 +251,66 @@ export const DEMO_REPRESENTATIVE_USER_ID: Record<string, string> = {
   secretary: 'user-secretary',
   teacher: 'user-teach-1', // Maria Reyes — leads several offerings
   student: 'user-stu-1', // Freddy Lopez — active, first-year, MATH1110-01
+  // D43. A DIFFERENT person from the lecturer login on purpose: if both resolved to
+  // Maria, nothing on screen would distinguish "what a lecturer sees" from "what a head
+  // sees", and the demo would appear to prove a scoping rule it never exercised.
+  hod: 'user-teach-2',
+  auditor: 'user-auditor',
 };
+
+// ── HOD scope (D43) ─────────────────────────────────────────────────────────────
+/**
+ * The mock mirror of `backend/app/core/rbac.py`'s HOD helpers. Same derivation chain:
+ * `program_heads → program_courses → courses → offerings → class_teachers`.
+ *
+ * Every one of these returns an EMPTY array for a caller who heads nothing, and every
+ * caller must treat that as "sees nothing extra" — never as "no filter". Getting that
+ * backwards is what would turn an unconfigured head into a Dean, which is the single
+ * most damaging way this role can fail.
+ */
+export function demoHodProgramIds(role: string | null | undefined): string[] {
+  if (role !== 'hod') return [];
+  const userId = DEMO_REPRESENTATIVE_USER_ID.hod;
+  const teacher = D.teachers.find((t) => t.user_id === userId);
+  if (!teacher) return [];
+  return D.program_heads.filter((h) => h.teacher_id === teacher.id).map((h) => h.program_id);
+}
+
+/** Offerings of every course in the programme(s) this caller heads. */
+export function demoHodOfferingIds(role: string | null | undefined): string[] {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  const courseIds = new Set(
+    D.program_courses.filter((pc) => programIds.has(pc.program_id)).map((pc) => pc.course_id),
+  );
+  return D.offerings.filter((o) => courseIds.has(o.course_id)).map((o) => o.id);
+}
+
+/** Students reading for the programme(s) this caller heads. */
+export function demoHodStudentIds(role: string | null | undefined): string[] {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  return D.students
+    .filter((s) => s.program_id !== null && programIds.has(s.program_id))
+    .map((s) => s.id);
+}
+
+/** Lecturers assigned to any offering in the programme(s) this caller heads. */
+export function demoHodTeacherIds(role: string | null | undefined): string[] {
+  const offeringIds = new Set(demoHodOfferingIds(role));
+  if (offeringIds.size === 0) return [];
+  const ids = new Set<string>();
+  for (const o of D.offerings) {
+    if (offeringIds.has(o.id)) for (const t of o.teacher_ids) ids.add(t);
+  }
+  return [...ids];
+}
+
+/** The seeded lecturer profile a demo `hod` login stands in for — they teach too. */
+export function currentDemoHodTeacher(role: string | null | undefined): DemoTeacher | undefined {
+  if (role !== 'hod') return undefined;
+  return D.teachers.find((t) => t.user_id === DEMO_REPRESENTATIVE_USER_ID.hod);
+}
 
 /** The seeded student a demo `student` login stands in for (undefined for other roles). */
 export function currentDemoStudent(role: string | null | undefined): DemoStudent | undefined {
@@ -265,6 +331,8 @@ export interface ListStudentsParams extends DemoListParams {
   offering_id?: string | null;
   /** teacher scope: restrict to students in an offering this lecturer teaches. */
   teacher_id?: string | null;
+  /** D43 HOD scope: an explicit allow-list of student ids (their programme's). */
+  student_ids?: string[] | null;
   /** year scope: restrict to students enrolled in an offering of this academic year. */
   academic_year_id?: string | null;
   /**
@@ -274,6 +342,8 @@ export interface ListStudentsParams extends DemoListParams {
   gender?: string | null;
   religion?: string | null;
   program_id?: string | null;
+  /** D40 — a fourth attribute filter, on the same terms as the three above. */
+  civil_status?: string | null;
 }
 /**
  * D32 — the DISTINCT religions present on non-deleted students, sorted (brief §3).
@@ -284,6 +354,20 @@ export interface ListStudentsParams extends DemoListParams {
  */
 export function studentReligions(): string[] {
   return [...new Set(D.students.map((s) => s.religion).filter((r): r is string => Boolean(r)))].sort();
+}
+
+/**
+ * D40 — the DISTINCT civil statuses present on non-deleted students, sorted.
+ *
+ * Served beside `studentReligions` on `GET /students/filter-options`. The dropdown itself
+ * is the fixed `CIVIL_STATUSES` vocabulary; this is what the register holds BEYOND it, so
+ * a legacy value stays selectable instead of being a column the table prints and the
+ * filter cannot reach.
+ */
+export function studentCivilStatuses(): string[] {
+  return [
+    ...new Set(D.students.map((s) => s.civil_status).filter((c): c is string => Boolean(c))),
+  ].sort();
 }
 
 export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStudent> {
@@ -299,6 +383,15 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
     const ownedIds = new Set(offeringsOwnedByTeacher(params.teacher_id).map((o) => o.id));
     rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => ownedIds.has(o.id)));
   }
+  if (params.student_ids) {
+    // D43 — the HOD's programme scope. An explicit allow-list rather than another
+    // `teacher_id`-style derivation, because a head's students come from
+    // `student_profiles.program_id`, NOT from shared enrolment: a first-year not yet
+    // enrolled in anything is still theirs, and an enrolment-based filter would drop
+    // exactly those students.
+    const allowed = new Set(params.student_ids);
+    rows = rows.filter((s) => allowed.has(s.id));
+  }
   if (params.status) rows = rows.filter((s) => s.status === params.status);
   if (params.offering_id) {
     const wanted = params.offering_id;
@@ -312,6 +405,9 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
   // values, and a LIKE would only conflate two real ones ("Catholic" / "Roman Catholic").
   if (params.gender) rows = rows.filter((s) => s.gender === params.gender);
   if (params.religion) rows = rows.filter((s) => s.religion === params.religion);
+  // D40 — exact for the same reason, and the write path normalises so the stored
+  // values converge on the four canonical ones.
+  if (params.civil_status) rows = rows.filter((s) => s.civil_status === params.civil_status);
   if (params.program_id) rows = rows.filter((s) => s.program_id === params.program_id);
   if (params.search) {
     const q = params.search;
@@ -361,9 +457,18 @@ export interface ListTeachersParams extends DemoListParams {
   specialization?: string | null;
   /** year scope: restrict to teachers assigned to an offering in this academic year. */
   academic_year_id?: string | null;
+  /** D43 HOD scope: an explicit allow-list of lecturer ids (their programme's). */
+  teacher_ids?: string[] | null;
 }
 export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeacher> {
   let rows = D.teachers;
+  if (params.teacher_ids) {
+    // D43 — "all the teachers under their program". An empty array narrows to nothing,
+    // which is the correct answer for a head with no appointment; it must never be read
+    // as "no filter".
+    const allowed = new Set(params.teacher_ids);
+    rows = rows.filter((t) => allowed.has(t.id));
+  }
   if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
     const ids = teacherIdsForYear(params.academic_year_id);
     rows = rows.filter((t) => ids.has(t.id));
@@ -871,7 +976,11 @@ export function unreadCountForUser(userId: string): number {
  */
 export function dashboardFor(role: string, userId?: string) {
   const semester = getActiveSemester();
-  if (role === 'principal' || role === 'secretary') {
+  // D43 — the Auditor gets the school-wide figures, identical to the Dean's. Grouped
+  // here rather than left to fall through: the tail of this function is the STUDENT
+  // shape, so an unmatched role silently received a student payload tagged with its own
+  // role name, and the page would have rendered an admin layout over student fields.
+  if (role === 'principal' || role === 'secretary' || role === 'auditor') {
     return {
       role,
       semester,
@@ -885,7 +994,9 @@ export function dashboardFor(role: string, userId?: string) {
       grade_distribution: gradeDistribution(),
     };
   }
-  if (role === 'teacher') {
+  // A head lands on their own teaching, so this is the lecturer payload with an honest
+  // `role`, exactly as `backend/app/modules/dashboard/service.py` returns it.
+  if (role === 'teacher' || role === 'hod') {
     const teacher = userId ? D.teachers.find((tt) => tt.user_id === userId) : undefined;
     const owned = teacher
       ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived)

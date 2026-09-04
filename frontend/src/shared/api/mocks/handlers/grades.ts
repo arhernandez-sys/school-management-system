@@ -184,22 +184,17 @@ function gradebookResponse(offeringId: string) {
   };
 }
 
-/**
- * The active term's grade-submission window (D30 §D6), mirroring
- * `grades/service._grade_window_closed`.
+/*
+ * D42 §5 — `gradeWindow()` lived here and mirrored `grades/service._grade_window_closed`,
+ * turning `semesters.grade_submission_deadline` into a closed gradebook and a 409 on the
+ * write. Both are retired on the server, so both are retired here: demo mode exists to
+ * certify what the real backend does, and a demo that still shut the window would have
+ * been the exact "rule in only one of the two implementations" this file keeps warning
+ * about — with the demo the stricter one, which is the harder direction to notice.
  *
- * A null deadline never closes — the state of every demo term as shipped, and the safe
- * default. Demo mode has to carry this rule too: the last two times a rule lived in only
- * one of the two implementations, demo mode certified a screen the real backend refused.
+ * The two seeded terms in `demo/data.ts` still carry deadlines, deliberately: they are the
+ * fixture that proves a stored value has no effect.
  */
-function gradeWindow(): { closed: boolean; deadline: string | null } {
-  const deadline = getActiveSemester()?.grade_submission_deadline ?? null;
-  if (!deadline) return { closed: false, deadline: null };
-  const at = new Date(deadline).getTime();
-  // DEMO_TODAY, not the real clock: the dataset is deterministic by design, and reading
-  // `Date.now()` here would make the window flip depending on when the demo is opened.
-  return { closed: !Number.isNaN(at) && new Date(DEMO_TODAY_ISO).getTime() > at, deadline };
-}
 
 /**
  * The active term's MID-TERM FREEZE (D33, client ask 7), mirroring
@@ -211,7 +206,8 @@ function gradeWindow(): { closed: boolean; deadline: string | null } {
  * be entered nor revised. Either date null → never frozen, the state of the demo term as
  * shipped.
  *
- * DEMO_TODAY, not the real clock, for the reason `gradeWindow()` documents.
+ * DEMO_TODAY, not the real clock: the dataset is deterministic by design, and reading
+ * `Date.now()` here would make the freeze flip depending on when the demo is opened.
  */
 function midtermFreeze(): { frozen: boolean; start: string | null; end: string | null } {
   const sem = getActiveSemester();
@@ -289,8 +285,7 @@ export const gradesHandlers = [
     const canEdit =
       role === 'teacher' && teacherId != null && offering.teacher_ids.includes(teacherId);
     // Reported for EVERY viewer, not just writers: a Registrar asked why the lecturer
-    // cannot enter grades needs to see the same closed window (D30 §D6).
-    const window = gradeWindow();
+    // cannot enter grades needs to see the same frozen window (D33 ask 7).
     const freeze = midtermFreeze();
     // D32 — `can_request_revision` answers "may YOU file one", and only a Lecturer can
     // (§D7: the Dean decides and may not request; the Registrar has no grade authority).
@@ -311,10 +306,11 @@ export const gradesHandlers = [
       ...body,
       rows,
       can_edit: canEdit,
-      grade_window_closed: window.closed,
-      grade_submission_deadline: window.deadline,
-      // D33 — reported for EVERY viewer, like the deadline above: a Registrar asked "why
-      // can't the lecturer enter these?" must see the same frozen window.
+      // D42 §5 — constants, matching the server. See the note where `gradeWindow()` was.
+      grade_window_closed: false,
+      grade_submission_deadline: null,
+      // D33 — reported for EVERY viewer, not just the one who can write: a Registrar asked
+      // "why can't the lecturer enter these?" must see the same frozen window.
       midterm_frozen: freeze.frozen,
       midterm_submission_start: freeze.start,
       midterm_submission_end: freeze.end,
@@ -344,22 +340,14 @@ export const gradesHandlers = [
       return errorResponse(403, 'forbidden', 'You do not teach this offering.');
     }
 
-    // The grade-submission deadline (D30 §D6). Checked BEFORE any validation or mutation,
+    // D33 ask 7 — the mid-session freeze. Checked BEFORE any validation or mutation,
     // exactly where the server checks it, so a refused batch leaves the gradebook
     // untouched. The Dean is exempt — and, as on the server, that arm is unreachable in
     // practice because a Dean fails the ownership guard above anyway; the intended
-    // post-deadline path is Phase 5's grade-revision workflow.
+    // post-freeze path is Phase 5's grade-revision workflow.
+    //
+    // D42 §5 removed the end-of-session deadline check that used to run first.
     if (writerRole !== 'principal') {
-      const window = gradeWindow();
-      if (window.closed) {
-        return errorResponse(
-          409,
-          'grade_window_closed',
-          'The grade submission deadline for this session has passed.',
-        );
-      }
-      // D33 ask 7 — checked AFTER the deadline for the reason the server documents: if
-      // both are shut, "the term is over" is the more useful message than "wait".
       const freeze = midtermFreeze();
       if (freeze.frozen) {
         return errorResponse(

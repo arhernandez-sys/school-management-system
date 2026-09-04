@@ -83,8 +83,9 @@ export function StudentListPrintDialog({
                 : 'All students (no filters applied)'}
             </Typography>
 
-            {/* The server caps `page_size` at 100. Saying so beats a silently short
-                sheet that reads as the complete answer. */}
+            {/* This dialog asks for 100; the server's ceiling is 200 (`MAX_PAGE_SIZE`).
+                Either way the sheet can be short of `total`, and saying so beats a
+                silently truncated list that reads as the complete answer. */}
             {total > rows.length && (
               <Typography variant="body2" color="warning.main" sx={{ mb: 2 }}>
                 Showing the first {rows.length} of {total}. Narrow the filters to print the
@@ -108,6 +109,12 @@ export function StudentListPrintDialog({
                     <TableCell sx={{ fontWeight: 600 }}>Programme</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Gender</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Religion</TableCell>
+                    {/* D40 — added with its filter. A sheet headed "Married students"
+                        that does not print a civil status cannot be checked by the
+                        person holding it, which is the whole reason Gender and Religion
+                        are here. Printed AS STORED, not capitalised like Gender: these
+                        values are TitleCase in the column already. */}
+                    <TableCell sx={{ fontWeight: 600 }}>Civil status</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
                   </TableRow>
                 </TableHead>
@@ -124,6 +131,7 @@ export function StudentListPrintDialog({
                         {s.gender ?? '—'}
                       </TableCell>
                       <TableCell>{s.religion ?? '—'}</TableCell>
+                      <TableCell>{s.civil_status ?? '—'}</TableCell>
                       <TableCell sx={{ textTransform: 'capitalize' }}>{s.status}</TableCell>
                     </TableRow>
                   ))}

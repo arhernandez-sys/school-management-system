@@ -22,6 +22,8 @@ export const ROLE_LABEL: Record<Role, string> = {
   secretary: strings.roles.secretary,
   teacher: strings.roles.teacher,
   student: strings.roles.student,
+  hod: strings.roles.hod,
+  auditor: strings.roles.auditor,
 };
 
 /** Display name for a role, e.g. `roleLabel('principal') === 'Dean'`. */
@@ -37,8 +39,12 @@ export function roleLabel(role: Role): string {
 export const ROLE_OPTIONS: ReadonlyArray<{ value: Role; label: string }> = [
   { value: 'principal', label: ROLE_LABEL.principal },
   { value: 'secretary', label: ROLE_LABEL.secretary },
+  // D43 — an HOD sits with the lecturers (they are one) and the Auditor last, as an
+  // oversight account rather than a rank. This order also drives the demo login buttons.
+  { value: 'hod', label: ROLE_LABEL.hod },
   { value: 'teacher', label: ROLE_LABEL.teacher },
   { value: 'student', label: ROLE_LABEL.student },
+  { value: 'auditor', label: ROLE_LABEL.auditor },
 ];
 
 export default ROLE_LABEL;

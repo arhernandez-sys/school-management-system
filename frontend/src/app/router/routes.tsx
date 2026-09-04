@@ -109,7 +109,11 @@ function lazyOnly(element: ReactElement): ReactElement {
  */
 function MyProfilePage() {
   const { user } = useAuth();
-  if (user?.role === 'teacher' && user.teacher_profile_id) {
+  // D43 — an HOD is a lecturer and carries a `teacher_profile_id` (the server resolves
+  // it for every role in `LECTURER_ROLES`), so "My profile" must reach their lecturer
+  // profile. Without this they fell through to the placeholder — a head clicking their
+  // own name would have got an empty page.
+  if ((user?.role === 'teacher' || user?.role === 'hod') && user.teacher_profile_id) {
     return <TeacherProfileView teacherId={user.teacher_profile_id} mode="self" />;
   }
   if (user?.role === 'student') {

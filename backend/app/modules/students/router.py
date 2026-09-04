@@ -54,7 +54,11 @@ router = APIRouter(prefix="/students", tags=["students"])
 
 _ERR = {"model": ErrorResponse}
 _manage = require_role(Role.PRINCIPAL, Role.SECRETARY)
-_read = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
+#: D43 — the HOD reads the directory across their programme and the Auditor reads it
+#: across the college; the SERVICE narrows the HOD's rows (a role gate cannot).
+_read = require_role(
+    Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER, Role.HOD, Role.AUDITOR
+)
 _student_only = require_role(Role.STUDENT)
 #: D32 (brief §4) — `/students/{id}/assessments` is the one route in this module that
 #: returns GRADES, and the client asked for grade information to leave the registration
@@ -63,7 +67,7 @@ _student_only = require_role(Role.STUDENT)
 #:
 #: Unconditional, with no toggle, for the same reason as `grades/router.py`: the removal
 #: was asked for outright, not as something to switch on and off.
-_read_grades = require_role(Role.PRINCIPAL, Role.TEACHER)
+_read_grades = require_role(Role.PRINCIPAL, Role.TEACHER, Role.HOD, Role.AUDITOR)
 #: A PROGRAMME change is the Dean's, unlike everything else in this module — it
 #: re-derives a degree plan and rules on what carries over (D30 §D12, §D14).
 _dean = require_role(Role.PRINCIPAL)
@@ -83,6 +87,7 @@ def list_students(
     year_of_study: Annotated[str | None, Query(max_length=50)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     religion: Annotated[str | None, Query(max_length=100)] = None,
+    civil_status: Annotated[str | None, Query(max_length=50)] = None,
     gender: Annotated[str | None, Query(max_length=20)] = None,
     program_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
@@ -103,8 +108,15 @@ def list_students(
     withdrawn student still matches; that is deliberate, and the same reasoning as the
     `academic_year_id` note above.
 
-    `religion` is free text from the admissions form, so its permitted values come from
-    `GET /students/filter-options` rather than an enum."""
+    **D40 adds `civil_status`**, on the same terms. Its four values come from the
+    `CivilStatus` vocabulary the forms write, and the match is exact — the write path
+    normalises, so a filter that also had to guess at spellings would be papering over
+    a bug rather than fixing one.
+
+    `religion` is free text on the COLUMN, but the dropdown that feeds this now reads
+    the client-owned `religions` table (D39) rather than the values already present;
+    `GET /students/filter-options` still reports the latter, so the directory can offer
+    a legacy religion the table does not carry."""
     return service.list_students(
         db,
         caller=caller,
@@ -113,6 +125,7 @@ def list_students(
         status=status_filter,
         offering_id=offering_id,
         religion=religion,
+        civil_status=civil_status,
         gender=gender,
         program_id=program_id,
         year_of_study=year_of_study,

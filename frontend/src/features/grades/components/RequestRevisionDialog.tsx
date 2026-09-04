@@ -26,7 +26,6 @@ export interface RequestRevisionDialogProps {
   /** The mark the student holds now — shown so the Dean's "from → to" is unambiguous. */
   currentScore: number | null;
   /** True when the term's grade window has closed; changes the explanatory copy only. */
-  windowClosed?: boolean;
   onClose: () => void;
 }
 
@@ -37,7 +36,6 @@ export function RequestRevisionDialog({
   maxScore,
   student,
   currentScore,
-  windowClosed = false,
   onClose,
 }: RequestRevisionDialogProps) {
   const requestMut = useRequestGradeRevision();
@@ -97,10 +95,13 @@ export function RequestRevisionDialog({
       onSubmit={submit}
     >
       <Stack spacing={2} sx={{ mt: 1 }}>
+        {/* D42 §5 — one message, not two. The second branch here described the
+            end-of-session deadline ("the mark cannot be edited directly"), which is
+            retired: a Lecturer reaching this dialog is outside a mid-session freeze by
+            definition, since the freeze blocks the request itself. */}
         <Alert severity="info">
-          {windowClosed
-            ? 'Grade submission has closed for this session, so the mark cannot be edited directly — but a revision can still be requested. The Dean decides, and an approval takes effect even after the deadline.'
-            : 'The Dean decides. Nothing changes until they approve it, and the original mark is kept either way.'}
+          The Dean decides. Nothing changes until they approve it, and the original mark is
+          kept either way.
         </Alert>
 
         <Typography variant="body2">

@@ -68,19 +68,19 @@ Capability levels:
 - **View-own** — read access limited to records that belong to the user (their classes, their students, their own data).
 - **None** — no access; module/feature is hidden.
 
-| Module | Principal | Secretary | Teacher | Student |
-|--------|-----------|-----------|---------|---------|
-| **1. Authentication** | Full (own session) | Full (own session) | Full (own session) | Full (own session) |
-| **2. Dashboard** | View-all (school-wide) | View-all (admin) | View-own (their classes) | View-own (their data) |
-| **3. Students** | Full | Full | View-own (students in their classes) | View-own (own profile, read-only) |
-| **4. Teachers** | Full | Create-Edit | View-all (directory, read-only) | None |
-| **5. Classes** | Full | Create-Edit | View-own ((section, subject) offerings they teach) | View-own (their one enrolled section + its subjects) |
-| **6. Assessments** | View-all | View-all | Full (own classes) | View-own (their classes) |
-| **7. Grades** | View-all | View-all | Create-Edit (own classes) | View-own (own grades) |
-| **8. Attendance** | View-all | View-all | Create-Edit (own classes) | View-own (own attendance) |
-| **9. Announcements** | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) |
-| **10. Reports** | View-all (incl. any student's transcript) | View-all (incl. any student's transcript) | View-own (their (section, subject) gradebooks/students; **no transcript access**) | View-own (own report card + own grades; **no transcript**) |
-| **11. Settings** | Full (school + academic config) | Create-Edit (limited admin config) | View-own (account/profile) | View-own (account/profile) |
+| Module | Principal | Secretary | Teacher | Student | HOD | Auditor |
+|--------|-----------|-----------|---------|---------|-----|---------|
+| **1. Authentication** | Full (own session) | Full (own session) | Full (own session) | Full (own session) | Full (own session) | Full (own session) |
+| **2. Dashboard** | View-all (school-wide) | View-all (admin) | View-own (their classes) | View-own (their data) | View-own (their own teaching) | View-all (school-wide) |
+| **3. Students** | Full | Full | View-own (students in their classes) | View-own (own profile, read-only) | View-all (their programme) | View-all |
+| **4. Teachers** | Full | Create-Edit | View-all (directory, read-only) | None | View-all (lecturers in their programme) | View-all |
+| **5. Classes** | Full | Create-Edit | View-own ((section, subject) offerings they teach) | View-own (their one enrolled section + its subjects) | View-all (their programme) + Create-Edit on offerings they teach | View-all |
+| **6. Assessments** | View-all | View-all | Full (own classes) | View-own (their classes) | Full (own classes) | View-all |
+| **7. Grades** | View-all | View-all | Create-Edit (own classes) | View-own (own grades) | Create-Edit (own classes) · View-all (their programme) | View-all |
+| **8. Attendance** | View-all | View-all | Create-Edit (own classes) | View-own (own attendance) | Create-Edit (own classes) · View-all (their programme) | View-all |
+| **9. Announcements** | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) | Create-Edit (own classes) | View-all (reads; never authors) |
+| **10. Reports** | View-all (incl. any student's transcript) | View-all (incl. any student's transcript) | View-own (their (section, subject) gradebooks/students; **no transcript access**) | View-own (own report card + own grades; **no transcript**) | View-all (their programme's gradebooks; **no transcript**) | View-all (incl. any transcript) |
+| **11. Settings** | Full (school + academic config) | Create-Edit (limited admin config) | View-own (account/profile) | View-own (account/profile) | View-own (account) + View-all (catalog) | View-all (read-only, incl. **Audit log**) |
 
 ### 2.1 Permission clarifications (what each role specifically can and cannot do)
 
@@ -105,6 +105,19 @@ Capability levels:
 **Student**
 - Read-only consumer of **their own** academic data: schedule/classes, assessments, grades, attendance, report card, and announcements targeted to them.
 - **Cannot** see other students' data, edit any academic record, or access administrative modules.
+
+**HOD — Head of Department** *(added D43)*
+- **Is a Lecturer first.** Every lecturer power is unchanged: they teach, and they enter grades, assessments and attendance for the offerings they are actually assigned to. Being promoted does not take away the gradebook they had the day before.
+- **Adds a programme-wide READ.** They see every student reading for the programme(s) they head, every course in its curriculum, every offering of those courses, and every lecturer teaching them — read-only.
+- **Cannot edit another lecturer's grades.** This is enforced by *ownership*, per offering, not by the role: the gradebook returns `can_edit=false` for a colleague's offering and the server refuses the write with a 404.
+- Sees nothing of a programme they do not head. Reports reach their programme's gradebooks; **no transcripts**.
+- The link is the `program_heads` table, and **appointing a head grants the role automatically** — the account becomes `hod` on appointment and returns to `teacher` when the last appointment is removed. Three guards: only a plain lecturer is promoted (an administrator who also teaches is never changed), only an `hod` is demoted, and a head who still runs another programme keeps the role. Every change is audited as `user.role_change`.
+
+**Auditor** *(added D43)*
+- **Reads everything, writes nothing.** Sees all students, lecturers, courses, offerings, grades, attendance, applications, reports (including transcripts) and settings, plus the **Audit log** — the sensitive-action trail, which no other screen exposes.
+- The write ban is not a matter of which routes they are listed on: **every** POST/PUT/PATCH/DELETE is refused with `403 read_only_role` in `get_current_user`, the one dependency every authenticated route passes through. A route added in future is read-only for them by default.
+- The three exceptions act on their own account, not on school data: log out, change their own password, set their own preferences.
+- **Cannot** author announcements, decide grade revisions, or be given any capability above `View-all`.
 
 ---
 

@@ -68,6 +68,7 @@ import type {
   DemoOfferingMeeting,
   DemoProgram,
   DemoProgramCourse,
+  DemoProgramHead,
   DemoSchoolProfile,
   DemoSemester,
   DemoReligion,
@@ -1239,6 +1240,19 @@ const assessment_policy: DemoAssessmentPolicy = {
   students_can_view_grades: true,
 };
 
+// ── Heads of Department (D43) ───────────────────────────────────────────────────
+//
+// DERIVED, not invented: the demo HOD is appointed to a programme they actually teach a
+// course in, so the "my department" screens are coherent — their lecturer list contains
+// colleagues they share courses with, and their own offering appears among the ones they
+// oversee. Hard-coding a programme id would have risked appointing them to a department
+// with none of their teaching in it, which reads as a bug when clicked through.
+//
+// `teach-2` rather than `teach-1`: Maria Reyes (teach-1) is the representative LECTURER
+// login, and the demo needs the two roles to be different people or nothing distinguishes
+// "what a lecturer sees" from "what a head sees".
+const HOD_TEACHER_ID = 'teach-2';
+
 // ── Users (login accounts backing Settings › Users + auth) ──────────────────────
 const users: DemoUser[] = [];
 function pushUser(u: Omit<DemoUser, 'locale' | 'theme' | 'date_format' | 'default_page_size'>): void {
@@ -1271,12 +1285,27 @@ for (const t of teachers) {
     email: t.email,
     username: t.email.split('@')[0]!,
     full_name: t.full_name,
-    role: 'teacher',
+    // D43 — the appointed head's LOGIN role is `hod`. The seed sets both because the
+    // demo needs a working HOD to click through; in the real system these are two
+    // separate acts (appoint on the programme page, change the role in Settings), which
+    // is why `program_heads` above does not imply this.
+    role: t.id === HOD_TEACHER_ID ? 'hod' : 'teacher',
     is_active: t.status === 'active',
     must_change_password: false,
     last_login_at: addDays(DEMO_TODAY, -randInt(makeRng(t.id.length + 3), 0, 5)) + 'T07:50:00Z',
   });
 }
+pushUser({
+  id: 'user-auditor',
+  email: 'auditor@belmopancomp.edu.bz',
+  username: 'auditor',
+  full_name: 'Ruth Bennett',
+  // No lecturer or student profile: an auditor teaches nothing and studies nothing.
+  role: 'auditor',
+  is_active: true,
+  must_change_password: false,
+  last_login_at: addDays(DEMO_TODAY, -2) + 'T09:10:00Z',
+});
 for (const s of students) {
   if (!s.user_id) continue;
   pushUser({
@@ -1520,6 +1549,25 @@ const program_courses: DemoProgramCourse[] = BAJC_CURRICULUM.flatMap(
       is_required: true,
     })),
 );
+
+/** The first programme containing a course this lecturer is assigned to teach. */
+const hodProgramId: string | undefined = (() => {
+  const taughtCourseIds = new Set(
+    offerings.filter((o) => o.teacher_ids.includes(HOD_TEACHER_ID)).map((o) => o.course_id),
+  );
+  return program_courses.find((pc) => taughtCourseIds.has(pc.course_id))?.program_id;
+})();
+
+const program_heads: DemoProgramHead[] = hodProgramId
+  ? [
+      {
+        id: 'phead-1',
+        program_id: hodProgramId,
+        teacher_id: HOD_TEACHER_ID,
+        appointed_at: DEMO_TODAY_ISO,
+      },
+    ]
+  : [];
 
 // The real prerequisite relation. `MATH1210 <- MATH1110` is the one the demo actually
 // exercises, because PreCalculus-1 and Algebra-1/2/3 are both offered above.
@@ -2058,6 +2106,7 @@ export const DEMO_DATASET: DemoDataset = {
   courses,
   programs,
   program_courses,
+  program_heads,
   course_prerequisites,
   offerings,
   teachers,

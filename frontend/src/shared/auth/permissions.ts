@@ -63,6 +63,10 @@ export type ModuleKey =
   | 'calendar'
   | 'reports'
   | 'settings'
+  // D43 — the sensitive-action trail (`GET /settings/audit-log`). Its own key rather
+  // than a corner of `settings`, because its readers are not the settings writers: the
+  // Registrar administers the school and is one of the people the log is ABOUT.
+  | 'audit'
   | 'profile';
 
 /** Capability level a role has within a module (requirements §2 legend). */
@@ -95,6 +99,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     calendar: 'full', // owns the shared school calendar
     reports: 'view-all',
     settings: 'full',
+    audit: 'view-all', // the Dean reads the trail; nobody writes it
     profile: 'none', // Principal has no student "My Profile"; account is under Settings
   },
   secretary: {
@@ -124,6 +129,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     calendar: 'full', // secretary can add/edit school events too
     reports: 'view-all',
     settings: 'create-edit',
+    audit: 'none', // the log records what the Registrar did
     profile: 'none',
   },
   teacher: {
@@ -152,6 +158,7 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // removed + /reports/* route-guarded). The server remains authoritative (NFR-SEC-01).
     reports: 'none',
     settings: 'view-own', // account only
+    audit: 'none',
     // 'view-own' surfaces the teacher "My Profile" (/me → own TeacherProfileView).
     // Ownership (a teacher may only reach their OWN profile) and the student
     // course-scoping rule are enforced CLIENT-SIDE for UX only — the server remains
@@ -191,7 +198,84 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     // removed + /reports/* route-guarded). The server remains authoritative (NFR-SEC-01).
     reports: 'none',
     settings: 'view-own', // account only
+    audit: 'none',
     profile: 'view-own',
+  },
+  /**
+   * D43 — Head of Department: a Lecturer's row, widened to `view-all` wherever the role
+   * adds departmental oversight.
+   *
+   * **`Capability` gained no "view-all-within-my-programme" level, on purpose.** Adding
+   * one would put a scoping rule in a map whose own header says it is UX-only and that
+   * the server re-checks every call — and the frontend has no way to evaluate it anyway,
+   * since which programme a head runs is a server fact. So `view-all` here means "this
+   * screen is REACHABLE", and the server decides which rows come back. An HOD opening
+   * Students sees the same page a Dean does, filled with their programme.
+   *
+   * `create-edit` on grades / assessments / attendance is the LECTURER half of the role.
+   * It does not mean they may edit a colleague's work: ownership decides that, per
+   * offering, and the API already returns `can_edit` / `actionable_by_caller` per row for
+   * the UI to honour. Setting these to `view-all` instead would have removed the
+   * gradebook from a lecturer the day they were promoted.
+   */
+  hod: {
+    dashboard: 'view-own', // their own teaching, like a lecturer's
+    students: 'view-all', // every student reading for their programme
+    // Unlike a plain lecturer, who is denied the directory outright: seeing the staff
+    // under them is the point of the role.
+    teachers: 'view-all',
+    offerings: 'view-all', // their programme's, plus their own
+    // Read-only reach into the catalog. The Courses tab lives under Settings, which is
+    // why `features/settings/index.tsx` had to stop gating its tabs on write access.
+    courses: 'view-all',
+    programs: 'view-all',
+    applications: 'none', // admissions is the Registrar's; a head has no part in it
+    timetable: 'view-own', // the offerings they personally teach
+    assessments: 'none', // folded into Grades, as for every other staff role
+    grades: 'create-edit', // own offerings only — server-enforced per offering
+    attendance: 'create-edit',
+    announcements: 'create-edit',
+    calendar: 'view-all',
+    // Their programme's gradebooks and report cards. NOT transcripts — the server keeps
+    // those on the `_admins` gate, which an HOD is deliberately not on.
+    reports: 'view-all',
+    settings: 'view-own', // account only; the Courses tab comes from `courses` above
+    audit: 'none', // a head oversees a programme, not the school's audit trail
+    profile: 'view-own', // they have a lecturer profile
+  },
+  /**
+   * D43 — Auditor: reads everything, writes nothing.
+   *
+   * Every entry is `view-all` or `view-own`. **There must never be a `full` or
+   * `create-edit` here** — not because this map enforces anything (it does not; the
+   * server refuses every mutating verb centrally in `get_current_user`), but because
+   * `canWrite()` drives whether edit buttons render, and offering an auditor a Save
+   * button that always 403s is a worse experience than not offering one.
+   *
+   * `settings: 'view-all'` is what makes the read-only Audit Log screen reachable. An
+   * auditor with no audit log is not an auditor.
+   */
+  auditor: {
+    dashboard: 'view-all',
+    students: 'view-all',
+    teachers: 'view-all',
+    offerings: 'view-all',
+    courses: 'view-all',
+    programs: 'view-all',
+    applications: 'view-all',
+    // No personal timetable: an auditor neither teaches nor takes a course, so
+    // `GET /timetable/me` would honestly answer an empty week. Same reasoning as the
+    // Dean's row.
+    timetable: 'none',
+    assessments: 'none', // folded into Grades
+    grades: 'view-all',
+    attendance: 'view-all',
+    announcements: 'view-all', // reads the feed; `_authors` does not include them
+    calendar: 'view-all',
+    reports: 'view-all', // including transcripts — they are on the server's `_admins` gate
+    settings: 'view-all', // read-only, and the way to the Audit Log
+    audit: 'view-all', // the reason the role exists
+    profile: 'none', // no student or lecturer profile to own
   },
 };
 
@@ -209,4 +293,21 @@ export function capabilityFor(role: Role, module: ModuleKey): Capability {
 export function canWrite(role: Role, module: ModuleKey): boolean {
   const cap = PERMISSION_MATRIX[role][module];
   return cap === 'full' || cap === 'create-edit';
+}
+
+/**
+ * Roles that ARE a lecturer — they carry a `teacher_profiles` row, can be assigned to an
+ * offering, and therefore hold lecturer powers on the offerings they own (D43).
+ *
+ * Mirrors `LECTURER_ROLES` in `backend/app/common/enums.py`. It exists because `role ===
+ * 'teacher'` was written in ~20 places to mean "is this person a lecturer", and every one
+ * of them silently answered "no" for a Head of Department — who is one. Promoting a
+ * lecturer must not remove their register, their gradebook or their own profile page.
+ *
+ * Use this for "is a lecturer". Do NOT use it for "may edit THIS thing": ownership is
+ * per-offering and only the server can answer it — honour `can_edit` /
+ * `actionable_by_caller` on the row instead.
+ */
+export function isLecturerRole(role: Role | undefined | null): boolean {
+  return role === 'teacher' || role === 'hod';
 }

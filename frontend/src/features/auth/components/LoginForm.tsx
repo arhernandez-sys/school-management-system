@@ -15,16 +15,12 @@ import {
 } from '@mui/material';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { ApiError } from '@shared/api/client';
 import { ROUTES } from '@shared/constants/routes';
 import { strings } from '@i18n/strings';
 import { ROLE_OPTIONS } from '@shared/auth/roleLabels';
-
-interface LocationState {
-  from?: { pathname?: string };
-}
 
 /**
  * Demo mode only (VITE_ENABLE_MOCKS): the MSW auth handler keys the signed-in role off
@@ -49,7 +45,6 @@ const DEMO_ROLES = ROLE_OPTIONS.map((opt) => ({ id: opt.value, label: opt.label 
 export function LoginForm() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
   const errorId = useId();
 
   const [identifier, setIdentifier] = useState('');
@@ -57,8 +52,6 @@ export function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const from = (location.state as LocationState | null)?.from?.pathname ?? ROUTES.dashboard;
 
   const submitCredentials = async (id: string, pw: string) => {
     setError(null);
@@ -68,7 +61,17 @@ export function LoginForm() {
       if (user.must_change_password) {
         navigate(ROUTES.changePassword, { replace: true });
       } else {
-        navigate(from, { replace: true });
+        /**
+         * D42 §1 — ALWAYS the dashboard, never the page the previous session was on.
+         *
+         * This used to return to `location.state.from`, the path `ProtectedRoute`
+         * recorded when it bounced an anonymous visitor to /login. Logging out is one of
+         * those bounces, so signing back in as a DIFFERENT role replayed the last
+         * session's route into `RoleRoute` and landed on "Access denied" — the client
+         * reported it as roles seeing a screen they should never be shown. The dashboard
+         * is the one route every role can open, so it is the only safe landing.
+         */
+        navigate(ROUTES.dashboard, { replace: true });
       }
     } catch (err) {
       // Non-enumerating message regardless of which field was wrong (FR-AUTH-02).

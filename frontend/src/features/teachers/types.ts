@@ -123,6 +123,18 @@ export interface TeacherCreateBody {
   designation?: string;
   address?: string;
   comments?: string;
+  /**
+   * D40 — the last three the create body could not carry. The lecturer form is one full
+   * screen with every field on it now, and a form that shows a field it cannot send is
+   * worse than one that hides it: the Dean fills it in and watches the value vanish.
+   *
+   * `gender` is optional here and REQUIRED by the form. Not a contradiction — the column
+   * is nullable and every lecturer created before D39 holds NULL, so demanding it on the
+   * wire would be stricter than the data the system already has.
+   */
+  gender?: 'male' | 'female' | 'other';
+  bio?: string;
+  expertise?: TeacherExpertise[];
 }
 
 /** POST /teachers response envelope (temp password surfaced ONCE on create-with-login). */
@@ -151,6 +163,21 @@ export interface TeacherUpdateBody {
   hire_date?: string | null;
   end_date?: string | null;
   comments?: string;
+}
+
+/**
+ * One academic year this lecturer taught in (GET /teachers/{id}/years).
+ *
+ * D42 §2 — the lecturer profile's year switcher. Deliberately the years they HAVE an
+ * assignment in rather than the school's whole calendar: a switcher position with nothing
+ * behind it reads as a broken screen, not as a scoping rule. Structurally identical to
+ * `StudentYear`, and kept as its own type because the two answer different questions and
+ * a shared alias would invite one endpoint's change to silently reshape the other.
+ */
+export interface TeacherYear {
+  id: string;
+  name: string;
+  status: string;
 }
 
 /** GET /teachers query params. */

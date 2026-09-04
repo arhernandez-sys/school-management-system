@@ -1,25 +1,60 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Autocomplete, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import {
+  Alert,
+  Autocomplete,
+  Divider,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import { FormDialog, SearchableSelect } from '@shared/components';
 import { useAcademicYears } from '@features/settings/hooks/useSettings';
 import { useCoursesList } from '@features/settings/hooks/useCourses';
 import { useTeachersList } from '@features/teachers/hooks/useTeachers';
 import { strings } from '@i18n/strings';
 import { MeetingRowsEditor } from './MeetingRowsEditor';
 import { meetingRowInvalid } from '../meetingFormat';
-import type { OfferingCreateBody, OfferingMeetingInput } from '../types';
+import type {
+  OfferingCreateBody,
+  OfferingListItem,
+  OfferingMeetingInput,
+  OfferingUpdateBody,
+} from '../types';
 
 export interface OfferingFormDialogProps {
   open: boolean;
+  /**
+   * Edit mode when provided (create otherwise). D41 — the list's Edit button.
+   *
+   * A LIST ROW, not a detail: the row already carries everything this form shows in edit
+   * mode (label, course, semester, section code, capacity, archive state), so opening the
+   * dialog costs no request and cannot show a spinner over a form the user is looking at.
+   */
+  offering?: OfferingListItem | null;
   submitting: boolean;
   error?: string | null;
   fieldErrors?: Record<string, string[]>;
   onSubmit: (values: OfferingCreateBody) => void;
+  /** Edit mode only. Called instead of `onSubmit`. */
+  onUpdate?: (values: OfferingUpdateBody) => void;
   onClose: () => void;
 }
 
 /**
- * Create a course offering (POST /offerings).
+ * Create OR edit a course offering — `POST /offerings`, or `PATCH /offerings/{id}` when
+ * `offering` is given (D41).
+ *
+ * **The two modes deliberately show different forms**, because the server accepts
+ * different bodies. Create takes the course, the term, the lecturers and the weekly
+ * schedule in one request; edit takes `section_code`, `capacity` and `is_archived` and
+ * nothing else. Rendering the create form's other fields in edit mode and quietly
+ * dropping them on save would be the worse lie: the Dean would change the lecturer,
+ * press Save, and watch it revert. Lecturers and schedule have their own endpoints and
+ * their own UI on the offering itself.
+ *
  *
  * **D31 — three fields went away and one arrived, and the form is simpler for it.**
  *
@@ -48,12 +83,15 @@ export interface OfferingFormDialogProps {
  */
 export function OfferingFormDialog({
   open,
+  offering,
   submitting,
   error,
   fieldErrors,
   onSubmit,
+  onUpdate,
   onClose,
 }: OfferingFormDialogProps) {
+  const editing = Boolean(offering);
   const yearsQuery = useAcademicYears();
 
   /**
@@ -91,68 +129,111 @@ export function OfferingFormDialog({
   const [semesterId, setSemesterId] = useState('');
   const [sectionCode, setSectionCode] = useState('');
   const [capacity, setCapacity] = useState('');
+  const [archived, setArchived] = useState(false);
   const [teacherIds, setTeacherIds] = useState<string[]>([]);
   const [meetings, setMeetings] = useState<OfferingMeetingInput[]>([]);
 
   useEffect(() => {
-    if (open) {
-      setCourseId('');
-      setSemesterId(activeSemesterId);
-      setSectionCode('');
-      setCapacity('');
-      setTeacherIds([]);
-      setMeetings([]);
+    if (!open) return;
+    if (offering) {
+      // Seeded from the row. Course and session are read-only here, but they are still
+      // SET rather than blank — the two selects render the offering's real course and
+      // term so the Dean can see what they are editing.
+      setCourseId(offering.course?.id ?? '');
+      setSemesterId(offering.semester?.id ?? '');
+      setSectionCode(offering.section_code ?? '');
+      setCapacity(offering.capacity == null ? '' : String(offering.capacity));
+      setArchived(offering.is_archived);
+      return;
     }
-  }, [open, activeSemesterId]);
+    setCourseId('');
+    setSemesterId(activeSemesterId);
+    setSectionCode('');
+    setCapacity('');
+    setArchived(false);
+    setTeacherIds([]);
+    setMeetings([]);
+  }, [open, offering, activeSemesterId]);
 
   const badMeeting = meetings.some(meetingRowInvalid);
-  const submitDisabled = courseId.length === 0 || semesterId.length === 0 || badMeeting;
+  // In edit mode the two required selects are read-only and always populated, and the
+  // meeting editor is not rendered — so neither gate can fail and the only thing that can
+  // block a save is nothing at all.
+  const submitDisabled = editing
+    ? false
+    : courseId.length === 0 || semesterId.length === 0 || badMeeting;
 
   const selectedTeachers = teachers.filter((t) => teacherIds.includes(t.id));
 
   return (
     <FormDialog
       open={open}
-      title={`Add ${strings.terms.courseOffering.toLowerCase()}`}
-      submitLabel="Create offering"
+      title={
+        editing
+          ? `Edit ${strings.terms.courseOffering.toLowerCase()}`
+          : `Add ${strings.terms.courseOffering.toLowerCase()}`
+      }
+      submitLabel={editing ? 'Save changes' : 'Create offering'}
       submitting={submitting}
       submitDisabled={submitDisabled}
       error={error}
       onClose={onClose}
       onSubmit={() =>
-        onSubmit({
-          course_id: courseId,
-          semester_id: semesterId,
-          // Empty optionals go as null, not "" — the API validates max_length on a string
-          // and would reject an empty section code outright.
-          section_code: sectionCode.trim() || null,
-          capacity: capacity.trim() ? Number(capacity) : null,
-          teacher_ids: teacherIds,
-          meetings: meetings.map((m) => ({ ...m, room: m.room?.trim() || null })),
-        })
+        editing
+          ? onUpdate?.({
+              // Only what `PATCH /offerings/{id}` accepts. Sent unconditionally rather
+              // than diffed: all three are absolute values, so re-sending an unchanged
+              // one is a no-op, and a diff would be a second place for "what changed" to
+              // be computed wrongly.
+              section_code: sectionCode.trim() || null,
+              capacity: capacity.trim() ? Number(capacity) : null,
+              is_archived: archived,
+            })
+          : onSubmit({
+              course_id: courseId,
+              semester_id: semesterId,
+              // Empty optionals go as null, not "" — the API validates max_length on a
+              // string and would reject an empty section code outright.
+              section_code: sectionCode.trim() || null,
+              capacity: capacity.trim() ? Number(capacity) : null,
+              teacher_ids: teacherIds,
+              meetings: meetings.map((m) => ({ ...m, room: m.room?.trim() || null })),
+            })
       }
     >
       <Stack spacing={2} sx={{ mt: 1 }}>
-        <TextField
-          select
+        {/* D41 — said once, at the top, rather than as a surprise on two disabled
+            controls. The Dean opening this to "move MATH1110 to Semester 2" needs to
+            know that is not an edit before they look for the field. */}
+        {editing && (
+          <Alert severity="info">
+            The course and session cannot be changed — every assessment, grade and
+            enrolment already recorded is attached to this offering, and moving it would
+            silently reinterpret all of them. Archive this offering and create the right
+            one instead.
+            <br />
+            Lecturers and the weekly schedule are edited on the offering itself.
+          </Alert>
+        )}
+        {/* D43-b — type-to-filter over the WHOLE catalog (114 courses). Creating an
+            offering means finding one specific course, which is a search, not a scroll. */}
+        <SearchableSelect
           label={strings.terms.course}
           value={courseId}
-          onChange={(e) => setCourseId(e.target.value)}
+          onChange={setCourseId}
+          options={courses.map((c) => ({ value: c.id, label: c.name, hint: c.code }))}
           required
           fullWidth
-          autoFocus
-          disabled={coursesQuery.isLoading}
+          disabled={editing || coursesQuery.isLoading}
+          loading={coursesQuery.isLoading}
           error={Boolean(fieldErrors?.course_id)}
           helperText={
-            fieldErrors?.course_id?.join(' ') ?? 'From the course catalog — the Dean owns it.'
+            fieldErrors?.course_id?.join(' ') ??
+            (editing
+              ? 'Cannot be changed — see the note above.'
+              : 'From the course catalog — the Dean owns it. Type a code or a name.')
           }
-        >
-          {courses.map((c) => (
-            <MenuItem key={c.id} value={c.id}>
-              {c.code} — {c.name}
-            </MenuItem>
-          ))}
-        </TextField>
+        />
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
@@ -162,11 +243,13 @@ export function OfferingFormDialog({
             onChange={(e) => setSemesterId(e.target.value)}
             required
             fullWidth
-            disabled={yearsQuery.isLoading}
+            disabled={editing || yearsQuery.isLoading}
             error={Boolean(fieldErrors?.semester_id)}
             helperText={
               fieldErrors?.semester_id?.join(' ') ??
-              'The same course can be offered again in another session.'
+              (editing
+                ? 'Cannot be changed — see the note above.'
+                : 'The same course can be offered again in another session.')
             }
           >
             {semesterOptions.map((s) => (
@@ -201,6 +284,26 @@ export function OfferingFormDialog({
           helperText={fieldErrors?.capacity?.join(' ') ?? 'Optional — leave blank for no limit.'}
         />
 
+        {/* The only write path to `is_archived` anywhere in the app. The list has printed
+            an Active/Archived badge since D31 and nothing could set it, so an offering
+            that had run its course stayed in every picker for good. */}
+        {editing && (
+          <FormControlLabel
+            control={
+              <Switch checked={archived} onChange={(e) => setArchived(e.target.checked)} />
+            }
+            label="Archived"
+          />
+        )}
+        {editing && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+            An archived offering keeps its roster, grades and history — it stops appearing
+            as a current offering.
+          </Typography>
+        )}
+
+        {!editing && (
+          <>
         <Autocomplete
           multiple
           options={teachers}
@@ -232,6 +335,8 @@ export function OfferingFormDialog({
           </Typography>
         </Stack>
         <MeetingRowsEditor value={meetings} onChange={setMeetings} disabled={submitting} dense />
+          </>
+        )}
       </Stack>
     </FormDialog>
   );

@@ -27,6 +27,8 @@ export interface StudentFilterValues {
   yearOfStudy: string;
   gender: string;
   religion: string;
+  /** D40 — one of `CIVIL_STATUSES`, or a legacy value the register still holds. */
+  civilStatus: string;
   programId: string;
   offeringId: string;
 }
@@ -37,6 +39,7 @@ export const EMPTY_STUDENT_FILTERS: StudentFilterValues = {
   yearOfStudy: '',
   gender: '',
   religion: '',
+  civilStatus: '',
   programId: '',
   offeringId: '',
 };
@@ -60,6 +63,7 @@ export function activeStudentFilterCount(
   if (v.yearOfStudy) n += 1;
   if (v.gender) n += 1;
   if (v.religion) n += 1;
+  if (v.civilStatus) n += 1;
   if (v.programId) n += 1;
   if (v.offeringId) n += 1;
   return n;

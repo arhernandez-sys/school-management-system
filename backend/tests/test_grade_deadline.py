@@ -1,8 +1,19 @@
-"""The grade-submission deadline (D30 §D6, brief §18).
+"""The grade-submission deadline — **RETIRED by D42 §5**.
 
-A Dean sets `semesters.grade_submission_deadline`; once it passes, the Lecturer's
-grade write is refused with 409 `grade_window_closed`, and the gradebook read says so
-in advance instead of letting them type forty marks into a doomed form.
+D30 §D6 made `semesters.grade_submission_deadline` a hard cutoff: once it passed, the
+Lecturer's grade write was refused with 409 `grade_window_closed`. The client asked for the
+end-of-session deadline to leave Academic Structure and for the MID-SESSION FREEZE to be
+the only thing that stops grade entry, so the enforcement went with the field.
+
+**This file did not become obsolete; it changed sides.** The column still exists and is
+still written — historic terms carry real values, and dropping it on live `sims` is a
+one-way door — so the thing worth testing is now that a stored deadline has NO EFFECT.
+Deleting these tests would have left "a deadline nobody reads" as an untested claim, and
+the very failure mode the removal was meant to prevent (a leftover deadline silently
+locking a lecturer out, with no Dean control that could clear it) would be invisible.
+
+`TestDeanOnlySetter` at the bottom is unchanged: writing the column is still a Dean-only
+operation and still stores UTC correctly. What it no longer does is close anything.
 
 Reuses `test_grades.py::_Graph` rather than rebuilding a year + section + offering +
 owning teacher: this suite is about ONE rule layered onto that graph, and a second
@@ -17,7 +28,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.common.enums import Role
 from tests.test_grades import _Graph  # noqa: F401 — the graph this suite builds on
 
 pytestmark = pytest.mark.requires_db
@@ -56,7 +66,9 @@ def _set_deadline(db_session, graph, when) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # Enforcement in upsert_grades — the single grade write path
 # ════════════════════════════════════════════════════════════════════════════
-class TestEnforcement:
+class TestTheDeadlineNoLongerBlocks:
+    """The whole of D30 §D6's enforcement, asserted as its own absence."""
+
     def test_no_deadline_never_blocks(self, client, graph) -> None:
         """NULL is the state of every term in the school today; it must stay open."""
         assert graph.sem.grade_submission_deadline is None
@@ -70,208 +82,116 @@ class TestEnforcement:
         student, _enr = graph.student()
         assert _save(client, graph, a, student).status_code == 200
 
-    def test_past_deadline_is_409_grade_window_closed(self, client, graph, db_session) -> None:
+    def test_a_PAST_deadline_no_longer_blocks(self, client, graph, db_session) -> None:
+        """The inversion of `test_past_deadline_is_409_grade_window_closed` (D42 §5).
+
+        This is the test that matters. A term whose deadline passed last month is exactly
+        the state that would have locked its lecturers out for good once the Dean's field
+        was removed from the form: nothing in the UI could have shown or cleared it.
+        """
         _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=1))
         a = graph.assessment()
         student, _enr = graph.student()
         resp = _save(client, graph, a, student)
-        assert resp.status_code == 409, resp.text
-        _assert_envelope(resp.json(), code="grade_window_closed")
+        assert resp.status_code == 200, resp.text
 
-    def test_409_names_the_deadline(self, client, graph, db_session) -> None:
-        """The date is the actionable part: a Lecturer an hour late and one a month late
-        are different conversations, and a bare 'window closed' cannot tell them apart."""
-        deadline = datetime.now(tz=timezone.utc) - timedelta(days=3)
-        _set_deadline(db_session, graph, deadline)
-        a = graph.assessment()
-        student, _enr = graph.student()
-        body = _save(client, graph, a, student).json()
-        assert "grade_submission_deadline" in body["error"]
-        assert body["error"]["grade_submission_deadline"] is not None
-
-    def test_nothing_is_written_when_the_window_is_closed(
+    def test_a_long_past_deadline_still_writes_the_grade(
         self, client, graph, db_session
     ) -> None:
-        """The check runs BEFORE any mutation, so a refused batch leaves the gradebook
-        exactly as it was — the same all-or-nothing discipline as the validation errors."""
+        """A 200 is not enough on its own — assert the row actually landed, since the
+        old guard refused BEFORE any mutation and an all-or-nothing batch that silently
+        wrote nothing would also answer 200 if the guard were replaced by a no-op."""
         from sqlalchemy import func, select
 
         from app.modules.grades.models import AssessmentGrade
 
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(hours=1))
+        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=400))
         a = graph.assessment()
         student, _enr = graph.student()
-        _save(client, graph, a, student)
+        assert _save(client, graph, a, student).status_code == 200
         count = db_session.scalar(
-            select(func.count()).select_from(AssessmentGrade).where(
-                AssessmentGrade.assessment_id == a.id
-            )
+            select(func.count())
+            .select_from(AssessmentGrade)
+            .where(AssessmentGrade.assessment_id == a.id)
         )
-        assert count == 0
-
-    def test_reopening_the_window_lets_the_same_save_through(
-        self, client, graph, db_session
-    ) -> None:
-        """Clearing the deadline is the Dean's escape hatch, and it must take effect
-        without any other change — the guard reads the column on every write."""
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=1))
-        a = graph.assessment()
-        student, _enr = graph.student()
-        assert _save(client, graph, a, student).status_code == 409
-        _set_deadline(db_session, graph, None)
-        assert _save(client, graph, a, student).status_code == 200
-
-    def test_the_deadline_is_per_TERM_not_per_year(self, client, graph, db_session) -> None:
-        """A closed Semester 1 must not close Semester 2. BAJC runs up to eight blocks
-        in a plan and they finish at different times."""
-        from datetime import date
-
-        from app.modules.settings.models import Semester
-
-        other = Semester(
-            academic_year_id=graph.year.id, name="Semester 2", sequence=2,
-            start_date=date(2026, 2, 1), end_date=date(2026, 6, 30), is_active=False,
-        )
-        db_session.add(other)
-        db_session.flush()
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=1))
-
-        student, _enr = graph.student()
-        closed = graph.assessment()
-        assert _save(client, graph, closed, student).status_code == 409
-
-        # The student's enrolment is in Semester 1, so enrol them into the second term
-        # too — otherwise the save fails on provenance rather than on the window.
-        from app.modules.offerings.models import ClassEnrollment
-
-        db_session.add(
-            ClassEnrollment(
-                offering_id=graph.section.id, student_id=student.id, semester_id=other.id
-            )
-        )
-        db_session.flush()
-        open_term = graph.assessment(semester_id=other.id)
-        assert _save(client, graph, open_term, student).status_code == 200
-
-    def test_a_deadline_seconds_in_the_future_is_still_open(
-        self, client, graph, db_session
-    ) -> None:
-        """The comparison is `now > deadline`, so the boundary is inclusive of the
-        deadline instant itself — a save landing exactly on time is accepted."""
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) + timedelta(seconds=30))
-        a = graph.assessment()
-        student, _enr = graph.student()
-        assert _save(client, graph, a, student).status_code == 200
+        assert count == 1
 
     def test_a_naive_stored_deadline_does_not_500(self, client, graph, db_session) -> None:
-        """MariaDB `DATETIME` comes back timezone-NAIVE through pymysql, and comparing
-        that with an aware `utcnow()` raises TypeError. `ensure_aware` is what keeps this
-        a clean 409 rather than an internal error on the save path — assert the naive
-        case explicitly, because the ORM sometimes hands back what was just written."""
+        """MariaDB `DATETIME` comes back timezone-NAIVE through pymysql, and the old guard
+        needed `ensure_aware` to avoid a TypeError comparing it with `utcnow()`. Nothing
+        compares it any more, so the naive case must be a plain 200 — kept because a
+        future reader reinstating any read of this column needs the trap flagged."""
         _set_deadline(db_session, graph, datetime.now() - timedelta(days=1))  # noqa: DTZ005
         db_session.expire(graph.sem)
         a = graph.assessment()
         student, _enr = graph.student()
         resp = _save(client, graph, a, student)
+        assert resp.status_code == 200, resp.text
+
+    def test_the_midterm_freeze_still_blocks(self, client, graph, db_session) -> None:
+        """The rule that SURVIVED. Removing one window must not have removed the other —
+        `test_midterm_freeze.py` owns this behaviour in full; this is the guard that stops
+        D42 being read as "grade entry can no longer be stopped at all"."""
+        now = datetime.now(tz=timezone.utc)
+        graph.sem.midterm_submission_start = now - timedelta(days=1)
+        graph.sem.midterm_submission_end = now + timedelta(days=1)
+        db_session.flush()
+        a = graph.assessment()
+        student, _enr = graph.student()
+        resp = _save(client, graph, a, student)
         assert resp.status_code == 409, resp.text
-        _assert_envelope(resp.json(), code="grade_window_closed")
-
-
-class TestDeanBypass:
-    def test_the_dean_arm_skips_the_check(self, graph, db_session) -> None:
-        """The Dean is exempt from the deadline (§D6) — asserted at the SERVICE level,
-        because the arm is unreachable over HTTP by design.
-
-        `PUT /assessments/{id}/grades` is `require_role(TEACHER)`, and
-        `assert_teacher_owns_offering` would 404 a Dean regardless, so no Dean can
-        enter a grade at all today. The intended post-deadline path is Phase 5's
-        grade-revision workflow (§D7): the Dean APPROVES a Lecturer's request rather
-        than typing the mark. The rule is tested here so it cannot rot before then.
-        """
-        from app.modules.grades.service import _assert_grade_window_open
-
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=1))
-        a = graph.assessment()
-
-        # A Lecturer is refused...
-        with pytest.raises(Exception) as exc:
-            _assert_grade_window_open(db_session, a, graph.teacher_user)
-        assert getattr(exc.value, "code", None) == "grade_window_closed"
-
-        # ...and the Dean is not. No raise is the assertion.
-        assert graph.principal_user.role == Role.PRINCIPAL
-        _assert_grade_window_open(db_session, a, graph.principal_user)
-
-    def test_the_registrar_is_not_exempt(self, graph, db_session) -> None:
-        """Only the Dean bypasses. The Registrar keeps administrative work but none of
-        the Dean's academic authority (§D14), and academic deadlines are that authority."""
-        from app.modules.grades.service import _assert_grade_window_open
-
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=1))
-        a = graph.assessment()
-        with pytest.raises(Exception) as exc:
-            _assert_grade_window_open(db_session, a, graph.secretary_user)
-        assert getattr(exc.value, "code", None) == "grade_window_closed"
+        _assert_envelope(resp.json(), code="midterm_frozen")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# The gradebook read reports the window
+# The gradebook read reports an open window, always
 # ════════════════════════════════════════════════════════════════════════════
-class TestGradebookReportsTheWindow:
+class TestGradebookAlwaysReportsAnOpenWindow:
+    """`grade_window_closed` / `grade_submission_deadline` stay on the wire so a client
+    built against the older contract still parses the response — as constants."""
+
     def _book(self, client, graph, headers=None):
         return client.get(
             f"{G}/offering/{graph.cs.id}", headers=headers or graph.H
         ).json()
 
-    def test_open_window_reports_false_and_null(self, client, graph) -> None:
+    def test_no_deadline_reports_false_and_null(self, client, graph) -> None:
         body = self._book(client, graph)
         assert body["grade_window_closed"] is False
         assert body["grade_submission_deadline"] is None
 
-    def test_closed_window_reports_true_and_the_date(self, client, graph, db_session) -> None:
-        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
-        body = self._book(client, graph)
-        assert body["grade_window_closed"] is True
-        assert body["grade_submission_deadline"] is not None
-
-    def test_future_deadline_is_reported_but_not_closed(
+    def test_a_stored_past_deadline_is_not_reported(
         self, client, graph, db_session
     ) -> None:
-        """The date is surfaced while the window is still OPEN, which is the point:
-        a Lecturer should see the cutoff coming, not discover it on save."""
+        """Was `test_closed_window_reports_true_and_the_date`. The gradebook must not
+        surface a cutoff the save path will not honour: a "Grading closed" banner over a
+        form that saves fine is worse than no banner."""
+        _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
+        body = self._book(client, graph)
+        assert body["grade_window_closed"] is False
+        assert body["grade_submission_deadline"] is None
+
+    def test_a_stored_future_deadline_is_not_reported_either(
+        self, client, graph, db_session
+    ) -> None:
         _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) + timedelta(days=5))
         body = self._book(client, graph)
         assert body["grade_window_closed"] is False
-        assert body["grade_submission_deadline"] is not None
+        assert body["grade_submission_deadline"] is None
 
-    def test_can_edit_is_not_overwritten_by_a_closed_window(
-        self, client, graph, db_session
-    ) -> None:
-        """`can_edit` keeps meaning 'your role and ownership permit writing here'.
-
-        Folding the closed window into it would make a shut deadline indistinguishable
-        from a Registrar's read-only view, and the Lecturer needs to know which one they
-        are looking at to know whom to ask.
-        """
+    def test_can_edit_is_unaffected(self, client, graph, db_session) -> None:
+        """`can_edit` keeps meaning 'your role and ownership permit writing here' — the
+        one thing about this response D42 did not touch."""
         _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
         book = self._book(client, graph)
         assert book["can_edit"] is True
-        assert book["grade_window_closed"] is True
+        assert book["grade_window_closed"] is False
 
-    def test_the_dean_sees_the_same_closed_window(
-        self, client, graph, db_session
-    ) -> None:
-        """Someone asked "why can't the lecturer enter these?" must be able to see the
-        answer, so the flag is reported for every viewer rather than only writers.
-
-        **This used to assert it for the REGISTRAR.** D32 (brief §4) removed the Registrar
-        from every grade route outright, so the Dean is now the non-writing viewer who
-        still needs the explanation. The behaviour under test is unchanged — reported for
-        readers as well as writers — only who can be a reader is."""
+    def test_the_dean_sees_the_same_open_window(self, client, graph, db_session) -> None:
         _set_deadline(db_session, graph, datetime.now(tz=timezone.utc) - timedelta(days=2))
         book = self._book(client, graph, headers=graph.P)
         assert book["can_edit"] is False
-        assert book["grade_window_closed"] is True
+        assert book["grade_window_closed"] is False
 
     def test_the_registrar_cannot_read_the_gradebook_at_all(
         self, client, graph, db_session
@@ -286,6 +206,11 @@ class TestGradebookReportsTheWindow:
 # The Dean-only setter
 # ════════════════════════════════════════════════════════════════════════════
 class TestDeanOnlySetter:
+    """Still Dean-only, still stored as UTC — it just no longer closes anything (D42 §5).
+
+    Kept in full because the column is still written by the API. If a future change drops
+    it from the schemas, these are the tests that will say so out loud."""
+
     def test_dean_sets_the_deadline_via_patch(self, client, graph) -> None:
         when = (datetime.now(tz=timezone.utc) + timedelta(days=10)).replace(microsecond=0)
         resp = client.patch(

@@ -10,7 +10,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { FormDialog, DateField } from '@shared/components';
 import { schoolToday } from '@shared/utils/schoolDate';
 import { strings } from '@i18n/strings';
 import {
@@ -19,6 +19,8 @@ import {
   GENDERS,
   GENDER_LABEL,
   canonicalGender,
+  canonicalCivilStatus,
+  civilStatusOptions,
 } from '@shared/types/enums';
 import type { District, EnrollmentLoad } from '@shared/types/enums';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
@@ -143,6 +145,10 @@ export function StudentFormDialog({
     () => religionOptions(religions.data?.items, religion),
     [religions.data, religion],
   );
+  // D40 — the same treatment for Civil status, which was free text until now. The list is
+  // hardcoded rather than fetched because these four ARE the vocabulary; there is no
+  // client-owned table behind them the way there is for religion.
+  const civilStatusChoices = useMemo(() => civilStatusOptions(civilStatus), [civilStatus]);
   // ── Section A · address + contact ───────────────────────────────────────────
   const [street, setStreet] = useState('');
   const [cityTownVillage, setCityTownVillage] = useState('');
@@ -199,7 +205,10 @@ export function StudentFormDialog({
     // Canonicalise on load, so a stored 'Male' selects the Male option instead of
     // rendering an empty select (and then clearing the field on save).
     setGender(canonicalGender(student?.gender) ?? 'female');
-    setCivilStatus(student?.civil_status ?? '');
+    // Canonicalised on load for the same reason `gender` is one line above: MariaDB's
+    // collation cannot tell 'single' from 'Single', but the <select> can, and the
+    // mismatched one renders blank and then saves that blank over a real value.
+    setCivilStatus(canonicalCivilStatus(student?.civil_status) ?? student?.civil_status ?? '');
     setReligion(student?.religion ?? '');
     setStreet(student?.street ?? '');
     setCityTownVillage(student?.city_town_village ?? '');
@@ -403,14 +412,12 @@ export function StudentFormDialog({
         </Row>
 
         <Row>
-          <TextField
+          <DateField
             label="Date of birth"
-            type="date"
             value={dateOfBirth}
-            onChange={(e) => setDateOfBirth(e.target.value)}
+            onChange={setDateOfBirth}
             required
             fullWidth
-            InputLabelProps={{ shrink: true }}
             error={Boolean(fieldErrors?.date_of_birth)}
             helperText={err('date_of_birth')}
           />
@@ -449,15 +456,30 @@ export function StudentFormDialog({
         </Row>
 
         <Row>
+          {/* D40 — a dropdown, replacing free text. The COLUMN stays `varchar(50)`, the
+              same split D37 settled for gender: the write path is what gets constrained,
+              so a student imported from the client's previous system keeps a status this
+              list does not carry instead of being rejected on the next unrelated save.
+
+              `civilStatusOptions` appends that stored value as an "(as recorded)" option.
+              Without it the select opens BLANK on such a student and saving anything else
+              on the form quietly erases their civil status. */}
           <TextField
             label="Civil status"
+            select
             value={civilStatus}
             onChange={(e) => setCivilStatus(e.target.value)}
             required
             fullWidth
             error={Boolean(fieldErrors?.civil_status)}
             helperText={err('civil_status')}
-          />
+          >
+            {civilStatusChoices.map((o) => (
+              <MenuItem key={o.value} value={o.value}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </TextField>
           {/* D39 (Meeting #2 item 8) — a dropdown fed by the client-owned `religions`
               table, replacing free text. The COLUMN is still free text: D37 settled that
               the write path is what gets constrained, so a student imported from the
@@ -784,14 +806,12 @@ export function StudentFormDialog({
               </MenuItem>
             ))}
           </TextField>
-          <TextField
+          <DateField
             label="Enrollment date"
-            type="date"
             value={enrollmentDate}
-            onChange={(e) => setEnrollmentDate(e.target.value)}
+            onChange={setEnrollmentDate}
             required
             fullWidth
-            InputLabelProps={{ shrink: true }}
             error={Boolean(fieldErrors?.enrollment_date)}
             helperText={err('enrollment_date')}
           />
@@ -835,22 +855,18 @@ export function StudentFormDialog({
             record and neither is required. */}
         {editing && (
           <Row>
-            <TextField
+            <DateField
               label="Graduation date"
-              type="date"
               value={graduationDate}
-              onChange={(e) => setGraduationDate(e.target.value)}
+              onChange={setGraduationDate}
               fullWidth
-              InputLabelProps={{ shrink: true }}
               helperText="Set automatically when the status becomes Graduated."
             />
-            <TextField
+            <DateField
               label="Drop-out date"
-              type="date"
               value={dropoutDate}
-              onChange={(e) => setDropoutDate(e.target.value)}
+              onChange={setDropoutDate}
               fullWidth
-              InputLabelProps={{ shrink: true }}
               helperText="Set automatically when the status becomes Drop out."
             />
             <TextField

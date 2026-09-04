@@ -1,6 +1,12 @@
 # Roles, Access & Process Flows — SIS
 
-> **Purpose.** A plain-language reference for what each of the four roles _is_, what it can _see and do_ in every module, and how work _flows_ between roles. Use this as the map when we go section-by-section: point at a row and tell me how you want it to behave.
+> **⚠️ D43 — there are now SIX roles.** HOD and Auditor were added; their rows are in §2
+> below and their summaries beside the others. The rest of this document still describes
+> the pre-D31 secondary-school model (sections, homerooms, "Form 1A") and was already
+> flagged stale in `tertiary-refactor-plan.md` — D43 updated the ROLE content only and
+> deliberately did not attempt to de-stale the vocabulary around it.
+>
+> **Purpose.** A plain-language reference for what each of the six roles _is_, what it can _see and do_ in every module, and how work _flows_ between roles. Use this as the map when we go section-by-section: point at a row and tell me how you want it to behave.
 >
 > **Sources.** Authoritative rules come from `requirements.md` §2 (the permission matrix) and §3 (functional requirements). The "As built in the demo" notes are what the current `npm run demo` build actually renders today (observed 2026-07-02) — where that differs from the intended design, it's called out as a **Gap**.
 >
@@ -61,23 +67,25 @@ graph TD
 
 Capability legend: **Full** = create/read/update/delete/configure · **Create-Edit** = add & edit, no delete/config · **View-all** = read across whole school · **View-own** = read only their own records · **None** = hidden.
 
-| Module | Principal | Secretary | Teacher | Student |
-|--------|-----------|-----------|---------|---------|
-| Dashboard | View-all (school) | View-all (admin) | View-own (their classes) | View-own (their data) |
-| Students | Full | Full | View-own (students in their classes) | View-own (own profile, read-only) |
-| Teachers | Full | Create-Edit | View-all (directory, read-only) | **None** |
-| Classes | Full | Create-Edit | View-own (offerings they teach) | View-own (their one section + its subjects) |
-| Assessments | View-all | View-all | **Full (own classes)** | View-own (their classes) |
-| Grades | View-all | View-all | **Create-Edit (own classes)** | View-own (own grades) |
-| Attendance | View-all | View-all | **Create-Edit (own classes)** | View-own (own attendance) |
-| Announcements | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) |
-| Reports | View-all (+ any transcript) | View-all (+ any transcript) | View-own (their gradebooks; **no transcript**) | View-own (own report card; **no transcript**) |
-| Settings | Full (school + academic config) | Create-Edit (limited config) | View-own (account only) | View-own (account only) |
+| Module | Principal | Secretary | Teacher | Student | HOD | Auditor |
+|--------|-----------|-----------|---------|---------|-----|---------|
+| Dashboard | View-all (school) | View-all (admin) | View-own (their classes) | View-own (their data) | View-own (own teaching) | View-all (school) |
+| Students | Full | Full | View-own (students in their classes) | View-own (own profile, read-only) | View-all (their programme) | View-all |
+| Teachers | Full | Create-Edit | View-all (directory, read-only) | **None** | View-all (their programme) | View-all |
+| Classes | Full | Create-Edit | View-own (offerings they teach) | View-own (their one section + its subjects) | View-all (their programme) | View-all |
+| Assessments | View-all | View-all | **Full (own classes)** | View-own (their classes) | Full (own classes) | View-all |
+| Grades | View-all | View-all | **Create-Edit (own classes)** | View-own (own grades) | Create-Edit (own) · View-all (programme) | View-all |
+| Attendance | View-all | View-all | **Create-Edit (own classes)** | View-own (own attendance) | Create-Edit (own) · View-all (programme) | View-all |
+| Announcements | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) | Create-Edit (own classes) | View-all (never authors) |
+| Reports | View-all (+ any transcript) | View-all (+ any transcript) | View-own (their gradebooks; **no transcript**) | View-own (own report card; **no transcript**) | View-all (programme gradebooks; **no transcript**) | View-all (+ any transcript) |
+| Settings | Full (school + academic config) | Create-Edit (limited config) | View-own (account only) | View-own (account only) | View-own (account) + catalog | View-all + **Audit log** |
 
 **One-line role summaries**
 - **Principal** — the administrator. Sees everything school-wide, owns Settings (year/term, grading scale, users). Doesn't routinely enter grades/attendance but can view all of it.
 - **Secretary** — the records clerk. Creates/edits students, teachers, classes; posts school-wide announcements. **Cannot** delete teachers, change roles, edit the grading scale, or open/close a term.
 - **Teacher** — the practitioner. Full control over **their own** assessments; enters grades & attendance for **their own** offerings only; posts announcements to their own classes. No access to other teachers' data or Settings.
+- **HOD (Head of Department)** — a Lecturer who also runs a programme. Keeps every lecturer power on the offerings they actually teach, and additionally *reads* every student, course, offering and colleague in the programme(s) they head. Cannot edit a colleague's grades — that is stopped by ownership, per offering, not by the role. No transcripts, no admissions, no Settings beyond their own account and the read-only catalog.
+- **Auditor** — sees everything, changes nothing. The only role that can open the **Audit log**. The write ban is enforced centrally rather than route-by-route, so it holds for endpoints that do not exist yet.
 - **Student** — the read-only consumer. Sees only **their own** classes, assessments, grades, attendance, report card, and announcements targeted to them.
 
 ---
@@ -127,6 +135,14 @@ Capability legend: **Full** = create/read/update/delete/configure · **Create-Ed
 
 > Ownership rule: a teacher can only act on **offerings they're assigned to**. They cannot enter grades/attendance for a section they don't teach (FR-GRD-10, FR-ATT-09).
 
+> **D42 §3 — ownership now bounds what they SEE on a student, not only what they can act on.**
+> A Lecturer reaches a student's profile as soon as they share one offering with them, and
+> that used to open a page listing every course the student takes and every mark in all of
+> them. `GET /students/{id}`, `/assessments`, `/years` and the directory's course COUNT are
+> all filtered to the caller's own offerings now. The Academic history tab is gone for them
+> entirely — its endpoint was already Dean/Registrar-only, so the tab had been rendering a
+> 403 where content should be.
+
 ### 3.4 Student — *"See my own school life"*
 
 **Sidebar:** Dashboard · **My School** (Classes) · My Classes/Assessments/My Grades/My Attendance · Announcements · Reports (own report card) · My Profile · Settings (account only). **No Students or Teachers modules.**
@@ -150,8 +166,8 @@ For each module, "what the role experiences." Use this to tell me the target beh
 | Module | Principal / Secretary | Teacher | Student |
 |--------|-----------------------|---------|---------|
 | **Dashboard** | School-wide KPIs + charts + announcements | Own classes, attendance-due-today, ungraded, assessments | Own term avg, attendance, upcoming, released grades |
-| **Students** | Full directory; create/edit/enroll/status | Read-only, **only students in their offerings** | *(no list — reaches own record via My Profile)* |
-| **Teachers** | Full (P) / Create-Edit (S) directory | Read-only directory | **Hidden** |
+| **Students** | Full directory; create/edit/enroll/status | Read-only, **only students in their offerings** — and on a student's profile, only **their own** courses, grades and years (D42 §3); no Academic history tab | *(no list — reaches own record via My Profile)* |
+| **Teachers** | Full (P) / Create-Edit (S) directory; profile has an **academic-year switcher** (D42 §2) | Own profile only, same year switcher | **Hidden** |
 | **Classes** | All sections + offerings; create sections, add subjects | **Only their offerings** | **Only their one section + its subjects** |
 | **Assessments** | View-all (oversight) | **Full on own offerings** (create/edit/delete) | View-own: their section's assessments; own score once released |
 | **Grades** | View-all gradebooks | **Create-Edit own** + release control | Own grades + term grade, once released |

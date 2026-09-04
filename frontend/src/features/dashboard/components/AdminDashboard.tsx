@@ -5,12 +5,16 @@ import ClassIcon from '@mui/icons-material/Class';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import { StatCard, ChartWithTable } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
-import type { AdminDashboard as AdminDashboardData } from '../types';
+import type {
+  AdminDashboard as AdminDashboardData,
+  AuditorDashboard as AuditorDashboardData,
+} from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
 import { PeopleListCard } from './PeopleListCard';
 
 export interface AdminDashboardProps {
-  data: AdminDashboardData;
+  /** D43 — also accepts the Auditor variant: the same school-wide payload, read-only. */
+  data: AdminDashboardData | AuditorDashboardData;
 }
 
 /**

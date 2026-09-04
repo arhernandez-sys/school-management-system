@@ -45,6 +45,8 @@ from app.modules.programs.schemas import (
     ProgramCourseUpdateRequest,
     ProgramCreateRequest,
     ProgramDetail,
+    ProgramHeadsResponse,
+    ProgramHeadsSetRequest,
     ProgramListItem,
     ProgramUpdateRequest,
 )
@@ -99,6 +101,45 @@ def get_program(
     """`curriculum` is grouped into term BLOCKS ordered by `term_order`. Those are
     curriculum positions, not calendar terms — see `ProgramCourse`."""
     return service.get_program(db, program_id=program_id)
+
+
+@router.get(
+    "/{program_id}/heads",
+    response_model=ProgramHeadsResponse,
+    summary="Heads of this programme (authenticated; D43)",
+    responses={401: _ERR, 404: _ERR},
+)
+def list_program_heads(
+    program_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> ProgramHeadsResponse:
+    """Who runs this department. Readable by anyone signed in — it is the answer to
+    "who do I ask about this course", not a confidence."""
+    return service.list_program_heads(db, program_id=program_id)
+
+
+@router.put(
+    "/{program_id}/heads",
+    response_model=ProgramHeadsResponse,
+    summary="Replace this programme's heads (Dean only; D43)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def set_program_heads(
+    program_id: uuid.UUID,
+    payload: ProgramHeadsSetRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_dean_only),
+) -> ProgramHeadsResponse:
+    """The COMPLETE list, replacing what is there; `[]` clears it.
+
+    Dean-only, alongside every other programme write. Note this does not grant anybody
+    the HOD role — that is a separate, audited role change in Settings. See the service
+    docstring for why the two are kept apart.
+    """
+    return service.set_program_heads(
+        db, actor=actor, program_id=program_id, teacher_ids=payload.teacher_ids
+    )
 
 
 @router.post(

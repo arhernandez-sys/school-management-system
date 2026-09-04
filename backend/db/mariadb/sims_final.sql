@@ -231,9 +231,11 @@ CREATE TABLE IF NOT EXISTS `applications` (
   CONSTRAINT `ck_applications_num_csec` CHECK (`num_csec` is null or `num_csec` between 0 and 20)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.applications: ~2 rows (approximately)
+-- Dumping data for table sims.applications: ~4 rows (approximately)
 INSERT INTO `applications` (`id`, `status`, `school_year`, `firstname`, `middlename`, `lastname`, `date_of_birth`, `ssno`, `gender`, `civil_status`, `religion`, `phone`, `email`, `has_health_condition`, `health_condition_note`, `street`, `city_town_village`, `district`, `mother_name`, `father_name`, `nok_name`, `nok_relationship`, `nok_phone`, `atlib_exam`, `num_csec`, `finance_name`, `finance_phone`, `finance_email`, `recommendation_received`, `program_id`, `year_of_study`, `enrollment_load`, `applicant_signed_at`, `guardian_signed_at`, `date_accepted`, `academic_year_id`, `enrolment_status`, `student_code`, `comments`, `decided_by_user_id`, `decided_at`, `student_id`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
+	('76467ba5-4b40-46d4-b14a-54563f31e69f', 'under_review', '2026-2027', 'Arturo', NULL, 'Hernandez', '2006-08-09', '097532112', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, '6229e7e2-7b97-4885-963c-b6c277229ae8', 'First', 'Part Time', '2026-09-26', '2026-09-24', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-09-03 04:42:16', '2026-09-03 04:42:23', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'denied', '2026-2027', 'Arturo', NULL, 'Hernandez', '2004-08-25', '000854433', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 5, NULL, NULL, NULL, 1, '22a02920-dc1e-4572-9da3-4ee738f8f42f', 'First', 'Full Time', '2026-08-26', '2026-08-20', NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-25 04:45:44', NULL, NULL, '2026-08-25 04:45:34', '2026-08-25 04:45:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('b582c1b2-2fe0-4346-b30d-af1ec5367f98', 'withdrawn', '2027-2028', 'Arturo', NULL, 'Hernandez', '2009-06-05', '086432221', 'female', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'First', 'Full Time', '2026-09-24', '2026-09-17', NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-09-03 04:41:22', NULL, NULL, '2026-09-03 04:40:40', '2026-09-03 04:41:22', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('afd18f01-6380-4541-ad61-ecb047cbaeeb', 'accepted', '2026-2027', 'Arturo', NULL, 'Hernandez', '2003-06-23', '000123456', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 20, 'Arturo Hernandez', '6118374', 'art.hdz25@gmail.com', 1, 'bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'First', 'Full Time', '2026-08-27', '2026-08-25', '2026-08-23', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Full Time', '202608006', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-23 15:10:54', '7c6e08c4-7100-428a-8f33-69498a45f4ed', NULL, '2026-08-23 15:03:29', '2026-08-23 14:02:41', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b');
 
 -- Dumping structure for table sims.assessment_categories
@@ -5237,9 +5239,9 @@ CREATE TABLE IF NOT EXISTS `audit_log` (
   KEY `k_audit_actor` (`actor_user_id`),
   CONSTRAINT `k_audit_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION,
   CONSTRAINT `summary` CHECK (json_valid(`summary`))
-) ENGINE=InnoDB AUTO_INCREMENT=39967 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=45923 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.audit_log: ~38 rows (approximately)
+-- Dumping data for table sims.audit_log: ~58 rows (approximately)
 INSERT INTO `audit_log` (`id`, `actor_user_id`, `action`, `entity_type`, `entity_id`, `summary`, `created_at`) VALUES
 	(16475, '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'application.create', 'application', '4c0f57ce-be90-4bde-a19f-c7abed27d621', '{"name": "Probe Tester", "status": "draft"}', '2026-08-21 03:15:06'),
 	(16476, '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'application.update', 'application', '4c0f57ce-be90-4bde-a19f-c7abed27d621', 'null', '2026-08-21 03:15:06'),
@@ -5278,7 +5280,27 @@ INSERT INTO `audit_log` (`id`, `actor_user_id`, `action`, `entity_type`, `entity
 	(35108, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'null', '2026-08-25 05:22:42'),
 	(38412, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'teacher.update', 'teacher', 'e50067bd-37b7-5a22-85f4-2164dfd201f2', 'null', '2026-08-27 06:27:33'),
 	(39965, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.create', 'program', 'c36f18d9-581c-404c-9794-9fac31d36cbe', '{"code": "ICTS", "name": "Information Tech"}', '2026-08-28 03:00:29'),
-	(39966, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'c36f18d9-581c-404c-9794-9fac31d36cbe', 'null', '2026-08-28 03:00:44');
+	(39966, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', 'c36f18d9-581c-404c-9794-9fac31d36cbe', 'null', '2026-08-28 03:00:44'),
+	(42542, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', '6229e7e2-7b97-4885-963c-b6c277229ae8', 'null', '2026-08-28 15:51:48'),
+	(42543, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.update', 'program', '6229e7e2-7b97-4885-963c-b6c277229ae8', 'null', '2026-08-28 15:51:54'),
+	(42544, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'course.update', 'course', '323c36ca-c5a8-4790-a577-3d9f84ed45c3', 'null', '2026-08-28 15:51:58'),
+	(42545, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'course.update', 'course', '323c36ca-c5a8-4790-a577-3d9f84ed45c3', 'null', '2026-08-28 15:52:01'),
+	(42546, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'offering.update', 'course_offering', '855e8d6b-0355-5665-861d-5c2349465007', 'null', '2026-08-28 15:53:00'),
+	(42547, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'offering.update', 'course_offering', '855e8d6b-0355-5665-861d-5c2349465007', 'null', '2026-08-28 15:53:13'),
+	(45909, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.heads.set', 'program', '6229e7e2-7b97-4885-963c-b6c277229ae8', '{"teacher_ids": ["e50067bd-37b7-5a22-85f4-2164dfd201f2"]}', '2026-09-03 04:00:54'),
+	(45910, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.create', 'application_temp', 'ce1c98cc-2644-4f0f-ad14-9e8384709b15', '{"name": "Arturo Hernandez"}', '2026-09-03 04:40:35'),
+	(45911, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.update', 'application_temp', 'ce1c98cc-2644-4f0f-ad14-9e8384709b15', 'null', '2026-09-03 04:40:40'),
+	(45912, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.submit', 'application', 'b582c1b2-2fe0-4346-b30d-af1ec5367f98', '{"name": "Arturo Hernandez", "promoted_from": "ce1c98cc-2644-4f0f-ad14-9e8384709b15", "education_rows": 0, "document_rows": 0}', '2026-09-03 04:40:40'),
+	(45913, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.review', 'application', 'b582c1b2-2fe0-4346-b30d-af1ec5367f98', 'null', '2026-09-03 04:41:20'),
+	(45914, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.withdraw', 'application', 'b582c1b2-2fe0-4346-b30d-af1ec5367f98', 'null', '2026-09-03 04:41:22'),
+	(45915, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.create', 'application_temp', '2824ef4f-aa50-4db5-ba38-d1d03f552b2c', '{"name": "Arturo Hernandez"}', '2026-09-03 04:42:16'),
+	(45916, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.pending.submit', 'application', '76467ba5-4b40-46d4-b14a-54563f31e69f', '{"name": "Arturo Hernandez", "promoted_from": "2824ef4f-aa50-4db5-ba38-d1d03f552b2c", "education_rows": 0, "document_rows": 0}', '2026-09-03 04:42:16'),
+	(45917, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'application.review', 'application', '76467ba5-4b40-46d4-b14a-54563f31e69f', 'null', '2026-09-03 04:42:23'),
+	(45918, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'user.role_change', 'program', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '{"from": "teacher", "to": "hod", "reason": "program_head_appointed"}', '2026-09-03 04:44:47'),
+	(45919, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.heads.set', 'program', '6229e7e2-7b97-4885-963c-b6c277229ae8', '{"teacher_ids": ["7f9e0349-b8cc-5845-9184-063d003c3831"]}', '2026-09-03 04:44:47'),
+	(45920, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'user.role_change', 'program', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '{"from": "hod", "to": "teacher", "reason": "program_head_unappointed"}', '2026-09-03 04:47:39'),
+	(45921, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'program.heads.set', 'program', '6229e7e2-7b97-4885-963c-b6c277229ae8', '{"teacher_ids": []}', '2026-09-03 04:47:39'),
+	(45922, '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'user.update', 'user', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '{"role_changed": true, "active_changed": false, "new_role": "auditor", "new_active": null}', '2026-09-03 04:51:16');
 
 -- Dumping structure for table sims.class_enrollments
 CREATE TABLE IF NOT EXISTS `class_enrollments` (
@@ -5833,7 +5855,7 @@ INSERT INTO `course_offerings` (`id`, `course_id`, `semester_id`, `section_code`
 	('420c7e91-0cb6-5aea-9919-2f5e21d41a01', '250c12f3-d3d6-4798-9fd7-730468a700af', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 18, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('232c85d2-851f-5a36-8597-324653bf351e', '8821fa08-807d-4f1f-bde1-b9eab3b8f19d', '756892b2-e688-5568-9c56-329b21ba1007', '01', 22, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('31da6b76-0e9d-583b-ae9a-4bb0614cb098', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '02', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('855e8d6b-0355-5665-861d-5c2349465007', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('855e8d6b-0355-5665-861d-5c2349465007', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-28 15:53:13', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('0a497482-6263-5c56-a5f5-5f29cf3e130e', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('a959c575-f28f-59f5-8eaf-9babed84501a', '8898ea08-fd1f-446a-90aa-99d6ad725609', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('251eb422-a75b-50c7-85cf-a5ed5e09e48a', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '03', 18, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
@@ -6007,7 +6029,7 @@ INSERT INTO `courses` (`id`, `code`, `name`, `credits`, `component`, `descriptio
 	('58fab625-d8b1-4fbe-a078-3472ddb5c364', 'BIOL1212', 'Genetics & Creation', 3, 'CEC', NULL, 'BIOL1102', 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('f8207e61-0d48-492e-b31e-38a3ba478601', 'THEO1212', 'Revelation', 3, 'CEC', NULL, NULL, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('651eef80-60a6-447a-aa54-3a6443cd88a7', 'THEO1104', 'Personal Evangelism', 2, 'CEC', NULL, NULL, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('323c36ca-c5a8-4790-a577-3d9f84ed45c3', 'AGRI2118', 'Agriculture Field Experience', 6, 'CEC', NULL, 'AGRI1108, AGRI1109', 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('323c36ca-c5a8-4790-a577-3d9f84ed45c3', 'AGRI2118', 'Agriculture Field Experience', 6, 'CEC', NULL, 'AGRI1108, AGRI1109', 1, NULL, '2026-08-17 03:35:31', '2026-08-28 15:52:01', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('471f9b10-8799-4e8a-9655-3e1c0e4e166a', 'EDUC2226', 'Managing the Regular & Multigrade Class', 3, 'CEC', NULL, 'EDUC1210', 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('3f9505dc-9086-4803-afe0-3f9f1bf653b4', 'EDUC1102', 'Nature of the Learner', 4, 'CEC', NULL, NULL, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('7360460b-ec52-4c0f-8e22-418e4aced9e2', 'BIOL2216', 'Human Anatomy & Physiology 2', 3, 'CEC', NULL, 'BIOL2114', 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
@@ -6281,24 +6303,40 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
   CONSTRAINT `fk_login_attempts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.login_attempts: ~17 rows (approximately)
+-- Dumping data for table sims.login_attempts: ~32 rows (approximately)
 INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `ip_address`, `attempted_at`) VALUES
+	('5fc9eaa8-a8c2-47a3-be5b-16e4508b7fa5', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 14:38:59'),
+	('cf7e8288-2db5-43fa-9e44-1fb6ab1b08b6', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:45:07'),
 	('7e309cdd-a782-4394-a940-2af0dfb8bd77', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-25 04:15:04'),
 	('3f455c1e-a684-4e76-a317-3801de41d696', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:34:00'),
+	('71c811fb-a313-406e-8b21-4185e2c9b240', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 04:44:18'),
 	('ff045f38-3bbd-4139-9f38-4bc879eab440', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:13:07'),
+	('2987027b-bb62-4321-9c12-5ec06a2be7ff', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:43:28'),
 	('c8a556c9-59a9-43fd-bc1a-6010b572fb45', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:14:04'),
 	('68f17923-bc8b-4e68-b16a-68c848e5533f', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:30:37'),
 	('6c8912a1-8d21-42b8-aa5e-6a3789ae9721', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, '::ffff:127.0.0.1', '2026-08-23 18:02:52'),
+	('f207b1ad-bbde-45fe-8b76-72a813681878', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:47:53'),
 	('33718888-da6a-4475-9b01-7beb67051fbb', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-23 17:22:44'),
 	('7b0405e7-15ed-4a93-aeb3-83c661038dc8', 'art.hdz25@gmail.com', '8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 0, '::ffff:127.0.0.1', '2026-08-23 19:50:55'),
+	('f23a177f-e954-439c-9080-8b6633a95b89', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 0, '::ffff:127.0.0.1', '2026-08-28 14:38:46'),
+	('a256f766-2655-4aed-a9e8-98b6a9a17251', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 15:50:46'),
+	('71aaed36-6f00-4ea9-a501-a2c3a8c82cac', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 15:32:03'),
+	('6b2ab4df-e4c9-4ab2-8843-b2a8b7767f1b', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 14:39:55'),
 	('1bdd79f3-27dc-40ac-b958-b789a2b548c1', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:29:38'),
 	('6142f457-8843-4a18-b8c8-b9e3339062b0', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 17:22:53'),
 	('c4dd698f-074a-44df-8a95-be40f4df32aa', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 19:51:05'),
 	('fd517a5e-e80a-4f73-85be-bf99959b6991', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 02:59:12'),
+	('4f77a123-dbfc-45af-91fb-c05c19b9f07a', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-28 17:44:06'),
 	('30c06241-30d6-4dab-a90e-c6ade4278f90', 'art.hdz25@gmail.com', '8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 0, '::ffff:127.0.0.1', '2026-08-23 19:50:43'),
+	('cbf7d496-036c-402b-acc5-ce0fad35250f', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 04:47:24'),
+	('a29f1a91-6285-4d06-b6f6-cf938b232dcf', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:51:32'),
+	('9944ddb1-bfbe-43f7-b4a7-d278a60890a1', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 17:44:11'),
+	('28281990-f784-4f4c-891a-d6f57424cac8', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 03:57:12'),
 	('c1dc7263-2cee-4669-bdd8-e839682a38c4', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:31:56'),
 	('6e7bda08-3343-4aad-ade0-f2c2e976f72b', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-27 06:23:22'),
 	('7c356c86-9843-49ca-9496-f4cf4af39f54', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 14:57:32'),
+	('ad517bcb-0dde-4e3a-a587-f7a8b4ba620a', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 04:50:58'),
+	('da8623f0-6e42-4eca-8511-f92d4439b5f5', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 14:40:29'),
 	('40d9e349-c8f4-45df-a912-fd986fac2d7d', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:15:06');
 
 -- Dumping structure for table sims.password_reset_tokens
@@ -6592,6 +6630,29 @@ INSERT INTO `program_courses` (`id`, `program_id`, `course_id`, `term_label`, `t
 	('badb53bf-ee12-47ef-952f-fe1a50dd21fb', 'c32f920e-1d87-4dcf-b916-d59afc647dee', '1f79b788-54e8-4537-b26f-47a8b1f83278', 'Semester 1', 2, 1, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('2c93bfdb-39b3-4fbf-a169-fea1938c902f', 'bc3287e0-14cb-461d-9d8c-2dbb23592bb1', '1715e1d7-6323-4e08-9c45-04c0de0bb35c', 'Semester 3', 4, 1, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL);
 
+-- Dumping structure for table sims.program_heads
+CREATE TABLE IF NOT EXISTS `program_heads` (
+  `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
+  `program_id` uuid NOT NULL COMMENT 'FK -> programs. The unit being headed.',
+  `teacher_id` uuid NOT NULL COMMENT 'FK -> teacher_profiles. The lecturer heading it.',
+  `appointed_at` datetime NOT NULL DEFAULT current_timestamp() COMMENT 'When the appointment took effect. Display/audit only - scope is not time-sliced.',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp() COMMENT 'NULL until edited - the 015 convention.',
+  `created_by` uuid DEFAULT NULL,
+  `updated_by` uuid DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_program_heads` (`program_id`,`teacher_id`),
+  KEY `ix_program_heads_teacher` (`teacher_id`),
+  KEY `fk_program_heads_created_by` (`created_by`),
+  KEY `fk_program_heads_updated_by` (`updated_by`),
+  CONSTRAINT `fk_program_heads_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_program_heads_program` FOREIGN KEY (`program_id`) REFERENCES `programs` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_program_heads_teacher` FOREIGN KEY (`teacher_id`) REFERENCES `teacher_profiles` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_program_heads_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='Head of Department appointments: lecturer <-> programme, many-to-many (D43).';
+
+-- Dumping data for table sims.program_heads: ~1 rows (approximately)
+
 -- Dumping structure for table sims.programs
 CREATE TABLE IF NOT EXISTS `programs` (
   `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
@@ -6627,7 +6688,7 @@ INSERT INTO `programs` (`id`, `code`, `name`, `award`, `total_credits`, `min_pas
 	('aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'BMAD', 'Business Management', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-25 05:22:42', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('72d40672-f70d-40ef-833d-9d49e44faeb1', 'RELG', 'Religion', 'Associate of Arts', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
 	('c36f18d9-581c-404c-9794-9fac31d36cbe', 'ICTS', 'Information Tech', NULL, 87, 2.50, 1, NULL, '2026-08-28 03:00:29', '2026-08-28 03:00:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('6229e7e2-7b97-4885-963c-b6c277229ae8', 'AGRI', 'Applied Agriculture', 'Associate of Science', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('6229e7e2-7b97-4885-963c-b6c277229ae8', 'AGRI', 'Applied Agriculture', 'Associate of Science', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-28 15:51:54', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('c32f920e-1d87-4dcf-b916-d59afc647dee', 'MATH', 'Mathematics', 'Associate of Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL);
 
 -- Dumping structure for table sims.refresh_sessions
@@ -6650,28 +6711,45 @@ CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   CONSTRAINT `fk_refresh_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.refresh_sessions: ~21 rows (approximately)
+-- Dumping data for table sims.refresh_sessions: ~38 rows (approximately)
 INSERT INTO `refresh_sessions` (`id`, `user_id`, `token_hash`, `issued_at`, `last_used_at`, `expires_at`, `is_revoked`, `revoked_at`, `user_agent`, `ip_address`, `created_at`, `updated_at`) VALUES
 	('66cae009-144c-41eb-b22b-0b0dbcd3bf5b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'bd2ba70e5d9719e5e2689c15bd389872cda21be9fe4108d3fa581650494e26d6', '2026-08-28 02:59:12', '2026-08-28 02:59:12', '2026-09-04 02:59:12', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 02:59:12', NULL),
 	('340dab0f-1bbd-4baf-a36b-2382d097fe45', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0055eae446c7ab315a7682b792f27f5ef3cba685a00c065238f49ee8fe7e653d', '2026-08-23 19:51:05', '2026-08-23 19:51:05', '2026-08-30 19:51:05', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 19:51:05', '2026-08-23 19:51:05'),
 	('13eae27b-e3e0-4dd4-9c06-34f6f6c40a4c', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '0a53f122bc73fa6904226ddb3d4b17dbdbc6a0fcf404b6cb11bc4eac01b9b8b1', '2026-08-21 03:13:07', '2026-08-21 03:13:07', '2026-08-28 03:13:07', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:13:07', '2026-08-23 18:03:11'),
 	('109c1072-a98a-46be-b240-35e1487bf391', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '67a3c0c47cc9752e05ecaff91a983f4fe6920e32dcb8534dbfa7b3b2cfcc625c', '2026-08-23 14:57:32', '2026-08-23 14:57:32', '2026-08-30 14:57:32', 1, '2026-08-23 15:12:55', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 14:57:32', '2026-08-23 15:12:55'),
+	('f688d3f2-da40-460c-9b3a-36eace769c78', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '7ea07b18555a3f40476ea93eaa3ef137cddf4bd0c612bc7eb6fd9ba4bdaf23e8', '2026-09-03 04:45:07', '2026-09-03 04:45:07', '2026-09-10 04:45:07', 1, '2026-09-03 04:47:10', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:45:07', '2026-09-03 04:47:10'),
 	('021301b5-e784-4bd5-b067-36fcd3f42f81', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '18124020ab4cc6bea72295474ca9dabeb5249e4ebab2507a0ca41e5a6d1d6f6f', '2026-08-27 06:23:22', '2026-08-27 06:23:22', '2026-09-03 06:23:22', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-27 06:23:22', '2026-08-27 06:23:22'),
 	('dc89a1fd-b96f-4317-9593-48bbaced85ef', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'a022cb624a5c46f01e35d718d6d7a32e6a56fda2f95d2aa08bf0fc1e5cba55bb', '2026-08-23 15:43:29', '2026-08-23 15:43:29', '2026-08-30 15:43:29', 1, '2026-08-23 15:44:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:43:29', '2026-08-23 15:44:17'),
 	('9d79b603-6696-4d65-942d-4f31a9d3998a', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '34122bc2730f56f66289e08fcd8c72abd243ebd8da029284675d2f000228a5a0', '2026-08-23 15:14:54', '2026-08-23 15:14:54', '2026-08-30 15:14:54', 1, '2026-08-23 15:16:20', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:14:54', '2026-08-23 15:16:20'),
 	('71056b5d-1de3-41ab-811a-55e3dbaa49cd', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'b173b633835e96e73d6545327d1924a19bb5b54b97f2b374e25fb2b81f2a0da3', '2026-08-21 03:14:04', '2026-08-21 03:14:04', '2026-08-28 03:14:04', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:14:04', '2026-08-23 18:03:11'),
+	('6b9aca06-a3d9-4510-9d6d-59bfc0bbe36f', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'be4484ccbe8075c2e2f48bd1e9f4269adc255c8e29c4d5597891db3b09b21d5b', '2026-09-03 03:57:12', '2026-09-03 03:57:12', '2026-09-10 03:57:12', 1, '2026-09-03 03:57:31', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 03:57:12', '2026-09-03 03:57:31'),
+	('6a62784d-9891-46db-8541-5c22af00e8ed', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '2e0a390b02c71ca26771e9174b0c33df232fef78ea98b4fb839f534dbc38b4ae', '2026-08-28 14:40:29', '2026-08-28 14:40:29', '2026-09-04 14:40:29', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:40:29', NULL),
 	('2270e7ec-a8d0-491a-9675-77d54126c0c0', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '364b217e7b112cc9ed9d63f0eaa35620255dda2c1099912ffb3669b3d02c5a61', '2026-08-21 03:15:06', '2026-08-21 03:15:06', '2026-08-28 03:15:06', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:15:06', '2026-08-23 18:03:11'),
+	('6a6a5ee1-6389-44c9-bf4d-815a2e7aac96', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '06ff96f40bf696a4676d433b5018347564c5465a8ec32eb06e2420ef5b5829bb', '2026-08-28 17:44:11', '2026-08-28 17:44:11', '2026-09-04 17:44:11', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 17:44:11', NULL),
 	('ad97abbc-4ac6-4819-9f5c-8334aad52ad2', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '6a6fa3b40a3e2ad46491baa46af4817a8106b9a8c2c804833c0870198778683c', '2026-08-25 04:42:19', '2026-08-25 04:42:19', '2026-09-01 04:42:19', 1, '2026-08-25 04:59:43', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:42:19', '2026-08-25 04:59:43'),
 	('e0e4efb6-9394-40b8-842f-83d8f46953fd', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '879c8a8f1676a67454323107d2ff256159a757b201461e0ad31cbcb285afe12c', '2026-08-23 16:12:40', '2026-08-23 16:12:40', '2026-08-30 16:12:40', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 16:12:40', '2026-08-23 16:12:40'),
+	('ee189e31-ca17-40a2-9d9b-86c3f1bc0c0d', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'f96d5fef222d9472279157ba6d08647b99a567b79cf22dc64465bd2111f5960b', '2026-09-03 04:47:53', '2026-09-03 04:47:53', '2026-09-10 04:47:53', 1, '2026-09-03 04:48:01', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:47:53', '2026-09-03 04:48:01'),
 	('b687fc84-4b35-4b52-8470-95b7351ce032', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '46eed42248b0ed5b0819fbaaa520fe1c894f6c37b0eb5f71d124993e7710ff57', '2026-08-25 04:39:16', '2026-08-25 04:39:16', '2026-09-01 04:39:16', 1, '2026-08-25 04:42:19', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:39:16', '2026-08-25 04:42:19'),
+	('f0f27417-522f-4c22-bc8e-95f5792b018e', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'b37fa01f189618ea5d90fc5519d0d20eca36ac6ba8a4c3def699b50b9c9bbf1d', '2026-09-03 04:47:24', '2026-09-03 04:47:24', '2026-09-10 04:47:24', 1, '2026-09-03 04:47:43', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:47:24', '2026-09-03 04:47:43'),
+	('9f37cb4a-5fe9-4a45-b0b5-a21b32a61588', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '32e3ef81d1dbb0cde4db4dac4eefb93781b654ecc1795f1c56006db528166826', '2026-09-03 04:44:18', '2026-09-03 04:44:18', '2026-09-10 04:44:18', 1, '2026-09-03 04:44:50', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:44:18', '2026-09-03 04:44:50'),
+	('176eaff6-4abe-4a00-a236-a470192b0d1e', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '6c409d2569474682fa9f02243aadc4170b13e3a9e1cbaead841790cd2c391438', '2026-08-28 15:32:03', '2026-08-28 15:32:03', '2026-09-04 15:32:03', 1, '2026-08-28 15:35:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 15:32:03', '2026-08-28 15:35:17'),
 	('78cf3450-27de-4986-839e-a4e86f655d1b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '4c28a6e3cb6be1ea8e360789d4b51e935eaf3805fc3fc7805945c2b6bb2eedbb', '2026-08-23 15:16:20', '2026-08-23 15:16:20', '2026-08-30 15:16:20', 1, '2026-08-23 15:28:10', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:16:20', '2026-08-23 15:28:10'),
+	('b2dfc422-33bf-4051-8a03-ac5290e357f5', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '8baa4ce4b0617df8457263a03d7806b639b9cb3d8246958e05cc818b6865ab5a', '2026-09-03 04:39:17', '2026-09-03 04:39:17', '2026-09-10 04:39:17', 1, '2026-09-03 04:43:18', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:39:17', '2026-09-03 04:43:18'),
 	('10f16d6f-fb10-43ab-bfa3-bd1eea66e300', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'e470249ef32d817a03e660547f25d7c428d9862bb3e19e5c5c5246ec34fffe92', '2026-08-23 15:12:55', '2026-08-23 15:12:55', '2026-08-30 15:12:55', 1, '2026-08-23 15:14:54', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:12:55', '2026-08-23 15:14:54'),
 	('21d19754-81d7-4764-b3fc-c1e409adb7c9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '89fa8e2611a74e830a28ce8bfd7d212cdef80762fe917d98b41a0a829d13cd62', '2026-08-25 05:22:35', '2026-08-25 05:22:35', '2026-09-01 05:22:35', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 05:22:35', '2026-08-25 05:22:35'),
+	('7169a8d6-9f20-433f-8876-c92194937969', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '9a6dbd4e307f16368f25a158e74a84fc550ac9923a61d7835274013dfc940c01', '2026-08-28 15:50:46', '2026-08-28 15:50:46', '2026-09-04 15:50:46', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 15:50:46', NULL),
+	('f869a082-2736-4a37-b8d6-cda49f416da4', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '7883fa8913e11cba4ffdf7fad49b66ee7fd737e157d9d00ffa633da6a9e4c1a5', '2026-09-03 04:14:17', '2026-09-03 04:14:17', '2026-09-10 04:14:17', 1, '2026-09-03 04:39:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:14:17', '2026-09-03 04:39:17'),
 	('85f9647e-e62f-4708-ad34-cfbb9e92d5d9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '4117b10d267d8d10de9f2899fb270bb32ab74ae5a09b6fd5b012c3b0c19d000c', '2026-08-23 17:22:53', '2026-08-23 17:22:53', '2026-08-30 17:22:53', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 17:22:53', '2026-08-23 17:22:53'),
 	('b7606fec-8115-49ee-b37f-d02223d6967b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '469f0acb8931450283aeaab4da8b3463fad4adc1c66401652e98748667b4fdce', '2026-08-25 04:15:04', '2026-08-25 04:15:04', '2026-09-01 04:15:04', 1, '2026-08-25 04:39:16', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:15:04', '2026-08-25 04:39:16'),
 	('eb1162a7-ce44-49f1-933b-d12aa9367f18', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'f437b6eb07d4328135c1a1c5ed1bf633ecf502414d3d922e936b4fd6385e4884', '2026-08-23 15:44:17', '2026-08-23 15:44:17', '2026-08-30 15:44:17', 1, '2026-08-23 16:12:40', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:44:17', '2026-08-23 16:12:40'),
+	('b505f95e-1342-4077-b60a-d3b12672f129', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '6b45f53f8120239e30ad8c54edf839a60a422d871b6a4c73e4ac3c39574ef877', '2026-09-03 04:50:58', '2026-09-03 04:50:58', '2026-09-10 04:50:58', 1, '2026-09-03 04:51:19', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:50:58', '2026-09-03 04:51:19'),
+	('64b21893-5328-4b68-94b2-d4c7bdbad7d9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0e23bfc02a298df27f901642743fb7807e7dae7358f66a3cb9170ee07eba2d1b', '2026-08-28 14:39:55', '2026-08-28 14:39:55', '2026-09-04 14:39:55', 1, '2026-08-28 14:40:21', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:39:55', '2026-08-28 14:40:21'),
 	('9bd01363-3627-4b8e-adfc-e4878382f2c9', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'e5045e4ba12b2d4f69479256fbf85968107b623e1337e009472062fa66d6b2f5', '2026-08-23 18:02:52', '2026-08-23 18:02:52', '2026-08-30 18:02:52', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 18:02:52', '2026-08-23 18:02:52'),
 	('c5934e5f-6fb0-481e-8ebe-e4a43cd2a3e4', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'c8b4e148fca51db883d795622cfcead1cfc53205084d146fa72fecafe9354f7f', '2026-08-25 04:59:43', '2026-08-25 04:59:43', '2026-09-01 04:59:43', 1, '2026-08-25 05:22:35', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:59:43', '2026-08-25 05:22:35'),
+	('f870bd85-7871-4030-b6bb-f2a70c3b9258', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '18630e9d8e712db8fd2be1bc96d8f86a09d34308d66eb74f5bb627737c480a8d', '2026-09-03 04:51:32', '2026-09-03 04:51:32', '2026-09-10 04:51:32', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:51:32', NULL),
+	('e252ce56-411c-48e1-aca4-f6804c0dd75d', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'ecc9244ab5a355033edbd7c1310e7959fd91eadbda53532e5d24af82cda70290', '2026-09-03 04:43:28', '2026-09-03 04:43:28', '2026-09-10 04:43:28', 1, '2026-09-03 04:44:06', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:43:28', '2026-09-03 04:44:06'),
+	('4ca3d2cd-0286-436e-8fb3-fb92a1235c3e', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'e0cb102f2aaaabba8343b89a1487c1637243f2a448b35476c4868619f48d141b', '2026-09-03 03:57:31', '2026-09-03 03:57:31', '2026-09-10 03:57:31', 1, '2026-09-03 04:14:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 03:57:31', '2026-09-03 04:14:17'),
+	('9a95a63f-6ea0-4637-b197-fc141c639b92', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '2758c0b04a6e691c67d877501431eea95f8f8704a431bb1e57b7e3477586eae3', '2026-08-28 14:38:59', '2026-08-28 14:38:59', '2026-09-04 14:38:59', 1, '2026-08-28 14:39:48', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:38:59', '2026-08-28 14:39:48'),
 	('01b65d1b-b15d-4981-b9ed-fe291a30d9f6', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '3b1f79b9d1bdadb054f956ec7ec06fc45ca0cdbde0172b419e9405c5ef88a073', '2026-08-23 15:28:10', '2026-08-23 15:28:10', '2026-08-30 15:28:10', 1, '2026-08-23 15:43:29', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:28:10', '2026-08-23 15:43:29');
 
 -- Dumping structure for table sims.religions
@@ -6684,7 +6762,7 @@ CREATE TABLE IF NOT EXISTS `religions` (
   `editedby` varchar(50) DEFAULT NULL,
   `editedon` datetime DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='D39 (Meeting #2 item 8). Read-only vocabulary for the Religion dropdown. Client-owned; NOT referenced by a FK - student_profiles.religion stays free text.';
+) ENGINE=InnoDB AUTO_INCREMENT=45 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='D39 (Meeting #2 item 8). Read-only vocabulary for the Religion dropdown. Client-owned; NOT referenced by a FK - student_profiles.religion stays free text.';
 
 -- Dumping data for table sims.religions: ~2 rows (approximately)
 INSERT INTO `religions` (`id`, `name`, `code_name`, `createdon`, `createdby`, `editedby`, `editedon`) VALUES
@@ -6912,7 +6990,7 @@ CREATE TABLE IF NOT EXISTS `student_profile_temp` (
   CONSTRAINT `ck_apptemp_documents_json` CHECK (`documents_json` is null or json_valid(`documents_json`))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.student_profile_temp: ~0 rows (approximately)
+-- Dumping data for table sims.student_profile_temp: ~1 rows (approximately)
 
 -- Dumping structure for table sims.student_profiles
 CREATE TABLE IF NOT EXISTS `student_profiles` (
@@ -7241,7 +7319,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` varchar(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Login identifier; case-insensitive unique',
   `username` varchar(100) DEFAULT NULL COMMENT 'Optional alternate login',
   `password_hash` text NOT NULL COMMENT 'Argon2id hash only; never plaintext',
-  `role` enum('principal','secretary','teacher','student') NOT NULL COMMENT 'principal / secretary / teacher / student',
+  `role` enum('principal','secretary','teacher','student','hod','auditor') NOT NULL COMMENT 'principal / secretary / teacher / student / hod / auditor',
   `full_name` varchar(200) NOT NULL COMMENT 'Display name',
   `is_active` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Disabled accounts cannot log in',
   `must_change_password` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Forces change on first login / admin reset',
@@ -7274,14 +7352,14 @@ INSERT INTO `users` (`id`, `email`, `username`, `password_hash`, `role`, `full_n
 	('9167ab7e-9fa6-5f2d-914b-318f6733b3d6', 'egbert.grinage@belmopancomp.edu.bz', 'egbert.grinage', '$argon2id$v=19$m=65536,t=3,p=4$MqV7KlSmxWEABLBToeZOCQ$iPlubPuGclVA7YyQ/v1t35z5QDhvCrVENjtmgXVA1Ek', 'teacher', 'Egbert Grinage', 1, 1, 0, NULL, '2025-10-15 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('4d257b0f-37b8-54d0-97c9-3395d4f36635', 's-25002@student.belmopancomp.edu.bz', 's-25002', '$argon2id$v=19$m=65536,t=3,p=4$KUfjccVwlSOIx60AYpcy2g$RP2pkbH7w3PmArjEur6FoYLp6Le1jpfpcX2W7FicZUw', 'student', 'John Garcia', 1, 1, 0, NULL, '2025-10-08 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('57eb7c25-18b2-5789-a329-39a99e277c9a', 'alicia.cano@belmopancomp.edu.bz', 'alicia.cano', '$argon2id$v=19$m=65536,t=3,p=4$fP6f/MmEx2KA5Wee52ytTg$uA8G/+R6Aqb70HsZ6H0sXReoLWKTT8JtU8WVVZqGqX8', 'teacher', 'Alicia Cano', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-08-28 02:59:12', NULL, '2026-08-20 08:24:23', '2026-08-28 02:59:12', NULL, NULL),
+	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-09-03 04:50:58', NULL, '2026-08-20 08:24:23', '2026-09-03 04:50:58', NULL, NULL),
 	('7f80de88-8724-590b-a2be-5b94dc0b72af', 'kayla.waight@belmopancomp.edu.bz', 'kayla.waight', '$argon2id$v=19$m=65536,t=3,p=4$p9tc+xIxD/oOVguRDMWgBw$lkh3vtr/nRZEFZJedEiBvUUhnTRJ3O3Z9kpbEQnQj/s', 'teacher', 'Kayla Waight', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('e485d3ff-0e08-5ebc-b2f4-62a1a9b3031a', 's-25006@student.belmopancomp.edu.bz', 's-25006', '$argon2id$v=19$m=65536,t=3,p=4$+6vZgd4IqdaGSW9wS0DsjA$4mq2pTFQA0uhKORL9U+O+Mgmo6T8HBhNIvfVu5cXq54', 'student', 'Marco Cacho', 1, 1, 0, NULL, '2025-10-13 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 'art.hdz25@gmail.com', NULL, '$argon2id$v=19$m=65536,t=3,p=4$7D2fZT1Eab2riyMzTJBjBQ$dH0JeEbDzIfGcNEzv4eJtkW2X/dgkbn53rXrDHj7bXM', 'student', 'Arturo Hernandez', 1, 1, 2, NULL, NULL, NULL, '2026-08-23 15:10:54', '2026-08-23 19:50:55', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('7159eeb6-f02d-5379-86d6-82fe757f5f20', 's-25001@student.belmopancomp.edu.bz', 's-25001', '$argon2id$v=19$m=65536,t=3,p=4$51CdGN53bq0rGqg6P5cmEA$vyCIQ/81hUWREABpnq90ScPNo2HSOnKyWurMpETLxkQ', 'student', 'Freddy Lopez', 1, 1, 0, NULL, '2025-10-09 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('ead1c01b-c10d-514c-92d4-88045472a984', 'marlon.pou@belmopancomp.edu.bz', 'marlon.pou', '$argon2id$v=19$m=65536,t=3,p=4$1TKacUQm2e1/gDkXT/9dlA$iJmRz/NWNDXnjZTQ/d/K4DtHbOcir6EryENJ/g89OQ0', 'teacher', 'Marlon Pou', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('c9661cb4-d005-52c5-9f7e-8ad3fcdb1bbc', 'carlos.mendez@belmopancomp.edu.bz', 'carlos.mendez', '$argon2id$v=19$m=65536,t=3,p=4$N8gdp+RpZhHjQlTu11pg4A$0aU+VNjiVF80ViUBFwUbQUj1jU0ITG/CL7WVwSHbfRo', 'teacher', 'Carlos Mendez', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('d87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'maria.reyes@belmopancomp.edu.bz', 'maria.reyes', '$argon2id$v=19$m=65536,t=3,p=4$ipxwGTyMxA4dioWrnlZYPg$PYelLhQQalx5RQJ1vShk0OB48QiO93G2RgDmcGmx+wM', 'teacher', 'Maria Reyes', 1, 1, 0, NULL, '2025-10-13 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('d87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'maria.reyes@belmopancomp.edu.bz', 'maria.reyes', '$argon2id$v=19$m=65536,t=3,p=4$dR8KBf26wUnbqByL3IyqYQ$X+g573C1GA3Z4FM+1EuR0nWZphMmIStSwBHoP+HU8AE', 'auditor', 'Maria Reyes', 1, 0, 0, NULL, '2026-09-03 04:51:32', NULL, '2026-08-20 08:24:23', '2026-09-03 04:51:32', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'secretary@belmopancomp.edu.bz', 'secretary', '$argon2id$v=19$m=65536,t=3,p=4$ovrIjZ25Cn0NWrfleqjMQg$Wdk7JAOZXx75qjHr2DOLdU4hCmJlKGTHV/RF9wX74wo', 'secretary', 'Sofia Castillo', 1, 0, 0, NULL, '2026-08-23 18:02:51', NULL, '2026-08-20 08:24:23', '2026-08-23 18:03:11', NULL, NULL),
 	('bf5e8b60-8758-594e-be41-d6ce2b325038', 'sonia.choc@belmopancomp.edu.bz', 'sonia.choc', '$argon2id$v=19$m=65536,t=3,p=4$eK674/2U1CTPKXMmc76adw$bk0qPltLrHyfoDk3F2sxGjthsijBlsEoBUkaH3+vk9M', 'teacher', 'Sonia Choc', 1, 1, 0, NULL, '2025-10-11 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('3f90c656-a26c-529d-a168-f4e93a71fa0e', 'nadia.rhaburn@belmopancomp.edu.bz', 'nadia.rhaburn', '$argon2id$v=19$m=65536,t=3,p=4$/Qsuk0ttXCUxl3G2bbMAlA$UND3pWANlKkeprgW2zGkWLpJMwdXPPdBU17aXXpsugQ', 'teacher', 'Nadia Rhaburn', 1, 1, 0, NULL, '2025-10-12 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),

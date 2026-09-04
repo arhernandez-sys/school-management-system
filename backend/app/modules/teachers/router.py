@@ -6,6 +6,7 @@ via app/main.py.
 Endpoints:
   GET    /teachers                 P/S/Teacher(RO)  -> Page[TeacherListItem]
   GET    /teachers/{id}            P/S/Teacher(RO)  -> TeacherDetail
+  GET    /teachers/{id}/years       P/S/Teacher(RO)  -> TeacherYearsResponse
   POST   /teachers                 P/S              -> TeacherCreateResponse (201)
   PATCH  /teachers/{id}             P/S              -> TeacherDetail
   POST   /teachers/{id}/status      Principal        -> TeacherDetail
@@ -34,13 +35,18 @@ from app.modules.teachers.schemas import (
     TeacherListItem,
     TeacherStatusRequest,
     TeacherUpdateRequest,
+    TeacherYearsResponse,
 )
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/teachers", tags=["teachers"])
 
 _ERR = {"model": ErrorResponse}
-_read = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
+#: D43 — an HOD must see the lecturers under their programme, which is the whole point
+#: of the role; the Auditor sees the full directory. Neither may edit one (`_manage`).
+_read = require_role(
+    Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER, Role.HOD, Role.AUDITOR
+)
 _manage = require_role(Role.PRINCIPAL, Role.SECRETARY)
 _principal_only = require_role(Role.PRINCIPAL)
 
@@ -58,13 +64,19 @@ def list_teachers(
     specialization: Annotated[str | None, Query(max_length=120)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
-    _caller: User = Depends(_read),
+    caller: User = Depends(_read),
 ) -> Page[TeacherListItem]:
     """Read-only for teachers; students are denied at the gate (403).
 
     `academic_year_id` backs the module's year switcher — a PAST year narrows the
     directory to staff who taught that year; the active year does not filter (see
-    `service.list_teachers`)."""
+    `service.list_teachers`).
+
+    D43 — `caller` is now PASSED (it was `_caller`, deliberately unused). The directory
+    was unscoped for every role that could reach it, which was fine while those roles
+    were Dean/Registrar/Lecturer and all three are meant to see the whole staff list. An
+    HOD is the first caller here who must see a SUBSET, so the service needs to know who
+    is asking."""
     return service.list_teachers(
         db,
         params=params,
@@ -72,21 +84,47 @@ def list_teachers(
         status=status_filter,
         specialization=specialization,
         academic_year_id=academic_year_id,
+        caller=caller,
     )
+
+
+@router.get(
+    "/{teacher_id}/years",
+    response_model=TeacherYearsResponse,
+    summary="Academic years this lecturer taught in (P/S/Teacher RO; D42 §2)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def list_teacher_years(
+    teacher_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _caller: User = Depends(_read),
+) -> TeacherYearsResponse:
+    """Backs the year switcher on the lecturer profile — only the years the lecturer
+    actually has an assignment in, newest first.
+
+    **Declared BEFORE `/{teacher_id}`.** FastAPI matches routes in declaration order, and
+    the bare path would otherwise swallow `years` as a teacher id and answer 422."""
+    service.get_teacher(db, teacher_id=teacher_id)  # 404s an unknown/deleted lecturer
+    return service.teacher_years(db, teacher_id=teacher_id)
 
 
 @router.get(
     "/{teacher_id}",
     response_model=TeacherDetail,
     summary="Teacher detail (P/S/Teacher RO; api-spec §5.4)",
-    responses={401: _ERR, 403: _ERR, 404: _ERR},
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def get_teacher(
     teacher_id: uuid.UUID,
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     _caller: User = Depends(_read),
 ) -> TeacherDetail:
-    return service.get_teacher(db, teacher_id=teacher_id)
+    """`academic_year_id` scopes `classes_taught` to that year (D42 §2, the profile's
+    year switcher). Omitted, every assignment the lecturer holds comes back."""
+    return service.get_teacher(
+        db, teacher_id=teacher_id, academic_year_id=academic_year_id
+    )
 
 
 @router.post(

@@ -35,6 +35,7 @@ Endpoints (all mount under `/api/v1` via app/main.py):
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
@@ -47,6 +48,7 @@ from app.core.pagination import PageParams, page_params
 from app.modules.settings import service
 from app.modules.settings.schemas import (
     AccountUpdateRequest,
+    AuditLogItem,
     ActiveTerm,
     AcademicYearCreateRequest,
     AcademicYearDetail,
@@ -79,7 +81,49 @@ _ERR = {"model": ErrorResponse}
 
 # Reusable role-gate dependencies (api-spec §3.4 permission matrix).
 _principal = require_role(Role.PRINCIPAL)
-_principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY)
+#: D43 — the Auditor is added for READ reach; the writes on this gate stay closed to
+#: them by the central read-only refusal, so the tuple does not need splitting.
+_principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
+
+
+# ── Audit log (D43) ─────────────────────────────────────────────────────────────
+#: Dean + Auditor. NOT the Registrar: the trail records what the Registrar did, and a
+#: records clerk reading their own audit history is a different decision from letting
+#: them keep records. Deliberately its own gate rather than reusing
+#: `_principal_or_secretary`.
+_audit_readers = require_role(Role.PRINCIPAL, Role.AUDITOR)
+
+
+@router.get(
+    "/audit-log",
+    response_model=Page[AuditLogItem],
+    summary="Sensitive-action audit trail, newest first (Dean + Auditor; D43)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_audit_log(
+    params: PageParams = Depends(page_params),
+    action: Annotated[str | None, Query(max_length=120)] = None,
+    entity_type: Annotated[str | None, Query(max_length=60)] = None,
+    actor_user_id: Annotated[uuid.UUID | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    db: Session = Depends(get_db),
+    _user: User = Depends(_audit_readers),
+) -> Page[AuditLogItem]:
+    """The log every module has written to since day one and nothing has ever read.
+
+    Read-only by construction — there is no companion write endpoint, and adding one
+    would defeat the point of an append-only trail. `date_to` is inclusive of that day.
+    """
+    return service.list_audit_log(
+        db,
+        params=params,
+        action=action,
+        entity_type=entity_type,
+        actor_user_id=actor_user_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
 
 # ── School profile / branding ───────────────────────────────────────────────────

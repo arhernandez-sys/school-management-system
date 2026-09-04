@@ -25,6 +25,7 @@ import { strings } from '@i18n/strings';
 import { useOfferingOptions } from './hooks/useGrades';
 import { OfferingGradesScreen } from './OfferingGradesScreen';
 import type { OfferingOption } from './types';
+import { isLecturerRole } from '@shared/auth/permissions';
 
 const OFFERING_PARAM = 'offering_id';
 
@@ -43,7 +44,7 @@ const OFFERING_PARAM = 'offering_id';
  */
 export function GradeAssessmentsScreen() {
   const { user } = useAuth();
-  const isTeacher = user?.role === 'teacher';
+  const isTeacher = isLecturerRole(user?.role); // D43 — an HOD is a lecturer
   // The Dean and Registrar browse every offering school-wide, so they get Lecturer/Term
   // narrowing. A lecturer sees only their own, where these would be noise.
   const showBrowseFilters = user?.role === 'principal' || user?.role === 'secretary';

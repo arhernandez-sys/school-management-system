@@ -7,7 +7,9 @@ import {
   getSemester,
   getTeacher,
   listTeachers,
+  demoHodTeacherIds,
   offeringLabel,
+  offeringsForYear,
   offeringsOwnedByTeacher,
   rosterFor,
 } from '@shared/api/mocks/demo/dataset';
@@ -20,7 +22,9 @@ import { errorResponse, listParamsFrom } from './_helpers';
  * Backs the Teachers directory + detail + admin CRUD entirely against the shared
  * in-memory dataset (no backend). Response shapes mirror api-spec §5.4:
  *  - GET    /teachers            → Page[TeacherListItem]  (search + status + specialization)
- *  - GET    /teachers/{id}       → TeacherDetail          (profile + classes_taught + audit)
+ *  - GET    /teachers/{id}       → TeacherDetail          (profile + classes_taught + audit;
+ *                                  `?academic_year_id=` scopes classes_taught — D42 §2)
+ *  - GET    /teachers/{id}/years → {items: TeacherYear[]}  (years this lecturer taught in)
  *  - POST   /teachers            → TeacherDetail (201); optional create_login returns the
  *                                  one-time temporary_password on the wrapper envelope.
  *  - PATCH  /teachers/{id}       → TeacherDetail          (benign profile edits)
@@ -96,6 +100,36 @@ function toClassTaught(offering: DemoOffering, teacherId: string) {
   };
 }
 
+/**
+ * The offerings this lecturer teaches, optionally narrowed to ONE academic year (D42 §2).
+ *
+ * Reaches the year through the offering's semester, like `offeringsForYear` does — an
+ * offering carries no year of its own since D31.
+ */
+function offeringsTaught(teacherId: string, yearId?: string | null): DemoOffering[] {
+  const owned = offeringsOwnedByTeacher(teacherId);
+  if (!yearId) return owned;
+  const inYear = new Set(offeringsForYear(yearId).map((o) => o.id));
+  return owned.filter((o) => inYear.has(o.id));
+}
+
+/**
+ * The academic years this lecturer actually has an assignment in, newest first.
+ *
+ * Only the years they taught, never the school's whole calendar: a switcher position with
+ * nothing behind it reads as a broken screen rather than as a scoping rule. Mirrors
+ * `teachers/service.teacher_years`.
+ */
+function yearsTaughtBy(teacherId: string) {
+  const semesterIds = new Set(offeringsOwnedByTeacher(teacherId).map((o) => o.semester_id));
+  const yearIds = new Set(
+    D.semesters.filter((sem) => semesterIds.has(sem.id)).map((sem) => sem.academic_year_id),
+  );
+  return D.academic_years
+    .filter((y) => yearIds.has(y.id))
+    .sort((a, b) => b.name.localeCompare(a.name));
+}
+
 /** Distinct students across every offering this lecturer teaches. */
 function studentCountForTeacher(teacherId: string): number {
   const ids = new Set<string>();
@@ -105,8 +139,8 @@ function studentCountForTeacher(teacherId: string): number {
   return ids.size;
 }
 
-function toDetail(t: DemoTeacher) {
-  const owned = offeringsOwnedByTeacher(t.id);
+function toDetail(t: DemoTeacher, yearId?: string | null) {
+  const owned = offeringsTaught(t.id, yearId);
   return {
     id: t.id,
     user_id: t.user_id,
@@ -164,23 +198,45 @@ let teacherSeq = 100;
 
 export const teachersHandlers = [
   // GET /teachers — searchable directory (Page[TeacherListItem]). Teacher = RO; Student → 403.
-  http.get(`${API_BASE_URL}/teachers`, ({ request }) => {
+  http.get(`${API_BASE_URL}/teachers`, ({ request, cookies }) => {
     const url = new URL(request.url);
+    // D43 — the directory was unscoped for every role that could reach it, which was
+    // right while those were Dean / Registrar / Lecturer. An HOD is the first caller
+    // who must see a SUBSET, so the handler now reads the session like the others do.
+    const role = cookies['sis_mock_session'] ?? 'principal';
     const page = listTeachers({
       ...listParamsFrom(url),
       status: url.searchParams.get('status'),
       specialization: url.searchParams.get('specialization'),
       // Per-module year switcher: restrict to teachers assigned in the chosen year.
       academic_year_id: url.searchParams.get('academic_year_id'),
+      teacher_ids: role === 'hod' ? demoHodTeacherIds(role) : null,
     });
     return HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),
 
-  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
-  http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
+  // GET /teachers/{id}/years — the academic years this lecturer taught in (D42 §2).
+  // Declared BEFORE the bare `/teachers/:teacherId` for the same reason the router
+  // declares it first: a reader scanning this list should see the specific path win.
+  http.get(`${API_BASE_URL}/teachers/:teacherId/years`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
-    return HttpResponse.json(toDetail(teacher));
+    return HttpResponse.json({
+      items: yearsTaughtBy(teacher.id).map((y) => ({
+        id: y.id,
+        name: y.name,
+        status: y.status,
+      })),
+    });
+  }),
+
+  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
+  // `?academic_year_id=` scopes `classes_taught` to that year (D42 §2).
+  http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params, request }) => {
+    const teacher = resolveTeacher(String(params.teacherId));
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
+    const yearId = new URL(request.url).searchParams.get('academic_year_id');
+    return HttpResponse.json(toDetail(teacher, yearId));
   }),
 
   // POST /teachers — create profile; optional create_login provisions a linked account
@@ -194,6 +250,22 @@ export const teachersHandlers = [
       status?: DemoTeacher['status'];
       subject_specializations?: string[] | null;
       create_login?: { email: string; role: 'teacher' } | null;
+      // D40 — the full profile, so the one-screen lecturer form can send everything it
+      // shows. Until now create took six fields and the rest were edit-only, which meant
+      // the Dean typed a hire date into a form that silently dropped it.
+      first_name?: string | null;
+      last_name?: string | null;
+      gender?: DemoTeacher['gender'] | null;
+      bio?: string | null;
+      academic_qualification?: string | null;
+      designation?: string | null;
+      address?: string | null;
+      ssno?: string | null;
+      licensenum?: string | null;
+      hire_date?: string | null;
+      end_date?: string | null;
+      comments?: string | null;
+      expertise?: { area: string; level: number }[] | null;
     };
 
     const staffNumber = (body.staff_number ?? '').trim();
@@ -210,6 +282,14 @@ export const teachersHandlers = [
     const email = (body.email ?? '').trim();
     if (email && D.teachers.some((t) => t.email.toLowerCase() === email.toLowerCase())) {
       return errorResponse(409, 'duplicate_email', 'A lecturer with this email already exists.');
+    }
+    // Mirrors `LICENSE_PATTERN` in teachers/schemas.py, exactly as the PATCH arm below
+    // does. A form that passes here and 422s against the real API is worse than no mock.
+    const licence = (body.licensenum ?? '').trim();
+    if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        licensenum: ['Letters, digits and hyphens only.'],
+      });
     }
 
     teacherSeq += 1;
@@ -252,6 +332,27 @@ export const teachersHandlers = [
       phone: (body.phone ?? '').trim(),
       subject_specializations: body.subject_specializations ?? [],
       status: body.status ?? 'active',
+      // D40 — every optional profile field, stored the way the PATCH arm stores them:
+      // blank becomes `undefined`, so an untouched field reads as absent rather than as
+      // an empty string the profile card would render as a mysteriously blank line.
+      first_name: (body.first_name ?? '').trim() || undefined,
+      last_name: (body.last_name ?? '').trim() || undefined,
+      gender: body.gender ?? undefined,
+      bio: (body.bio ?? '').trim() || undefined,
+      academic_qualification: (body.academic_qualification ?? '').trim() || undefined,
+      designation: (body.designation ?? '').trim() || undefined,
+      address: (body.address ?? '').trim() || undefined,
+      ssno: (body.ssno ?? '').trim() || undefined,
+      licensenum: licence || undefined,
+      hire_date: body.hire_date || undefined,
+      end_date: body.end_date || undefined,
+      comments: (body.comments ?? '').trim() || undefined,
+      expertise: (body.expertise ?? [])
+        .map((e) => ({
+          area: e.area.trim(),
+          level: Math.max(0, Math.min(100, Math.round(e.level))),
+        }))
+        .filter((e) => e.area.length > 0),
     };
     D.teachers.push(created);
 

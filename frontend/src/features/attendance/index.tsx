@@ -6,6 +6,7 @@ import { ROUTES } from '@shared/constants/routes';
 import { AttendanceRegisterScreen } from './screens/AttendanceRegisterScreen';
 import { AttendanceSummaryScreen } from './screens/AttendanceSummaryScreen';
 import { MyAttendanceScreen } from './screens/MyAttendanceScreen';
+import { isLecturerRole } from '@shared/auth/permissions';
 
 /**
  * Attendance module (Phase 7, D-Q4) — a tabbed, nested-routed container mounted at
@@ -32,7 +33,9 @@ export function AttendancePage() {
 
   const role = user?.role;
   const isStudent = role === 'student';
-  const isTeacher = role === 'teacher';
+  // D43 — an HOD records attendance for the offerings they teach, so they need the
+  // Record tab. The server holds them to their own offerings.
+  const isTeacher = isLecturerRole(role);
 
   const tabs = useMemo<AttendanceTab[]>(() => {
     if (isStudent) return [{ label: 'My attendance', path: 'me' }];

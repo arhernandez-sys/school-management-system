@@ -32,6 +32,8 @@ export { ChartWithTable } from './ChartWithTable';
 export type { ChartWithTableProps, ChartDatum } from './ChartWithTable';
 export { CollapsibleSection } from './CollapsibleSection';
 export type { CollapsibleSectionProps } from './CollapsibleSection';
+export { SearchableSelect } from './SearchableSelect';
+export type { SearchableSelectProps, SearchableSelectOption } from './SearchableSelect';
 export { PrintLayout } from './PrintLayout';
 export type { PrintLayoutProps } from './PrintLayout';
 export { DetailTabs } from './DetailTabs';
@@ -47,6 +49,11 @@ export type {
   ProfileStatTileProps,
 } from './ProfileParts';
 export { avatarInitials, avatarAccent, PROFILE_ACCENTS } from './profileIdentity';
+// D42 §6 — the app's only date controls. A native `<input type="date">` renders in the
+// browser's locale and cannot be told to use dd/mm/yyyy, so every one of them was replaced
+// by these two.
+export { DateField, DateTimeField } from './DateField';
+export type { DateFieldProps, DateTimeFieldProps } from './DateField';
 
 // Deferred Phase 7 stub (typed placeholder) — promote when a module needs it.
 export { FormPage } from './stubs';

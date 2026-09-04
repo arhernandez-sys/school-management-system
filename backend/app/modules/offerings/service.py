@@ -46,7 +46,7 @@ from datetime import datetime, time, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role, StudentStatus
+from app.common.enums import LECTURER_ROLES, Role, StudentStatus
 from app.common.schemas import (
     AcademicYearRef,
     AuditStamp,
@@ -58,7 +58,12 @@ from app.common.schemas import (
 )
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
-from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
+from app.core.rbac import (
+    _teacher_profile_id,
+    assert_teacher_owns_offering,
+    hod_offering_ids,
+    hod_program_ids,
+)
 from app.modules.offerings.labels import OFFERING_ORDER, offering_label
 from app.modules.offerings.models import (
     ClassEnrollment,
@@ -132,9 +137,26 @@ def _year_of(db: Session, offering: CourseOffering) -> AcademicYear | None:
     )
 
 
-def _assert_year_writable(db: Session, offering: CourseOffering) -> None:
-    """Reject any write on an offering whose academic year is archived (FR-CLS-06)."""
-    if offering.is_archived:
+def _assert_year_writable(
+    db: Session, offering: CourseOffering, *, allow_archived_offering: bool = False
+) -> None:
+    """Reject a write on an archived offering, or one in an archived year (FR-CLS-06).
+
+    Two separate facts, both refused here and — historically — both reported as
+    `year_archived`. They are not the same thing: the year is a school-wide close-out, the
+    offering flag is a per-offering retirement.
+
+    `allow_archived_offering` exempts the SECOND check only, and exists for exactly one
+    caller: `update_offering`, the endpoint that owns `is_archived`. Without it archiving
+    was a ONE-WAY DOOR — the guard runs before the payload is read, so the PATCH that
+    would clear the flag was refused *because the flag was set*, and an offering archived
+    by mistake could never be restored by any route in the system.
+
+    That went unnoticed because nothing called `PATCH /offerings/{id}` until D41 gave the
+    list an Edit button. The archived-YEAR check is NOT exempted: a closed year stays
+    closed, and restoring an offering inside one is still a write into a sealed year.
+    """
+    if offering.is_archived and not allow_archived_offering:
         raise Conflict("This offering's year is archived.", code="year_archived")
     year = _year_of(db, offering)
     if year is not None and year.archived_at is not None:
@@ -303,7 +325,11 @@ def _owned_offering_ids(
         return set()
     if caller.role in (Role.PRINCIPAL, Role.SECRETARY):
         return set(offering_ids)
-    if caller.role != Role.TEACHER:
+    # D43 — an HOD falls through to the ownership lookup below, NOT to `set()`. They
+    # teach, so the offerings they hold a `class_teachers` row on are actionable and the
+    # rest of their programme is not. An Auditor takes the `set()` branch and gets
+    # nothing actionable, which is the correct read-only answer.
+    if caller.role not in LECTURER_ROLES:
         return set()
     teacher_id = _teacher_profile_id(db, caller)
     return set(
@@ -666,6 +692,18 @@ def list_offerings(
                 .exists()
             )
             stmt = stmt.where(enrolled)
+    elif caller.role == Role.HOD:
+        # D43 — the head sees every offering of every course in the programme(s) they
+        # head, INCLUDING colleagues' (that is the point of the role) but not other
+        # programmes'. This branch is not optional: without it an HOD falls past every
+        # `elif` and the list is UNSCOPED, i.e. the whole college.
+        #
+        # `hod_offering_ids` returns [] for a head with no appointment yet, and
+        # `in_([])` is the empty set — narrowing, never widening. An unconfigured HOD
+        # sees nothing extra rather than everything.
+        stmt = stmt.where(
+            CourseOffering.id.in_(hod_offering_ids(db, hod_program_ids(db, caller)))
+        )
 
     sort = (params.sort or "label").strip()
     desc = sort.startswith("-")
@@ -694,9 +732,26 @@ def get_offering(db: Session, *, caller: User, offering_id: uuid.UUID):
 
 
 def _assert_caller_can_read(db: Session, caller: User, offering: CourseOffering) -> None:
-    """Dean/Registrar: any. Lecturer: teaches it (else 404). Student: actively enrolled
-    (else 404). No existence leak (§3.3)."""
-    if caller.role in (Role.PRINCIPAL, Role.SECRETARY):
+    """Dean/Registrar/Auditor: any. Lecturer: teaches it (else 404). HOD: teaches it OR
+    it belongs to a programme they head (else 404). Student: actively enrolled (else
+    404). No existence leak (§3.3).
+
+    D43 note: before the Auditor and HOD branches below, both fell past every check to
+    the STUDENT clause and got a 404 on everything — the mirror image of the list, which
+    let them past every clause and showed them everything. The two paths disagreed, and
+    the detail's answer was the wrong one for both roles.
+    """
+    if caller.role in (Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR):
+        return
+    if caller.role == Role.HOD:
+        # Their own offering, or anything in the programme they head. Checked in that
+        # order because a head who also teaches the course should not depend on the
+        # appointment being recorded to reach their own gradebook.
+        if offering.id in set(hod_offering_ids(db, hod_program_ids(db, caller))):
+            return
+        assert_teacher_owns_offering(
+            db, caller, offering.id, message="Offering not found."
+        )
         return
     if caller.role == Role.TEACHER:
         # Same wording as `_offering_or_404`, so "you do not teach it" and "it does
@@ -819,11 +874,31 @@ def create_offering(db: Session, *, actor: User, payload):
 # PATCH /offerings/{id}
 # ══════════════════════════════════════════════════════════════════════════════
 def update_offering(db: Session, *, actor: User, offering_id: uuid.UUID, payload):
-    offering = _offering_or_404(db, offering_id)
-    _assert_year_writable(db, offering)
+    """PATCH /offerings/{id} — section code · capacity · archive.
 
-    if payload.section_code is not None:
-        wanted = payload.section_code.strip() or None
+    **PRESENCE, not truthiness** (D41). Every field here is `X | None`, and until the
+    list's Edit button shipped nothing called this endpoint, so the difference had never
+    been exercised: `if payload.capacity is not None` reads an explicit `null` as "not
+    supplied" and leaves the old value in place. Both nullable fields are ones the form
+    can legitimately CLEAR — "no capacity limit", "the only section" — so under that rule
+    a Dean would blank the field, save, and watch the old value come back with no error to
+    explain it.
+
+    `model_fields_set` is what distinguishes the two, the same arm `update_student` uses
+    for the admission fields and for exactly the same reason. Absent still means "leave
+    alone"; an explicit `null` now clears.
+    """
+    offering = _offering_or_404(db, offering_id)
+    # See `_assert_year_writable` — this is the one caller allowed to touch an already
+    # archived offering, because it is the only way to un-archive one.
+    _assert_year_writable(db, offering, allow_archived_offering=True)
+
+    supplied = payload.model_fields_set
+
+    if "section_code" in supplied:
+        # `""` and `null` both mean "no section code" — the column stores NULL for the
+        # only-section case, and `_assert_identity_free`'s COALESCE depends on it.
+        wanted = (payload.section_code or "").strip() or None
         if wanted != offering.section_code:
             _assert_identity_free(
                 db,
@@ -833,9 +908,13 @@ def update_offering(db: Session, *, actor: User, offering_id: uuid.UUID, payload
                 exclude_id=offering.id,
             )
             offering.section_code = wanted
-    if payload.capacity is not None:
+    if "capacity" in supplied:
+        # NULL is a real value here: it means no limit, which is not the same as 0 and is
+        # the state a new offering starts in.
         offering.capacity = payload.capacity
-    if payload.is_archived is not None:
+    if "is_archived" in supplied and payload.is_archived is not None:
+        # The column is NOT NULL, so an explicit null cannot be honoured — it is read as
+        # "leave alone" rather than crashing on the flush.
         offering.is_archived = payload.is_archived
 
     offering.updated_by = actor.id

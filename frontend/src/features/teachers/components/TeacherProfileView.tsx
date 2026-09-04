@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -25,19 +25,19 @@ import {
   ErrorState,
   LoadingState,
   ProfileLayout,
+  YearSelect,
   type DetailTab,
 } from '@shared/components';
 import type { ReactNode } from 'react';
-import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
+import { apiErrorMessage } from '@shared/api/errorMessages';
 import { ApiError } from '@shared/api/client';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteTeacher,
   useSetTeacherStatus,
   useTeacherDetail,
-  useUpdateTeacher,
+  useTeacherYears,
 } from '../hooks/useTeachers';
-import { TeacherFormDialog, type TeacherFormValues } from './TeacherFormDialog';
 import { TeacherProfileSummary } from './TeacherProfileSummary';
 import type { TeacherClassTaught, TeacherDetail } from '../types';
 
@@ -66,19 +66,46 @@ export interface TeacherProfileViewProps {
  *  - Left: {@link TeacherProfileSummary} identity card (avatar, status, personal info,
  *    statistics, subject-expertise bars).
  *  - Right: {@link DetailTabs}:
- *      · Classes & Subjects — the teacher's class_subjects ("section · subject", lead
- *        chip), each linking to the gradebook (Grades filtered by class_subject_id).
+ *      · Classes & Subjects — the teacher's offerings ("label · course", lead chip, term).
+ *        Read-only: the gradebook is reached from the Grades tab (D42 §7).
  *      · Grades — the same subjects rendered as clickable rows that open each
  *        class_subject's gradebook.
  *
  * The same component powers all three mount points; `mode` only controls the header
  * actions and breadcrumbs. Directory breadcrumbs render only for `manage` (self/readonly
  * viewers have no teachers directory to return to).
+ *
+ * **D42 §2 — the academic-year switcher.** Both tabs list what the lecturer teaches, and
+ * without a year that was every assignment they had ever held, in one undifferentiated
+ * list. The picker sits in the ProfileLayout toolbar and re-scopes both tabs together,
+ * exactly as the student profile's does.
+ *
+ * It is shown to EVERY viewer, `self` included. A Lecturer has the same question about
+ * their own record that the Dean has about it, and the switcher cannot widen anything:
+ * `classes_taught` is that lecturer's assignments whichever year is selected.
  */
 export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps) {
   const navigate = useNavigate();
 
-  const detailQuery = useTeacherDetail(teacherId);
+  // Per-lecturer year filter (local to this page): the dropdown lists only the years this
+  // lecturer actually taught in, and the choice persists to `?year=` so it survives a
+  // refresh or a back-navigation from the gradebook.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const yearsQuery = useTeacherYears(teacherId);
+  const years = useMemo(() => yearsQuery.data ?? [], [yearsQuery.data]);
+  const activeYearId = years.find((y) => y.status === 'active')?.id;
+  const urlYear = searchParams.get('year') ?? undefined;
+  const yearId = years.some((y) => y.id === urlYear) ? urlYear : (activeYearId ?? years[0]?.id);
+  const changeYear = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('year', id);
+    setSearchParams(next, { replace: true });
+  };
+
+  // Wait for the years before asking for the detail: see `useTeacherDetail`. A lecturer
+  // with NO assignments resolves to an empty list and `yearId === undefined`, which is a
+  // legitimate answer — so the gate is "the years have loaded", not "a year was chosen".
+  const detailQuery = useTeacherDetail(teacherId, yearId, !yearsQuery.isLoading);
   const detail = detailQuery.data;
 
   const tabs = useMemo<DetailTab[]>(() => {
@@ -99,7 +126,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
     ];
   }, [detail]);
 
-  if (detailQuery.isLoading) {
+  if (yearsQuery.isLoading || detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading lecturer" />;
   }
   if (detailQuery.isError) {
@@ -144,6 +171,17 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
       title={detail.full_name}
       breadcrumbs={breadcrumbs}
       actions={actions}
+      toolbar={
+        years.length > 0 ? (
+          <YearSelect
+            value={yearId}
+            onChange={changeYear}
+            years={years}
+            activeYearId={activeYearId}
+            isLoading={yearsQuery.isLoading}
+          />
+        ) : undefined
+      }
       summary={<TeacherProfileSummary teacher={detail} />}
     >
       {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Lecturer detail sections" />}
@@ -151,33 +189,24 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
   );
 }
 
-/** Assignments tab — the teacher's class_subjects, linking toward the gradebook. */
+/** Assignments tab — the teacher's offerings, as a read-only list (D42 §7). */
 function AssignmentsTab({ classes }: { classes: TeacherClassTaught[] }) {
   if (classes.length === 0) {
     return (
       <EmptyState
         variant="card"
         title="No assignments"
-        description="This lecturer is not assigned to any course offerings yet."
+        description="This lecturer has no course offerings in the selected year."
       />
     );
   }
+  // D42 §7 — no Gradebook link on these rows. The Grades tab beside this one IS the
+  // gradebook view, and two links to the same place from one profile only made the reader
+  // wonder how they differed.
   return (
     <List disablePadding>
       {classes.map((c) => (
-        <ListItem
-          key={c.offering_id}
-          divider
-          secondaryAction={
-            <MuiLink
-              component={RouterLink}
-              to={`${ROUTES.grades}?offering_id=${c.offering_id}`}
-              underline="hover"
-            >
-              Gradebook
-            </MuiLink>
-          }
-        >
+        <ListItem key={c.offering_id} divider>
           <ListItemText
             primary={
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
@@ -207,7 +236,7 @@ function GradesTab({ classes }: { classes: TeacherClassTaught[] }) {
       <EmptyState
         variant="card"
         title="No courses to grade"
-        description="This lecturer is not assigned to any course offerings yet."
+        description="This lecturer has no course offerings in the selected year."
       />
     );
   }
@@ -256,11 +285,6 @@ function TeacherActions({
 }) {
   const navigate = useNavigate();
   const isManage = variant === 'manage';
-  const [editOpen, setEditOpen] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [editFieldErrors, setEditFieldErrors] = useState<Record<string, string[]> | undefined>(
-    undefined,
-  );
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [statusRefs, setStatusRefs] = useState<string[]>([]);
@@ -269,7 +293,6 @@ function TeacherActions({
   const [deleteRefs, setDeleteRefs] = useState<string[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
-  const updateMut = useUpdateTeacher(teacher.id);
   const statusMut = useSetTeacherStatus(teacher.id);
   const deleteMut = useDeleteTeacher();
 
@@ -278,42 +301,6 @@ function TeacherActions({
   const assignmentRefsFrom = (err: unknown): string[] => {
     const fields = err instanceof ApiError ? err.fields : undefined;
     return fields?.assignments ?? [];
-  };
-
-  const handleEdit = (values: TeacherFormValues) => {
-    setEditError(null);
-    setEditFieldErrors(undefined);
-    updateMut.mutate(
-      {
-        full_name: values.full_name,
-        email: values.email || null,
-        phone: values.phone || null,
-        subject_specializations: values.subject_specializations,
-        bio: values.bio || undefined,
-        gender: values.gender || undefined,
-        academic_qualification: values.academic_qualification || undefined,
-        designation: values.designation || undefined,
-        address: values.address || undefined,
-        expertise: values.expertise,
-        // Employment record (D39, Meeting #2 item 10). `is_employed` is absent — the
-        // server derives it from `status`, which this dialog does not edit.
-        ssno: values.ssno || undefined,
-        licensenum: values.licensenum || undefined,
-        hire_date: values.hire_date || undefined,
-        end_date: values.end_date || undefined,
-        comments: values.comments || undefined,
-      },
-      {
-        onSuccess: () => {
-          setEditOpen(false);
-          setToast(isManage ? 'Lecturer updated.' : 'Profile updated.');
-        },
-        onError: (err) => {
-          setEditError(apiErrorMessage(err));
-          setEditFieldErrors(fieldErrorsFrom(err));
-        },
-      },
-    );
   };
 
   const handleStatus = () => {
@@ -358,7 +345,15 @@ function TeacherActions({
   return (
     <>
       <Stack direction="row" spacing={1}>
-        <Button variant="outlined" startIcon={<EditIcon />} onClick={() => setEditOpen(true)}>
+        {/* D40 — the edit form is a PAGE now (`/teachers/:id/edit`), not a modal. Create
+            and edit are the same screen, which is what stops the two from disagreeing
+            about which fields a lecturer record even has — the bug the dialog had, where
+            create showed six fields and edit showed twenty. */}
+        <Button
+          variant="outlined"
+          startIcon={<EditIcon />}
+          onClick={() => navigate(`${ROUTES.teachers}/${teacher.id}/edit`)}
+        >
           {isManage ? 'Edit' : 'Edit profile'}
         </Button>
         {isManage && (
@@ -388,16 +383,6 @@ function TeacherActions({
           </>
         )}
       </Stack>
-
-      <TeacherFormDialog
-        open={editOpen}
-        teacher={teacher}
-        submitting={updateMut.isPending}
-        error={editError}
-        fieldErrors={editFieldErrors}
-        onSubmit={handleEdit}
-        onClose={() => setEditOpen(false)}
-      />
 
       {isManage && (
         <>

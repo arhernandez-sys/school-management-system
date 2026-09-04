@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MenuItem, Stack, TextField } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { FormDialog, DateField } from '@shared/components';
 import type { AssessmentType } from '@shared/types/enums';
 import type { AssessmentCategory, AssessmentListItem } from '../hooks/useAssessments';
 
@@ -158,14 +158,7 @@ export function AssessmentFormDialog({
           ))}
         </TextField>
 
-        <TextField
-          label="Date (optional)"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          fullWidth
-          InputLabelProps={{ shrink: true }}
-        />
+        <DateField label="Date (optional)" value={date} onChange={setDate} fullWidth />
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField

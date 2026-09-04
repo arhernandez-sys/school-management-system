@@ -8,6 +8,7 @@ import {
 import { useGradeRevisions } from '@features/grades/hooks/useRevisions';
 import { ROUTES } from '@shared/constants/routes';
 import type { NotificationItem } from './NotificationsBell';
+import { isLecturerRole } from '@shared/auth/permissions';
 
 /**
  * What the bell shows (D30 §D8) — **and the fix for real dead UI**.
@@ -46,7 +47,9 @@ export function useNotifications(): NotificationsState {
   const role = user?.role;
   // A student and a Registrar have no revision queue at all — the endpoint answers 403 —
   // so the query is not even issued for them.
-  const canSeeRevisions = role === 'principal' || role === 'teacher';
+  // D43 — matches `features/grades/index.tsx` and the widened server scope.
+  const canSeeRevisions =
+    role === 'principal' || role === 'auditor' || isLecturerRole(role);
 
   const counts = useNotificationCounts();
   const announcements = useAnnouncementsList({ page: 1, page_size: MAX_PER_SOURCE });

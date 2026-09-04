@@ -6,6 +6,7 @@ import ArchiveIcon from '@mui/icons-material/Archive';
 import UnarchiveIcon from '@mui/icons-material/Unarchive';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import PrintIcon from '@mui/icons-material/Print';
 import {
   DataTable,
   FilterBar,
@@ -27,6 +28,7 @@ import {
 } from './hooks/useCourses';
 import { CourseFormDialog, type CourseFormValues } from './components/CourseFormDialog';
 import { PrerequisitesDialog } from './components/PrerequisitesDialog';
+import { CourseListPrintDialog } from './components/CourseListPrintDialog';
 
 /**
  * Course catalog (api-spec §5b, ui-design-system Settings). The Dean manages; the list
@@ -95,6 +97,19 @@ export function CoursesPage() {
   // D30 §D4 — what this course requires. Reachable for the Registrar too (read-only):
   // knowing why an enrolment was refused is administration, not academic authority.
   const [prereqTarget, setPrereqTarget] = useState<CourseListItem | null>(null);
+
+  // D43 — print/PDF of the catalog AS FILTERED. Open to every role that can reach the
+  // tab: printing is reading, and the sheet contains nothing the screen does not.
+  const [printOpen, setPrintOpen] = useState(false);
+
+  /** What the printed sheet says selected these rows. Mirrors the two live filters. */
+  const filterSummary = useMemo(
+    () => [
+      ...(debouncedSearch ? [`Search "${debouncedSearch}"`] : []),
+      showRetired ? 'Active and retired' : 'Active only',
+    ],
+    [debouncedSearch, showRetired],
+  );
 
   const openCreate = () => {
     setEditingCourse(null);
@@ -230,6 +245,14 @@ export function CoursesPage() {
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {/* D41 — Restore is GREEN, Retire is not.
+              The two sat side by side in the same default grey, differing only by an
+              Archive/Unarchive glyph that is the same box with the arrow flipped — at 20px,
+              in a row of icon buttons, that is not a difference anyone reads before
+              clicking. Colour carries the meaning the glyph was failing to: restoring puts
+              something back, and green is what this app already uses for an active state
+              (`StatusBadge kind="success"`). Retire stays neutral rather than turning red —
+              it is reversible, and red is reserved for Delete, which is not. */}
           {s.is_active ? (
             <Tooltip title="Retire">
               <IconButton
@@ -244,6 +267,7 @@ export function CoursesPage() {
             <Tooltip title="Restore">
               <IconButton
                 size="small"
+                color="success"
                 aria-label={`Restore ${s.name}`}
                 onClick={() => handleToggleActive(s)}
               >
@@ -273,6 +297,16 @@ export function CoursesPage() {
       <PageHeader
         title="Course Catalog"
         subtitle="Manage the catalog of courses the college offers."
+        secondaryActions={
+          <Button
+            variant="outlined"
+            startIcon={<PrintIcon />}
+            onClick={() => setPrintOpen(true)}
+            disabled={query.isLoading}
+          >
+            Print list
+          </Button>
+        }
         primaryAction={
           canManage ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -344,6 +378,13 @@ export function CoursesPage() {
         fieldErrors={formFieldErrors}
         onSubmit={handleFormSubmit}
         onClose={() => setFormOpen(false)}
+      />
+
+      <CourseListPrintDialog
+        open={printOpen}
+        onClose={() => setPrintOpen(false)}
+        params={params}
+        filterSummary={filterSummary}
       />
 
       <PrerequisitesDialog

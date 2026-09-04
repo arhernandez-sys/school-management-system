@@ -27,7 +27,13 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import AssessmentStatus, AssessmentType, GradeStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
-from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
+from app.core.rbac import (
+    _teacher_profile_id,
+    assert_teacher_owns_offering,
+    hod_offering_ids,
+    hod_program_ids,
+    teacher_offering_ids,
+)
 from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments import release_nudge
 from app.modules.assessments.models import Assessment, AssessmentCategory
@@ -133,52 +139,24 @@ def _assert_year_writable(db: Session, cs: CourseOffering) -> None:
             raise Conflict("The academic year is archived.", code="year_archived")
 
 
-def _grade_window_closed(db: Session, semester_id: uuid.UUID | None) -> tuple[bool, datetime | None]:
-    """`(closed, deadline)` for a term's grade-submission window (D30 §D6, brief §18).
-
-    NULL deadline → never closed. That is the state of every term in the school today
-    and the safe default: an invented cutoff would lock lecturers out of a live term.
-
-    `ensure_aware` is not optional here. The column is a MariaDB `DATETIME`, which
-    pymysql hands back timezone-NAIVE, and comparing that with `utcnow()` raises
-    `TypeError: can't compare offset-naive and offset-aware datetimes` — a 500 on the
-    save path rather than a clean 409.
-    """
-    if semester_id is None:
-        return False, None
-    deadline = ensure_aware(
-        db.scalar(select(Semester.grade_submission_deadline).where(Semester.id == semester_id))
-    )
-    if deadline is None:
-        return False, None
-    return utcnow() > deadline, deadline
-
-
-def _assert_grade_window_open(db: Session, assessment: Assessment, actor: User) -> None:
-    """409 `grade_window_closed` once the term's deadline has passed (D30 §D6).
-
-    Enforced HERE, in `upsert_grades`, because that is the single grade write path
-    (api-spec §7 — there is no `POST /grades`). Putting it in the router would leave
-    the freeze, the seeds and any future writer outside the rule.
-
-    **The Dean is exempt.** Note this arm is currently unreachable: the route is
-    `require_role(Role.TEACHER)` and `assert_teacher_owns_offering` would 404 a
-    Dean anyway, so no Dean can enter a grade at all today. It is written because the
-    rule belongs with the check rather than in a comment somewhere, and because the
-    intended post-deadline path is Phase 5's grade-revision workflow (§D7) — the Dean
-    approves a Lecturer's request, they do not type the mark themselves.
-    """
-    if actor.role == Role.PRINCIPAL:
-        return
-    closed, deadline = _grade_window_closed(db, assessment.semester_id)
-    if closed:
-        raise Conflict(
-            "The grade submission deadline for this term has passed.",
-            code="grade_window_closed",
-            # The date is the actionable part: a Lecturer needs to know whether they
-            # are an hour late or a month late before deciding whom to ask.
-            extra={"grade_submission_deadline": deadline.isoformat() if deadline else None},
-        )
+# ──────────────────────────────────────────────────────────────────────────────
+# D42 §5 — the END-OF-SESSION grade submission deadline is gone.
+#
+# `_grade_window_closed` and `_assert_grade_window_open` lived here and turned
+# `semesters.grade_submission_deadline` into a 409 on the grade write path (D30 §D6).
+# The client asked for the deadline to be removed from Academic Structure and for the
+# MID-SESSION freeze to be the only thing that stops grade entry, so the enforcement went
+# with the field rather than being left behind where nobody could see or clear it — a
+# term that already carried a deadline would otherwise have locked its lecturers out
+# permanently, with the Dean given no control that could undo it.
+#
+# The COLUMN is deliberately still there and still writable through the Settings schemas:
+# historic terms carry real values, and dropping a column on live `sims` to tidy away a
+# field nobody reads is a one-way door. `Gradebook.grade_window_closed` is now hard-wired
+# to False and `grade_submission_deadline` to None, so every reader sees an open window.
+#
+# The mid-session freeze below is untouched — it is the rule that survives.
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 def midterm_freeze_state(
@@ -202,13 +180,15 @@ def midterm_freeze_state(
     (which is what makes rules 2 and 3 of the revision gate reachable), while CHANGING one
     that was entered before `start` needs the Dean to approve a revision.
 
-    NULL either side → never frozen, the same safe default as `_grade_window_closed`. That
+    NULL either side → never frozen — the safe default: an invented window would lock a
+    live term. That
     is the state of every semester created before D32, and an invented window would lock a
     live term. `_assert_midterm_window` in `settings/service.py` already refuses to store
     only one of the pair, so a half-configured window cannot reach this function.
 
-    `ensure_aware` is load-bearing for the reason `_grade_window_closed` documents: these
-    are MariaDB `DATETIME`s and pymysql returns them naive.
+    `ensure_aware` is load-bearing: the columns are MariaDB `DATETIME`s and pymysql hands
+    them back timezone-NAIVE, so comparing one with `utcnow()` raises `TypeError` — a 500
+    on the save path rather than a clean 409.
     """
     if semester_id is None:
         return False, None, None
@@ -229,12 +209,11 @@ def midterm_freeze_state(
 def _assert_midterm_not_frozen(db: Session, assessment: Assessment, actor: User) -> None:
     """409 `midterm_frozen` while the term's mid-term grading window is running (D33).
 
-    Sits beside `_assert_grade_window_open` in `upsert_grades` for the same reason that one
-    is there: it is the single grade write path, so the freeze, the seeds and any future
-    writer are all inside the rule.
+    Enforced in `upsert_grades` because that is the single grade write path (api-spec §7 —
+    there is no `POST /grades`), so the freeze, the seeds and any future writer are all
+    inside the rule.
 
-    **The Dean is exempt**, matching `_assert_grade_window_open`. The same caveat applies —
-    the arm is currently unreachable because the route is `require_role(Role.TEACHER)` — and
+    **The Dean is exempt.** The arm is currently unreachable because the route is `require_role(Role.TEACHER)` — and
     it is written for the same reason: the rule belongs with the check, and the Dean's
     sanctioned post-freeze path is approving a revision rather than typing the mark.
 
@@ -268,6 +247,21 @@ def _assert_readable(db: Session, actor: User, cs: CourseOffering) -> bool:
     if actor.role == Role.TEACHER:
         assert_teacher_owns_offering(db, actor, cs.id)
         return True
+    if actor.role == Role.HOD:
+        # D43 — the head's two-tier answer, and the whole "sees all, edits only their
+        # own" rule in four lines. Teaching it wins first: a head who also teaches the
+        # course keeps every lecturer right on it. Otherwise, being in a programme they
+        # head buys READ and nothing more, so `False` here is what makes the gradebook
+        # render without an edit affordance. Anything else is a 404, identical to a
+        # gradebook that does not exist.
+        # `teacher_offering_ids` rather than `_owned_cs_ids`: it returns [] for a head
+        # with no lecturer profile instead of raising, so that case falls through to the
+        # programme check and ends in the same honest 404 rather than an early one.
+        if cs.id in set(teacher_offering_ids(db, actor)):
+            return True
+        if cs.id in set(hod_offering_ids(db, hod_program_ids(db, actor))):
+            return False
+        raise NotFound("Resource not found.")
     return False
 
 
@@ -419,11 +413,27 @@ def list_offering_options(
         stmt = stmt.where(offerings_in_year(year_id))
 
     is_teacher = actor.role == Role.TEACHER
+    #: Offerings this caller may EDIT, when that differs per row. `None` means the
+    #: answer is the same for every row and comes from the role alone — which was the
+    #: only case before D43 introduced a caller who sees more than they can edit.
+    editable_ids: set[uuid.UUID] | None = None
+
     if is_teacher:
         owned = _owned_cs_ids(db, actor)
         if not owned:
             return OfferingOptionsResponse(items=[])
         stmt = stmt.where(CourseOffering.id.in_(owned))
+    elif actor.role == Role.HOD:
+        # D43 — the head's picker lists their own offerings AND every offering in the
+        # programme(s) they head, but only the first set comes back editable. The union
+        # matters: a head may teach a shared course outside their own programme, and
+        # scoping to the programme alone would hide their own gradebook from them.
+        owned_ids = set(teacher_offering_ids(db, actor))
+        visible = owned_ids | set(hod_offering_ids(db, hod_program_ids(db, actor)))
+        if not visible:
+            return OfferingOptionsResponse(items=[])
+        stmt = stmt.where(CourseOffering.id.in_(visible))
+        editable_ids = owned_ids
 
     rows = db.execute(stmt).all()
     cs_ids = [cs.id for cs, _ in rows]
@@ -445,7 +455,7 @@ def list_offering_options(
         OfferingOption(
             **_offering_ref(cs, subject, teachers_by_cs.get(cs.id, [])).model_dump(),
             assessment_count=counts.get(cs.id, 0),
-            can_edit=is_teacher,
+            can_edit=is_teacher if editable_ids is None else cs.id in editable_ids,
         )
         for cs, subject in rows
     ]
@@ -726,9 +736,6 @@ def get_gradebook(
             )
         )
 
-    window_closed, window_deadline = _grade_window_closed(
-        db, semester.id if semester is not None else None
-    )
     # D33 ask 7 — the mid-term freeze, reported the same way and for the same reason.
     midterm_frozen, midterm_start, midterm_end = midterm_freeze_state(
         db, semester.id if semester is not None else None
@@ -777,8 +784,11 @@ def get_gradebook(
         can_edit=can_edit,
         # Reported for EVERY viewer, not just the one who can write: a Registrar asked
         # "why can't the lecturer enter these?" needs to see the same closed window.
-        grade_window_closed=window_closed,
-        grade_submission_deadline=window_deadline,
+        # D42 §5 — constants now. The end-of-session deadline is no longer enforced or
+        # configurable; the fields stay on the wire so an older client still parses the
+        # response, and they always report an OPEN window.
+        grade_window_closed=False,
+        grade_submission_deadline=None,
         midterm_frozen=midterm_frozen,
         midterm_submission_start=midterm_start,
         midterm_submission_end=midterm_end,
@@ -802,10 +812,8 @@ def upsert_grades(
     assert_teacher_owns_offering(db, actor, assessment.offering_id)
     cs = db.get(CourseOffering, assessment.offering_id)
     _assert_year_writable(db, cs)
-    _assert_grade_window_open(db, assessment, actor)
-    # D33 ask 7 — and it is checked AFTER the end-term deadline on purpose. If both are
-    # shut the end-term message is the more useful one: the term is over, and waiting for
-    # the mid-term window to reopen would not help.
+    # D42 §5 — the end-of-session deadline check that used to sit here is gone. The
+    # mid-session freeze is the only window that stops grade entry now.
     _assert_midterm_not_frozen(db, assessment, actor)
 
     entries = payload.entries

@@ -37,12 +37,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import GradeRevisionStatus, GradeStatus, Role
 from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
-from app.core.rbac import assert_teacher_owns_offering
+from app.core.rbac import (
+    assert_teacher_owns_offering,
+    hod_offering_ids,
+    hod_program_ids,
+)
 from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments.models import Assessment
 from app.modules.offerings.labels import offering_ref
@@ -295,7 +299,7 @@ def list_revisions(
     they may have no relationship with. The Registrar and students see none: a revision is
     an academic judgement in flight, and §D14 gives the Registrar no grade authority.
     """
-    if actor.role not in (Role.PRINCIPAL, Role.TEACHER):
+    if actor.role not in (Role.PRINCIPAL, Role.TEACHER, Role.HOD, Role.AUDITOR):
         raise Forbidden(
             "Grade revisions are visible to the Dean and to the requesting Lecturer.",
             code="forbidden",
@@ -304,6 +308,28 @@ def list_revisions(
     stmt = select(GradeRevisionRequest)
     if actor.role == Role.TEACHER:
         stmt = stmt.where(GradeRevisionRequest.requested_by_user_id == actor.id)
+    elif actor.role == Role.HOD:
+        # D43 — their own requests, PLUS any raised against an offering in the
+        # programme(s) they head. A revision in their department is exactly the kind of
+        # thing a head is meant to have sight of; one in another department is not.
+        #
+        # The union matters for the same reason it does everywhere else in this role: a
+        # head who teaches a shared course outside their programme still filed those
+        # requests and must not lose sight of them.
+        scope = hod_offering_ids(db, hod_program_ids(db, actor))
+        stmt = stmt.where(
+            or_(
+                GradeRevisionRequest.requested_by_user_id == actor.id,
+                GradeRevisionRequest.assessment_grade_id.in_(
+                    select(AssessmentGrade.id)
+                    .join(Assessment, Assessment.id == AssessmentGrade.assessment_id)
+                    .where(Assessment.offering_id.in_(scope))
+                ),
+            )
+        )
+    # The Auditor is unfiltered, like the Dean — reading the whole queue is the job. They
+    # cannot act on any of it: `POST /grade-revisions/{id}/decision` is Dean-only, and
+    # every mutating verb is refused to them centrally regardless.
     if status is not None:
         stmt = stmt.where(GradeRevisionRequest.status == status)
     if offering_id is not None:
@@ -547,11 +573,12 @@ def decide_revision(
 
     **Deny** records the ruling and touches no grade.
 
-    **This writes through a closed grade-submission window, by design** (client decision).
-    The deadline exists to stop Lecturers editing freely; a revision is the sanctioned
-    exception and the Dean is the one approving it. `_assert_grade_window_open` is
-    deliberately NOT called here — and this is the path Phase 3's dormant Dean bypass was
-    always pointing at.
+    **This writes through the mid-session freeze, by design** (client decision). The
+    freeze exists to stop Lecturers editing freely; a revision is the sanctioned exception
+    and the Dean is the one approving it, so `_assert_midterm_not_frozen` is deliberately
+    NOT called here — this is the path Phase 3's dormant Dean bypass was always pointing
+    at. (It wrote through the end-of-session deadline on the same reasoning, until D42 §5
+    retired that deadline outright.)
 
     A decided request cannot be re-decided: re-opening a ruling would leave no record of
     the reversal. A second, fresh request is the supported way to change course, and

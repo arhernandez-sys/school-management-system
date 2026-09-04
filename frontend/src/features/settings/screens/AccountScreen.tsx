@@ -27,11 +27,6 @@ const THEME_OPTIONS = [
   { value: 'light', label: 'Light' },
   { value: 'system', label: 'System' },
 ];
-const DATE_FORMAT_OPTIONS = [
-  { value: 'YYYY-MM-DD', label: '2026-06-30 (ISO)' },
-  { value: 'MM/DD/YYYY', label: '06/30/2026' },
-  { value: 'DD/MM/YYYY', label: '30/06/2026' },
-];
 
 /**
  * Account & preferences (api-spec §11, FR-SET-05). Every role edits their own contact
@@ -156,19 +151,6 @@ export function AccountScreen() {
               helperText="Dark mode is planned for a future release."
             >
               {THEME_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>
-                  {o.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              label="Date format"
-              value={dateFormat}
-              onChange={(e) => setDateFormat(e.target.value)}
-              fullWidth
-            >
-              {DATE_FORMAT_OPTIONS.map((o) => (
                 <MenuItem key={o.value} value={o.value}>
                   {o.label}
                 </MenuItem>

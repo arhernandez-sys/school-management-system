@@ -7,7 +7,6 @@ import {
   CardContent,
   Chip,
   Divider,
-  MenuItem,
   Stack,
   TextField,
   Tooltip,
@@ -15,7 +14,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import { EmptyState, FormDialog, StatusBadge } from '@shared/components';
+import { EmptyState, FormDialog, SearchableSelect, StatusBadge } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useCoursesList } from '@features/settings/hooks/useCourses';
 import {
@@ -384,22 +383,21 @@ export function CreditTransferPanel({ application, isDean, canEdit }: CreditTran
               helperText="As the transcript writes it — another institution's scale is not BAJC's."
             />
           </Stack>
-          <TextField
-            select
+          {/* D43-b — the whole catalog, so type-to-filter rather than a 114-row scroll. */}
+          <SearchableSelect
             label="BAJC course this would satisfy"
             value={targetCourseId}
-            onChange={(e) => setTargetCourseId(e.target.value)}
+            onChange={setTargetCourseId}
+            options={(coursesQuery.data?.items ?? []).map((course) => ({
+              value: course.id,
+              label: course.name,
+              hint: course.code,
+            }))}
+            loading={coursesQuery.isLoading}
             required
             fullWidth
             helperText="Required: an approval that names no course means nothing to the curriculum."
-          >
-            <MenuItem value="">—</MenuItem>
-            {(coursesQuery.data?.items ?? []).map((course) => (
-              <MenuItem key={course.id} value={course.id}>
-                {course.code} — {course.name}
-              </MenuItem>
-            ))}
-          </TextField>
+          />
           <TextField
             label="Content equivalency (%)"
             type="number"

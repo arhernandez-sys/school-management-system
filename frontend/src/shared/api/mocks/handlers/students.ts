@@ -14,16 +14,18 @@ import {
   getStudent,
   listStudents,
   studentReligions,
+  studentCivilStatuses,
   offeringLabel,
   offeringsForStudentInYear,
   offeringsForStudent,
   currentOfferingsFor,
   offeringsOwnedByTeacher,
   yearsForStudent,
+  demoHodStudentIds,
 } from '@shared/api/mocks/demo/dataset';
 import type { District, EnrollmentLoad } from '@shared/types/enums';
 import type { EnrollmentStatus } from '@features/offerings/types';
-import { canonicalGender } from '@shared/types/enums';
+import { canonicalGender, normaliseCivilStatus } from '@shared/types/enums';
 import type {
   DemoAssessment,
   DemoEnrollment,
@@ -106,9 +108,41 @@ function offeringRef(offering: DemoOffering | undefined) {
 /**
  * The offerings that scope a detail-style read. With a `yearId` these are the offerings the
  * student sat that year (historical view); without one, their live load.
+ *
+ * `viewerRole` applies the D42 §3 lecturer narrowing: a Lecturer sees only the offerings
+ * they teach. It is a VIEW filter, not an access check — `resolveScopedStudent` has already
+ * decided whether this caller may open the record at all, and this only decides how much of
+ * it is theirs to read. Mirrors `students/service._detail`'s `viewer_teacher_id`.
  */
-function scopedOfferingsFor(student: DemoStudent, yearId?: string | null) {
-  return yearId ? offeringsForStudentInYear(student.id, yearId) : currentOfferingsFor(student.id);
+function scopedOfferingsFor(
+  student: DemoStudent,
+  yearId?: string | null,
+  viewerRole?: string,
+) {
+  const all = yearId
+    ? offeringsForStudentInYear(student.id, yearId)
+    : currentOfferingsFor(student.id);
+  return narrowToLecturer(all, viewerRole);
+}
+
+/**
+ * Keep only the offerings the acting Lecturer teaches (D42 §3). A no-op for every other
+ * role, so callers can hand it the viewer's role unconditionally.
+ *
+ * Demo mode has to carry this rule too. The client's ask — "lecturer cannot see all the
+ * students course and course offering only theirs" — is a scoping rule, and a demo that
+ * showed the whole load would certify exactly the screen the change removed.
+ */
+function narrowToLecturer<T extends { id: string }>(offerings: T[], viewerRole?: string): T[] {
+  // D43 — an HOD is NOT narrowed to their own teaching here. They are admitted to a
+  // student's profile because they run the programme, and a head who then saw only the
+  // one course they happen to teach that student would be looking at less than the point
+  // of the role. The narrowing exists for a plain Lecturer, whose reach came from
+  // sharing a single offering.
+  if (viewerRole !== 'teacher') return offerings;
+  const teacherId = currentTeacherId(viewerRole);
+  const owned = teacherId ? teacherOfferingIds(teacherId) : new Set<string>();
+  return offerings.filter((o) => owned.has(o.id));
 }
 
 /**
@@ -145,8 +179,8 @@ function allocateStudentNumber(): string {
   return `${ym}${String(next).padStart(3, '0')}`;
 }
 
-/** StudentListItem (GET /students). */
-function studentListItem(s: DemoStudent) {
+/** StudentListItem (GET /students). `viewerRole` scopes the course COUNT — see below. */
+function studentListItem(s: DemoStudent, viewerRole?: string) {
   return {
     id: s.id,
     student_number: s.student_number,
@@ -158,12 +192,19 @@ function studentListItem(s: DemoStudent) {
     // The row shows the student's own level + how many courses they take. The course names
     // are a variable-length list that belongs on the detail page, not in a table cell.
     year_of_study: s.year_of_study,
-    offering_count: currentOfferingsFor(s.id).length,
+    // D42 §3 — counted through the caller's own lens, mirroring `list_students`. The
+    // "Courses" column is the same fact the profile's enrolment list shows, and that list
+    // is scoped for a Lecturer: a global count here would print 4 in the directory and 1 on
+    // the profile of the same student.
+    offering_count: narrowToLecturer(currentOfferingsFor(s.id), viewerRole).length,
     guardian_name: s.guardian_name || null,
     // D32 — on the ROW as well as in the query, because the printed sheet has to show
     // what it was filtered by (brief §3).
     gender: s.gender ?? null,
     religion: s.religion ?? null,
+    // D40 — added with the civil-status filter, under the same rule: a directory
+    // narrowed to "Married" that never prints one cannot be checked.
+    civil_status: s.civil_status ?? null,
     program_code: D.programs.find((p) => p.id === s.program_id)?.code ?? null,
   };
 }
@@ -172,7 +213,7 @@ function studentListItem(s: DemoStudent) {
  * StudentDetail (GET /students/{id}, /me, POST, PATCH, status). With `yearId` the
  * `current_offerings` reflect the offerings the student sat that year.
  */
-function studentDetail(s: DemoStudent, yearId?: string | null) {
+function studentDetail(s: DemoStudent, yearId?: string | null, viewerRole?: string) {
   return {
     id: s.id,
     student_number: s.student_number,
@@ -190,7 +231,7 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
     guardian_email: s.guardian_email,
     address: s.address,
     phone: s.phone,
-    current_offerings: scopedOfferingsFor(s, yearId).map(offeringRef).filter(Boolean),
+    current_offerings: scopedOfferingsFor(s, yearId, viewerRole).map(offeringRef).filter(Boolean),
     // ── D33 (ask 4): the whole record, so the profile can show it ─────────────
     program: (() => {
       const p = D.programs.find((x) => x.id === s.program_id);
@@ -246,8 +287,18 @@ function studentDetail(s: DemoStudent, yearId?: string | null) {
  * wire name and carries a course ref — one of the few places the server still spells the
  * catalog entry "subject", so the handler matches it rather than inventing a better name.
  */
-function assessmentsForStudent(student: DemoStudent, yearId?: string | null) {
-  const offerings = offeringsForStudent(student.id, yearId).filter((o) => !o.is_archived);
+function assessmentsForStudent(
+  student: DemoStudent,
+  yearId?: string | null,
+  viewerRole?: string,
+) {
+  // D42 §3 — "they can only see grades for their courses not for all the student takes".
+  // Narrowed here rather than in the caller so the tab and the profile header cannot end
+  // up disagreeing about which offerings this viewer is looking at.
+  const offerings = narrowToLecturer(
+    offeringsForStudent(student.id, yearId).filter((o) => !o.is_archived),
+    viewerRole,
+  );
   return offerings.map((offering) => {
     const course = getCourse(offering.course_id);
     const term = computeTermGrade(student.id, offering.id);
@@ -450,14 +501,23 @@ export const studentsHandlers = [
       year_of_study: url.searchParams.get('year_of_study'),
       // Lecturer scope: restrict to students in offerings the lecturer teaches.
       teacher_id: role === 'teacher' ? currentTeacherId(role) : null,
+      // D43 — a head sees their programme's students. `demoHodStudentIds` returns []
+      // for any other role, and `null` here means "no filter", so the two must not be
+      // confused: an empty array for an unappointed head narrows to nothing, which is
+      // the safe direction.
+      student_ids: role === 'hod' ? demoHodStudentIds(role) : null,
       // Per-module year switcher: restrict to students enrolled in the chosen year.
       academic_year_id: url.searchParams.get('academic_year_id'),
       // D32 (brief §3) — the three attribute filters.
       gender: url.searchParams.get('gender'),
       religion: url.searchParams.get('religion'),
+      civil_status: url.searchParams.get('civil_status'),
       program_id: url.searchParams.get('program_id'),
     });
-    return HttpResponse.json({ ...page, items: page.items.map(studentListItem) });
+    return HttpResponse.json({
+      ...page,
+      items: page.items.map((s) => studentListItem(s, role)),
+    });
   }),
 
   /*
@@ -472,7 +532,10 @@ export const studentsHandlers = [
     if (role === 'student') {
       return errorResponse(403, 'forbidden', 'Students do not have access to the roster.');
     }
-    return HttpResponse.json({ religions: studentReligions() });
+    return HttpResponse.json({
+      religions: studentReligions(),
+      civil_statuses: studentCivilStatuses(),
+    });
   }),
 
   // ── GET /students/me/years — academic years the acting student was enrolled in ──
@@ -512,7 +575,13 @@ export const studentsHandlers = [
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
-    const years = yearsForStudent(resolved.student.id);
+    // D42 §3 — a Lecturer gets only the years they taught this student in. Offering a year
+    // where every tab below is empty reads as a broken screen, not as a scoping rule.
+    const years = yearsForStudent(resolved.student.id).filter(
+      (y) =>
+        role !== 'teacher' ||
+        narrowToLecturer(offeringsForStudentInYear(resolved.student.id, y.id), role).length > 0,
+    );
     return HttpResponse.json({
       items: years.map((y) => ({ id: y.id, name: y.name, status: y.status })),
     });
@@ -528,7 +597,7 @@ export const studentsHandlers = [
     // `nudge_cooldown_seconds` rides in the envelope so the SPA never keeps its own
     // copy of the window — the server owns it and can retune without a frontend release.
     return HttpResponse.json({
-      items: assessmentsForStudent(resolved.student, yearId),
+      items: assessmentsForStudent(resolved.student, yearId, role),
       nudge_cooldown_seconds: NUDGE_COOLDOWN_SECONDS,
     });
   }),
@@ -540,7 +609,7 @@ export const studentsHandlers = [
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
     const yearId = new URL(request.url).searchParams.get('academic_year_id');
-    return HttpResponse.json(studentDetail(resolved.student, yearId));
+    return HttpResponse.json(studentDetail(resolved.student, yearId, role));
   }),
 
   // ── POST /students — create (principal / secretary) ─────────────────────────────
@@ -604,7 +673,8 @@ export const studentsHandlers = [
       program_id: body.program_id ?? null,
       // ── the rest of Sections A-E (D33) ──
       ssno: body.ssno ?? null,
-      civil_status: body.civil_status ?? null,
+      // D40 — folded like `gender` above, mirroring `normalise_civil_status`.
+      civil_status: normaliseCivilStatus(body.civil_status),
       street: body.street ?? null,
       city_town_village: body.city_town_village ?? null,
       district: body.district ?? null,
@@ -691,7 +761,9 @@ export const studentsHandlers = [
     // writable, and `if (body.x)` cannot express that.
     if (body.religion !== undefined) student.religion = body.religion || null;
     if (body.ssno !== undefined) student.ssno = body.ssno || null;
-    if (body.civil_status !== undefined) student.civil_status = body.civil_status || null;
+    if (body.civil_status !== undefined) {
+      student.civil_status = normaliseCivilStatus(body.civil_status); // D40
+    }
     if (body.street !== undefined) student.street = body.street || null;
     if (body.city_town_village !== undefined) {
       student.city_town_village = body.city_town_village || null;

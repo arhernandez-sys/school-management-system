@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Numeric,
     SmallInteger,
     String,
+    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -124,4 +127,56 @@ class ProgramCourse(Base, TimestampMixin, AuditMixin):
         Index("uq_program_courses", "program_id", "course_id", unique=True),
         Index("ix_program_courses_program_order", "program_id", "term_order"),
         CheckConstraint("term_order > 0", name="ck_program_courses_term_order"),
+    )
+
+
+class ProgramHead(Base, TimestampMixin, AuditMixin):
+    """Who heads which programme — the HOD role's entire scope (D43).
+
+    A lecturer supervising a programme sees every student, course, offering and
+    colleague in it. That reach has to derive from somewhere, and before D43 there was
+    nowhere: `teacher_profiles` carried no programme link of any kind, and deriving one
+    from what a lecturer teaches (`class_teachers` → `course_offerings` → `courses` →
+    `program_courses`) is lossy in the wrong direction — a shared GEC course would have
+    made its lecturer a de-facto head of almost every programme.
+
+    **Many-to-many on purpose.** A single `teacher_profiles.headed_program_id` would have
+    been smaller and wrong both ways at a college this size: one lecturer can head two
+    programmes, and a programme can have co-heads across a handover. This mirrors
+    `class_teachers`, which solved the same shape for (offering, lecturer).
+
+    **The role is not enforced here.** A row may exist for a lecturer whose `users.role`
+    is still `teacher`; it grants nothing until the role changes. Appointing the head and
+    provisioning the login are two acts, often days apart. Authorization reads the ROLE
+    first and this table second — never this table alone.
+
+    Not soft-deleted: an appointment that ended is removed, not archived. `appointed_at`
+    is display and audit only — scope is never time-sliced, so a head sees the
+    programme's history as well as its present.
+    """
+
+    __tablename__ = "program_heads"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    program_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("programs.id", ondelete="CASCADE", name="fk_program_heads_program"),
+        nullable=False,
+    )
+    teacher_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "teacher_profiles.id", ondelete="CASCADE", name="fk_program_heads_teacher"
+        ),
+        nullable=False,
+    )
+    appointed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("uq_program_heads", "program_id", "teacher_id", unique=True),
+        # "Which programmes does THIS lecturer head" runs on every scoped request and
+        # cannot use the unique index above, where `teacher_id` is the second column.
+        Index("ix_program_heads_teacher", "teacher_id"),
     )

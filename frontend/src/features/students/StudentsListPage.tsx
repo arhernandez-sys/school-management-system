@@ -29,7 +29,8 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
 import { surnameFirst } from '@shared/utils/names';
-import { genderLabel } from '@shared/types/enums';
+import { CIVIL_STATUSES, genderLabel } from '@shared/types/enums';
+import { useReligions } from '@features/settings/hooks/useReligions';
 import { useStudentFilterOptions, useStudentsList } from './hooks/useStudents';
 import { useOfferingOptions } from './hooks/useOfferingOptions';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
@@ -96,9 +97,31 @@ export function StudentsListPage() {
   // Memoised rather than `?? []` inline: a fresh literal each render would re-run the
   // `filterSummary` memo below on every keystroke, since it reads both lists.
   const offerings = useMemo(() => offeringsQuery.data ?? [], [offeringsQuery.data]);
-  // Religion is free text on the admissions form, so its options are DISCOVERED rather
-  // than hardcoded — a fixed list would offer values that match nothing (D32).
-  const religionOptions = useStudentFilterOptions().data?.religions ?? [];
+  // D40 — the Religion filter now leads with the CLIENT-OWNED `religions` table (the
+  // same vocabulary the student and application forms write), not the DISTINCT values
+  // found in the register as D32 had it. The old behaviour could not answer "show me the
+  // Methodist students" with "none" — it simply had no such option to offer, which reads
+  // as the filter being broken rather than the answer being zero.
+  //
+  // The discovered list is still merged in, and that is the part that must not be
+  // dropped: `student_profiles.religion` is free text and stays so (D37), so a student
+  // imported from the client's previous system holds a religion the table has never
+  // carried. Without the merge they would be visible in the table's Religion column and
+  // unreachable by the filter beside it.
+  const religionsQuery = useReligions();
+  const filterOptions = useStudentFilterOptions().data;
+  const religionOptions = useMemo(() => {
+    const configured = (religionsQuery.data?.items ?? []).map((r) => r.name);
+    const seen = new Set(configured.map((n) => n.toLowerCase()));
+    const legacy = (filterOptions?.religions ?? []).filter((r) => !seen.has(r.toLowerCase()));
+    return [...configured, ...legacy];
+  }, [religionsQuery.data, filterOptions?.religions]);
+  // Same idea, one list smaller: the four canonical statuses are hardcoded in the dialog,
+  // so only what the register holds BEYOND them needs passing down.
+  const legacyCivilStatuses = useMemo(() => {
+    const known = new Set(CIVIL_STATUSES.map((c) => c.toLowerCase()));
+    return (filterOptions?.civil_statuses ?? []).filter((c) => !known.has(c.toLowerCase()));
+  }, [filterOptions?.civil_statuses]);
   const programsQuery = useProgramsList({ page_size: 100, is_active: true });
   const programOptions = useMemo(() => programsQuery.data?.items ?? [], [programsQuery.data]);
 
@@ -120,6 +143,7 @@ export function StudentsListPage() {
       academic_year_id: showAllYears ? undefined : effectiveYearId || undefined,
       gender: filters.gender || undefined,
       religion: filters.religion || undefined,
+      civil_status: filters.civilStatus || undefined,
       program_id: filters.programId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
@@ -215,6 +239,13 @@ export function StudentsListPage() {
     }
     if (filters.religion) {
       out.push({ key: 'religion', label: filters.religion, clear: drop('religion', '') });
+    }
+    if (filters.civilStatus) {
+      out.push({
+        key: 'civilStatus',
+        label: filters.civilStatus,
+        clear: drop('civilStatus', ''),
+      });
     }
     if (filters.programId) {
       const p = programOptions.find((o) => o.id === filters.programId);
@@ -319,6 +350,15 @@ export function StudentsListPage() {
       headerName: 'Religion',
       hideOnMobile: true,
       render: (s) => <Typography variant="body2">{s.religion || '—'}</Typography>,
+    },
+    {
+      // D40 — added with the filter, under D38's rule above: a directory narrowed to
+      // "Married" that never prints a civil status is a result the Registrar cannot
+      // check. Shown as stored, not re-labelled — a legacy value is a real value.
+      field: 'civil_status',
+      headerName: 'Civil status',
+      hideOnMobile: true,
+      render: (s) => <Typography variant="body2">{s.civil_status || '—'}</Typography>,
     },
     {
       field: 'offering_count',
@@ -478,6 +518,7 @@ export function StudentsListPage() {
         activeYearId={activeYearId}
         yearsLoading={yearsLoading}
         religionOptions={religionOptions}
+        legacyCivilStatuses={legacyCivilStatuses}
         programOptions={programOptions}
         offeringOptions={offerings}
         offeringsLoading={offeringsQuery.isLoading}

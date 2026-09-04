@@ -135,19 +135,26 @@ class StudentListItem(BaseModel):
     #: programme is unverifiable by the person holding it.
     gender: str | None = None
     religion: str | None = None
+    #: D40 — a fourth, added with its filter. Same reasoning: the directory has to print
+    #: what it was narrowed by, or the result cannot be checked by whoever asked for it.
+    civil_status: str | None = None
     #: Resolved from `program_id` — the CODE, e.g. "BMAD", which is what the register
     #: and the report card both print. `None` until a student is assigned a programme.
     program_code: str | None = None
 
 
 class StudentFilterOptions(BaseModel):
-    """GET /students/filter-options — the values the directory filters can actually take.
+    """GET /students/filter-options — what the directory's free-text filters can match.
 
-    **Only `religion` is derived**, and it has to be: it is free text collected on the
-    admissions form (`applications.religion`, copied across on acceptance), so there is no
-    enum to render a dropdown from. A hardcoded list would go stale the first time
-    somebody typed a denomination nobody had anticipated, and would show options that
-    match nothing.
+    Both lists here are DISCOVERED from the register, and after D39/D40 neither is the
+    dropdown's primary source any more. Religion now offers the client-owned `religions`
+    table and civil status offers the four `CivilStatus` values; what this endpoint adds
+    is the **residue** — the values already stored that those vocabularies do not carry.
+
+    That residue is not a nicety. A student imported from the client's previous system
+    keeps a religion the table has never held (D37: the write path is constrained, not the
+    column), and a filter built only from the vocabulary could not select them. They would
+    be a student nobody could find by the attribute the directory shows in their row.
 
     `gender` is a fixed pair and `program_id` comes from `/programs`, so neither needs to
     be discovered — they are not returned here.
@@ -156,6 +163,9 @@ class StudentFilterOptions(BaseModel):
     #: DISTINCT non-null religions present on non-deleted students, sorted. Empty until
     #: the admissions flow has run: as of D32 every one of the 45 live students has NULL.
     religions: list[str] = Field(default_factory=list)
+    #: DISTINCT non-null civil statuses present, sorted (D40). Usually a subset of the
+    #: four canonical values — anything else is a row this system did not write.
+    civil_statuses: list[str] = Field(default_factory=list)
 
 
 class StudentDetail(_AdmissionProfileFields):

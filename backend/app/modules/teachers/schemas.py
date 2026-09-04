@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.common.enums import Role, TeacherStatus
+from app.common.enums import AcademicYearStatus, Role, TeacherStatus
 from app.common.schemas import AuditStamp, OfferingRef, CourseRef
 
 #: `teacher_profiles.gender` is a real MariaDB `enum('male','female','other')` — unlike
@@ -71,6 +71,26 @@ class TeacherExpertise(BaseModel):
     model_config = ConfigDict(extra="forbid")
     area: str = Field(min_length=1, max_length=120)
     level: int = Field(ge=0, le=100)
+
+
+class TeacherYearItem(BaseModel):
+    """One academic year this lecturer actually taught in (D42 §2)."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    status: AcademicYearStatus
+
+
+class TeacherYearsResponse(BaseModel):
+    """GET /teachers/{id}/years — newest year first.
+
+    Backs the year switcher on the lecturer profile, the mirror of
+    `StudentYearsResponse`. Only the years the lecturer HAS an assignment in: a
+    switcher that offers a year with nothing behind it reads as a broken screen.
+    """
+
+    items: list[TeacherYearItem] = Field(default_factory=list)
 
 
 class TeacherDetail(BaseModel):
@@ -161,6 +181,21 @@ class TeacherCreateRequest(BaseModel):
     designation: str | None = Field(default=None, max_length=150)
     address: str | None = None
     comments: str | None = Field(default=None, max_length=500)
+    #: D40 — the last three profile fields create could not accept.
+    #:
+    #: `extra="forbid"` meant a create body carrying them was a 422, so the Dean could
+    #: only record a lecturer's gender, bio and expertise by saving the form and then
+    #: editing it. The lecturer form is now one full screen with every field on it
+    #: (D40), and a form that shows a field it cannot send is worse than one that hides
+    #: it — the Dean fills it in and watches the value disappear.
+    #:
+    #: `gender` is OPTIONAL here and required by the edit form. That is not a
+    #: contradiction: the column is nullable and every lecturer created before D39 has
+    #: NULL in it, so a create that demanded it would be stricter than the data the
+    #: system already holds. The screen is where the requirement lives.
+    gender: TeacherGender | None = None
+    bio: str | None = None
+    expertise: list[TeacherExpertise] | None = None
 
 
 class TeacherUpdateRequest(BaseModel):

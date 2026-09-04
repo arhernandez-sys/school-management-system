@@ -17,6 +17,12 @@ const ROLE_COLOR: Record<Role, ChipProps['color']> = {
   secretary: 'secondary',
   teacher: 'info',
   student: 'default',
+  // D43 — an HOD reads as a senior lecturer, so 'success' keeps them visually adjacent
+  // to `teacher: info` without implying admin authority. The Auditor is deliberately
+  // 'warning': the chip's job on a user list is to make an account that can see
+  // everything conspicuous.
+  hod: 'success',
+  auditor: 'warning',
 };
 
 export interface RoleChipProps {

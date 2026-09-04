@@ -35,7 +35,11 @@ export function GradesPage() {
   // Only the Dean and the Lecturer may LIST revisions — `GET /grade-revisions` answers
   // 403 for the Registrar (§D14 gives them no grade authority) and for students. The tab
   // is hidden rather than left to fail, and the route below redirects for the same set.
-  const canSeeRevisions = role === 'principal' || role === 'teacher';
+  // D43 — the HOD and the Auditor join them. The server was widened to match: a head
+  // lists their own requests plus their programme's, an auditor lists all. Neither can
+  // DECIDE one — `POST /grade-revisions/{id}/decision` stays Dean-only.
+  const canSeeRevisions =
+    role === 'principal' || role === 'teacher' || role === 'hod' || role === 'auditor';
 
   const tabs = useMemo<GradesTab[]>(() => {
     if (isStudent) return [];

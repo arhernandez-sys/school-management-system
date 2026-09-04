@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, AlertTitle, Box, Stack, TextField, Typography } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { FormDialog, DateField } from '@shared/components';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { useAcceptApplication } from '../hooks/useAdmissions';
 import type { AcceptResponse, ApplicationDetail } from '../types';
@@ -178,13 +178,11 @@ export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptD
               : `Leave blank to use the applicant's own address (${application.email}).`
           }
         />
-        <TextField
+        <DateField
           label="Date accepted"
-          type="date"
           value={dateAccepted}
-          onChange={(e) => setDateAccepted(e.target.value)}
+          onChange={setDateAccepted}
           fullWidth
-          InputLabelProps={{ shrink: true }}
           helperText="Defaults to today. Set it when the decision was made earlier than the keying-in."
         />
         <TextField

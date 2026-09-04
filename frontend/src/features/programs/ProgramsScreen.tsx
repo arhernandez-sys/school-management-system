@@ -233,6 +233,14 @@ export function ProgramsScreen() {
               <EditIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {/* D41 — Restore is GREEN, Retire is not.
+              The two sat side by side in the same default grey, differing only by an
+              Archive/Unarchive glyph that is the same box with the arrow flipped — at 20px,
+              in a row of icon buttons, that is not a difference anyone reads before
+              clicking. Colour carries the meaning the glyph was failing to: restoring puts
+              something back, and green is what this app already uses for an active state
+              (`StatusBadge kind="success"`). Retire stays neutral rather than turning red —
+              it is reversible, and red is reserved for Delete, which is not. */}
           {p.is_active ? (
             <Tooltip title="Retire">
               <IconButton
@@ -247,6 +255,7 @@ export function ProgramsScreen() {
             <Tooltip title="Restore">
               <IconButton
                 size="small"
+                color="success"
                 aria-label={`Restore ${p.name}`}
                 onClick={() => toggleActive(p)}
               >

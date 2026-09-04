@@ -167,25 +167,20 @@ class Gradebook(BaseModel):
     rows: list[GradebookRow] = Field(default_factory=list)
     drop_lowest_applied: bool = False
     can_edit: bool = False
-    #: D30 §D6. True once the term's `grade_submission_deadline` has passed, so the UI
-    #: can explain itself and disable the save bar instead of letting a Lecturer type
-    #: forty marks into a form the server will 409.
-    #:
-    #: Deliberately SEPARATE from `can_edit`, which keeps its meaning of "this caller's
-    #: role and ownership permit writing here". Folding the two together would make a
-    #: closed window indistinguishable from a Registrar's read-only view, and the
-    #: Lecturer needs to be told which one they are looking at.
+    #: D30 §D6, **retired by D42 §5**. These two always report `False` / `None` now —
+    #: the end-of-session deadline is neither configurable nor enforced. Kept on the wire
+    #: so a client built against the older contract still parses the response; new
+    #: readers should ignore them and look at `midterm_frozen` instead.
     grade_window_closed: bool = False
     grade_submission_deadline: datetime | None = None
     #: D33 (client ask 7). True while `[midterm_submission_start, midterm_submission_end]`
     #: is running, during which NOBODY enters a grade for this term.
     #:
-    #: A THIRD flag rather than a value folded into `grade_window_closed`, for the reason
-    #: that field's own note gives: the three states are answered differently by the
-    #: Lecturer. `can_edit=false` → "not yours". `grade_window_closed` → "the term is
-    #: over; file a revision". `midterm_frozen` → "wait; it reopens on this date". The
-    #: window dates travel with it so the UI can name that date instead of saying
-    #: "later".
+    #: Deliberately SEPARATE from `can_edit`, which keeps its meaning of "this caller's
+    #: role and ownership permit writing here". The two are answered differently by the
+    #: Lecturer: `can_edit=false` → "not yours"; `midterm_frozen` → "wait; it reopens on
+    #: this date". The window dates travel with it so the UI can name that date instead
+    #: of saying "later".
     midterm_frozen: bool = False
     midterm_submission_start: datetime | None = None
     midterm_submission_end: datetime | None = None

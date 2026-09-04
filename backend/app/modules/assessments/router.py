@@ -44,10 +44,11 @@ router = APIRouter(prefix="/assessments", tags=["assessments"])
 categories_router = APIRouter(prefix="/offerings", tags=["assessments"])
 
 _ERR = {"model": ErrorResponse}
-_teacher = require_role(Role.TEACHER)
+#: D43 — the HOD is a lecturer; ownership limits them to their own offerings.
+_teacher = require_role(Role.TEACHER, Role.HOD)
 #: The nudge inverts this module's usual gate: it is the one action here performed
 #: BY an administrator ON a teacher's queue, so P/S only, teacher excluded.
-_admin = require_role(Role.PRINCIPAL, Role.SECRETARY)
+_admin = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.HOD, Role.AUDITOR)
 _any = get_current_user
 
 

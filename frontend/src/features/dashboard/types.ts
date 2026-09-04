@@ -227,11 +227,30 @@ export interface StudentDashboard extends DashboardBase {
 }
 
 /** Role-discriminated composite response. Narrow on `.role`. */
+/**
+ * D43 — the two new variants reuse an existing SHAPE and change only the discriminator,
+ * mirroring `backend/app/modules/dashboard/schemas.py`.
+ *
+ * The backend could have returned `role: 'teacher'` to a Head of Department and saved
+ * two types. It does not, because this file's consumer switches on `role` and a wrong
+ * discriminator is a bug in every consumer — the honest tag is what lets the switch
+ * below route an HOD to the lecturer layout deliberately rather than by accident.
+ */
+export interface HodDashboard extends Omit<TeacherDashboard, 'role'> {
+  role: 'hod';
+}
+
+export interface AuditorDashboard extends Omit<AdminDashboard, 'role'> {
+  role: 'auditor';
+}
+
 export type DashboardResponse =
   | AdminDashboard
   | SecretaryDashboard
   | TeacherDashboard
-  | StudentDashboard;
+  | StudentDashboard
+  | HodDashboard
+  | AuditorDashboard;
 
 /** Type guard: the school-wide admin (Dean) variant. */
 export function isAdminDashboard(d: DashboardResponse): d is AdminDashboard {

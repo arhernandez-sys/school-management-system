@@ -46,7 +46,8 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/announcements", tags=["announcements"])
 
 _ERR = {"model": ErrorResponse}
-_authors = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
+#: D43 — the HOD authors like any lecturer (own offerings). The Auditor never authors.
+_authors = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER, Role.HOD)
 
 
 @router.get(

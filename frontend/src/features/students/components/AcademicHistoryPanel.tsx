@@ -28,6 +28,7 @@ import {
   StatCard,
   StatusBadge,
   type StatusKind,
+  DateField,
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useAuth } from '@features/auth/hooks/useAuth';
@@ -424,13 +425,11 @@ export function AcademicHistoryPanel({ studentId }: AcademicHistoryPanelProps) {
                 </MenuItem>
               ))}
           </TextField>
-          <TextField
+          <DateField
             label="Effective from"
-            type="date"
             value={effectiveFrom}
-            onChange={(e) => setEffectiveFrom(e.target.value)}
+            onChange={setEffectiveFrom}
             fullWidth
-            InputLabelProps={{ shrink: true }}
             helperText="Defaults to today. The outgoing programme is closed the day before this date."
           />
           <TextField

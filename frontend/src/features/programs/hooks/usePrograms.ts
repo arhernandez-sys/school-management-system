@@ -106,3 +106,31 @@ export function useRemoveProgramCourse(programId: string) {
     onSuccess: apply,
   });
 }
+
+// ── Heads of Department (D43) ──────────────────────────────────────────────────
+export const programHeadKeys = {
+  heads: (id: string) => [...programKeys.detail(id), 'heads'] as const,
+};
+
+export function useProgramHeads(programId: string | undefined) {
+  return useQuery({
+    queryKey: programHeadKeys.heads(programId ?? ''),
+    queryFn: ({ signal }) => api.getProgramHeads(programId!, signal),
+    enabled: Boolean(programId),
+  });
+}
+
+/**
+ * The response IS the new list, so the cache is SET from it rather than invalidated —
+ * same reasoning as the curriculum writes above: the editor should not flash empty
+ * between saving and refetching.
+ */
+export function useSetProgramHeads(programId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (teacherIds: string[]) => api.setProgramHeads(programId, teacherIds),
+    onSuccess: (data) => {
+      qc.setQueryData(programHeadKeys.heads(programId), data);
+    },
+  });
+}

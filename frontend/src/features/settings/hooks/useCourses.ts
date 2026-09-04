@@ -51,6 +51,28 @@ export function useCoursesList(params: CoursesListParams) {
   });
 }
 
+/**
+ * The same filters, unpaginated, for the print sheet (D43).
+ *
+ * The list on screen is one PAGE of the answer; "print the retired courses" means all of
+ * them, not the 25 currently visible. So the print dialog re-runs the caller's filters
+ * with the page size raised to the server's ceiling rather than printing what the table
+ * happens to be showing. `MAX_PAGE_SIZE` is 200 (`backend/app/core/pagination.py`) and
+ * the catalog holds 114 courses, so today this is the whole catalog in one request — but
+ * the dialog still prints the "showing the first N of M" warning rather than trusting
+ * that to stay true.
+ *
+ * `enabled` gates the fetch on the dialog being open, so opening the page costs nothing.
+ */
+export function useCoursesForPrint(params: CoursesListParams, enabled: boolean) {
+  const printParams: CoursesListParams = { ...params, page: 1, page_size: 200 };
+  return useQuery({
+    queryKey: [...courseKeys.list(printParams), 'print'],
+    queryFn: ({ signal }) => listCoursesApiV1CoursesGet(printParams, undefined, signal),
+    enabled,
+  });
+}
+
 /** Invalidate every course list after a mutation. */
 function useInvalidateCourses() {
   const qc = useQueryClient();

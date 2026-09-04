@@ -26,17 +26,19 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import AcademicYearStatus, Role, TeacherStatus
-from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
+from app.common.schemas import AuditStamp, OfferingRef, CourseRef, SemesterRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
 from app.modules.offerings.queries import offerings_in_year
 from app.modules.offerings.labels import OFFERING_ORDER, offering_label
 from app.modules.offerings.models import CourseOffering, CourseOffering, ClassTeacher, Course
-from app.modules.settings.models import AcademicYear, AuditLog
+from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.teachers.models import TeacherProfile
 from app.modules.teachers.schemas import (
     ClassTaught,
+    TeacherYearItem,
+    TeacherYearsResponse,
     TeacherCreateRequest,
     TeacherDetail,
     TeacherExpertise,
@@ -44,6 +46,7 @@ from app.modules.teachers.schemas import (
     TeacherStatusRequest,
     TeacherUpdateRequest,
 )
+from app.core.rbac import hod_program_ids, hod_teacher_ids
 from app.modules.users.models import User
 
 # Allowed sort fields for the teachers list (whitelist — never interpolated, §6).
@@ -109,32 +112,80 @@ def _assert_staff_number_unique(
         )
 
 
-def _classes_taught(db: Session, teacher_id: uuid.UUID) -> list[ClassTaught]:
+def _classes_taught(
+    db: Session,
+    teacher_id: uuid.UUID,
+    *,
+    academic_year_id: uuid.UUID | None = None,
+) -> list[ClassTaught]:
     """The offerings this lecturer is assigned to. One join since D31 — ownership rows
-    point straight at the offering, where they used to reach it through `class_subjects`."""
-    rows = db.execute(
-        select(ClassTeacher, CourseOffering, Course)
+    point straight at the offering, where they used to reach it through `class_subjects`.
+
+    `academic_year_id` narrows it to one year (D42 §2), reaching the year through the
+    offering's semester — an offering stores no year of its own. Absent, every year the
+    lecturer has ever taught comes back, which is the behaviour every existing caller
+    (create / patch / status) still wants.
+
+    **The `SemesterRef` is new.** This built the ref without a `semester`, so the profile's
+    term line — `c.offering.semester?.name` — has rendered blank against the real backend
+    since D31 while the demo handlers filled it in. A year switcher whose rows do not say
+    which term they belong to would have been the same bug wearing a bigger hat.
+    """
+    stmt = (
+        select(ClassTeacher, CourseOffering, Course, Semester)
         .join(CourseOffering, ClassTeacher.offering_id == CourseOffering.id)
         .join(Course, CourseOffering.course_id == Course.id)
+        .join(Semester, CourseOffering.semester_id == Semester.id)
         .where(
             ClassTeacher.teacher_id == teacher_id,
             CourseOffering.deleted_at.is_(None),
         )
         .order_by(*OFFERING_ORDER)
-    ).all()
+    )
+    if academic_year_id is not None:
+        stmt = stmt.where(offerings_in_year(academic_year_id))
+    rows = db.execute(stmt).all()
     return [
         ClassTaught(
             offering_id=offering.id,
             offering=OfferingRef(
                 id=offering.id,
                 course=CourseRef.model_validate(course),
+                semester=SemesterRef.model_validate(semester),
                 section_code=offering.section_code,
                 label=offering_label(course.code, offering.section_code),
             ),
             is_lead=ct.is_lead,
         )
-        for (ct, offering, course) in rows
+        for (ct, offering, course, semester) in rows
     ]
+
+
+def teacher_years(db: Session, *, teacher_id: uuid.UUID) -> TeacherYearsResponse:
+    """GET /teachers/{id}/years — the academic years this lecturer taught in, newest
+    first (D42 §2). The mirror of `students.service._years_for_student`.
+
+    Resolved through `class_teachers -> course_offerings -> semesters -> academic_years`.
+    Inactive and archived years count: reaching a past year is the entire point of the
+    switcher. Deleted offerings do not.
+    """
+    taught_year_ids = (
+        select(Semester.academic_year_id)
+        .join(CourseOffering, CourseOffering.semester_id == Semester.id)
+        .join(ClassTeacher, ClassTeacher.offering_id == CourseOffering.id)
+        .where(
+            ClassTeacher.teacher_id == teacher_id,
+            CourseOffering.deleted_at.is_(None),
+        )
+    )
+    years = db.scalars(
+        select(AcademicYear)
+        .where(AcademicYear.id.in_(taught_year_ids))
+        .order_by(AcademicYear.start_date.desc(), AcademicYear.name.desc())
+    ).all()
+    return TeacherYearsResponse(
+        items=[TeacherYearItem.model_validate(y) for y in years]
+    )
 
 
 def _audit_stamp(db: Session, teacher: TeacherProfile) -> AuditStamp:
@@ -180,7 +231,12 @@ def _sync_is_employed(teacher: TeacherProfile) -> None:
     teacher.is_employed = teacher.status == TeacherStatus.ACTIVE
 
 
-def _detail(db: Session, teacher: TeacherProfile) -> TeacherDetail:
+def _detail(
+    db: Session,
+    teacher: TeacherProfile,
+    *,
+    academic_year_id: uuid.UUID | None = None,
+) -> TeacherDetail:
     detail = TeacherDetail.model_validate(teacher)
     detail.subject_specializations = teacher.subject_specializations or []
     # Same reason as the line above: the column is NULL for every lecturer whose profile
@@ -189,7 +245,9 @@ def _detail(db: Session, teacher: TeacherProfile) -> TeacherDetail:
     detail.expertise = [
         TeacherExpertise.model_validate(row) for row in (teacher.expertise or [])
     ]
-    detail.classes_taught = _classes_taught(db, teacher.id)
+    detail.classes_taught = _classes_taught(
+        db, teacher.id, academic_year_id=academic_year_id
+    )
     detail.audit = _audit_stamp(db, teacher)
     return detail
 
@@ -228,6 +286,7 @@ def list_teachers(
     status: TeacherStatus | None,
     specialization: str | None,
     academic_year_id: uuid.UUID | None = None,
+    caller: User | None = None,
 ):
     """GET /teachers (P/S/Teacher RO). Page[TeacherListItem]; default sort
     full_name. `specialization` matches the JSON array via MariaDB JSON_SEARCH.
@@ -249,6 +308,18 @@ def list_teachers(
     switcher appeared to work while returning the same rows for every year.
     """
     stmt = select(TeacherProfile).where(TeacherProfile.deleted_at.is_(None))
+
+    if caller is not None and caller.role == Role.HOD:
+        # D43 — "they can see all the teachers under their program". Derived from actual
+        # teaching assignments, because that is the only link a lecturer has to a
+        # programme: `teacher_profiles` carries no programme column and never has.
+        #
+        # The head appears in their own list when they teach in their own programme,
+        # which is right — a department list that omits its head is a list of other
+        # people. A colleague who teaches nothing in the programme is correctly absent.
+        stmt = stmt.where(
+            TeacherProfile.id.in_(hod_teacher_ids(db, hod_program_ids(db, caller)))
+        )
 
     if status is not None:
         stmt = stmt.where(TeacherProfile.status == status)
@@ -314,11 +385,19 @@ def list_teachers(
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /teachers/{id} — detail
 # ──────────────────────────────────────────────────────────────────────────────
-def get_teacher(db: Session, *, teacher_id: uuid.UUID) -> TeacherDetail:
+def get_teacher(
+    db: Session, *, teacher_id: uuid.UUID, academic_year_id: uuid.UUID | None = None
+) -> TeacherDetail:
     """GET /teachers/{id} (P/S/Teacher RO). Teacher directory is not scoped by
     ownership (FR-TCH-05/07) — any authenticated non-student may read any teacher;
-    Student is denied at the role gate (403)."""
-    return _detail(db, _teacher_or_404(db, teacher_id))
+    Student is denied at the role gate (403).
+
+    `academic_year_id` scopes `classes_taught` to one year (D42 §2). It narrows the view
+    and can never widen it: the assignments listed are this lecturer's either way.
+    """
+    return _detail(
+        db, _teacher_or_404(db, teacher_id), academic_year_id=academic_year_id
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -359,7 +438,13 @@ def create_teacher(
             email=login_email,
             username=None,
             password_hash=hash_password(temp_password),
-            role=Role.TEACHER,  # a teacher profile links only to a teacher login
+            # A teacher profile links only to a teacher login. D43 deliberately did NOT
+            # let this create an HOD: promoting someone is the Dean's act, gated by
+            # `_PRIVILEGED_ROLES` on the Users screen, and appointing a head of a
+            # programme is a third act again (`program_heads`). Creating a lecturer is
+            # the Registrar's, and it must not be a way to mint a role that reads a
+            # whole programme.
+            role=Role.TEACHER,
             full_name=payload.full_name.strip(),
             is_active=True,
             must_change_password=True,
@@ -399,6 +484,17 @@ def create_teacher(
         designation=_clean(payload.designation),
         address=_clean(payload.address),
         comments=_clean(payload.comments),
+        # D40 — the three the create body could not carry until now. `expertise` is
+        # stored as plain dicts for the reason `update_teacher` records: the column is
+        # JSON, and handing it a Pydantic model serialises through whatever the driver
+        # happens to do with an object.
+        gender=payload.gender,
+        bio=_clean(payload.bio),
+        expertise=[
+            {"area": row.area.strip(), "level": row.level}
+            for row in (payload.expertise or [])
+            if row.area.strip()
+        ],
     )
     _sync_is_employed(teacher)
     db.add(teacher)

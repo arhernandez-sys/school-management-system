@@ -27,13 +27,18 @@ import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ErrorState, LoadingState, PageContainer, PageHeader } from '@shared/components';
+import { ErrorState, LoadingState, PageContainer, PageHeader, DateField } from '@shared/components';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import { useAcademicYears } from '@features/settings/hooks/useSettings';
 import { useReligions, religionOptions } from '@features/settings/hooks/useReligions';
-import { GENDERS, GENDER_LABEL } from '@shared/types/enums';
+import {
+  GENDERS,
+  GENDER_LABEL,
+  canonicalCivilStatus,
+  civilStatusOptions,
+} from '@shared/types/enums';
 import { schoolYearOptions } from '@shared/utils/schoolYears';
 import {
   useApplication,
@@ -358,6 +363,22 @@ export function ApplicationWizardScreen() {
   const isKnownGender = (GENDERS as readonly string[]).includes(genderCanonical);
   const genderValue = isKnownGender ? genderCanonical : genderRaw;
   const legacyGender = !isKnownGender && genderRaw ? genderRaw : null;
+
+  /**
+   * Civil status, on exactly the same terms (D40) — it was free text until now, and it is
+   * the same trap: MariaDB's collation folds 'single' into 'Single', the `<select>` does
+   * not, and the one that does not match renders blank and saves that blank back.
+   *
+   * `civilStatusOptions` carries a genuinely unknown value ('Common law') as its own
+   * "(as recorded)" option; the canonicaliser handles the merely mis-cased case, which is
+   * the common one and does not deserve a second option beside the real thing.
+   */
+  const civilStatusValue =
+    canonicalCivilStatus(draft.civil_status) ?? draft.civil_status.trim();
+  const civilStatusChoices = useMemo(
+    () => civilStatusOptions(civilStatusValue),
+    [civilStatusValue],
+  );
   // `STEPS[step]` is `Step | undefined` under `noUncheckedIndexedAccess`. `step` is only
   // ever moved with `Math.min`/`Math.max` inside the range, so narrow once here rather
   // than sprinkling `!` through the JSX.
@@ -657,14 +678,12 @@ export function ApplicationWizardScreen() {
                   </MenuItem>
                 ))}
               </TextField>
-              <TextField
+              <DateField
                 label="Date of birth"
-                type="date"
                 value={draft.date_of_birth}
-                onChange={(e) => set('date_of_birth', e.target.value)}
+                onChange={(v) => set('date_of_birth', v)}
                 required
                 fullWidth
-                InputLabelProps={{ shrink: true }}
                 error={Boolean(fieldErrors.date_of_birth)}
                 helperText={fieldErrors.date_of_birth?.join(' ')}
               />
@@ -709,15 +728,26 @@ export function ApplicationWizardScreen() {
                   <MenuItem value={legacyGender}>{legacyGender} (as recorded)</MenuItem>
                 )}
               </TextField>
+              {/* D40 — a SELECT, matching `StudentFormDialog`, and for the reason the
+                  Gender note above records: the two forms feed the same columns, and
+                  acceptance copies one onto the other verbatim. A vocabulary enforced on
+                  only one of them is a vocabulary the other quietly undoes. */}
               <TextField
                 label="Civil status"
-                value={draft.civil_status}
+                select
+                value={civilStatusValue}
                 onChange={(e) => set('civil_status', e.target.value)}
                 required
                 fullWidth
                 error={Boolean(fieldErrors.civil_status)}
                 helperText={fieldErrors.civil_status?.join(' ')}
-              />
+              >
+                {civilStatusChoices.map((o) => (
+                  <MenuItem key={o.value} value={o.value}>
+                    {o.label}
+                  </MenuItem>
+                ))}
+              </TextField>
               {/* D39 (Meeting #2 item 8) — the same vocabulary the student form uses.
                   `religionChoices` keeps whatever the draft already holds, so reopening
                   a saved application never opens this select blank and blanks the
@@ -929,20 +959,16 @@ export function ApplicationWizardScreen() {
                           }
                           label="Graduated"
                         />
-                        <TextField
+                        <DateField
                           label="Graduation date"
-                          type="date"
                           value={row.graduation_date ?? ''}
-                          onChange={(e) =>
+                          onChange={(v) =>
                             setEducation((prev) =>
                               prev.map((r, i) =>
-                                i === index
-                                  ? { ...r, graduation_date: e.target.value || null }
-                                  : r,
+                                i === index ? { ...r, graduation_date: v || null } : r,
                               ),
                             )
                           }
-                          InputLabelProps={{ shrink: true }}
                           required={row.graduated}
                           helperText={
                             row.graduated && !row.graduation_date
@@ -1184,22 +1210,18 @@ export function ApplicationWizardScreen() {
               checks that against the date of birth and refuses the submission if it is missing.
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
+              <DateField
                 label="Applicant signed"
-                type="date"
                 value={draft.applicant_signed_at}
-                onChange={(e) => set('applicant_signed_at', e.target.value)}
+                onChange={(v) => set('applicant_signed_at', v)}
                 fullWidth
                 required
-                InputLabelProps={{ shrink: true }}
               />
-              <TextField
+              <DateField
                 label="Parent / guardian signed"
-                type="date"
                 value={draft.guardian_signed_at}
-                onChange={(e) => set('guardian_signed_at', e.target.value)}
+                onChange={(v) => set('guardian_signed_at', v)}
                 fullWidth
-                InputLabelProps={{ shrink: true }}
                 helperText="Required only if the applicant is under 18."
               />
             </Stack>

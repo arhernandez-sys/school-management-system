@@ -96,12 +96,14 @@ class Semester(Base, TimestampMixin):
     start_date: Mapped[date] = mapped_column(Date(), nullable=False)
     end_date: Mapped[date] = mapped_column(Date(), nullable=False)
     #: Brief §18 / D30 §D6 — the Lecturer grade-entry cutoff, i.e. the **END-TERM**
-    #: deadline (D32-1; the column keeps its name, see `docs/midterm-revision-reports-plan.md`
-    #: §E for why it was not renamed). Set by the Dean-only `POST`/`PATCH
-    #: /settings/semesters`; enforced by `_assert_grade_window_open` in
-    #: `grades/service.upsert_grades`, the single grade write path, as a 409
-    #: `grade_window_closed`. **NULL = no deadline, window open** — the default, and
-    #: deliberately so: a guessed cutoff would lock lecturers out of a live term.
+    #: deadline (D32-1).
+    #:
+    #: **D42 §5 — RETIRED. Nothing reads this column.** The client asked for the
+    #: end-of-session deadline to leave Academic Structure and for the mid-session freeze
+    #: to be the only thing that stops grade entry, so `grades/service` no longer enforces
+    #: it and the Dean's form no longer offers it. The column and its schema fields are
+    #: kept because historic terms carry real values and dropping a column on live `sims`
+    #: is a one-way door — not because anything still consults them.
     #: Stored UTC (see `settings/service._to_utc`).
     grade_submission_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

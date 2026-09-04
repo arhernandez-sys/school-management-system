@@ -291,18 +291,26 @@ class TestTheGradebookReportsIt:
         assert body["midterm_frozen"] is True
         assert body["grade_window_closed"] is False
 
-    def test_the_end_term_deadline_wins_when_both_are_shut(
+    def test_the_freeze_is_the_only_window_that_shuts_now(
         self, client, graph, db_session
     ) -> None:
-        """Both closed → the end-term 409, because it is the more useful message: the
-        term is over, and waiting for the mid-term window to reopen would not help."""
-        graph.sem.grade_submission_deadline = _utc(-1)
+        """Was `test_the_end_term_deadline_wins_when_both_are_shut`, which asserted the
+        precedence between two windows. **D42 §5 retired the end-of-session deadline**, so
+        there is no precedence left to order — and the question worth asking flipped: does
+        a term carrying BOTH a past deadline and a running freeze still answer with the
+        freeze's message?
+
+        It must. `midterm_frozen` names a reopen date and `grade_window_closed` named a
+        finished term; answering the second for a term that is merely mid-freeze would send
+        a Lecturer to file a revision when all they had to do was wait.
+        """
+        graph.sem.grade_submission_deadline = _utc(-1)  # retired: must not influence this
         _window(db_session, graph, opens=-1, closes=+1)
         a = graph.assessment()
         student, _enr = graph.student()
         resp = _save(client, graph, a, student)
         assert resp.status_code == 409, resp.text
-        _assert_envelope(resp.json(), code="grade_window_closed")
+        _assert_envelope(resp.json(), code="midterm_frozen")
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -45,6 +45,7 @@ import {
   ProgramCourseDialog,
   type ProgramCourseFormValues,
 } from './components/ProgramCourseDialog';
+import { ProgramHeadsCard } from './components/ProgramHeadsCard';
 import type { ProgramCourseItem, TermBlock } from './types';
 
 /**
@@ -203,6 +204,10 @@ export function ProgramCurriculumScreen() {
           ) : undefined
         }
       />
+
+      {/* D43 — who runs this programme. Above the retirement notice and the credit
+          shortfall because it is a fact about the programme itself, not a warning. */}
+      <ProgramHeadsCard programId={program.id} canManage={canManage} />
 
       {!program.is_active && (
         <Alert severity="info" sx={{ mb: 2 }}>

@@ -36,6 +36,7 @@ import {
   type GradeRevision,
   type GradeRevisionStatus,
 } from './revisionTypes';
+import { formatSchoolDateTime } from '@shared/utils/schoolDate';
 
 /**
  * The grade-revision queue (D30 §D7/§D8, brief §20).
@@ -65,18 +66,13 @@ const FILTERS: { value: GradeRevisionStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All requests' },
 ];
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-}
+/*
+ * D42 §6 — this file's private date+time formatter is gone. It called
+ * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
+ * stamp on a US-locale machine while every plain date on the same screen was already
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * the one place that decision lives.
+ */
 
 export function GradeRevisionsScreen() {
   const { user } = useAuth();
@@ -227,9 +223,9 @@ export function GradeRevisionsScreen() {
                   </Typography>
 
                   <Typography variant="caption" color="text.secondary">
-                    Requested by {row.requested_by_name} on {formatWhen(row.created_at)}
+                    Requested by {row.requested_by_name} on {formatSchoolDateTime(row.created_at)}
                     {row.decided_at &&
-                      ` · ${row.status} by ${row.decided_by_name ?? 'the Dean'} on ${formatWhen(row.decided_at)}`}
+                      ` · ${row.status} by ${row.decided_by_name ?? 'the Dean'} on ${formatSchoolDateTime(row.decided_at)}`}
                   </Typography>
 
                   {row.decision_note && (

@@ -23,8 +23,9 @@ before the state transitions. See that function's docstring for the ordering rul
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from math import ceil
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from app.common.enums import AcademicYearStatus, Role
 from app.common.schemas import (
     AcademicYearRef,
     CurrentUser,
+    Page,
     SemesterRef,
 )
 from app.config import Settings as AppSettings
@@ -57,6 +59,7 @@ from app.modules.settings.models import (
 )
 from app.modules.settings.schemas import (
     AccountUpdateRequest,
+    AuditLogItem,
     ActiveTerm,
     AcademicYearCreateRequest,
     AcademicYearDetail,
@@ -79,7 +82,12 @@ from app.modules.users.models import User, UserPreferences
 
 # Roles that are "privileged" — assigning or moving a user INTO these, or any role
 # *change*, is Principal-only (FR-SET-04, §5.11).
-_PRIVILEGED_ROLES = {Role.PRINCIPAL, Role.SECRETARY}
+#
+# D43 adds both new roles. An AUDITOR account can read every record in the college, and
+# an HOD can read a whole programme's; handing either out is exactly the kind of decision
+# this list exists to keep with the Dean. Note the direction of the rule — it gates being
+# moved INTO the role, which is the act that grants the reach.
+_PRIVILEGED_ROLES = {Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.HOD}
 
 # Allowed sort fields for the users list (whitelist — never interpolated, §6).
 _USER_SORT_FIELDS = {
@@ -1299,3 +1307,93 @@ def update_account(
 
     db.commit()
     return build_current_user(db, user)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Audit log (D43)
+# ══════════════════════════════════════════════════════════════════════════════
+_AUDIT_SORT_FIELDS = {"created_at": AuditLog.created_at, "action": AuditLog.action}
+
+
+def list_audit_log(
+    db: Session,
+    *,
+    params: PageParams,
+    action: str | None = None,
+    entity_type: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    """GET /settings/audit-log — the sensitive-action trail (Dean + Auditor).
+
+    **This table has been written since day one and read by nothing.** Every module's
+    `_audit()` appends to it — role changes, grade revisions, programme edits, user
+    creation — and until D43 there was no endpoint and no screen, so the record existed
+    purely in the abstract. An auditor whose whole job is to inspect what was done needs
+    exactly this, and it is the one thing the existing screens could not give them.
+
+    Newest first, always: an audit trail is read from the most recent action backwards,
+    and any other default makes page 1 useless. `id` breaks ties because `created_at`
+    has second resolution here and a bulk action writes several rows inside one second —
+    without the tiebreak those rows can swap between pages and a reader paging through
+    would see one twice and another never.
+
+    Read-only by construction: there is no write endpoint, and none should be added.
+    """
+    stmt = select(AuditLog, User).outerjoin(User, User.id == AuditLog.actor_user_id)
+
+    if action:
+        stmt = stmt.where(AuditLog.action.ilike(f"%{action.strip()}%"))
+    if entity_type:
+        stmt = stmt.where(AuditLog.entity_type == entity_type.strip())
+    if actor_user_id is not None:
+        stmt = stmt.where(AuditLog.actor_user_id == actor_user_id)
+    if date_from is not None:
+        stmt = stmt.where(AuditLog.created_at >= datetime.combine(date_from, time.min))
+    if date_to is not None:
+        # INCLUSIVE of `date_to`: a user asking for "up to the 5th" means the whole of
+        # the 5th. Comparing against midnight would silently drop that day's rows.
+        stmt = stmt.where(
+            AuditLog.created_at < datetime.combine(date_to, time.min) + timedelta(days=1)
+        )
+
+    sort = (params.sort or "-created_at").strip()
+    desc = sort.startswith("-")
+    key = sort[1:] if desc else sort
+    col = _AUDIT_SORT_FIELDS.get(key)
+    if col is None:
+        raise ValidationError(f"Unknown sort field '{key}'.", code="invalid_sort_field")
+    stmt = stmt.order_by(
+        col.desc() if desc else col.asc(),
+        AuditLog.id.desc() if desc else AuditLog.id.asc(),
+    )
+
+    total = db.scalar(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    ) or 0
+    rows = db.execute(
+        stmt.offset((params.page - 1) * params.page_size).limit(params.page_size)
+    ).all()
+
+    items = [
+        AuditLogItem(
+            id=row.id,
+            actor_user_id=row.actor_user_id,
+            actor_name=user.full_name if user is not None else None,
+            actor_role=user.role.value if user is not None else None,
+            action=row.action,
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+            summary=row.summary,
+            created_at=row.created_at,
+        )
+        for (row, user) in rows
+    ]
+    return Page(
+        items=items,
+        total=total,
+        page=params.page,
+        page_size=params.page_size,
+        total_pages=max(1, ceil(total / params.page_size)) if total else 1,
+    )

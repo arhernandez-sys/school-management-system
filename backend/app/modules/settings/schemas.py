@@ -79,10 +79,10 @@ class SemesterDetail(BaseModel):
     sequence: int
     start_date: date
     end_date: date
-    #: Brief §18 / D30 §D6 — the **END-TERM** grade-entry cutoff (D32-1). Set by the
-    #: Dean-only `POST`/`PATCH /settings/semesters`; enforced in
-    #: `grades/service.upsert_grades`, the single grade write path, as a 409
-    #: `grade_window_closed`. `None` means the term never closes.
+    #: Brief §18 / D30 §D6 — the **END-TERM** grade-entry cutoff (D32-1).
+    #: **D42 §5 — RETIRED: still stored and still accepted on write, but no longer
+    #: enforced and no longer offered by the Dean's session form.** See
+    #: `Semester.grade_submission_deadline` in `settings/models.py`.
     grade_submission_deadline: datetime | None = None
     #: D32 — the mid-term grading window. Both `None` means the term has no mid-term
     #: period, which disables mid-term revision gating and mid-term report cards for it.
@@ -366,3 +366,26 @@ class ReligionList(BaseModel):
     dropdown that pages is not a dropdown."""
 
     items: list[ReligionItem] = Field(default_factory=list)
+
+
+# ── Audit log (D43) ────────────────────────────────────────────────────────────
+class AuditLogItem(BaseModel):
+    """One row of the append-only sensitive-action log.
+
+    `actor` is resolved to a name here rather than left as an id: an audit trail whose
+    every row reads `actor_user_id: 9f3c…` cannot be audited by a person, which is the
+    only reason it exists. It is nullable because the FK is `ON DELETE SET NULL` — a
+    deleted account must not take its history with it, so the ACTION survives the actor
+    and the screen shows it as an unknown user rather than dropping the row.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    actor_user_id: UUID | None = None
+    actor_name: str | None = None
+    actor_role: str | None = None
+    action: str
+    entity_type: str
+    entity_id: UUID | None = None
+    summary: dict | None = None
+    created_at: datetime

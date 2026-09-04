@@ -83,6 +83,11 @@ export const strings = {
     secretary: 'Registrar',
     teacher: 'Lecturer',
     student: 'Student',
+    // D43. "Head of Department" is the client's own words and the phrase already sits in
+    // `teacher_profiles.designation` as free text — so it is what staff will look for,
+    // even though the unit an HOD actually heads is a PROGRAMME.
+    hod: 'Head of Department',
+    auditor: 'Auditor',
   },
   nav: {
     dashboard: 'Dashboard',

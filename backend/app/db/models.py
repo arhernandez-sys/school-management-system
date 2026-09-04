@@ -25,6 +25,15 @@ from app.modules.offerings.models import (  # noqa: F401
     Course,
     CourseOffering,
 )
+# D43 — the programmes module was never registered here, so `programs` and
+# `program_courses` have been absent from `Base.metadata` since D30. `ProgramHead` is
+# added with them rather than becoming the next omission. (Admissions, prerequisites and
+# a few others are still missing; out of scope for D43, but worth a sweep.)
+from app.modules.programs.models import (  # noqa: F401
+    Program,
+    ProgramCourse,
+    ProgramHead,
+)
 from app.modules.settings.models import (  # noqa: F401
     AcademicYear,
     AssessmentPolicy,

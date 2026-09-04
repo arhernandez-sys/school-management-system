@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatSchoolDate } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
 import {
   Alert,
   Box,
@@ -33,6 +33,7 @@ import {
   StatusBadge,
   FormDialog,
   ConfirmDialog,
+  DateField,
 } from '@shared/components';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
@@ -70,22 +71,13 @@ const TERM_KINDS: { value: TermType; label: string }[] = [
   { value: 'spring', label: 'Spring block' },
 ];
 
-/**
- * A stored UTC deadline, rendered in the reader's own timezone (D30 §D6). Shown to the
- * minute: "grades due on the 15th" is not the same instruction as "grades due 17:00 on
- * the 15th", and the second is the one that is actually enforced.
+/*
+ * D42 §6 — this file's private date+time formatter is gone. It called
+ * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
+ * stamp on a US-locale machine while every plain date on the same screen was already
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * the one place that decision lives.
  */
-function formatDeadline(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 function blankTerm(sequence: number, name: string): DraftTerm {
   return {
@@ -519,22 +511,9 @@ export function AcademicStructureScreen() {
                             </TableCell>
                             <TableCell>
                               {formatSchoolDate(sem.start_date)} → {formatSchoolDate(sem.end_date)}
-                              {/* D30 §D6 — a closed grade window is the reason a Lecturer
-                                  cannot save, so it belongs on the term row rather than
-                                  only inside the edit dialog. */}
-                              {sem.grade_submission_deadline && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ display: 'block' }}
-                                >
-                                  Grades due {formatDeadline(sem.grade_submission_deadline)}
-                                </Typography>
-                              )}
-                              {/* D32 — the mid-session window decides which assessments can
-                                  be revised and when the mid-session card can be frozen, so
-                                  it belongs beside the end-session deadline, not buried in
-                                  the dialog. Both dates are set together or not at all. */}
+                              {/* D33 — a running freeze is the reason a Lecturer cannot
+                                  save, so it belongs on the session row rather than only
+                                  inside the edit dialog. */}
                               {sem.midterm_submission_start && sem.midterm_submission_end && (
                                 <Typography
                                   variant="caption"
@@ -543,8 +522,8 @@ export function AcademicStructureScreen() {
                                 >
                                   {/* D33 — it is a FREEZE, not a submission period. */}
                                   Mid-session frozen{' '}
-                                  {formatDeadline(sem.midterm_submission_start)} →{' '}
-                                  {formatDeadline(sem.midterm_submission_end)}
+                                  {formatSchoolDateTime(sem.midterm_submission_start)} →{' '}
+                                  {formatSchoolDateTime(sem.midterm_submission_end)}
                                 </Typography>
                               )}
                             </TableCell>
@@ -634,24 +613,14 @@ export function AcademicStructureScreen() {
             helperText={createFieldErrors.name?.join(' ')}
           />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField
+            <DateField
               label="Year start"
-              type="date"
               value={yearStart}
-              onChange={(e) => setYearStart(e.target.value)}
+              onChange={setYearStart}
               required
               fullWidth
-              InputLabelProps={{ shrink: true }}
             />
-            <TextField
-              label="Year end"
-              type="date"
-              value={yearEnd}
-              onChange={(e) => setYearEnd(e.target.value)}
-              required
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-            />
+            <DateField label="Year end" value={yearEnd} onChange={setYearEnd} required fullWidth />
           </Stack>
 
           {/* D30 §D3 — terms are a LIST. This used to be two fixed blocks of fields,
@@ -726,23 +695,19 @@ export function AcademicStructureScreen() {
                   />
                 </Stack>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <TextField
+                  <DateField
                     label="Start"
-                    type="date"
                     value={term.start_date}
-                    onChange={(e) => patchTerm(term.key, { start_date: e.target.value })}
+                    onChange={(v) => patchTerm(term.key, { start_date: v })}
                     required
                     fullWidth
-                    InputLabelProps={{ shrink: true }}
                   />
-                  <TextField
+                  <DateField
                     label="End"
-                    type="date"
                     value={term.end_date}
-                    onChange={(e) => patchTerm(term.key, { end_date: e.target.value })}
+                    onChange={(v) => patchTerm(term.key, { end_date: v })}
                     required
                     fullWidth
-                    InputLabelProps={{ shrink: true }}
                     error={Boolean(
                       term.start_date && term.end_date && term.end_date <= term.start_date,
                     )}

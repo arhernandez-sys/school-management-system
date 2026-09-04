@@ -412,6 +412,189 @@
         }
       }
     },
+    "/api/v1/settings/audit-log": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Sensitive-action audit trail, newest first (Dean + Auditor; D43)",
+        "description": "The log every module has written to since day one and nothing has ever read.\n\nRead-only by construction — there is no companion write endpoint, and adding one\nwould defeat the point of an append-only trail. `date_to` is inclusive of that day.",
+        "operationId": "list_audit_log_api_v1_settings_audit_log_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 60
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Type"
+            }
+          },
+          {
+            "name": "actor_user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor User Id"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 25,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AuditLogItem_"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/settings/school": {
       "get": {
         "tags": [
@@ -498,6 +681,43 @@
           },
           "422": {
             "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings/religions": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Religion vocabulary (authenticated; D39, Meeting #2 item 8)",
+        "description": "Authenticated read — the Secretary registering a student and the student\nreviewing their own profile both need the same list.\n\nGET is the ONLY verb this vocabulary has. The table is client-owned and this\napplication never writes it; see `settings/models.Religion`.",
+        "operationId": "list_religions_api_v1_settings_religions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReligionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -1984,7 +2204,7 @@
           "courses"
         ],
         "summary": "The course catalog / picker (authenticated; api-spec §5b)",
-        "description": "Everyone may read the catalog (reference data, no PII). Default is_active\nfilter hides retired courses from the picker.",
+        "description": "Everyone may read the catalog (reference data, no PII). Default is_active\nfilter hides retired courses from the picker; `include_retired=true` drops the\nfilter and returns both.",
         "operationId": "list_courses_api_v1_courses_get",
         "security": [
           {
@@ -2023,6 +2243,16 @@
                 }
               ],
               "title": "Is Active"
+            }
+          },
+          {
+            "name": "include_retired",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Retired"
             }
           },
           {
@@ -2359,7 +2589,7 @@
           "programs"
         ],
         "summary": "The programmes / studies offered (authenticated; D30 §D3)",
-        "description": "Default `is_active` filter hides retired programmes from pickers.",
+        "description": "Default `is_active` filter hides retired programmes from pickers.\n\n`include_retired=true` drops the filter entirely and returns active AND retired —\nwhat the Programmes screen's \"Show retired\" switch needs. `is_active` stays an\nequality filter, so `is_active=false` still means \"retired only\".",
         "operationId": "list_programs_api_v1_programs_get",
         "security": [
           {
@@ -2398,6 +2628,16 @@
                 }
               ],
               "title": "Is Active"
+            }
+          },
+          {
+            "name": "include_retired",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Retired"
             }
           },
           {
@@ -2790,6 +3030,162 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/programs/{program_id}/heads": {
+      "get": {
+        "tags": [
+          "programs"
+        ],
+        "summary": "Heads of this programme (authenticated; D43)",
+        "description": "Who runs this department. Readable by anyone signed in — it is the answer to\n\"who do I ask about this course\", not a confidence.",
+        "operationId": "list_program_heads_api_v1_programs__program_id__heads_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "program_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Program Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgramHeadsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "programs"
+        ],
+        "summary": "Replace this programme's heads (Dean only; D43)",
+        "description": "The COMPLETE list, replacing what is there; `[]` clears it.\n\nDean-only, alongside every other programme write. Note this does not grant anybody\nthe HOD role — that is a separate, audited role change in Settings. See the service\ndocstring for why the two are kept apart.",
+        "operationId": "set_program_heads_api_v1_programs__program_id__heads_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "program_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Program Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgramHeadsSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgramHeadsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -3338,7 +3734,7 @@
           "students"
         ],
         "summary": "List students (P/S/Teacher; api-spec §5.3, FR-STU-06)",
-        "description": "Teacher results auto-restrict to students in a class they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).\n\n`year_of_study` filters on the student's own level (D29 — it replaced `grade_level`,\nwhich used to be read off the student's homeroom). `offering_id` narrows to one\ncourse offering. `academic_year_id` (year switcher) restricts the directory to\nstudents enrolled in that year when it is a PAST year; the active year lists\neveryone.\n\n**D32 (brief §3) adds `religion`, `gender` and `program_id`.** Server-side, and they\nAND with each other and with everything above — \"all Female students in Programme X\"\nis two of them together. They filter on the student record itself, so a graduated or\nwithdrawn student still matches; that is deliberate, and the same reasoning as the\n`academic_year_id` note above.\n\n`religion` is free text from the admissions form, so its permitted values come from\n`GET /students/filter-options` rather than an enum.",
+        "description": "Teacher results auto-restrict to students in a class they own any subject\nof (FR-STU-08). Students are denied at the role gate (403).\n\n`year_of_study` filters on the student's own level (D29 — it replaced `grade_level`,\nwhich used to be read off the student's homeroom). `offering_id` narrows to one\ncourse offering. `academic_year_id` (year switcher) restricts the directory to\nstudents enrolled in that year when it is a PAST year; the active year lists\neveryone.\n\n**D32 (brief §3) adds `religion`, `gender` and `program_id`.** Server-side, and they\nAND with each other and with everything above — \"all Female students in Programme X\"\nis two of them together. They filter on the student record itself, so a graduated or\nwithdrawn student still matches; that is deliberate, and the same reasoning as the\n`academic_year_id` note above.\n\n**D40 adds `civil_status`**, on the same terms. Its four values come from the\n`CivilStatus` vocabulary the forms write, and the match is exact — the write path\nnormalises, so a filter that also had to guess at spellings would be papering over\na bug rather than fixing one.\n\n`religion` is free text on the COLUMN, but the dropdown that feeds this now reads\nthe client-owned `religions` table (D39) rather than the values already present;\n`GET /students/filter-options` still reports the latter, so the directory can offer\na legacy religion the table does not carry.",
         "operationId": "list_students_api_v1_students_get",
         "security": [
           {
@@ -3445,6 +3841,23 @@
                 }
               ],
               "title": "Religion"
+            }
+          },
+          {
+            "name": "civil_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 50
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Civil Status"
             }
           },
           {
@@ -6240,13 +6653,508 @@
         }
       }
     },
+    "/api/v1/pending-applications": {
+      "get": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Pending forms — own rows for a Registrar, ALL rows for the Dean",
+        "description": "Saved-but-unsubmitted forms. Each row carries `blocking_issues`, so the list can\nsay what a form still needs without anyone re-opening the wizard.",
+        "operationId": "list_pending_applications_api_v1_pending_applications_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 25,
+              "title": "Page Size"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingApplicationPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Save a form as pending (Registrar + Dean)",
+        "description": "The WHOLE form in one body, including Sections B and F — D38 removed per-step\nsaving, so the browser holds all seven sections until *Save and close*.",
+        "operationId": "create_pending_application_api_v1_pending_applications_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PendingApplicationWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingApplicationDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/pending-applications/{temp_id}": {
+      "get": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Re-open a pending form (own, or any for the Dean)",
+        "description": "404 — not 403 — for someone else's form. A 403 would confirm the row exists.",
+        "operationId": "get_pending_application_api_v1_pending_applications__temp_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "temp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Temp Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingApplicationDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Re-save a pending form (own, or any for the Dean)",
+        "description": "Whole-form, not per-section: there is nothing on the server a full body could\nclobber. `created_by` is never reassigned — it is the scope.",
+        "operationId": "update_pending_application_api_v1_pending_applications__temp_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "temp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Temp Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PendingApplicationWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingApplicationDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Discard a pending form — HARD (own, or any for the Dean)",
+        "description": "Hard, unlike an application: there is no admissions record to keep — the form\neither became an application or was abandoned.",
+        "operationId": "delete_pending_application_api_v1_pending_applications__temp_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "temp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Temp Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/pending-applications/{temp_id}/submit": {
+      "post": {
+        "tags": [
+          "admissions"
+        ],
+        "summary": "Promote a pending form into an application and submit it",
+        "description": "One transaction: the temp row becomes an `applications` row, its two JSON arrays\nbecome the real child rows, and the temp row is deleted.\n\nReturns the **application**, not the pending form — the pending form no longer exists.\n422 `application_incomplete` lists everything missing at once AND leaves the pending\nrow untouched, so a refused submit never costs the Registrar their typing.",
+        "operationId": "submit_pending_application_api_v1_pending_applications__temp_id__submit_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "temp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Temp Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/v1/teachers": {
       "get": {
         "tags": [
           "teachers"
         ],
         "summary": "Teacher directory (P/S/Teacher RO; api-spec §5.4, FR-TCH-05)",
-        "description": "Read-only for teachers; students are denied at the gate (403).\n\n`academic_year_id` backs the module's year switcher — a PAST year narrows the\ndirectory to staff who taught that year; the active year does not filter (see\n`service.list_teachers`).",
+        "description": "Read-only for teachers; students are denied at the gate (403).\n\n`academic_year_id` backs the module's year switcher — a PAST year narrows the\ndirectory to staff who taught that year; the active year does not filter (see\n`service.list_teachers`).\n\nD43 — `caller` is now PASSED (it was `_caller`, deliberately unused). The directory\nwas unscoped for every role that could reach it, which was fine while those roles\nwere Dean/Registrar/Lecturer and all three are meant to see the whole staff list. An\nHOD is the first caller here who must see a SUBSET, so the service needs to know who\nis asking.",
         "operationId": "list_teachers_api_v1_teachers_get",
         "security": [
           {
@@ -6480,12 +7388,92 @@
         }
       }
     },
+    "/api/v1/teachers/{teacher_id}/years": {
+      "get": {
+        "tags": [
+          "teachers"
+        ],
+        "summary": "Academic years this lecturer taught in (P/S/Teacher RO; D42 §2)",
+        "description": "Backs the year switcher on the lecturer profile — only the years the lecturer\nactually has an assignment in, newest first.\n\n**Declared BEFORE `/{teacher_id}`.** FastAPI matches routes in declaration order, and\nthe bare path would otherwise swallow `years` as a teacher id and answer 422.",
+        "operationId": "list_teacher_years_api_v1_teachers__teacher_id__years_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "teacher_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Teacher Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherYearsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teachers/{teacher_id}": {
       "get": {
         "tags": [
           "teachers"
         ],
         "summary": "Teacher detail (P/S/Teacher RO; api-spec §5.4)",
+        "description": "`academic_year_id` scopes `classes_taught` to that year (D42 §2, the profile's\nyear switcher). Omitted, every assignment the lecturer holds comes back.",
         "operationId": "get_teacher_api_v1_teachers__teacher_id__get",
         "security": [
           {
@@ -6501,6 +7489,23 @@
               "type": "string",
               "format": "uuid",
               "title": "Teacher Id"
+            }
+          },
+          {
+            "name": "academic_year_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Academic Year Id"
             }
           }
         ],
@@ -6546,14 +7551,14 @@
             "description": "Not Found"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
-            }
+            },
+            "description": "Unprocessable Entity"
           }
         }
       },
@@ -15748,8 +16753,15 @@
             "title": "Decided At"
           },
           "updated_at": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Updated At"
           },
           "education": {
@@ -15788,8 +16800,7 @@
           "full_name",
           "first_name",
           "last_name",
-          "created_at",
-          "updated_at"
+          "created_at"
         ],
         "title": "ApplicationDetail",
         "description": "The whole form, plus its repeating tables and its transfers."
@@ -17409,6 +18420,93 @@
           "summary"
         ],
         "title": "AttendanceUpsertResponse"
+      },
+      "AuditLogItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "actor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Name"
+          },
+          "actor_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Role"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "entity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Id"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "entity_type",
+          "created_at"
+        ],
+        "title": "AuditLogItem",
+        "description": "One row of the append-only sensitive-action log.\n\n`actor` is resolved to a name here rather than left as an id: an audit trail whose\nevery row reads `actor_user_id: 9f3c…` cannot be audited by a person, which is the\nonly reason it exists. It is nullable because the FK is `ON DELETE SET NULL` — a\ndeleted account must not take its history with it, so the ACTION survives the actor\nand the screen shows it as an unknown user rather than dropping the row."
       },
       "AuditStamp": {
         "properties": {
@@ -21166,6 +22264,42 @@
         ],
         "title": "Page[AssessmentListItem]"
       },
+      "Page_AuditLogItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditLogItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages"
+        ],
+        "title": "Page[AuditLogItem]"
+      },
       "Page_CourseListItem_": {
         "properties": {
           "items": {
@@ -21381,6 +22515,1063 @@
           "total_pages"
         ],
         "title": "Page[UserListItem]"
+      },
+      "PendingApplicationDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "pending"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "first_name": {
+            "type": "string",
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "type": "string",
+            "title": "Last Name"
+          },
+          "school_year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "School Year"
+          },
+          "program": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__admissions__schemas__ProgramRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "year_of_study": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearOfStudy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enrollment_load": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrollmentLoad"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "blocking_issues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Issues"
+          },
+          "date_of_birth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Birth"
+          },
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "has_health_condition": {
+            "type": "boolean",
+            "title": "Has Health Condition",
+            "default": false
+          },
+          "health_condition_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Condition Note"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Street"
+          },
+          "city_town_village": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City Town Village"
+          },
+          "district": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/District"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mother_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mother Name"
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name"
+          },
+          "nok_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Name"
+          },
+          "nok_relationship": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Relationship"
+          },
+          "nok_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Phone"
+          },
+          "atlib_exam": {
+            "type": "boolean",
+            "title": "Atlib Exam",
+            "default": false
+          },
+          "num_csec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Csec"
+          },
+          "finance_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Name"
+          },
+          "finance_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Phone"
+          },
+          "finance_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Email"
+          },
+          "recommendation_received": {
+            "type": "boolean",
+            "title": "Recommendation Received",
+            "default": false
+          },
+          "applicant_signed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicant Signed At"
+          },
+          "guardian_signed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardian Signed At"
+          },
+          "academic_year_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Year Id"
+          },
+          "enrolment_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enrolment Status"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "education": {
+            "items": {
+              "$ref": "#/components/schemas/EducationRow"
+            },
+            "type": "array",
+            "title": "Education"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentRow"
+            },
+            "type": "array",
+            "title": "Documents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "full_name",
+          "first_name",
+          "last_name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PendingApplicationDetail",
+        "description": "The whole pending form, as the wizard re-opens it."
+      },
+      "PendingApplicationListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "pending"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "first_name": {
+            "type": "string",
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "type": "string",
+            "title": "Last Name"
+          },
+          "school_year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "School Year"
+          },
+          "program": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__admissions__schemas__ProgramRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "year_of_study": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearOfStudy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enrollment_load": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrollmentLoad"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "blocking_issues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "full_name",
+          "first_name",
+          "last_name",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PendingApplicationListItem",
+        "description": "A row in the Pending forms list.\n\n`created_by_name` is here because the Dean sees everyone's rows and \"whose form is\nthis?\" is the first question a shared queue raises. A Registrar sees only their own,\nso for them the column is constant and the frontend hides it."
+      },
+      "PendingApplicationPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingApplicationListItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size",
+            "default": 25
+          },
+          "total_pages": {
+            "type": "integer",
+            "title": "Total Pages",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "PendingApplicationPage"
+      },
+      "PendingApplicationWrite": {
+        "properties": {
+          "school_year": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "School Year"
+          },
+          "first_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "First Name"
+          },
+          "middle_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Middle Name"
+          },
+          "last_name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Last Name"
+          },
+          "date_of_birth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Birth"
+          },
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 25
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
+          },
+          "religion": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Religion"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "has_health_condition": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Health Condition"
+          },
+          "health_condition_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Condition Note"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Street"
+          },
+          "city_town_village": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City Town Village"
+          },
+          "district": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/District"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mother_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mother Name"
+          },
+          "father_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Father Name"
+          },
+          "nok_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Name"
+          },
+          "nok_relationship": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Relationship"
+          },
+          "nok_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nok Phone"
+          },
+          "atlib_exam": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Atlib Exam"
+          },
+          "num_csec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Csec"
+          },
+          "finance_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Name"
+          },
+          "finance_phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Phone"
+          },
+          "finance_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finance Email"
+          },
+          "recommendation_received": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommendation Received"
+          },
+          "program_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Id"
+          },
+          "year_of_study": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/YearOfStudy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enrollment_load": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrollmentLoad"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "applicant_signed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicant Signed At"
+          },
+          "guardian_signed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardian Signed At"
+          },
+          "academic_year_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Year Id"
+          },
+          "enrolment_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enrolment Status"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "education": {
+            "items": {
+              "$ref": "#/components/schemas/EducationRow"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Education"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentRow"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Documents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "first_name",
+          "last_name"
+        ],
+        "title": "PendingApplicationWrite",
+        "description": "POST / PATCH `/pending-applications` — the WHOLE form in one body.\n\nUnlike `ApplicationUpdateRequest` this is not a per-section patch, because D38 removed\nper-section saving: the wizard holds all seven sections in the browser and writes them\nonce, when the Registrar presses *Save and close* or *Save and submit*. Sending the\nwhole form is therefore correct rather than wasteful — there are no other sections\nsitting on the server that a full body could clobber.\n\nThe names stay required. A pending form with no name on it cannot be found again in a\nlist, which is the only thing the table is for."
       },
       "PreferencesUpdate": {
         "properties": {
@@ -21873,6 +24064,83 @@
         "title": "ProgramDetail",
         "description": "GET /programs/{id} — the programme plus its curriculum, grouped by block."
       },
+      "ProgramHeadItem": {
+        "properties": {
+          "teacher_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Teacher Id"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "staff_number": {
+            "type": "string",
+            "title": "Staff Number"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "appointed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "teacher_id",
+          "full_name",
+          "staff_number"
+        ],
+        "title": "ProgramHeadItem",
+        "description": "One head of this programme, named well enough to render without a second call."
+      },
+      "ProgramHeadsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProgramHeadItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "ProgramHeadsResponse"
+      },
+      "ProgramHeadsSetRequest": {
+        "properties": {
+          "teacher_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Teacher Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProgramHeadsSetRequest",
+        "description": "PUT /programs/{id}/heads — the COMPLETE list of heads, replacing what is there.\n\nA whole-list PUT rather than add/remove endpoints: the screen edits a multi-select\nand submits it, and two co-heads swapped in one action would otherwise be an add and\na delete that can half-fail. Sending `[]` clears the appointments, which is how a\nhead is removed."
+      },
       "ProgramHistoryEntry": {
         "properties": {
           "id": {
@@ -22125,6 +24393,50 @@
           "released_count"
         ],
         "title": "ReleaseResult"
+      },
+      "ReligionItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "code_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ReligionItem",
+        "description": "One row of the Religion dropdown.\n\n`code_name` (e.g. `SDA`) is carried alongside the name because the client's own\nreports use it; nothing in this application writes it."
+      },
+      "ReligionList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReligionItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "ReligionList",
+        "description": "GET /settings/religions. Not paginated — this is a short vocabulary, and a\ndropdown that pages is not a dropdown."
       },
       "ReportAcademicYearRef": {
         "properties": {
@@ -22594,9 +24906,12 @@
           "principal",
           "secretary",
           "teacher",
-          "student"
+          "student",
+          "hod",
+          "auditor"
         ],
-        "title": "Role"
+        "title": "Role",
+        "description": "One role per user (A-ONE-ROLE). Values are the wire labels AND the DB enum labels.\n\nThe DISPLAY vocabulary differs and is a frontend concern (D30, decision #3):\nprincipal -> Dean, secretary -> Registrar, teacher -> Lecturer. The values below were\ndeliberately not renamed with it.\n\nD43 added the last two:\n\n  AUDITOR  Reads everything, writes nothing. Not \"an admin who should behave\" - the\n           refusal is enforced in `get_current_user`, which every authenticated route\n           passes through, so no route can opt out of it by omission. `require_role`\n           is a role allowlist and cannot express \"GET only\", which is why the guard\n           lives there and not in 121 dependency tuples.\n\n  HOD      Head of Department: a LECTURER who also supervises a programme. Keeps every\n           lecturer power on offerings they are actually assigned to - ownership, not\n           role, is what limits that - and additionally READS everything in the\n           programme(s) they head. The link is `program_heads`; there is no\n           `departments` table and a programme is the unit BAJC actually has."
       },
       "RosterEntry": {
         "properties": {
@@ -22744,6 +25059,17 @@
               }
             ],
             "title": "Contact Phone"
+          },
+          "post_graduation_access_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Graduation Access Days"
           }
         },
         "type": "object",
@@ -22751,7 +25077,7 @@
           "name"
         ],
         "title": "SchoolProfileRead",
-        "description": "GET /settings/school — SchoolIdentity plus nothing extra (identity is the\npublic read shape). `logo_url` is resolved from `logo_storage_key` + the\nSupabase public base when a key is present (TODO(OQ-DB5), see service)."
+        "description": "GET /settings/school — the identity, plus the operator-set policy below.\n\n`logo_url` is resolved from `logo_storage_key` by `service._logo_url_for`, which\nD39 taught to return an already-usable key rather than always None."
       },
       "SchoolUpdateRequest": {
         "properties": {
@@ -22796,6 +25122,19 @@
               }
             ],
             "title": "Contact Phone"
+          },
+          "post_graduation_access_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3650.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Graduation Access Days"
           }
         },
         "additionalProperties": false,
@@ -24278,11 +26617,18 @@
             },
             "type": "array",
             "title": "Religions"
+          },
+          "civil_statuses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Civil Statuses"
           }
         },
         "type": "object",
         "title": "StudentFilterOptions",
-        "description": "GET /students/filter-options — the values the directory filters can actually take.\n\n**Only `religion` is derived**, and it has to be: it is free text collected on the\nadmissions form (`applications.religion`, copied across on acceptance), so there is no\nenum to render a dropdown from. A hardcoded list would go stale the first time\nsomebody typed a denomination nobody had anticipated, and would show options that\nmatch nothing.\n\n`gender` is a fixed pair and `program_id` comes from `/programs`, so neither needs to\nbe discovered — they are not returned here."
+        "description": "GET /students/filter-options — what the directory's free-text filters can match.\n\nBoth lists here are DISCOVERED from the register, and after D39/D40 neither is the\ndropdown's primary source any more. Religion now offers the client-owned `religions`\ntable and civil status offers the four `CivilStatus` values; what this endpoint adds\nis the **residue** — the values already stored that those vocabularies do not carry.\n\nThat residue is not a nicety. A student imported from the client's previous system\nkeeps a religion the table has never held (D37: the write path is constrained, not the\ncolumn), and a filter built only from the vocabulary could not select them. They would\nbe a student nobody could find by the attribute the directory shows in their row.\n\n`gender` is a fixed pair and `program_id` comes from `/programs`, so neither needs to\nbe discovered — they are not returned here."
       },
       "StudentListItem": {
         "properties": {
@@ -24376,6 +26722,17 @@
               }
             ],
             "title": "Religion"
+          },
+          "civil_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Civil Status"
           },
           "program_code": {
             "anyOf": [
@@ -25182,6 +27539,167 @@
                 "type": "null"
               }
             ]
+          },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "licensenum": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 15,
+                "pattern": "^$|^[A-Za-z0-9-]{1,15}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licensenum"
+          },
+          "hire_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hire Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "academic_qualification": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Qualification"
+          },
+          "designation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Designation"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "male",
+                  "female",
+                  "other"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bio"
+          },
+          "expertise": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TeacherExpertise"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expertise"
           }
         },
         "additionalProperties": false,
@@ -25280,6 +27798,174 @@
                 "type": "null"
               }
             ]
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bio"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "male",
+                  "female",
+                  "other"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "academic_qualification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Qualification"
+          },
+          "designation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Designation"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "expertise": {
+            "items": {
+              "$ref": "#/components/schemas/TeacherExpertise"
+            },
+            "type": "array",
+            "title": "Expertise"
+          },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "licensenum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licensenum"
+          },
+          "is_employed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Employed"
+          },
+          "hire_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hire Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
           }
         },
         "type": "object",
@@ -25291,6 +27977,30 @@
         ],
         "title": "TeacherDetail",
         "description": "GET /teachers/{id} + POST/PATCH/status responses (api-spec §5.4)."
+      },
+      "TeacherExpertise": {
+        "properties": {
+          "area": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Area"
+          },
+          "level": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Level"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "area",
+          "level"
+        ],
+        "title": "TeacherExpertise",
+        "description": "One rated area of subject expertise — the profile's labelled progress bars.\n\n`level` is a percentage the UI renders as a bar, so it is clamped at the contract\nrather than trusted: a 140 would draw off the end of its track."
       },
       "TeacherListItem": {
         "properties": {
@@ -25447,12 +28157,223 @@
               }
             ],
             "title": "Subject Specializations"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bio"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "male",
+                  "female",
+                  "other"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "academic_qualification": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Qualification"
+          },
+          "designation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 150
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Designation"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "expertise": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TeacherExpertise"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expertise"
+          },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 250
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "ssno": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssno"
+          },
+          "licensenum": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 15,
+                "pattern": "^$|^[A-Za-z0-9-]{1,15}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Licensenum"
+          },
+          "hire_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hire Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "TeacherUpdateRequest",
         "description": "PATCH /teachers/{id} (api-spec §5.4, FR-TCH-03).\n\nBenign profile edits only. `status` (deactivation) goes through\nPOST /teachers/{id}/status (Principal-only); role change is a Settings action."
+      },
+      "TeacherYearItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AcademicYearStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "TeacherYearItem",
+        "description": "One academic year this lecturer actually taught in (D42 §2)."
+      },
+      "TeacherYearsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TeacherYearItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "TeacherYearsResponse",
+        "description": "GET /teachers/{id}/years — newest year first.\n\nBacks the year switcher on the lecturer profile, the mirror of\n`StudentYearsResponse`. Only the years the lecturer HAS an assignment in: a\nswitcher that offers a year with nothing behind it reads as a broken screen."
       },
       "TermBlock": {
         "properties": {
@@ -25724,6 +28645,28 @@
           },
           "school": {
             "$ref": "#/components/schemas/ReportSchool"
+          },
+          "program_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Code"
+          },
+          "program_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Name"
           },
           "issued_at": {
             "type": "string",

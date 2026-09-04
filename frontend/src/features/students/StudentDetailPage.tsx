@@ -105,6 +105,12 @@ export function StudentDetailPage() {
     // `GET /students/{id}/assessments` now 403s for the Registrar. Rendering it for them
     // would show an error panel where a tab used to be, which is worse than no tab.
     const canSeeGrades = user?.role === 'principal' || user?.role === 'teacher';
+    // D42 §4 — the Academic history tab is Dean/Registrar only. Its endpoint
+    // (`GET /students/{id}/academic-history`) is already `require_role(PRINCIPAL,
+    // SECRETARY)`, so a Lecturer opening this tab got a 403 error panel where content
+    // should be. The client asked for the tab to go for them, which is also what the
+    // server was already saying.
+    const canSeeAcademicHistory = user?.role === 'principal' || user?.role === 'secretary';
     return [
       {
         value: 'enrollment',
@@ -122,16 +128,20 @@ export function StudentDetailPage() {
             } as DetailTab,
           ]
         : []),
-      {
-        // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
-        // cumulative GPA, and which courses count toward the current award. Derived on
-        // every read, and NOT year-scoped: an award spans years by definition, so the
-        // global year switcher deliberately does not narrow it.
-        value: 'academic',
-        label: 'Academic history',
-        icon: <SchoolOutlinedIcon fontSize="small" />,
-        render: () => <AcademicHistoryPanel studentId={studentId} />,
-      },
+      ...(canSeeAcademicHistory
+        ? [
+            {
+              // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
+              // cumulative GPA, and which courses count toward the current award. Derived on
+              // every read, and NOT year-scoped: an award spans years by definition, so the
+              // global year switcher deliberately does not narrow it.
+              value: 'academic',
+              label: 'Academic history',
+              icon: <SchoolOutlinedIcon fontSize="small" />,
+              render: () => <AcademicHistoryPanel studentId={studentId} />,
+            } as DetailTab,
+          ]
+        : []),
     ];
   }, [detail, studentId, yearId, yearName, user?.role]);
 

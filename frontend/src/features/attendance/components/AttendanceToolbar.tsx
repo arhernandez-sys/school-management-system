@@ -1,6 +1,6 @@
-import { MenuItem, Stack, TextField } from '@mui/material';
+import { Box, MenuItem, Stack, TextField } from '@mui/material';
 import { schoolToday } from '@shared/utils/schoolDate';
-import { YearSelect } from '@shared/components';
+import { YearSelect, DateField } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
 import type { AttendanceOfferingsResponse } from '../types';
 
@@ -97,18 +97,21 @@ export function AttendanceToolbar({
       </TextField>
 
       {showDate && onDateChange && (
-        <TextField
-          size="small"
-          label="Date"
-          type="date"
-          value={date ?? today}
-          onChange={(e) => onDateChange(e.target.value)}
-          disabled={disabled}
-          inputProps={{ max: today }}
-          InputLabelProps={{ shrink: true }}
-          helperText="Future dates are disabled"
-          sx={{ minWidth: 200 }}
-        />
+        <Box sx={{ minWidth: 200 }}>
+          {/* `maxDate` replaces the native `max` attribute — FR-ATT-05 forbids a future
+              register, and the picker greys those days out rather than only refusing on
+              submit. */}
+          <DateField
+            size="small"
+            label="Date"
+            value={date ?? today}
+            onChange={onDateChange}
+            disabled={disabled}
+            maxDate={today}
+            helperText="Future dates are disabled"
+            fullWidth
+          />
+        </Box>
       )}
     </Stack>
   );

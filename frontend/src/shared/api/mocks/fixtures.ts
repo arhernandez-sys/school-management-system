@@ -13,6 +13,8 @@ function makeUser(role: Role, overrides: Partial<CurrentUser> = {}): CurrentUser
     secretary: 'Sofia Castillo',
     teacher: 'Maria Reyes',
     student: 'Ana Lopez',
+    hod: 'Daniel Cruz',
+    auditor: 'Ruth Bennett',
   };
   return {
     id: `mock-${role}`,
@@ -23,7 +25,13 @@ function makeUser(role: Role, overrides: Partial<CurrentUser> = {}): CurrentUser
     must_change_password: false,
     is_active: true,
     ...(role === 'student' ? { student_profile_id: 'mock-student-profile' } : {}),
-    ...(role === 'teacher' ? { teacher_profile_id: 'mock-teacher-profile' } : {}),
+    // D43 — an HOD carries a lecturer profile too, matching `build_current_user`,
+    // which resolves `teacher_profile_id` for every role in `LECTURER_ROLES`. Without
+    // it the demo's HOD would look like an admin with no profile and "My profile" would
+    // dead-end.
+    ...(role === 'teacher' || role === 'hod'
+      ? { teacher_profile_id: 'mock-teacher-profile' }
+      : {}),
     preferences: { locale: 'en', theme: 'light', default_page_size: 25 },
     // D32 - the canned fixture users predate the switch and exist to exercise the shell;
     // published so the nav renders the full set (see the demo seed comment for the
@@ -43,6 +51,8 @@ export const MOCK_USERS: Record<string, CurrentUser> = {
   secretary: makeUser('secretary'),
   teacher: makeUser('teacher'),
   student: makeUser('student'),
+  hod: makeUser('hod'),
+  auditor: makeUser('auditor'),
 };
 
 export function resolveMockUser(identifier: string): CurrentUser {

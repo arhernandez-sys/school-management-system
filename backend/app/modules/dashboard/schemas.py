@@ -254,6 +254,36 @@ class StudentDashboard(_Base):
     announcements: list[DashboardAnnouncement] = Field(default_factory=list)
 
 
+# ── D43: the two new roles ─────────────────────────────────────────────────────
+# Both reuse an existing SHAPE and change only the discriminator. That is deliberate:
+# the payloads genuinely are the same data, and the frontend branches on `role`, so
+# returning `role: "teacher"` to a Head of Department would have been a lie the client
+# then acts on. A variant is cheap; a wrong discriminator is a bug in every consumer.
+
+
+class HodDashboard(TeacherDashboard):
+    """A head's own teaching, tagged honestly.
+
+    Shaped like the lecturer dashboard because a head IS a lecturer and their landing
+    page is their own classes. Their departmental oversight is not squeezed in here —
+    it lives where it is useful, on the Students / Lecturers / Offerings screens, which
+    the server scopes to their programme.
+    """
+
+    role: Literal["hod"] = "hod"
+
+
+class AuditorDashboard(AdminDashboard):
+    """School-wide figures, read-only. Same numbers the Dean sees."""
+
+    role: Literal["auditor"] = "auditor"
+
+
 DashboardResponse = (
-    AdminDashboard | SecretaryDashboard | TeacherDashboard | StudentDashboard
+    AdminDashboard
+    | SecretaryDashboard
+    | TeacherDashboard
+    | StudentDashboard
+    | HodDashboard
+    | AuditorDashboard
 )

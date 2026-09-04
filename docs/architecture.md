@@ -158,7 +158,11 @@ flowchart LR
 
 **Frontend enforcement:** React Router route guards check the in-memory role and redirect unauthorized navigation (validating the AC: a Student manually visiting an admin URL is redirected and gets no data). A central permission map mirrors the §2 matrix so menus, buttons, and routes render per role — but every gated call is independently re-checked by the API.
 
-**Roles are fixed (4)** and **single per user (A-ONE-ROLE)**, so role is a simple enum on the user record — no role/permission join tables needed for v1.
+**Roles are fixed (6 as of D43: principal, secretary, teacher, student, hod, auditor)** and **single per user (A-ONE-ROLE)**, so role is a simple enum on the user record — no role/permission join tables needed for v1.
+
+> **D43 added a THIRD authorization layer, above the other two.** The role gate is an allowlist of role names and cannot express "GET only", so the Auditor's read-only rule could not be written as one: expressing it per-route would have meant getting all ~121 `Depends(...)` tuples right, where a single miss is a read-only account that can delete a student. It is enforced once in `get_current_user` — the one dependency every authenticated route passes through — which inverts the default: **a new endpoint is read-only for an Auditor the day it is written, without its author knowing the role exists.**
+>
+> The HOD's programme scope is NOT in that layer. It is ordinary layer-2 ownership work (`app/core/rbac.py::hod_*`), because it narrows *which rows* come back rather than *whether* the call is allowed — and, like every other 'own'-scoped rule here, it derives from the authenticated principal (`program_heads`), never from the request.
 
 ---
 

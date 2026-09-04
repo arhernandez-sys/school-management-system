@@ -8971,9 +8971,9 @@ var require_iterate = __commonJS({
     var async = require_async();
     var abort = require_abort();
     module2.exports = iterate;
-    function iterate(list2, iterator2, state, callback) {
+    function iterate(list, iterator2, state, callback) {
       var key = state["keyedList"] ? state["keyedList"][state.index] : state.index;
-      state.jobs[key] = runJob(iterator2, key, list2[key], function(error, output) {
+      state.jobs[key] = runJob(iterator2, key, list[key], function(error, output) {
         if (!(key in state.jobs)) {
           return;
         }
@@ -9002,17 +9002,17 @@ var require_iterate = __commonJS({
 var require_state = __commonJS({
   "node_modules/asynckit/lib/state.js"(exports2, module2) {
     module2.exports = state;
-    function state(list2, sortMethod) {
-      var isNamedList = !Array.isArray(list2), initState = {
+    function state(list, sortMethod) {
+      var isNamedList = !Array.isArray(list), initState = {
         index: 0,
-        keyedList: isNamedList || sortMethod ? Object.keys(list2) : null,
+        keyedList: isNamedList || sortMethod ? Object.keys(list) : null,
         jobs: {},
         results: isNamedList ? {} : [],
-        size: isNamedList ? Object.keys(list2).length : list2.length
+        size: isNamedList ? Object.keys(list).length : list.length
       };
       if (sortMethod) {
         initState.keyedList.sort(isNamedList ? sortMethod : function(a, b) {
-          return sortMethod(list2[a], list2[b]);
+          return sortMethod(list[a], list[b]);
         });
       }
       return initState;
@@ -9044,10 +9044,10 @@ var require_parallel = __commonJS({
     var initState = require_state();
     var terminator = require_terminator();
     module2.exports = parallel;
-    function parallel(list2, iterator2, callback) {
-      var state = initState(list2);
-      while (state.index < (state["keyedList"] || list2).length) {
-        iterate(list2, iterator2, state, function(error, result) {
+    function parallel(list, iterator2, callback) {
+      var state = initState(list);
+      while (state.index < (state["keyedList"] || list).length) {
+        iterate(list, iterator2, state, function(error, result) {
           if (error) {
             callback(error, result);
             return;
@@ -9073,16 +9073,16 @@ var require_serialOrdered = __commonJS({
     module2.exports = serialOrdered;
     module2.exports.ascending = ascending;
     module2.exports.descending = descending;
-    function serialOrdered(list2, iterator2, sortMethod, callback) {
-      var state = initState(list2, sortMethod);
-      iterate(list2, iterator2, state, function iteratorHandler(error, result) {
+    function serialOrdered(list, iterator2, sortMethod, callback) {
+      var state = initState(list, sortMethod);
+      iterate(list, iterator2, state, function iteratorHandler(error, result) {
         if (error) {
           callback(error, result);
           return;
         }
         state.index++;
-        if (state.index < (state["keyedList"] || list2).length) {
-          iterate(list2, iterator2, state, iteratorHandler);
+        if (state.index < (state["keyedList"] || list).length) {
+          iterate(list, iterator2, state, iteratorHandler);
           return;
         }
         callback(null, state.results);
@@ -9103,8 +9103,8 @@ var require_serial = __commonJS({
   "node_modules/asynckit/serial.js"(exports2, module2) {
     var serialOrdered = require_serialOrdered();
     module2.exports = serial;
-    function serial(list2, iterator2, callback) {
-      return serialOrdered(list2, iterator2, null, callback);
+    function serial(list, iterator2, callback) {
+      return serialOrdered(list, iterator2, null, callback);
     }
   }
 });
@@ -9986,7 +9986,7 @@ var require_form_data = __commonJS({
     var CombinedStream = require_combined_stream();
     var util4 = require("util");
     var path = require("path");
-    var http21 = require("http");
+    var http7 = require("http");
     var https2 = require("https");
     var parseUrl2 = require("url").parse;
     var fs = require("fs");
@@ -10261,7 +10261,7 @@ var require_form_data = __commonJS({
       if (options.protocol === "https:") {
         request = https2.request(options);
       } else {
-        request = http21.request(options);
+        request = http7.request(options);
       }
       this.getLength(function(err, length) {
         if (err && err !== "Unknown stream") {
@@ -11283,18 +11283,18 @@ var require_parse_proxy_response = __commonJS({
       return new Promise((resolve, reject) => {
         let buffersLength = 0;
         const buffers = [];
-        function read2() {
+        function read() {
           const b = socket.read();
           if (b)
             ondata(b);
           else
-            socket.once("readable", read2);
+            socket.once("readable", read);
         }
         function cleanup() {
           socket.removeListener("end", onend);
           socket.removeListener("error", onerror);
           socket.removeListener("close", onclose);
-          socket.removeListener("readable", read2);
+          socket.removeListener("readable", read);
         }
         function onclose(err) {
           debug("onclose had error %o", err);
@@ -11314,7 +11314,7 @@ var require_parse_proxy_response = __commonJS({
           const endOfHeaders = buffered.indexOf("\r\n\r\n");
           if (endOfHeaders === -1) {
             debug("have not received end of HTTP headers yet...");
-            read2();
+            read();
             return;
           }
           const firstLine = buffered.toString("ascii", 0, buffered.indexOf("\r\n"));
@@ -11328,7 +11328,7 @@ var require_parse_proxy_response = __commonJS({
         socket.on("error", onerror);
         socket.on("close", onclose);
         socket.on("end", onend);
-        read2();
+        read();
       });
     }
     exports2.default = parseProxyResponse;
@@ -11539,7 +11539,7 @@ var require_follow_redirects = __commonJS({
   "node_modules/follow-redirects/index.js"(exports2, module2) {
     var url2 = require("url");
     var URL2 = url2.URL;
-    var http21 = require("http");
+    var http7 = require("http");
     var https2 = require("https");
     var Writable = require("stream").Writable;
     var assert = require("assert");
@@ -12040,20 +12040,26 @@ var require_follow_redirects = __commonJS({
     function escapeRegex(regex) {
       return regex.replace(/[\]\\/()*+?.$]/g, "\\$&");
     }
-    module2.exports = wrap({ http: http21, https: https2 });
+    module2.exports = wrap({ http: http7, https: https2 });
     module2.exports.wrap = wrap;
   }
 });
 
-// src/shared/api/mocks/handlers/index.ts
-var handlers_exports = {};
-__export(handlers_exports, {
-  handlers: () => handlers
+// <stdin>
+var stdin_exports = {};
+__export(stdin_exports, {
+  DEMO_DATASET: () => DEMO_DATASET,
+  DEMO_TODAY_ISO: () => DEMO_TODAY_ISO,
+  gradesHandlers: () => gradesHandlers,
+  offeringsHandlers: () => offeringsHandlers,
+  offeringsOwnedByTeacher: () => offeringsOwnedByTeacher,
+  studentsHandlers: () => studentsHandlers,
+  teachersHandlers: () => teachersHandlers
 });
-module.exports = __toCommonJS(handlers_exports);
+module.exports = __toCommonJS(stdin_exports);
 
-// src/shared/api/mocks/handlers/auth.ts
-var import_msw = require("msw");
+// src/shared/api/mocks/handlers/students.ts
+var import_msw2 = require("msw");
 
 // node_modules/axios/lib/helpers/bind.js
 function bind(fn, thisArg) {
@@ -17080,147 +17086,6 @@ api.interceptors.response.use(
   }
 );
 
-// src/shared/api/mocks/fixtures.ts
-function makeUser(role, overrides = {}) {
-  const names = {
-    principal: "Alicia Mendez",
-    secretary: "Sofia Castillo",
-    teacher: "Maria Reyes",
-    student: "Ana Lopez"
-  };
-  return {
-    id: `mock-${role}`,
-    email: `${role}@example.school`,
-    username: role,
-    full_name: names[role],
-    role,
-    must_change_password: false,
-    is_active: true,
-    ...role === "student" ? { student_profile_id: "mock-student-profile" } : {},
-    ...role === "teacher" ? { teacher_profile_id: "mock-teacher-profile" } : {},
-    preferences: { locale: "en", theme: "light", default_page_size: 25 },
-    // D32 - the canned fixture users predate the switch and exist to exercise the shell;
-    // published so the nav renders the full set (see the demo seed comment for the
-    // opposite default and why).
-    students_can_view_grades: true,
-    ...overrides
-  };
-}
-var MOCK_USERS = {
-  principal: makeUser("principal"),
-  secretary: makeUser("secretary"),
-  teacher: makeUser("teacher"),
-  student: makeUser("student")
-};
-function resolveMockUser(identifier) {
-  const key = identifier.trim().toLowerCase().split("@")[0] ?? "";
-  return MOCK_USERS[key] ?? MOCK_USERS.principal;
-}
-var MOCK_ACCESS_TOKEN = "mock-access-token";
-
-// src/shared/api/mocks/handlers/auth.ts
-var SESSION_COOKIE = "sis_mock_session";
-function readSessionRole(cookieHeader) {
-  if (!cookieHeader) return null;
-  const match = cookieHeader.split(";").map((c) => c.trim().split("="));
-  const entry = match.find(([k]) => k === SESSION_COOKIE);
-  return entry?.[1] ?? null;
-}
-function userResponse(user) {
-  return { access_token: MOCK_ACCESS_TOKEN, user };
-}
-var authHandlers = [
-  // POST /auth/login — any password; identifier selects the role.
-  import_msw.http.post(`${API_BASE_URL}/auth/login`, async ({ request }) => {
-    const body = await request.json();
-    if (!body?.identifier || !body?.password) {
-      return import_msw.HttpResponse.json(
-        { error: { code: "validation_error", message: "Missing credentials." } },
-        { status: 422 }
-      );
-    }
-    const user = resolveMockUser(body.identifier);
-    return import_msw.HttpResponse.json(userResponse(user), {
-      status: 200,
-      headers: {
-        // Simulated (non-HttpOnly) session marker so /auth/refresh can resolve a role.
-        "Set-Cookie": `${SESSION_COOKIE}=${user.role}; Path=/`
-      }
-    });
-  }),
-  // POST /auth/refresh — bootstrap + single-flight. 401 when no session cookie.
-  import_msw.http.post(`${API_BASE_URL}/auth/refresh`, ({ request, cookies }) => {
-    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get("Cookie"));
-    if (!role) {
-      return import_msw.HttpResponse.json(
-        { error: { code: "refresh_invalid", message: "No active session." } },
-        { status: 401 }
-      );
-    }
-    const user = resolveMockUser(role);
-    return import_msw.HttpResponse.json(userResponse(user), { status: 200 });
-  }),
-  // GET /auth/me — current principal from the session cookie.
-  import_msw.http.get(`${API_BASE_URL}/auth/me`, ({ request, cookies }) => {
-    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get("Cookie"));
-    if (!role) {
-      return import_msw.HttpResponse.json(
-        { error: { code: "unauthenticated", message: "Not signed in." } },
-        { status: 401 }
-      );
-    }
-    return import_msw.HttpResponse.json(resolveMockUser(role), { status: 200 });
-  }),
-  // POST /auth/logout — clear the simulated session.
-  import_msw.http.post(`${API_BASE_URL}/auth/logout`, () => {
-    return new import_msw.HttpResponse(null, {
-      status: 204,
-      headers: { "Set-Cookie": `${SESSION_COOKIE}=; Path=/; Max-Age=0` }
-    });
-  }),
-  // PATCH /auth/me/password — forced/self-service change. 422 if the new password is
-  // trivially weak; otherwise 204 (the real backend also clears must_change_password
-  // + revokes other sessions). Lets the forced-change flow be demoed without a backend.
-  import_msw.http.patch(`${API_BASE_URL}/auth/me/password`, async ({ request, cookies }) => {
-    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get("Cookie"));
-    if (!role) {
-      return import_msw.HttpResponse.json(
-        { error: { code: "unauthenticated", message: "Not signed in." } },
-        { status: 401 }
-      );
-    }
-    const body = await request.json();
-    if (!body?.new_password || body.new_password.length < 8) {
-      return import_msw.HttpResponse.json(
-        {
-          error: {
-            code: "weak_password",
-            message: "Password does not meet the policy.",
-            fields: { new_password: ["Must be at least 8 characters."] }
-          }
-        },
-        { status: 422 }
-      );
-    }
-    return new import_msw.HttpResponse(null, { status: 204 });
-  }),
-  // POST /auth/users/:userId/reset-password — admin-initiated reset (returns the temp
-  // password once). Mocked so Settings/user-admin flows can be exercised without a backend.
-  import_msw.http.post(`${API_BASE_URL}/auth/users/:userId/reset-password`, ({ request, cookies }) => {
-    const role = cookies[SESSION_COOKIE] ?? readSessionRole(request.headers.get("Cookie"));
-    if (!role) {
-      return import_msw.HttpResponse.json(
-        { error: { code: "unauthenticated", message: "Not signed in." } },
-        { status: 401 }
-      );
-    }
-    return import_msw.HttpResponse.json({ temporary_password: "Temp-Pass-1234" }, { status: 200 });
-  })
-];
-
-// src/shared/api/mocks/handlers/settings.ts
-var import_msw3 = require("msw");
-
 // src/shared/api/mocks/demo/bajcCatalog.ts
 var BAJC_COURSES = [
   ["ACCT1102", "Principles of Accounting 1", 3, "CEC", null],
@@ -17496,6 +17361,8 @@ var school_profile = {
   phone: "+501-422-2015",
   email: "office@bajc.edu.bz",
   logo_url: "/logo.jpeg",
+  // D39 (Meeting #2 item 6) — the client's recommended three months.
+  post_graduation_access_days: 90,
   // Brand colors sampled from the BAJC seal (navy triangle + crimson ring).
   colors: { primary: "#1E3A6E", secondary: "#C21F30" }
 };
@@ -17777,7 +17644,14 @@ var teachers = teacherSeed.map(([full_name, specs, status, gender], i) => {
     status,
     gender,
     designation,
-    education: `${TEACHER_DEGREES[designation]} ${specNames[0]}`,
+    academic_qualification: `${TEACHER_DEGREES[designation]} ${specNames[0]}`,
+    // D39 — the split names mirror what 013 backfilled in the real database.
+    first_name: full_name.split(" ")[0],
+    last_name: full_name.split(" ").slice(-1)[0],
+    // Only the lead lecturer carries an SS# and a licence, so the demo shows both the
+    // populated and the empty rendering of these fields rather than only one.
+    ssno: i === 0 ? "000256398" : void 0,
+    licensenum: i === 0 ? "OWD-2019-00035" : void 0,
     bio: `${designation} with ${years} years of classroom experience teaching ${specNames[0]}. Committed to student-centred learning and measurable outcomes.`,
     address: `${randInt(rng, 1, 120)} ${pick(rng, BELIZE_STREETS)}, Belmopan, Cayo`,
     // Expertise derived from specializations; the lead subject rates highest.
@@ -17791,9 +17665,9 @@ var teacherByCode = (code) => {
   const name = courseName(code);
   return teachers.find((t) => t.status === "active" && t.subject_specializations.includes(name));
 };
-var teacherByName = (fullName2) => {
-  const found = teachers.find((t) => t.status === "active" && t.full_name === fullName2);
-  if (!found) throw new Error(`demo dataset: no active lecturer named ${fullName2}`);
+var teacherByName = (fullName) => {
+  const found = teachers.find((t) => t.status === "active" && t.full_name === fullName);
+  if (!found) throw new Error(`demo dataset: no active lecturer named ${fullName}`);
   return found;
 };
 var offerings = offeringSeed.map((o, i) => {
@@ -17940,6 +17814,10 @@ var DEMO_RELIGIONS = [
   "Methodist",
   null,
   "Catholic"
+];
+var religions = [
+  { id: 1, name: "Catholic", code_name: "CATH" },
+  { id: 2, name: "Seventh Day Adventist", code_name: "SDA" }
 ];
 var DEMO_CIVIL_STATUS = ["Single", "Single", null, "Single", "Married"];
 var DEMO_DISTRICTS = [
@@ -18455,6 +18333,7 @@ var assessment_policy = {
   // student: My Grades disappears from the nav and /grades redirects to /forbidden.
   students_can_view_grades: true
 };
+var HOD_TEACHER_ID = "teach-2";
 var users = [];
 function pushUser(u) {
   users.push({ locale: "en", theme: "light", date_format: null, default_page_size: 25, ...u });
@@ -18486,12 +18365,27 @@ for (const t of teachers) {
     email: t.email,
     username: t.email.split("@")[0],
     full_name: t.full_name,
-    role: "teacher",
+    // D43 — the appointed head's LOGIN role is `hod`. The seed sets both because the
+    // demo needs a working HOD to click through; in the real system these are two
+    // separate acts (appoint on the programme page, change the role in Settings), which
+    // is why `program_heads` above does not imply this.
+    role: t.id === HOD_TEACHER_ID ? "hod" : "teacher",
     is_active: t.status === "active",
     must_change_password: false,
     last_login_at: addDays(DEMO_TODAY, -randInt(makeRng(t.id.length + 3), 0, 5)) + "T07:50:00Z"
   });
 }
+pushUser({
+  id: "user-auditor",
+  email: "auditor@belmopancomp.edu.bz",
+  username: "auditor",
+  full_name: "Ruth Bennett",
+  // No lecturer or student profile: an auditor teaches nothing and studies nothing.
+  role: "auditor",
+  is_active: true,
+  must_change_password: false,
+  last_login_at: addDays(DEMO_TODAY, -2) + "T09:10:00Z"
+});
 for (const s of students) {
   if (!s.user_id) continue;
   pushUser({
@@ -18673,6 +18567,20 @@ var program_courses = BAJC_CURRICULUM.flatMap(
     is_required: true
   }))
 );
+var hodProgramId = (() => {
+  const taughtCourseIds = new Set(
+    offerings.filter((o) => o.teacher_ids.includes(HOD_TEACHER_ID)).map((o) => o.course_id)
+  );
+  return program_courses.find((pc) => taughtCourseIds.has(pc.course_id))?.program_id;
+})();
+var program_heads = hodProgramId ? [
+  {
+    id: "phead-1",
+    program_id: hodProgramId,
+    teacher_id: HOD_TEACHER_ID,
+    appointed_at: DEMO_TODAY_ISO
+  }
+] : [];
 var course_prerequisites = [
   ...BAJC_PREREQUISITES.map(([courseCode, requiredCode], i) => ({
     id: `prereq-${i + 1}`,
@@ -19130,11 +19038,13 @@ var grade_revision_requests = revisableGrade ? [
 })();
 var DEMO_DATASET = {
   school_profile,
+  religions,
   academic_years,
   semesters,
   courses,
   programs,
   program_courses,
+  program_heads,
   course_prerequisites,
   offerings,
   teachers,
@@ -19169,7 +19079,7 @@ var DEMO_IDS = {
 var D = DEMO_DATASET;
 function paginate(items, params = {}) {
   const page = Math.max(1, params.page ?? 1);
-  const pageSize = Math.min(100, Math.max(1, params.page_size ?? 25));
+  const pageSize = Math.min(200, Math.max(1, params.page_size ?? 25));
   let sorted = items;
   if (params.sort) {
     const desc = params.sort.startsWith("-");
@@ -19273,9 +19183,47 @@ var DEMO_REPRESENTATIVE_USER_ID = {
   secretary: "user-secretary",
   teacher: "user-teach-1",
   // Maria Reyes — leads several offerings
-  student: "user-stu-1"
+  student: "user-stu-1",
   // Freddy Lopez — active, first-year, MATH1110-01
+  // D43. A DIFFERENT person from the lecturer login on purpose: if both resolved to
+  // Maria, nothing on screen would distinguish "what a lecturer sees" from "what a head
+  // sees", and the demo would appear to prove a scoping rule it never exercised.
+  hod: "user-teach-2",
+  auditor: "user-auditor"
 };
+function demoHodProgramIds(role) {
+  if (role !== "hod") return [];
+  const userId = DEMO_REPRESENTATIVE_USER_ID.hod;
+  const teacher = D.teachers.find((t) => t.user_id === userId);
+  if (!teacher) return [];
+  return D.program_heads.filter((h) => h.teacher_id === teacher.id).map((h) => h.program_id);
+}
+function demoHodOfferingIds(role) {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  const courseIds = new Set(
+    D.program_courses.filter((pc) => programIds.has(pc.program_id)).map((pc) => pc.course_id)
+  );
+  return D.offerings.filter((o) => courseIds.has(o.course_id)).map((o) => o.id);
+}
+function demoHodStudentIds(role) {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  return D.students.filter((s) => s.program_id !== null && programIds.has(s.program_id)).map((s) => s.id);
+}
+function demoHodTeacherIds(role) {
+  const offeringIds = new Set(demoHodOfferingIds(role));
+  if (offeringIds.size === 0) return [];
+  const ids = /* @__PURE__ */ new Set();
+  for (const o of D.offerings) {
+    if (offeringIds.has(o.id)) for (const t of o.teacher_ids) ids.add(t);
+  }
+  return [...ids];
+}
+function currentDemoHodTeacher(role) {
+  if (role !== "hod") return void 0;
+  return D.teachers.find((t) => t.user_id === DEMO_REPRESENTATIVE_USER_ID.hod);
+}
 function currentDemoStudent(role) {
   if (role !== "student") return void 0;
   return D.students.find((s) => s.user_id === DEMO_REPRESENTATIVE_USER_ID.student);
@@ -19287,6 +19235,11 @@ function currentDemoTeacher(role) {
 function studentReligions() {
   return [...new Set(D.students.map((s) => s.religion).filter((r) => Boolean(r)))].sort();
 }
+function studentCivilStatuses() {
+  return [
+    ...new Set(D.students.map((s) => s.civil_status).filter((c) => Boolean(c)))
+  ].sort();
+}
 function listStudents(params = {}) {
   let rows = D.students;
   if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
@@ -19297,6 +19250,10 @@ function listStudents(params = {}) {
     const ownedIds = new Set(offeringsOwnedByTeacher(params.teacher_id).map((o) => o.id));
     rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => ownedIds.has(o.id)));
   }
+  if (params.student_ids) {
+    const allowed = new Set(params.student_ids);
+    rows = rows.filter((s) => allowed.has(s.id));
+  }
   if (params.status) rows = rows.filter((s) => s.status === params.status);
   if (params.offering_id) {
     const wanted = params.offering_id;
@@ -19305,6 +19262,7 @@ function listStudents(params = {}) {
   if (params.year_of_study) rows = rows.filter((s) => s.year_of_study === params.year_of_study);
   if (params.gender) rows = rows.filter((s) => s.gender === params.gender);
   if (params.religion) rows = rows.filter((s) => s.religion === params.religion);
+  if (params.civil_status) rows = rows.filter((s) => s.civil_status === params.civil_status);
   if (params.program_id) rows = rows.filter((s) => s.program_id === params.program_id);
   if (params.search) {
     const q = params.search;
@@ -19334,6 +19292,10 @@ function listStudents(params = {}) {
 }
 function listTeachers(params = {}) {
   let rows = D.teachers;
+  if (params.teacher_ids) {
+    const allowed = new Set(params.teacher_ids);
+    rows = rows.filter((t) => allowed.has(t.id));
+  }
   if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
     const ids = teacherIdsForYear(params.academic_year_id);
     rows = rows.filter((t) => ids.has(t.id));
@@ -19353,21 +19315,6 @@ function listTeachers(params = {}) {
     sort: params.sort ?? "full_name"
   });
 }
-function listCourses(params = {}) {
-  let rows = D.courses;
-  const wantActive = params.is_active ?? true;
-  if (!params.include_retired && wantActive !== null) {
-    rows = rows.filter((c) => c.is_active === wantActive);
-  }
-  if (params.search) {
-    const q = params.search;
-    rows = rows.filter((c) => textIncludes(c.name, q) || textIncludes(c.code, q));
-  }
-  return paginate(rows, {
-    ...params,
-    sort: params.sort ?? "name"
-  });
-}
 function offeringsOwnedByTeacher(teacherId) {
   return D.offerings.filter((o) => o.teacher_ids.includes(teacherId));
 }
@@ -19384,9 +19331,6 @@ function activeEnrollmentFor(studentId, offeringId) {
 }
 function assessmentsForOffering(offeringId) {
   return D.assessments.filter((a) => a.offering_id === offeringId);
-}
-function gradesForAssessment(assessmentId) {
-  return D.assessment_grades.filter((g) => g.assessment_id === assessmentId);
 }
 function midtermRevisionEligible(a, g) {
   const sem = getSemester(a.semester_id);
@@ -19551,94 +19495,37 @@ function unmetPrerequisites(studentId, courseId2, semesterId) {
   }
   return issues;
 }
-function attendanceFor(offeringId, date) {
-  return D.attendance_records.filter(
-    (a) => a.offering_id === offeringId && a.attendance_date === date
-  );
+
+// src/shared/types/enums.ts
+function canonicalGender(value) {
+  if (!value) return null;
+  const key = value.trim().toLowerCase();
+  return key === "female" || key === "male" ? key : null;
 }
-function attendanceSummaryForOffering(offeringId) {
-  const rows = D.attendance_records.filter((a) => a.offering_id === offeringId);
-  const counts = { present: 0, absent: 0, late: 0, excused: 0 };
-  for (const r of rows) counts[r.status] += 1;
-  const total = rows.length || 1;
-  return { ...counts, pct_present: Math.round(counts.present / total * 1e3) / 10 };
-}
-function attendanceRateForStudent(studentId) {
-  const rows = D.attendance_records.filter((r) => r.student_id === studentId);
-  if (rows.length === 0) return 0;
-  const present = rows.filter((r) => r.status === "present" || r.status === "late").length;
-  return Math.round(present / rows.length * 1e3) / 10;
-}
-function schoolAttendanceRate() {
-  const activeOfferingIds = new Set(offeringsForYear(DEMO_IDS.activeYearId).map((o) => o.id));
-  const rows = D.attendance_records.filter((r) => activeOfferingIds.has(r.offering_id));
-  if (rows.length === 0) return 0;
-  const present = rows.filter((r) => r.status === "present" || r.status === "late").length;
-  return Math.round(present / rows.length * 1e3) / 10;
-}
-function announcementsForUser(userId) {
-  const user = D.users.find((u) => u.id === userId);
-  if (!user) return [];
-  const now = (/* @__PURE__ */ new Date(`${DEMO_TODAY}T23:59:59Z`)).getTime();
-  const isAdmin = user.role === "principal" || user.role === "secretary";
-  const adminUserIds = new Set(
-    D.users.filter((u) => u.role === "principal" || u.role === "secretary").map((u) => u.id)
-  );
-  const linkedOfferingIds = /* @__PURE__ */ new Set();
-  if (user.role === "student") {
-    const stu = D.students.find((s) => s.user_id === userId);
-    if (stu) for (const off of currentOfferingsFor(stu.id)) linkedOfferingIds.add(off.id);
-  } else if (user.role === "teacher") {
-    const teacher = D.teachers.find((tt) => tt.user_id === userId);
-    if (teacher) for (const off of offeringsOwnedByTeacher(teacher.id)) linkedOfferingIds.add(off.id);
-  }
-  return D.announcements.filter((a) => {
-    if (a.expires_at && new Date(a.expires_at).getTime() <= now) return false;
-    if (new Date(a.published_at).getTime() > now) return false;
-    if (a.author_user_id === userId) return true;
-    if (a.audience === "all") return true;
-    if (isAdmin) {
-      return adminUserIds.has(a.author_user_id);
-    }
-    if (a.audience === "students") return user.role === "student";
-    if (a.audience === "teachers") return user.role === "teacher";
-    if (a.audience === "class")
-      return a.offering_id ? linkedOfferingIds.has(a.offering_id) : false;
-    return false;
-  }).sort((x, y) => y.published_at.localeCompare(x.published_at));
-}
-function unreadCountForUser(userId) {
-  return announcementsForUser(userId).filter((a) => !a.read_by_user_ids.includes(userId)).length;
-}
-var getEvent = (id) => D.events.find((e) => e.id === id);
-function listEvents(from, to) {
-  return D.events.filter((e) => {
-    const eStart = e.start_date;
-    const eEnd = e.end_date ?? e.start_date;
-    if (from && eEnd < from) return false;
-    if (to && eStart > to) return false;
-    return true;
-  }).slice().sort(
-    (a, b) => a.start_date.localeCompare(b.start_date) || (a.start_time ?? "").localeCompare(b.start_time ?? "") || a.id.localeCompare(b.id)
-  );
-}
-function gradeDistribution() {
-  const scale = getActiveGradingScale();
-  const counts = /* @__PURE__ */ new Map();
-  if (scale) for (const b of scale.bands) counts.set(b.letter, 0);
-  for (const off of offeringsForYear(DEMO_IDS.activeYearId)) {
-    for (const stu of rosterFor(off.id)) {
-      const { letter } = computeTermGrade(stu.id, off.id);
-      if (letter) counts.set(letter, (counts.get(letter) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()].map(([letter, count]) => ({ letter, count }));
+var CIVIL_STATUS_ALIASES = {
+  single: "Single",
+  s: "Single",
+  married: "Married",
+  m: "Married",
+  divorced: "Divorced",
+  d: "Divorced",
+  "widow(er)": "Widow(er)",
+  widow: "Widow(er)",
+  widower: "Widow(er)",
+  widowed: "Widow(er)",
+  w: "Widow(er)"
+};
+function normaliseCivilStatus(value) {
+  if (value == null) return null;
+  const cleaned = value.trim();
+  if (!cleaned) return null;
+  return CIVIL_STATUS_ALIASES[cleaned.toLowerCase()] ?? cleaned;
 }
 
 // src/shared/api/mocks/handlers/_helpers.ts
-var import_msw2 = require("msw");
+var import_msw = require("msw");
 function errorResponse(status, code, message, fields) {
-  return import_msw2.HttpResponse.json({ error: { code, message, ...fields ? { fields } : {} } }, { status });
+  return import_msw.HttpResponse.json({ error: { code, message, ...fields ? { fields } : {} } }, { status });
 }
 function listParamsFrom(url2) {
   const page = url2.searchParams.get("page");
@@ -19650,950 +19537,6 @@ function listParamsFrom(url2) {
   if (page) params.page = Number(page);
   if (pageSize) params.page_size = Number(pageSize);
   return params;
-}
-function boolParam(url2, key) {
-  const v = url2.searchParams.get(key);
-  if (v === null) return null;
-  return v === "true";
-}
-
-// src/shared/api/mocks/handlers/settings.ts
-var D2 = DEMO_DATASET;
-function assertPrincipal(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  if (role !== "principal") {
-    return errorResponse(403, "forbidden", "Only the principal can change the academic structure.");
-  }
-  return null;
-}
-function schoolProfileRead() {
-  const p = D2.school_profile;
-  return {
-    name: p.name,
-    logo_url: p.logo_url,
-    address: p.address,
-    contact_email: p.email,
-    contact_phone: p.phone
-  };
-}
-function semesterDetail(s) {
-  return {
-    id: s.id,
-    academic_year_id: s.academic_year_id,
-    name: s.name,
-    term_type: s.term_type,
-    sequence: s.sequence,
-    start_date: s.start_date,
-    end_date: s.end_date,
-    grade_submission_deadline: s.grade_submission_deadline,
-    midterm_submission_start: s.midterm_submission_start,
-    midterm_submission_end: s.midterm_submission_end,
-    is_active: s.is_active
-  };
-}
-function academicYearDetail(yearId) {
-  const y = D2.academic_years.find((a) => a.id === yearId);
-  return {
-    id: y.id,
-    name: y.name,
-    start_date: y.start_date,
-    end_date: y.end_date,
-    status: y.status,
-    archived_at: y.archived_at,
-    semesters: D2.semesters.filter((s) => s.academic_year_id === y.id).sort((a, b) => a.sequence - b.sequence).map(semesterDetail)
-  };
-}
-function gradingScaleRead(yearId) {
-  const g = D2.grading_scales.find((s) => s.academic_year_id === yearId) ?? D2.grading_scales[0];
-  return {
-    academic_year_id: g.academic_year_id,
-    pass_mark: g.pass_mark,
-    is_frozen: g.is_frozen,
-    bands: g.bands.map((b) => ({ ...b }))
-  };
-}
-function userListItem(u) {
-  return {
-    id: u.id,
-    email: u.email,
-    username: u.username,
-    full_name: u.full_name,
-    role: u.role,
-    is_active: u.is_active,
-    must_change_password: u.must_change_password,
-    last_login_at: u.last_login_at
-  };
-}
-var LOGO_ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
-var LOGO_MAX_BYTES = 2 * 1024 * 1024;
-var settingsHandlers = [
-  // ── School profile ────────────────────────────────────────────────────────────
-  import_msw3.http.get(`${API_BASE_URL}/settings/school`, () => import_msw3.HttpResponse.json(schoolProfileRead())),
-  import_msw3.http.put(`${API_BASE_URL}/settings/school`, async ({ request }) => {
-    const body = await request.json();
-    if (body.name) D2.school_profile.name = body.name;
-    if (body.address !== void 0) D2.school_profile.address = body.address ?? "";
-    if (body.contact_email !== void 0) D2.school_profile.email = body.contact_email ?? "";
-    if (body.contact_phone !== void 0) D2.school_profile.phone = body.contact_phone ?? "";
-    return import_msw3.HttpResponse.json(schoolProfileRead());
-  }),
-  /**
-   * POST /settings/school/logo — multipart image upload (Dean only).
-   *
-   * **This handler was MISSING**, and the way it was missing is the point: with
-   * `onUnhandledRequest: 'bypass'` an unmatched request falls through to the NETWORK, so in
-   * demo mode the upload silently hit a server that is not there and failed with nothing on
-   * screen to say so. `scratchpad/check_msw_routes.mjs` is what found it, by diffing the
-   * registered routes against `openapi.json` — neither tsc nor eslint can see a missing
-   * route.
-   *
-   * The VALIDATION is real and mirrors `settings/service.validate_logo_upload`: 415 for a
-   * non-image, 413 past 2 MiB. Those two are the endpoint's live contract today.
-   *
-   * The STORAGE is not: object storage is unprovisioned (OQ-DB5), so the server validates,
-   * writes an audit row and returns `logo_url: null`. The mock returns the profile's
-   * CURRENT url unchanged for the same reason — echoing back a fake uploaded URL would
-   * certify a feature that does not exist, which is exactly the demo-vs-server divergence
-   * this project has already paid for twice.
-   */
-  import_msw3.http.post(`${API_BASE_URL}/settings/school/logo`, async ({ request, cookies }) => {
-    const role = cookies["sis_mock_session"] ?? "principal";
-    if (role !== "principal") {
-      return errorResponse(403, "forbidden", "Only the Dean can change the school logo.");
-    }
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
-      return errorResponse(422, "validation_error", "An image file is required.", {
-        file: ["Field required"]
-      });
-    }
-    if (!LOGO_ALLOWED_TYPES.includes(file.type)) {
-      return errorResponse(
-        415,
-        "unsupported_media_type",
-        "Unsupported image type; use PNG, JPEG, WEBP, or SVG."
-      );
-    }
-    if (file.size > LOGO_MAX_BYTES) {
-      return errorResponse(413, "file_too_large", "Logo file is too large (max 2 MiB).");
-    }
-    return import_msw3.HttpResponse.json({ logo_url: D2.school_profile.logo_url });
-  }),
-  // ── Active term ───────────────────────────────────────────────────────────────
-  import_msw3.http.get(`${API_BASE_URL}/settings/active-term`, () => {
-    const year = getActiveYear();
-    const semester = getActiveSemester();
-    if (!year || !semester) {
-      return errorResponse(409, "no_active_semester", "No active academic session is configured.");
-    }
-    return import_msw3.HttpResponse.json({
-      academic_year: { id: year.id, name: year.name, status: year.status },
-      semester: {
-        id: semester.id,
-        name: semester.name,
-        sequence: semester.sequence,
-        is_active: semester.is_active
-      }
-    });
-  }),
-  // ── Academic years + semesters ──────────────────────────────────────────────────
-  // The two READS are intentionally ungated: they are open to every authenticated role
-  // on the real server too (widened 2026-07-29), because every period picker in the app
-  // is built from them — staff's `?year=` filter and the student's global year·semester
-  // switcher, which joins this response's `semesters` to /students/me/years.
-  import_msw3.http.get(
-    `${API_BASE_URL}/settings/academic-years`,
-    () => import_msw3.HttpResponse.json({ items: D2.academic_years.map((y) => academicYearDetail(y.id)) })
-  ),
-  import_msw3.http.get(`${API_BASE_URL}/settings/semesters`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id");
-    let rows = D2.semesters;
-    if (yearId) rows = rows.filter((s) => s.academic_year_id === yearId);
-    return import_msw3.HttpResponse.json({ items: rows.map(semesterDetail) });
-  }),
-  import_msw3.http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params, cookies }) => {
-    const denied = assertPrincipal(cookies);
-    if (denied) return denied;
-    const target = D2.semesters.find((s) => s.id === params.semesterId);
-    if (!target) return errorResponse(404, "not_found", "Semester not found.");
-    D2.semesters.forEach((s) => {
-      s.is_active = s.id === target.id;
-    });
-    return import_msw3.HttpResponse.json(semesterDetail(target));
-  }),
-  // ── Create an academic year + its terms ──────────────────────────────────────
-  //
-  // This handler did not exist before D30, so demo mode 404'd on the "New academic
-  // year" button while the real backend answered 201 — the mirror image of the defect
-  // the file header describes. Added here because the N-term create dialog is the
-  // headline of §D3 and has to be demonstrable without a backend.
-  import_msw3.http.post(`${API_BASE_URL}/settings/academic-years`, async ({ request, cookies }) => {
-    const denied = assertPrincipal(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    if (body.end_date <= body.start_date) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        end_date: ["Must be after start_date."]
-      });
-    }
-    if (!body.semesters?.length) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        semesters: ["At least one session is required."]
-      });
-    }
-    const sequences = body.semesters.map((t) => t.sequence);
-    if (new Set(sequences).size !== sequences.length) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        semesters: ["Sequence numbers must be distinct."]
-      });
-    }
-    if (D2.academic_years.some((y) => y.status === "active")) {
-      return errorResponse(
-        409,
-        "active_year_exists",
-        "An active academic year already exists; archive it first."
-      );
-    }
-    const yearId = `ay-new-${D2.academic_years.length + 1}`;
-    D2.academic_years.push({
-      id: yearId,
-      name: body.name,
-      start_date: body.start_date,
-      end_date: body.end_date,
-      status: "active",
-      archived_at: null
-    });
-    const first = Math.min(...sequences);
-    D2.semesters.forEach((s) => {
-      s.is_active = false;
-    });
-    body.semesters.slice().sort((a, b) => a.sequence - b.sequence).forEach((t, i) => {
-      D2.semesters.push({
-        id: `${yearId}-t${i + 1}`,
-        academic_year_id: yearId,
-        name: t.name,
-        term_type: t.term_type ?? "semester",
-        sequence: t.sequence,
-        start_date: t.start_date,
-        end_date: t.end_date,
-        grade_submission_deadline: null,
-        midterm_submission_start: null,
-        midterm_submission_end: null,
-        is_active: t.sequence === first
-      });
-    });
-    const template = D2.grading_scales[0];
-    if (template) {
-      D2.grading_scales.push({
-        academic_year_id: yearId,
-        pass_mark: template.pass_mark,
-        is_frozen: false,
-        bands: template.bands.map((b) => ({ ...b }))
-      });
-    }
-    return import_msw3.HttpResponse.json(academicYearDetail(yearId), { status: 201 });
-  }),
-  // ── D30 §D3 — add / correct ONE calendar term (Dean only) ─────────────────────
-  // New endpoints: before D30 the whole calendar came from creating a year, which made
-  // exactly two semesters, so BAJC's Summer and Spring blocks had no route at all.
-  import_msw3.http.post(`${API_BASE_URL}/settings/semesters`, async ({ request, cookies }) => {
-    const denied = assertPrincipal(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    const year = D2.academic_years.find((y) => y.id === body.academic_year_id);
-    if (!year) return errorResponse(404, "not_found", "Academic year not found.");
-    if (year.status === "archived") {
-      return errorResponse(409, "year_archived", "Cannot change the sessions of an archived year.");
-    }
-    if (body.end_date <= body.start_date) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        end_date: ["Must be after start_date."]
-      });
-    }
-    const newMidStart = body.midterm_submission_start ?? null;
-    const newMidEnd = body.midterm_submission_end ?? null;
-    if (newMidStart === null !== (newMidEnd === null)) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        [newMidEnd === null ? "midterm_submission_end" : "midterm_submission_start"]: [
-          "Required when the other mid-session date is set."
-        ]
-      });
-    }
-    if (newMidStart !== null && newMidEnd !== null && newMidEnd <= newMidStart) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        midterm_submission_end: ["Must be after midterm_submission_start."]
-      });
-    }
-    if (D2.semesters.some(
-      (s) => s.academic_year_id === year.id && s.sequence === body.sequence
-    )) {
-      return errorResponse(
-        409,
-        "duplicate_semester_sequence",
-        `Another session in this year already uses sequence ${body.sequence}.`
-      );
-    }
-    const created = {
-      id: `sem-new-${D2.semesters.length + 1}`,
-      academic_year_id: year.id,
-      name: body.name,
-      term_type: body.term_type ?? "semester",
-      sequence: body.sequence,
-      start_date: body.start_date,
-      end_date: body.end_date,
-      // Optional at creation; absent means the term never closes (D30 §D6).
-      grade_submission_deadline: body.grade_submission_deadline ?? null,
-      // D32 - both or neither, validated above. Absent means no mid-term period.
-      midterm_submission_start: body.midterm_submission_start ?? null,
-      midterm_submission_end: body.midterm_submission_end ?? null,
-      // Created INACTIVE: adding a future block must not move the current term.
-      is_active: false
-    };
-    D2.semesters.push(created);
-    return import_msw3.HttpResponse.json(semesterDetail(created), { status: 201 });
-  }),
-  import_msw3.http.patch(`${API_BASE_URL}/settings/semesters/:semesterId`, async ({ params, request, cookies }) => {
-    const denied = assertPrincipal(cookies);
-    if (denied) return denied;
-    const term = D2.semesters.find((s) => s.id === params.semesterId);
-    if (!term) return errorResponse(404, "not_found", "Semester not found.");
-    const body = await request.json();
-    const start = body.start_date ?? term.start_date;
-    const end = body.end_date ?? term.end_date;
-    if (end <= start) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        end_date: ["Must be after start_date."]
-      });
-    }
-    if (body.sequence !== void 0 && body.sequence !== term.sequence && D2.semesters.some(
-      (s) => s.id !== term.id && s.academic_year_id === term.academic_year_id && s.sequence === body.sequence
-    )) {
-      return errorResponse(
-        409,
-        "duplicate_semester_sequence",
-        `Another session in this year already uses sequence ${body.sequence}.`
-      );
-    }
-    if (body.name !== void 0) term.name = body.name;
-    if (body.term_type !== void 0) term.term_type = body.term_type;
-    if (body.sequence !== void 0) term.sequence = body.sequence;
-    if ("grade_submission_deadline" in body) {
-      term.grade_submission_deadline = body.grade_submission_deadline ?? null;
-    }
-    if ("midterm_submission_start" in body || "midterm_submission_end" in body) {
-      const midStart = "midterm_submission_start" in body ? body.midterm_submission_start ?? null : term.midterm_submission_start;
-      const midEnd = "midterm_submission_end" in body ? body.midterm_submission_end ?? null : term.midterm_submission_end;
-      const halfSet = midStart === null !== (midEnd === null);
-      if (halfSet) {
-        return errorResponse(422, "validation_error", "Some fields need attention.", {
-          [midEnd === null ? "midterm_submission_end" : "midterm_submission_start"]: [
-            "Required when the other mid-session date is set."
-          ]
-        });
-      }
-      if (midStart !== null && midEnd !== null && midEnd <= midStart) {
-        return errorResponse(422, "validation_error", "Some fields need attention.", {
-          midterm_submission_end: ["Must be after midterm_submission_start."]
-        });
-      }
-      term.midterm_submission_start = midStart;
-      term.midterm_submission_end = midEnd;
-    }
-    term.start_date = start;
-    term.end_date = end;
-    return import_msw3.HttpResponse.json(semesterDetail(term));
-  }),
-  import_msw3.http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params, cookies }) => {
-    const denied = assertPrincipal(cookies);
-    if (denied) return denied;
-    const year = D2.academic_years.find((y) => y.id === params.yearId);
-    if (!year) return errorResponse(404, "not_found", "Academic year not found.");
-    if (year.status === "archived") {
-      return errorResponse(409, "year_already_archived", "This year is already archived.");
-    }
-    return import_msw3.HttpResponse.json(
-      { snapshots_written: 0, no_active_year_remaining: false },
-      { status: 202 }
-    );
-  }),
-  // ── Grading scale ───────────────────────────────────────────────────────────────
-  import_msw3.http.get(`${API_BASE_URL}/settings/grading-scale`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id") ?? DEMO_IDS.activeYearId;
-    return import_msw3.HttpResponse.json(gradingScaleRead(yearId));
-  }),
-  import_msw3.http.put(`${API_BASE_URL}/settings/grading-scale`, async ({ request }) => {
-    const body = await request.json();
-    const scale = D2.grading_scales.find((s) => s.academic_year_id === DEMO_IDS.activeYearId);
-    if (typeof body.pass_mark === "number") scale.pass_mark = body.pass_mark;
-    if (Array.isArray(body.bands)) {
-      scale.bands = body.bands.map((b) => ({
-        letter: String(b.letter ?? ""),
-        min_score: Number(b.min_score ?? 0),
-        max_score: Number(b.max_score ?? 0),
-        // Round-tripped, and absent/blank stays NULL rather than becoming 0 (D30 §D5).
-        // `Number(undefined)` is NaN and `Number(null)` is 0, so neither coercion is
-        // safe here — the backend stores NULL for "this scale cannot price this letter",
-        // and 0.00 is an F.
-        grade_point: b.grade_point === null || b.grade_point === void 0 || b.grade_point === "" ? null : Number(b.grade_point),
-        is_passing: Boolean(b.is_passing ?? false),
-        sort_order: Number(b.sort_order ?? 0)
-      }));
-    }
-    return import_msw3.HttpResponse.json({ ...gradingScaleRead(DEMO_IDS.activeYearId), affects_displayed_grades: true });
-  }),
-  // ── Assessment policy ────────────────────────────────────────────────────────────
-  import_msw3.http.get(
-    `${API_BASE_URL}/settings/assessment-policy`,
-    () => import_msw3.HttpResponse.json({ ...D2.assessment_policy })
-  ),
-  import_msw3.http.put(`${API_BASE_URL}/settings/assessment-policy`, async ({ request }) => {
-    const body = await request.json();
-    if (typeof body.absent_as_zero === "boolean") D2.assessment_policy.absent_as_zero = body.absent_as_zero;
-    if (typeof body.allow_makeup === "boolean") D2.assessment_policy.allow_makeup = body.allow_makeup;
-    if (typeof body.drop_lowest_count === "number")
-      D2.assessment_policy.drop_lowest_count = body.drop_lowest_count;
-    D2.assessment_policy.students_can_view_grades = body.students_can_view_grades ?? false;
-    return import_msw3.HttpResponse.json({ ...D2.assessment_policy });
-  }),
-  // ── Users admin ───────────────────────────────────────────────────────────────────
-  import_msw3.http.get(`${API_BASE_URL}/settings/users`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const role = url2.searchParams.get("role");
-    const isActive = boolParam(url2, "is_active");
-    const search = url2.searchParams.get("search");
-    let rows = D2.users;
-    if (role) rows = rows.filter((u) => u.role === role);
-    if (isActive !== null) rows = rows.filter((u) => u.is_active === isActive);
-    if (search) {
-      const q = search.toLowerCase();
-      rows = rows.filter(
-        (u) => u.full_name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-      );
-    }
-    const page = paginate(
-      rows.map(userListItem),
-      { ...listParamsFrom(url2), sort: url2.searchParams.get("sort") ?? "full_name" }
-    );
-    return import_msw3.HttpResponse.json(page);
-  }),
-  import_msw3.http.post(`${API_BASE_URL}/settings/users`, async ({ request }) => {
-    const body = await request.json();
-    if (D2.users.some((u) => u.email.toLowerCase() === body.email.toLowerCase())) {
-      return errorResponse(409, "duplicate_email", "A user with this email already exists.");
-    }
-    const newUser = {
-      id: `user-new-${D2.users.length + 1}`,
-      email: body.email,
-      username: body.username ?? null,
-      full_name: body.full_name,
-      role: body.role,
-      is_active: true,
-      must_change_password: true,
-      last_login_at: null,
-      locale: "en",
-      theme: "light",
-      date_format: null,
-      default_page_size: 25
-    };
-    D2.users.push(newUser);
-    return import_msw3.HttpResponse.json(
-      { user: userListItem(newUser), temporary_password: body.temporary_password ?? "Temp-Pass-5678" },
-      { status: 201 }
-    );
-  }),
-  import_msw3.http.patch(`${API_BASE_URL}/settings/users/:userId`, async ({ params, request }) => {
-    const user = D2.users.find((u) => u.id === params.userId);
-    if (!user) return errorResponse(404, "not_found", "User not found.");
-    const body = await request.json();
-    if (body.full_name !== void 0) user.full_name = body.full_name;
-    if (body.username !== void 0) user.username = body.username;
-    if (body.role !== void 0) user.role = body.role;
-    if (body.is_active !== void 0) user.is_active = body.is_active;
-    return import_msw3.HttpResponse.json(userListItem(user));
-  }),
-  // ── Account / preferences (self) ─────────────────────────────────────────────────
-  // The demo resolves "self" from the mock session role cookie (auth.ts) → the matching
-  // seeded user. Falls back to the principal.
-  import_msw3.http.get(`${API_BASE_URL}/settings/account`, ({ cookies }) => {
-    const role = cookies["sis_mock_session"] ?? "principal";
-    const user = D2.users.find((u) => u.role === role) ?? D2.users[0];
-    return import_msw3.HttpResponse.json(accountResponse(user));
-  }),
-  import_msw3.http.patch(`${API_BASE_URL}/settings/account`, async ({ cookies, request }) => {
-    const role = cookies["sis_mock_session"] ?? "principal";
-    const user = D2.users.find((u) => u.role === role) ?? D2.users[0];
-    const body = await request.json();
-    if (body.full_name) user.full_name = body.full_name;
-    if (body.preferences) {
-      const p = body.preferences;
-      if (p.locale !== void 0) user.locale = p.locale;
-      if (p.theme !== void 0) user.theme = p.theme;
-      if (p.date_format !== void 0) user.date_format = p.date_format;
-      if (p.default_page_size !== void 0) user.default_page_size = p.default_page_size;
-    }
-    return import_msw3.HttpResponse.json(accountResponse(user));
-  })
-];
-function accountResponse(u) {
-  return {
-    id: u.id,
-    email: u.email,
-    username: u.username,
-    full_name: u.full_name,
-    role: u.role,
-    must_change_password: u.must_change_password,
-    is_active: u.is_active,
-    preferences: {
-      locale: u.locale,
-      theme: u.theme,
-      date_format: u.date_format,
-      default_page_size: u.default_page_size
-    }
-  };
-}
-
-// src/shared/api/mocks/handlers/courses.ts
-var import_msw4 = require("msw");
-var D3 = DEMO_DATASET;
-function toListItem(c) {
-  return {
-    id: c.id,
-    name: c.name,
-    code: c.code,
-    // D30 §D2 — `credits` is what closes the grade→credit chain (plan §B3), so it is
-    // part of the list shape on the real API and has to be here too.
-    credits: c.credits,
-    component: c.component,
-    is_active: c.is_active
-  };
-}
-function assertDean(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  if (role !== "principal") {
-    return errorResponse(403, "forbidden", "Only the Dean can change the course catalog.");
-  }
-  return null;
-}
-var coursesHandlers = [
-  import_msw4.http.get(`${API_BASE_URL}/courses`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const page = listCourses({
-      ...listParamsFrom(url2),
-      is_active: boolParam(url2, "is_active"),
-      include_retired: boolParam(url2, "include_retired") === true
-    });
-    return import_msw4.HttpResponse.json({ ...page, items: page.items.map(toListItem) });
-  }),
-  import_msw4.http.post(`${API_BASE_URL}/courses`, async ({ request, cookies }) => {
-    const denied = assertDean(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    if (!body.name || !body.code) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        ...body.name ? {} : { name: ["Field required"] },
-        ...body.code ? {} : { code: ["Field required"] }
-      });
-    }
-    if (body.credits !== void 0 && (!Number.isInteger(body.credits) || body.credits < 1)) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        credits: ["Must be a whole number greater than 0."]
-      });
-    }
-    if (D3.courses.some((c) => c.name.toLowerCase() === body.name.toLowerCase())) {
-      return errorResponse(409, "duplicate_course_name", "A course with this name already exists.");
-    }
-    if (D3.courses.some((c) => c.code.toLowerCase() === body.code.toLowerCase())) {
-      return errorResponse(409, "duplicate_course_code", "A course with this code already exists.");
-    }
-    const created = {
-      id: `course-new-${D3.courses.length + 1}`,
-      name: body.name,
-      code: body.code,
-      credits: body.credits ?? 3,
-      component: body.component ?? null,
-      is_active: true
-    };
-    D3.courses.push(created);
-    return import_msw4.HttpResponse.json(toListItem(created), { status: 201 });
-  }),
-  import_msw4.http.patch(`${API_BASE_URL}/courses/:courseId`, async ({ params, request, cookies }) => {
-    const denied = assertDean(cookies);
-    if (denied) return denied;
-    const course = D3.courses.find((c) => c.id === params.courseId);
-    if (!course) return errorResponse(404, "not_found", "Course not found.");
-    const body = await request.json();
-    if (body.name && D3.courses.some((c) => c.id !== course.id && c.name.toLowerCase() === body.name.toLowerCase())) {
-      return errorResponse(409, "duplicate_course_name", "A course with this name already exists.");
-    }
-    if (body.code && D3.courses.some((c) => c.id !== course.id && c.code.toLowerCase() === body.code.toLowerCase())) {
-      return errorResponse(409, "duplicate_course_code", "A course with this code already exists.");
-    }
-    if (body.name !== void 0) course.name = body.name;
-    if (body.code) course.code = body.code;
-    if (body.credits !== void 0) course.credits = body.credits;
-    if (body.component !== void 0) course.component = body.component;
-    if (body.is_active !== void 0) course.is_active = body.is_active;
-    return import_msw4.HttpResponse.json(toListItem(course));
-  }),
-  import_msw4.http.delete(`${API_BASE_URL}/courses/:courseId`, ({ params, cookies }) => {
-    const denied = assertDean(cookies);
-    if (denied) return denied;
-    const course = D3.courses.find((c) => c.id === params.courseId);
-    if (!course) return errorResponse(404, "not_found", "Course not found.");
-    const inUse = D3.offerings.some((o) => o.course_id === course.id);
-    if (inUse) {
-      return errorResponse(
-        409,
-        "course_in_use",
-        "Offered in one or more course offerings \u2014 retire it instead."
-      );
-    }
-    D3.courses = D3.courses.filter((c) => c.id !== course.id);
-    return new import_msw4.HttpResponse(null, { status: 204 });
-  })
-];
-
-// src/shared/api/mocks/handlers/programs.ts
-var import_msw5 = require("msw");
-var D4 = DEMO_DATASET;
-function assertDean2(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  if (role !== "principal") {
-    return errorResponse(403, "forbidden", "Only the Dean can change programmes.");
-  }
-  return null;
-}
-function curriculumRows(programId2) {
-  return D4.program_courses.filter((pc) => pc.program_id === programId2);
-}
-function totals(programId2) {
-  const rows = curriculumRows(programId2);
-  const credits = rows.reduce((sum, pc) => {
-    const course = D4.courses.find((c) => c.id === pc.course_id);
-    return sum + (course?.credits ?? 0);
-  }, 0);
-  return { course_count: rows.length, curriculum_credits: credits };
-}
-function listItem(p) {
-  return {
-    id: p.id,
-    code: p.code,
-    name: p.name,
-    award: p.award,
-    total_credits: p.total_credits,
-    min_passing_grade_point: p.min_passing_grade_point,
-    is_active: p.is_active,
-    ...totals(p.id)
-  };
-}
-function detail(p) {
-  const blocks = /* @__PURE__ */ new Map();
-  const rows = [...curriculumRows(p.id)].sort((a, b) => {
-    if (a.term_order !== b.term_order) return a.term_order - b.term_order;
-    const ca = D4.courses.find((c) => c.id === a.course_id)?.code ?? "";
-    const cb = D4.courses.find((c) => c.id === b.course_id)?.code ?? "";
-    return ca.localeCompare(cb);
-  });
-  for (const pc of rows) {
-    const course = D4.courses.find((c) => c.id === pc.course_id);
-    if (!course) continue;
-    let block = blocks.get(pc.term_order);
-    if (!block) {
-      block = {
-        term_label: pc.term_label,
-        term_order: pc.term_order,
-        credits: 0,
-        courses: []
-      };
-      blocks.set(pc.term_order, block);
-    }
-    block.courses.push({
-      id: pc.id,
-      course: {
-        id: course.id,
-        code: course.code,
-        name: course.name,
-        credits: course.credits,
-        component: course.component,
-        is_active: course.is_active
-      },
-      is_required: pc.is_required
-    });
-    block.credits += course.credits;
-  }
-  return { ...listItem(p), curriculum: [...blocks.values()] };
-}
-function findProgram(id) {
-  return D4.programs.find((p) => p.id === id);
-}
-var programsHandlers = [
-  import_msw5.http.get(`${API_BASE_URL}/programs`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const { page = 1, page_size = 25, search } = listParamsFrom(url2);
-    const isActive = boolParam(url2, "is_active");
-    const includeRetired = boolParam(url2, "include_retired") === true;
-    let rows = D4.programs;
-    if (!includeRetired) {
-      rows = rows.filter((p) => isActive === null ? p.is_active : p.is_active === isActive);
-    }
-    if (search) {
-      const q = search.toLowerCase();
-      rows = rows.filter(
-        (p) => p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || (p.award ?? "").toLowerCase().includes(q)
-      );
-    }
-    rows = [...rows].sort((a, b) => a.code.localeCompare(b.code));
-    const start = (page - 1) * page_size;
-    return import_msw5.HttpResponse.json({
-      items: rows.slice(start, start + page_size).map(listItem),
-      total: rows.length,
-      page,
-      page_size,
-      total_pages: Math.max(1, Math.ceil(rows.length / page_size))
-    });
-  }),
-  import_msw5.http.get(`${API_BASE_URL}/programs/:programId`, ({ params }) => {
-    const program = findProgram(String(params.programId));
-    if (!program) return errorResponse(404, "not_found", "Program not found.");
-    return import_msw5.HttpResponse.json(detail(program));
-  }),
-  import_msw5.http.post(`${API_BASE_URL}/programs`, async ({ request, cookies }) => {
-    const denied = assertDean2(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    if (!body.code || !body.name) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        ...body.code ? {} : { code: ["Field required"] },
-        ...body.name ? {} : { name: ["Field required"] }
-      });
-    }
-    if (D4.programs.some((p) => p.code.toLowerCase() === body.code.toLowerCase())) {
-      return errorResponse(409, "duplicate_program_code", "A program with this code already exists.");
-    }
-    if (D4.programs.some((p) => p.name.toLowerCase() === body.name.toLowerCase())) {
-      return errorResponse(409, "duplicate_program_name", "A program with this name already exists.");
-    }
-    const created = {
-      id: `prog-new-${D4.programs.length + 1}`,
-      code: body.code,
-      name: body.name,
-      award: body.award ?? null,
-      total_credits: body.total_credits ?? null,
-      min_passing_grade_point: body.min_passing_grade_point ?? "2.50",
-      is_active: true
-    };
-    D4.programs.push(created);
-    return import_msw5.HttpResponse.json(detail(created), { status: 201 });
-  }),
-  import_msw5.http.patch(`${API_BASE_URL}/programs/:programId`, async ({ params, request, cookies }) => {
-    const denied = assertDean2(cookies);
-    if (denied) return denied;
-    const program = findProgram(String(params.programId));
-    if (!program) return errorResponse(404, "not_found", "Program not found.");
-    const body = await request.json();
-    if (body.code && D4.programs.some((p) => p.id !== program.id && p.code.toLowerCase() === body.code.toLowerCase())) {
-      return errorResponse(409, "duplicate_program_code", "A program with this code already exists.");
-    }
-    if (body.code !== void 0) program.code = body.code;
-    if (body.name !== void 0) program.name = body.name;
-    if (body.award !== void 0) program.award = body.award ?? null;
-    if (body.total_credits !== void 0) program.total_credits = body.total_credits ?? null;
-    if (body.min_passing_grade_point !== void 0) {
-      program.min_passing_grade_point = body.min_passing_grade_point;
-    }
-    if (body.is_active !== void 0) program.is_active = body.is_active;
-    return import_msw5.HttpResponse.json(detail(program));
-  }),
-  import_msw5.http.delete(`${API_BASE_URL}/programs/:programId`, ({ params, cookies }) => {
-    const denied = assertDean2(cookies);
-    if (denied) return denied;
-    const program = findProgram(String(params.programId));
-    if (!program) return errorResponse(404, "not_found", "Program not found.");
-    D4.program_courses = D4.program_courses.filter((pc) => pc.program_id !== program.id);
-    D4.programs = D4.programs.filter((p) => p.id !== program.id);
-    return new import_msw5.HttpResponse(null, { status: 204 });
-  }),
-  // ── Curriculum ────────────────────────────────────────────────────────────────
-  import_msw5.http.post(`${API_BASE_URL}/programs/:programId/courses`, async ({ params, request, cookies }) => {
-    const denied = assertDean2(cookies);
-    if (denied) return denied;
-    const program = findProgram(String(params.programId));
-    if (!program) return errorResponse(404, "not_found", "Program not found.");
-    const body = await request.json();
-    const course = D4.courses.find((c) => c.id === body.course_id);
-    if (!course) return errorResponse(404, "course_not_found", "Course not found.");
-    if (!course.is_active) {
-      return errorResponse(409, "course_retired", "That course is retired.");
-    }
-    if (D4.program_courses.some(
-      (pc) => pc.program_id === program.id && pc.course_id === course.id
-    )) {
-      return errorResponse(
-        409,
-        "course_already_in_program",
-        "That course is already in this program."
-      );
-    }
-    D4.program_courses.push({
-      id: `pc-new-${D4.program_courses.length + 1}`,
-      program_id: program.id,
-      course_id: course.id,
-      term_label: body.term_label,
-      term_order: body.term_order,
-      is_required: body.is_required ?? true
-    });
-    return import_msw5.HttpResponse.json(detail(program), { status: 201 });
-  }),
-  import_msw5.http.patch(
-    `${API_BASE_URL}/programs/:programId/courses/:programCourseId`,
-    async ({ params, request, cookies }) => {
-      const denied = assertDean2(cookies);
-      if (denied) return denied;
-      const program = findProgram(String(params.programId));
-      if (!program) return errorResponse(404, "not_found", "Program not found.");
-      const row = D4.program_courses.find(
-        (pc) => pc.id === params.programCourseId && pc.program_id === program.id
-      );
-      if (!row) return errorResponse(404, "not_found", "Curriculum entry not found.");
-      const body = await request.json();
-      if (body.term_label !== void 0) row.term_label = body.term_label;
-      if (body.term_order !== void 0) row.term_order = body.term_order;
-      if (body.is_required !== void 0) row.is_required = body.is_required;
-      return import_msw5.HttpResponse.json(detail(program));
-    }
-  ),
-  import_msw5.http.delete(
-    `${API_BASE_URL}/programs/:programId/courses/:programCourseId`,
-    ({ params, cookies }) => {
-      const denied = assertDean2(cookies);
-      if (denied) return denied;
-      const program = findProgram(String(params.programId));
-      if (!program) return errorResponse(404, "not_found", "Program not found.");
-      const row = D4.program_courses.find(
-        (pc) => pc.id === params.programCourseId && pc.program_id === program.id
-      );
-      if (!row) return errorResponse(404, "not_found", "Curriculum entry not found.");
-      D4.program_courses = D4.program_courses.filter((pc) => pc.id !== row.id);
-      return import_msw5.HttpResponse.json(detail(program));
-    }
-  )
-];
-
-// src/shared/api/mocks/handlers/prerequisites.ts
-var import_msw6 = require("msw");
-var D5 = DEMO_DATASET;
-function assertDean3(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  if (role !== "principal") {
-    return errorResponse(403, "forbidden", "Only the Dean can change prerequisites.");
-  }
-  return null;
-}
-function list(courseId2) {
-  const course = D5.courses.find((c) => c.id === courseId2);
-  return {
-    items: D5.course_prerequisites.filter((p) => p.course_id === courseId2).map((p) => {
-      const required = p.prerequisite_course_id ? D5.courses.find((c) => c.id === p.prerequisite_course_id) : void 0;
-      const program = p.program_id ? D5.programs.find((x) => x.id === p.program_id) : void 0;
-      return {
-        id: p.id,
-        requirement_type: p.requirement_type,
-        prerequisite_course: required ? { id: required.id, code: required.code, name: required.name } : null,
-        program: program ? { id: program.id, code: program.code, name: program.name } : null
-      };
-    }),
-    // Documentation only — the gate reads `items`. The demo courses carry none.
-    prerequisites_text: course?.prerequisites_text ?? null
-  };
-}
-var prerequisitesHandlers = [
-  import_msw6.http.get(`${API_BASE_URL}/courses/:courseId/prerequisites`, ({ params }) => {
-    const courseId2 = String(params.courseId);
-    if (!D5.courses.some((c) => c.id === courseId2)) {
-      return errorResponse(404, "not_found", "Course not found.");
-    }
-    return import_msw6.HttpResponse.json(list(courseId2));
-  }),
-  import_msw6.http.post(
-    `${API_BASE_URL}/courses/:courseId/prerequisites`,
-    async ({ params, request, cookies }) => {
-      const denied = assertDean3(cookies);
-      if (denied) return denied;
-      const courseId2 = String(params.courseId);
-      if (!D5.courses.some((c) => c.id === courseId2)) {
-        return errorResponse(404, "not_found", "Course not found.");
-      }
-      const body = await request.json();
-      const kind = body.requirement_type ?? "course";
-      if (kind === "all_program_courses") {
-        if (!body.program_id) {
-          return errorResponse(422, "validation_error", "Some fields need attention.", {
-            program_id: ["Required for all_program_courses."]
-          });
-        }
-        if (body.prerequisite_course_id) {
-          return errorResponse(422, "validation_error", "Some fields need attention.", {
-            prerequisite_course_id: ["Must be omitted."]
-          });
-        }
-      } else {
-        if (!body.prerequisite_course_id) {
-          return errorResponse(422, "validation_error", "Some fields need attention.", {
-            prerequisite_course_id: ["Required."]
-          });
-        }
-        if (body.prerequisite_course_id === courseId2) {
-          return errorResponse(422, "validation_error", "Some fields need attention.", {
-            prerequisite_course_id: ["Cannot be this course."]
-          });
-        }
-      }
-      if (D5.course_prerequisites.some(
-        (p) => p.course_id === courseId2 && p.prerequisite_course_id === (body.prerequisite_course_id ?? null) && p.program_id === (body.program_id ?? null)
-      )) {
-        return errorResponse(
-          409,
-          "duplicate_prerequisite",
-          "That prerequisite is already recorded for this course."
-        );
-      }
-      D5.course_prerequisites.push({
-        id: `prereq-new-${D5.course_prerequisites.length + 1}`,
-        course_id: courseId2,
-        prerequisite_course_id: body.prerequisite_course_id ?? null,
-        program_id: body.program_id ?? null,
-        requirement_type: kind
-      });
-      return import_msw6.HttpResponse.json(list(courseId2), { status: 201 });
-    }
-  ),
-  import_msw6.http.delete(
-    `${API_BASE_URL}/courses/:courseId/prerequisites/:prerequisiteId`,
-    ({ params, cookies }) => {
-      const denied = assertDean3(cookies);
-      if (denied) return denied;
-      const courseId2 = String(params.courseId);
-      const row = D5.course_prerequisites.find(
-        (p) => p.id === params.prerequisiteId && p.course_id === courseId2
-      );
-      if (!row) return errorResponse(404, "not_found", "Prerequisite not found.");
-      D5.course_prerequisites = D5.course_prerequisites.filter((p) => p.id !== row.id);
-      return import_msw6.HttpResponse.json(list(courseId2));
-    }
-  )
-];
-
-// src/shared/api/mocks/handlers/students.ts
-var import_msw7 = require("msw");
-
-// src/shared/types/enums.ts
-function canonicalGender(value) {
-  if (!value) return null;
-  const key = value.trim().toLowerCase();
-  return key === "female" || key === "male" ? key : null;
 }
 
 // src/shared/api/mocks/handlers/_nudges.ts
@@ -20615,18 +19558,18 @@ function nudgeRetryAfter(assessmentId, now = /* @__PURE__ */ new Date()) {
 }
 
 // src/shared/api/mocks/handlers/students.ts
-var D6 = DEMO_DATASET;
-var SESSION_COOKIE2 = "sis_mock_session";
+var D2 = DEMO_DATASET;
+var SESSION_COOKIE = "sis_mock_session";
 function sessionRole(cookies) {
-  return cookies[SESSION_COOKIE2] ?? "principal";
+  return cookies[SESSION_COOKIE] ?? "principal";
 }
 function currentTeacherId(role) {
   if (role !== "teacher") return null;
-  return D6.teachers.find((t) => t.user_id === "user-teach-1")?.id ?? D6.teachers[0]?.id ?? null;
+  return D2.teachers.find((t) => t.user_id === "user-teach-1")?.id ?? D2.teachers[0]?.id ?? null;
 }
 function currentStudentId(role) {
   if (role !== "student") return null;
-  return D6.students.find((s) => s.user_id === "user-stu-1")?.id ?? D6.students[0]?.id ?? null;
+  return D2.students.find((s) => s.user_id === "user-stu-1")?.id ?? D2.students[0]?.id ?? null;
 }
 function offeringRef(offering) {
   if (!offering) return null;
@@ -20645,8 +19588,15 @@ function offeringRef(offering) {
     label: offeringLabel(offering)
   };
 }
-function scopedOfferingsFor(student, yearId) {
-  return yearId ? offeringsForStudentInYear(student.id, yearId) : currentOfferingsFor(student.id);
+function scopedOfferingsFor(student, yearId, viewerRole) {
+  const all3 = yearId ? offeringsForStudentInYear(student.id, yearId) : currentOfferingsFor(student.id);
+  return narrowToLecturer(all3, viewerRole);
+}
+function narrowToLecturer(offerings2, viewerRole) {
+  if (viewerRole !== "teacher") return offerings2;
+  const teacherId = currentTeacherId(viewerRole);
+  const owned = teacherId ? teacherOfferingIds(teacherId) : /* @__PURE__ */ new Set();
+  return offerings2.filter((o) => owned.has(o.id));
 }
 function displayName(first, middle, last) {
   return [first, middle, last].filter(Boolean).join(" ");
@@ -20654,11 +19604,11 @@ function displayName(first, middle, last) {
 function allocateStudentNumber() {
   const now = /* @__PURE__ */ new Date();
   const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const used = D6.students.map((s) => s.student_number).filter((n) => n.startsWith(ym) && n.length === 9).map((n) => Number(n.slice(6))).filter((n) => Number.isFinite(n));
+  const used = D2.students.map((s) => s.student_number).filter((n) => n.startsWith(ym) && n.length === 9).map((n) => Number(n.slice(6))).filter((n) => Number.isFinite(n));
   const next = (used.length ? Math.max(...used) : 0) + 1;
   return `${ym}${String(next).padStart(3, "0")}`;
 }
-function studentListItem(s) {
+function studentListItem(s, viewerRole) {
   return {
     id: s.id,
     student_number: s.student_number,
@@ -20670,16 +19620,23 @@ function studentListItem(s) {
     // The row shows the student's own level + how many courses they take. The course names
     // are a variable-length list that belongs on the detail page, not in a table cell.
     year_of_study: s.year_of_study,
-    offering_count: currentOfferingsFor(s.id).length,
+    // D42 §3 — counted through the caller's own lens, mirroring `list_students`. The
+    // "Courses" column is the same fact the profile's enrolment list shows, and that list
+    // is scoped for a Lecturer: a global count here would print 4 in the directory and 1 on
+    // the profile of the same student.
+    offering_count: narrowToLecturer(currentOfferingsFor(s.id), viewerRole).length,
     guardian_name: s.guardian_name || null,
     // D32 — on the ROW as well as in the query, because the printed sheet has to show
     // what it was filtered by (brief §3).
     gender: s.gender ?? null,
     religion: s.religion ?? null,
-    program_code: D6.programs.find((p) => p.id === s.program_id)?.code ?? null
+    // D40 — added with the civil-status filter, under the same rule: a directory
+    // narrowed to "Married" that never prints one cannot be checked.
+    civil_status: s.civil_status ?? null,
+    program_code: D2.programs.find((p) => p.id === s.program_id)?.code ?? null
   };
 }
-function studentDetail(s, yearId) {
+function studentDetail(s, yearId, viewerRole) {
   return {
     id: s.id,
     student_number: s.student_number,
@@ -20697,20 +19654,20 @@ function studentDetail(s, yearId) {
     guardian_email: s.guardian_email,
     address: s.address,
     phone: s.phone,
-    current_offerings: scopedOfferingsFor(s, yearId).map(offeringRef).filter(Boolean),
+    current_offerings: scopedOfferingsFor(s, yearId, viewerRole).map(offeringRef).filter(Boolean),
     // ── D33 (ask 4): the whole record, so the profile can show it ─────────────
     program: (() => {
-      const p = D6.programs.find((x) => x.id === s.program_id);
+      const p = D2.programs.find((x) => x.id === s.program_id);
       return p ? { id: p.id, code: p.code, name: p.name } : null;
     })(),
     // Demo mode has no `applications` link on the student row, so this is derived from
     // whether an accepted application points back at them — which is what the server's
     // `application_id` column records.
-    application_id: D6.applications?.find((a) => a.student_id === s.id)?.id ?? null,
+    application_id: D2.applications?.find((a) => a.student_id === s.id)?.id ?? null,
     // READ ONLY, and D34 renamed it: the student now has an `email` column of their own
     // (above), so the LOGIN needs a name that cannot be confused with it. Null for a
     // student who has no account.
-    login_email: D6.users.find((u) => u.id === s.user_id)?.email ?? null,
+    login_email: D2.users.find((u) => u.id === s.user_id)?.email ?? null,
     ssno: s.ssno,
     civil_status: s.civil_status,
     religion: s.religion,
@@ -20743,12 +19700,15 @@ function studentDetail(s, yearId) {
     doc_id: s.doc_id
   };
 }
-function assessmentsForStudent(student, yearId) {
-  const offerings2 = offeringsForStudent(student.id, yearId).filter((o) => !o.is_archived);
+function assessmentsForStudent(student, yearId, viewerRole) {
+  const offerings2 = narrowToLecturer(
+    offeringsForStudent(student.id, yearId).filter((o) => !o.is_archived),
+    viewerRole
+  );
   return offerings2.map((offering) => {
     const course = getCourse(offering.course_id);
     const term = computeTermGrade(student.id, offering.id);
-    const assessments2 = D6.assessments.filter((a) => a.offering_id === offering.id).map((a) => assessmentLine(a, student.id));
+    const assessments2 = D2.assessments.filter((a) => a.offering_id === offering.id).map((a) => assessmentLine(a, student.id));
     return {
       offering_id: offering.id,
       subject: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : null,
@@ -20758,7 +19718,7 @@ function assessmentsForStudent(student, yearId) {
   });
 }
 function assessmentLine(a, studentId) {
-  const grade = D6.assessment_grades.find(
+  const grade = D2.assessment_grades.find(
     (g) => g.assessment_id === a.id && g.student_id === studentId
   );
   const released = grade?.is_released ?? a.is_released;
@@ -20799,24 +19759,24 @@ function resolveScopedStudent(role, id) {
   return { student };
 }
 function hasAcademicHistory(studentId) {
-  return D6.assessment_grades.some((g) => g.student_id === studentId) || D6.attendance_records.some((a) => a.student_id === studentId);
+  return D2.assessment_grades.some((g) => g.student_id === studentId) || D2.attendance_records.some((a) => a.student_id === studentId);
 }
 var LIVE_STATUSES = ["Registered", "Unregistered", "transferred"];
 function isDuplicateNumber(num, exceptId) {
   const q = num.trim().toLowerCase();
-  return D6.students.some(
+  return D2.students.some(
     (s) => s.id !== exceptId && LIVE_STATUSES.includes(s.status) && s.student_number.toLowerCase() === q
   );
 }
 function enrollStudent(student, offeringId) {
   const offering = getOffering(offeringId);
   if (!offering) return;
-  const already = D6.enrollments.some(
+  const already = D2.enrollments.some(
     (e) => e.student_id === student.id && e.offering_id === offering.id && e.semester_id === offering.semester_id && !e.unenrolled_at
   );
   if (already) return;
   const enrollment = {
-    id: `enr-new-${D6.enrollments.length + 1}`,
+    id: `enr-new-${D2.enrollments.length + 1}`,
     student_id: student.id,
     offering_id: offering.id,
     semester_id: offering.semester_id,
@@ -20826,11 +19786,11 @@ function enrollStudent(student, offeringId) {
     // afterwards from the offering roster.
     enrollment_status: "enrolled"
   };
-  D6.enrollments.push(enrollment);
+  D2.enrollments.push(enrollment);
 }
 var studentsHandlers = [
   // ── GET /students — searchable, filterable, paginated list ──────────────────────
-  import_msw7.http.get(`${API_BASE_URL}/students`, ({ request, cookies }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students`, ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (role === "student") {
       return errorResponse(403, "forbidden", "Students do not have access to the roster.");
@@ -20844,14 +19804,23 @@ var studentsHandlers = [
       year_of_study: url2.searchParams.get("year_of_study"),
       // Lecturer scope: restrict to students in offerings the lecturer teaches.
       teacher_id: role === "teacher" ? currentTeacherId(role) : null,
+      // D43 — a head sees their programme's students. `demoHodStudentIds` returns []
+      // for any other role, and `null` here means "no filter", so the two must not be
+      // confused: an empty array for an unappointed head narrows to nothing, which is
+      // the safe direction.
+      student_ids: role === "hod" ? demoHodStudentIds(role) : null,
       // Per-module year switcher: restrict to students enrolled in the chosen year.
       academic_year_id: url2.searchParams.get("academic_year_id"),
       // D32 (brief §3) — the three attribute filters.
       gender: url2.searchParams.get("gender"),
       religion: url2.searchParams.get("religion"),
+      civil_status: url2.searchParams.get("civil_status"),
       program_id: url2.searchParams.get("program_id")
     });
-    return import_msw7.HttpResponse.json({ ...page, items: page.items.map(studentListItem) });
+    return import_msw2.HttpResponse.json({
+      ...page,
+      items: page.items.map((s) => studentListItem(s, role))
+    });
   }),
   /*
    * D32 — GET /students/filter-options.
@@ -20859,24 +19828,27 @@ var studentsHandlers = [
    * Declared BEFORE `/students/:studentId` so the literal wins; MSW matches in
    * registration order, exactly as the FastAPI route ordering note describes.
    */
-  import_msw7.http.get(`${API_BASE_URL}/students/filter-options`, ({ cookies }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/filter-options`, ({ cookies }) => {
     const role = sessionRole(cookies);
     if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
     if (role === "student") {
       return errorResponse(403, "forbidden", "Students do not have access to the roster.");
     }
-    return import_msw7.HttpResponse.json({ religions: studentReligions() });
+    return import_msw2.HttpResponse.json({
+      religions: studentReligions(),
+      civil_statuses: studentCivilStatuses()
+    });
   }),
   // ── GET /students/me/years — academic years the acting student was enrolled in ──
   // Backs the student-only top-bar year switcher.
-  import_msw7.http.get(`${API_BASE_URL}/students/me/years`, ({ cookies }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/me/years`, ({ cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "student") {
       return errorResponse(403, "forbidden", "Only students may read /students/me/years.");
     }
     const id = currentStudentId(role);
     const years = id ? yearsForStudent(id) : [];
-    return import_msw7.HttpResponse.json({
+    return import_msw2.HttpResponse.json({
       items: years.map((y) => ({ id: y.id, name: y.name, status: y.status }))
     });
   }),
@@ -20885,7 +19857,7 @@ var studentsHandlers = [
   // `/students/{id}` route below already did. It was missing here, so "My Profile" kept
   // showing the CURRENT section while every other screen followed the global switcher —
   // and the student sits in a different section each year.
-  import_msw7.http.get(`${API_BASE_URL}/students/me`, ({ cookies, request }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/me`, ({ cookies, request }) => {
     const role = sessionRole(cookies);
     if (role !== "student") {
       return errorResponse(403, "forbidden", "Only students may read /students/me.");
@@ -20894,42 +19866,44 @@ var studentsHandlers = [
     const student = id ? getStudent(id) : void 0;
     if (!student) return errorResponse(404, "no_student_profile", "No student profile.");
     const yearId = new URL(request.url).searchParams.get("academic_year_id");
-    return import_msw7.HttpResponse.json(studentDetail(student, yearId));
+    return import_msw2.HttpResponse.json(studentDetail(student, yearId));
   }),
   // ── GET /students/{id}/years — academic years this student was enrolled in ──────
   // Backs the per-student year filter on the profile page (P/S/teacher, scope-checked).
-  import_msw7.http.get(`${API_BASE_URL}/students/:studentId/years`, ({ params, cookies }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/:studentId/years`, ({ params, cookies }) => {
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ("error" in resolved) return resolved.error;
-    const years = yearsForStudent(resolved.student.id);
-    return import_msw7.HttpResponse.json({
+    const years = yearsForStudent(resolved.student.id).filter(
+      (y) => role !== "teacher" || narrowToLecturer(offeringsForStudentInYear(resolved.student.id, y.id), role).length > 0
+    );
+    return import_msw2.HttpResponse.json({
       items: years.map((y) => ({ id: y.id, name: y.name, status: y.status }))
     });
   }),
   // ── GET /students/{id}/assessments — grouped assessment summary ─────────────────
   // `?academic_year_id=` scopes to the section the student had that year.
-  import_msw7.http.get(`${API_BASE_URL}/students/:studentId/assessments`, ({ params, cookies, request }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/:studentId/assessments`, ({ params, cookies, request }) => {
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ("error" in resolved) return resolved.error;
     const yearId = new URL(request.url).searchParams.get("academic_year_id");
-    return import_msw7.HttpResponse.json({
-      items: assessmentsForStudent(resolved.student, yearId),
+    return import_msw2.HttpResponse.json({
+      items: assessmentsForStudent(resolved.student, yearId, role),
       nudge_cooldown_seconds: NUDGE_COOLDOWN_SECONDS
     });
   }),
   // ── GET /students/{id} — detail header ──────────────────────────────────────────
   // `?academic_year_id=` scopes `current_section` to that year.
-  import_msw7.http.get(`${API_BASE_URL}/students/:studentId`, ({ params, cookies, request }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/:studentId`, ({ params, cookies, request }) => {
     const role = sessionRole(cookies);
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ("error" in resolved) return resolved.error;
     const yearId = new URL(request.url).searchParams.get("academic_year_id");
-    return import_msw7.HttpResponse.json(studentDetail(resolved.student, yearId));
+    return import_msw2.HttpResponse.json(studentDetail(resolved.student, yearId, role));
   }),
   // ── POST /students — create (principal / secretary) ─────────────────────────────
-  import_msw7.http.post(`${API_BASE_URL}/students`, async ({ request, cookies }) => {
+  import_msw2.http.post(`${API_BASE_URL}/students`, async ({ request, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot create students.");
@@ -20958,7 +19932,7 @@ var studentsHandlers = [
       }
     }
     const created = {
-      id: `stu-new-${D6.students.length + 1}`,
+      id: `stu-new-${D2.students.length + 1}`,
       user_id: null,
       student_number: body.student_number || allocateStudentNumber(),
       first_name: body.first_name,
@@ -20986,7 +19960,8 @@ var studentsHandlers = [
       program_id: body.program_id ?? null,
       // ── the rest of Sections A-E (D33) ──
       ssno: body.ssno ?? null,
-      civil_status: body.civil_status ?? null,
+      // D40 — folded like `gender` above, mirroring `normalise_civil_status`.
+      civil_status: normaliseCivilStatus(body.civil_status),
       street: body.street ?? null,
       city_town_village: body.city_town_village ?? null,
       district: body.district ?? null,
@@ -21016,10 +19991,10 @@ var studentsHandlers = [
       educationbg_id: null,
       doc_id: null
     };
-    D6.students.push(created);
+    D2.students.push(created);
     if (created.program_id) {
-      D6.student_program_history.push({
-        id: `sph-new-${D6.student_program_history.length + 1}`,
+      D2.student_program_history.push({
+        id: `sph-new-${D2.student_program_history.length + 1}`,
         student_id: created.id,
         program_id: created.program_id,
         started_at: created.enrollment_date,
@@ -21028,10 +20003,10 @@ var studentsHandlers = [
       });
     }
     for (const offeringId of body.offering_ids ?? []) enrollStudent(created, offeringId);
-    return import_msw7.HttpResponse.json(studentDetail(created), { status: 201 });
+    return import_msw2.HttpResponse.json(studentDetail(created), { status: 201 });
   }),
   // ── PATCH /students/{id} — edit profile (status NOT editable here) ──────────────
-  import_msw7.http.patch(`${API_BASE_URL}/students/:studentId`, async ({ params, request, cookies }) => {
+  import_msw2.http.patch(`${API_BASE_URL}/students/:studentId`, async ({ params, request, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot edit students.");
@@ -21062,7 +20037,9 @@ var studentsHandlers = [
     if (body.year_of_study !== void 0) student.year_of_study = body.year_of_study ?? null;
     if (body.religion !== void 0) student.religion = body.religion || null;
     if (body.ssno !== void 0) student.ssno = body.ssno || null;
-    if (body.civil_status !== void 0) student.civil_status = body.civil_status || null;
+    if (body.civil_status !== void 0) {
+      student.civil_status = normaliseCivilStatus(body.civil_status);
+    }
     if (body.street !== void 0) student.street = body.street || null;
     if (body.city_town_village !== void 0) {
       student.city_town_village = body.city_town_village || null;
@@ -21099,10 +20076,10 @@ var studentsHandlers = [
     if (body.dropout_reason !== void 0) student.dropout_reason = body.dropout_reason || null;
     if (body.comments !== void 0) student.comments = body.comments || null;
     if (body.origin !== void 0) student.origin = body.origin || null;
-    return import_msw7.HttpResponse.json(studentDetail(student));
+    return import_msw2.HttpResponse.json(studentDetail(student));
   }),
   // ── POST /students/{id}/status — lifecycle change (auditable, guarded) ──────────
-  import_msw7.http.post(`${API_BASE_URL}/students/:studentId/status`, async ({ params, request, cookies }) => {
+  import_msw2.http.post(`${API_BASE_URL}/students/:studentId/status`, async ({ params, request, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot change student status.");
@@ -21129,10 +20106,10 @@ var studentsHandlers = [
       student.dropout_date = `${DEMO_TODAY}T00:00:00Z`;
     }
     student.status = next;
-    return import_msw7.HttpResponse.json(studentDetail(student));
+    return import_msw2.HttpResponse.json(studentDetail(student));
   }),
   // ── DELETE /students/{id} — soft-delete only if no academic history ─────────────
-  import_msw7.http.delete(`${API_BASE_URL}/students/:studentId`, ({ params, cookies }) => {
+  import_msw2.http.delete(`${API_BASE_URL}/students/:studentId`, ({ params, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot delete students.");
@@ -21146,31 +20123,31 @@ var studentsHandlers = [
         "This student has grades or attendance on record \u2014 deactivate instead."
       );
     }
-    D6.students = D6.students.filter((s) => s.id !== student.id);
-    D6.enrollments = D6.enrollments.filter((e) => e.student_id !== student.id);
-    return new import_msw7.HttpResponse(null, { status: 204 });
+    D2.students = D2.students.filter((s) => s.id !== student.id);
+    D2.enrollments = D2.enrollments.filter((e) => e.student_id !== student.id);
+    return new import_msw2.HttpResponse(null, { status: 204 });
   }),
   // ── GET /students/{id}/academic-history — DERIVED (D30 §D12, brief §27) ─────────
   // Recomputed on every call from enrolments, results, approved transfers and the
   // programme curriculum. Nothing is cached as truth, exactly as the server does it.
-  import_msw7.http.get(`${API_BASE_URL}/students/:studentId/academic-history`, ({ params, cookies }) => {
+  import_msw2.http.get(`${API_BASE_URL}/students/:studentId/academic-history`, ({ params, cookies }) => {
     const role = sessionRole(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot view academic history.");
     }
     const student = getStudent(String(params.studentId));
     if (!student) return errorResponse(404, "not_found", "Student not found.");
-    const program = D6.programs.find((p) => p.id === student.program_id) ?? null;
+    const program = D2.programs.find((p) => p.id === student.program_id) ?? null;
     const minGradePoint = Number(program?.min_passing_grade_point ?? "2.50");
-    const plan = program ? D6.program_courses.filter((pc) => pc.program_id === program.id) : [];
+    const plan = program ? D2.program_courses.filter((pc) => pc.program_id === program.id) : [];
     const planByCourse = new Map(plan.map((pc) => [pc.course_id, pc]));
-    const application = D6.applications.find((a) => a.student_id === student.id);
+    const application = D2.applications.find((a) => a.student_id === student.id);
     const transferred = new Set(
-      application ? D6.credit_transfer_requests.filter((t) => t.application_id === application.id && t.status === "approved").map((t) => t.target_course_id) : []
+      application ? D2.credit_transfer_requests.filter((t) => t.application_id === application.id && t.status === "approved").map((t) => t.target_course_id) : []
     );
     const enrolled = /* @__PURE__ */ new Map();
     const howSat = /* @__PURE__ */ new Map();
-    for (const enr of D6.enrollments.filter((e) => e.student_id === student.id)) {
+    for (const enr of D2.enrollments.filter((e) => e.student_id === student.id)) {
       const offering = getOffering(enr.offering_id);
       if (offering) {
         enrolled.set(offering.course_id, enr.semester_id);
@@ -21203,7 +20180,7 @@ var studentsHandlers = [
       const credits = course.credits ?? 0;
       let letter = null;
       let numeric = null;
-      for (const offering of D6.offerings.filter((o) => o.course_id === courseId2)) {
+      for (const offering of D2.offerings.filter((o) => o.course_id === courseId2)) {
         const term = computeTermGrade(student.id, offering.id);
         if (term.numeric != null && (numeric == null || term.numeric > numeric)) {
           numeric = term.numeric;
@@ -21267,7 +20244,7 @@ var studentsHandlers = [
       (row) => row.is_required === true && (row.status === "completed" || row.status === "transferred")
     ).reduce((sum, row) => sum + (row.credits ?? 0), 0);
     const gpa = gpaFor(gpaEntries);
-    return import_msw7.HttpResponse.json({
+    return import_msw2.HttpResponse.json({
       student_id: student.id,
       full_name: student.full_name,
       student_number: student.student_number,
@@ -21285,8 +20262,8 @@ var studentsHandlers = [
       gpa_total_credits: gpa.total_credits,
       counts,
       courses: courses2,
-      program_history: D6.student_program_history.filter((h) => h.student_id === student.id).sort((a, b) => a.started_at.localeCompare(b.started_at)).map((h) => {
-        const p = D6.programs.find((pr) => pr.id === h.program_id);
+      program_history: D2.student_program_history.filter((h) => h.student_id === student.id).sort((a, b) => a.started_at.localeCompare(b.started_at)).map((h) => {
+        const p = D2.programs.find((pr) => pr.id === h.program_id);
         return {
           id: h.id,
           program: { id: h.program_id, code: p?.code ?? "", name: p?.name ?? "" },
@@ -21300,14 +20277,14 @@ var studentsHandlers = [
     });
   }),
   // ── PUT /students/{id}/program — DEAN ONLY (D30 §D12, §D14) ────────────────────
-  import_msw7.http.put(`${API_BASE_URL}/students/:studentId/program`, async ({ params, request, cookies }) => {
+  import_msw2.http.put(`${API_BASE_URL}/students/:studentId/program`, async ({ params, request, cookies }) => {
     if (sessionRole(cookies) !== "principal") {
       return errorResponse(403, "forbidden", "Only the Dean may change a student's programme.");
     }
     const student = getStudent(String(params.studentId));
     if (!student) return errorResponse(404, "not_found", "Student not found.");
     const body = await request.json();
-    const program = D6.programs.find((p) => p.id === body.program_id);
+    const program = D2.programs.find((p) => p.id === body.program_id);
     if (!program) return errorResponse(404, "program_not_found", "Programme not found.");
     if (student.program_id === program.id) {
       return errorResponse(
@@ -21317,7 +20294,7 @@ var studentsHandlers = [
       );
     }
     const effective = body.effective_from || DEMO_TODAY;
-    const open = D6.student_program_history.find(
+    const open = D2.student_program_history.find(
       (h) => h.student_id === student.id && h.ended_at === null
     );
     if (open) {
@@ -21335,8 +20312,8 @@ var studentsHandlers = [
       open.ended_at = closed < open.started_at ? open.started_at : closed;
       open.reason = open.reason ?? body.reason ?? null;
     }
-    D6.student_program_history.push({
-      id: `sph-demo-${D6.student_program_history.length + 1}`,
+    D2.student_program_history.push({
+      id: `sph-demo-${D2.student_program_history.length + 1}`,
       student_id: student.id,
       program_id: program.id,
       started_at: effective,
@@ -21345,13 +20322,13 @@ var studentsHandlers = [
     });
     student.program_id = program.id;
     if (body.year_of_study) student.year_of_study = body.year_of_study;
-    return import_msw7.HttpResponse.json({
+    return import_msw2.HttpResponse.json({
       student_id: student.id,
       program: { id: program.id, code: program.code, name: program.name },
       year_of_study: body.year_of_study ?? null,
       enrollment_load: body.enrollment_load ?? null,
-      history: D6.student_program_history.filter((h) => h.student_id === student.id).sort((a, b) => a.started_at.localeCompare(b.started_at)).map((h) => {
-        const p = D6.programs.find((pr) => pr.id === h.program_id);
+      history: D2.student_program_history.filter((h) => h.student_id === student.id).sort((a, b) => a.started_at.localeCompare(b.started_at)).map((h) => {
+        const p = D2.programs.find((pr) => pr.id === h.program_id);
         return {
           id: h.id,
           program: { id: h.program_id, code: p?.code ?? "", name: p?.name ?? "" },
@@ -21365,1165 +20342,16 @@ var studentsHandlers = [
   })
 ];
 
-// src/shared/api/mocks/handlers/admissions.ts
-var import_msw8 = require("msw");
-var D7 = DEMO_DATASET;
-var SESSION_COOKIE3 = "sis_mock_session";
-function sessionRole2(cookies) {
-  return cookies[SESSION_COOKIE3] ?? "principal";
-}
-var MIN_EQUIVALENCY_PCT = 75;
-var idCounter = 0;
-var nextId = (prefix) => {
-  idCounter += 1;
-  return `${prefix}-demo-${idCounter}`;
-};
-function assertAdmissions(cookies) {
-  const role = sessionRole2(cookies);
-  if (role !== "principal" && role !== "secretary") {
-    return errorResponse(403, "forbidden", "Only the Dean or the Registrar may manage admissions.");
-  }
-  return null;
-}
-function assertDean4(cookies) {
-  if (sessionRole2(cookies) !== "principal") {
-    return errorResponse(403, "forbidden", "Only the Dean may decide a credit transfer.");
-  }
-  return null;
-}
-var isDecided = (app) => app.status === "accepted" || app.status === "denied" || app.status === "withdrawn";
-var fullName = (app) => [app.first_name, app.middle_name, app.last_name].filter(Boolean).join(" ");
-function programRef(programId2) {
-  if (!programId2) return null;
-  const program = D7.programs.find((p) => p.id === programId2);
-  return program ? { id: program.id, code: program.code, name: program.name } : null;
-}
-function courseRef(courseId2) {
-  const course = getCourse(courseId2);
-  return course ? { id: course.id, code: course.code, name: course.name, credits: course.credits } : null;
-}
-function ageOn(dob, on) {
-  if (!dob) return null;
-  const birth = /* @__PURE__ */ new Date(`${dob}T00:00:00`);
-  const at = /* @__PURE__ */ new Date(`${on}T00:00:00`);
-  if (Number.isNaN(birth.getTime()) || Number.isNaN(at.getTime())) return null;
-  let years = at.getFullYear() - birth.getFullYear();
-  const beforeBirthday = at.getMonth() < birth.getMonth() || at.getMonth() === birth.getMonth() && at.getDate() < birth.getDate();
-  if (beforeBirthday) years -= 1;
-  return years;
-}
-function submissionIssues(app) {
-  const issues = [];
-  if (!app.first_name?.trim() || !app.last_name?.trim()) {
-    issues.push("The applicant's first and last name are required.");
-  }
-  if (!app.date_of_birth) issues.push("Date of birth is required.");
-  else if (app.date_of_birth > DEMO_TODAY) issues.push("Date of birth cannot be in the future.");
-  if (!app.program_id) issues.push("A programme of study must be chosen (Section E).");
-  if (!app.year_of_study) issues.push("Year of study must be chosen (Section E).");
-  if (!app.enrollment_load) {
-    issues.push("Study load must be chosen \u2014 Part Time, Full Time or Transient.");
-  }
-  if (!app.applicant_signed_at) {
-    issues.push("The applicant must sign and date the form (Section G).");
-  }
-  const age = ageOn(app.date_of_birth, app.applicant_signed_at ?? DEMO_TODAY);
-  if (age !== null && age < 18 && !app.guardian_signed_at) {
-    issues.push(
-      "The applicant is under 18, so a parent or guardian must also sign (Section G)."
-    );
-  }
-  return issues;
-}
-function acceptanceIssues(app) {
-  if (app.status === "accepted") return ["This application has already been accepted."];
-  if (app.status === "denied" || app.status === "withdrawn") {
-    return [`This application is ${app.status}.`];
-  }
-  const issues = submissionIssues(app);
-  if (app.status === "draft") {
-    issues.push("The application must be submitted before it can be accepted.");
-  }
-  const pending = D7.credit_transfer_requests.filter(
-    (t) => t.application_id === app.id && t.status === "pending"
-  ).length;
-  if (pending > 0) {
-    issues.push(
-      `${pending} credit transfer request(s) are still awaiting the Dean's decision. Credit transfer may only be assessed at admission.`
-    );
-  }
-  if (!app.email?.trim()) {
-    issues.push(
-      "An email address is required to issue the student a login (or supply one when accepting)."
-    );
-  }
-  return issues;
-}
-function transferRead(row) {
-  return {
-    id: row.id,
-    application_id: row.application_id,
-    external_institution: row.external_institution,
-    external_course_code: row.external_course_code,
-    external_course_name: row.external_course_name,
-    external_credits: row.external_credits,
-    external_grade: row.external_grade,
-    target_course: courseRef(row.target_course_id),
-    content_equivalency_pct: row.content_equivalency_pct,
-    cta_document_id: row.cta_document_id,
-    transcript_document_id: row.transcript_document_id,
-    outline_document_id: row.outline_document_id,
-    status: row.status,
-    decided_by_user_id: row.decided_by_user_id,
-    decided_at: row.decided_at,
-    note: row.note,
-    meets_equivalency_floor: row.content_equivalency_pct != null && row.content_equivalency_pct >= MIN_EQUIVALENCY_PCT
-  };
-}
-function listItem2(app) {
-  return {
-    id: app.id,
-    status: app.status,
-    full_name: fullName(app),
-    first_name: app.first_name,
-    middle_name: app.middle_name,
-    last_name: app.last_name,
-    school_year: app.school_year,
-    program: programRef(app.program_id),
-    year_of_study: app.year_of_study,
-    enrollment_load: app.enrollment_load,
-    email: app.email,
-    phone: app.phone,
-    date_accepted: app.date_accepted,
-    student_code: app.student_code,
-    student_id: app.student_id,
-    created_at: app.created_at,
-    pending_credit_transfers: D7.credit_transfer_requests.filter(
-      (t) => t.application_id === app.id && t.status === "pending"
-    ).length
-  };
-}
-function detail2(app) {
-  return {
-    ...listItem2(app),
-    date_of_birth: app.date_of_birth,
-    ssno: app.ssno,
-    gender: app.gender,
-    civil_status: app.civil_status,
-    religion: app.religion,
-    has_health_condition: app.has_health_condition,
-    health_condition_note: app.health_condition_note,
-    street: app.street,
-    city_town_village: app.city_town_village,
-    district: app.district,
-    mother_name: app.mother_name,
-    father_name: app.father_name,
-    nok_name: app.nok_name,
-    nok_relationship: app.nok_relationship,
-    nok_phone: app.nok_phone,
-    atlib_exam: app.atlib_exam,
-    num_csec: app.num_csec,
-    finance_name: app.finance_name,
-    finance_phone: app.finance_phone,
-    finance_email: app.finance_email,
-    recommendation_received: app.recommendation_received,
-    applicant_signed_at: app.applicant_signed_at,
-    guardian_signed_at: app.guardian_signed_at,
-    academic_year_id: app.academic_year_id,
-    enrolment_status: app.enrolment_status,
-    comments: app.comments,
-    decided_by_user_id: app.decided_by_user_id,
-    decided_at: app.decided_at,
-    updated_at: app.updated_at,
-    education: D7.application_education.filter((row) => row.application_id === app.id).sort((a, b) => a.sort_order - b.sort_order),
-    documents: D7.application_documents.filter((row) => row.application_id === app.id),
-    credit_transfers: D7.credit_transfer_requests.filter((row) => row.application_id === app.id).map(transferRead),
-    blocking_issues: acceptanceIssues(app)
-  };
-}
-var find = (id) => D7.applications.find((a) => a.id === id);
-var WRITABLE = [
-  "school_year",
-  "first_name",
-  "middle_name",
-  "last_name",
-  "date_of_birth",
-  "ssno",
-  "gender",
-  "civil_status",
-  "religion",
-  "phone",
-  "email",
-  "has_health_condition",
-  "health_condition_note",
-  "street",
-  "city_town_village",
-  "district",
-  "mother_name",
-  "father_name",
-  "nok_name",
-  "nok_relationship",
-  "nok_phone",
-  "atlib_exam",
-  "num_csec",
-  "finance_name",
-  "finance_phone",
-  "finance_email",
-  "recommendation_received",
-  "program_id",
-  "year_of_study",
-  "enrollment_load",
-  "applicant_signed_at",
-  "guardian_signed_at",
-  "academic_year_id",
-  "enrolment_status",
-  "comments"
-];
-var BOOLEANS = /* @__PURE__ */ new Set(["has_health_condition", "atlib_exam", "recommendation_received"]);
-function applyWritable(app, body) {
-  for (const key of WRITABLE) {
-    if (!(key in body)) continue;
-    const value = body[key];
-    if (BOOLEANS.has(key)) {
-      app[key] = Boolean(value);
-      continue;
-    }
-    app[key] = typeof value === "string" && value.trim() === "" ? null : value;
-  }
-  app.updated_at = `${DEMO_TODAY}T12:00:00Z`;
-}
-function allocateStudentNumber2() {
-  const prefix = DEMO_TODAY.slice(0, 7).replace("-", "");
-  const taken = D7.students.map((s) => s.student_number).filter((n) => n.startsWith(prefix)).map((n) => Number(n.slice(6))).filter((n) => !Number.isNaN(n));
-  const next = (taken.length ? Math.max(...taken) : 0) + 1;
-  return `${prefix}${String(next).padStart(3, "0")}`;
-}
-var admissionsHandlers = [
-  // ── GET /applications ────────────────────────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/applications`, ({ request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const url2 = new URL(request.url);
-    const params = listParamsFrom(url2);
-    const status = url2.searchParams.get("status");
-    const search = (url2.searchParams.get("search") ?? "").trim().toLowerCase();
-    const programId2 = url2.searchParams.get("program_id");
-    let rows = [...D7.applications];
-    if (status) rows = rows.filter((a) => a.status === status);
-    if (programId2) rows = rows.filter((a) => a.program_id === programId2);
-    if (search) {
-      rows = rows.filter(
-        (a) => [a.first_name, a.last_name, a.email, a.student_code].filter(Boolean).some((field) => String(field).toLowerCase().includes(search))
-      );
-    }
-    rows.sort(
-      (a, b) => a.last_name.localeCompare(b.last_name) || a.first_name.localeCompare(b.first_name)
-    );
-    const page = params.page ?? 1;
-    const pageSize = params.page_size ?? 25;
-    const start = (page - 1) * pageSize;
-    return import_msw8.HttpResponse.json({
-      items: rows.slice(start, start + pageSize).map(listItem2),
-      total: rows.length,
-      page,
-      page_size: pageSize,
-      total_pages: pageSize ? Math.ceil(rows.length / pageSize) : 0
-    });
-  }),
-  // ── POST /applications ──────────────────────────────────────────────────────
-  import_msw8.http.post(`${API_BASE_URL}/applications`, async ({ request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    const first = String(body.first_name ?? "").trim();
-    const last = String(body.last_name ?? "").trim();
-    if (!first || !last) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        last_name: ["Required."]
-      });
-    }
-    if (body.program_id && !D7.programs.some((p) => p.id === body.program_id)) {
-      return errorResponse(422, "validation_error", "Programme not found.", {
-        program_id: ["Unknown programme."]
-      });
-    }
-    const app = {
-      id: nextId("app"),
-      status: "draft",
-      school_year: null,
-      first_name: first,
-      middle_name: null,
-      last_name: last,
-      date_of_birth: null,
-      ssno: null,
-      gender: null,
-      civil_status: null,
-      religion: null,
-      phone: null,
-      email: null,
-      has_health_condition: false,
-      health_condition_note: null,
-      street: null,
-      city_town_village: null,
-      district: null,
-      mother_name: null,
-      father_name: null,
-      nok_name: null,
-      nok_relationship: null,
-      nok_phone: null,
-      atlib_exam: false,
-      num_csec: null,
-      finance_name: null,
-      finance_phone: null,
-      finance_email: null,
-      recommendation_received: false,
-      program_id: null,
-      year_of_study: null,
-      enrollment_load: null,
-      applicant_signed_at: null,
-      guardian_signed_at: null,
-      date_accepted: null,
-      academic_year_id: null,
-      enrolment_status: null,
-      student_code: null,
-      comments: null,
-      decided_by_user_id: null,
-      decided_at: null,
-      student_id: null,
-      created_at: `${DEMO_TODAY}T12:00:00Z`,
-      updated_at: `${DEMO_TODAY}T12:00:00Z`
-    };
-    applyWritable(app, body);
-    D7.applications.push(app);
-    if (body.submit === true) {
-      const issues = submissionIssues(app);
-      if (issues.length > 0) {
-        D7.applications.splice(D7.applications.indexOf(app), 1);
-        return errorResponse(
-          422,
-          "application_incomplete",
-          "This application is not complete enough to submit.",
-          { application: issues }
-        );
-      }
-      app.status = "submitted";
-    }
-    return import_msw8.HttpResponse.json(detail2(app), { status: 201 });
-  }),
-  // ── GET /applications/{id} ──────────────────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/applications/:applicationId`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  // ── PATCH /applications/{id} ────────────────────────────────────────────────
-  import_msw8.http.patch(`${API_BASE_URL}/applications/:applicationId`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (isDecided(app)) {
-      return errorResponse(
-        409,
-        "application_decided",
-        `This application is ${app.status} and can no longer be edited.`
-      );
-    }
-    const body = await request.json();
-    if ("program_id" in body && body.program_id && !D7.programs.some((p) => p.id === body.program_id)) {
-      return errorResponse(422, "validation_error", "Programme not found.", {
-        program_id: ["Unknown programme."]
-      });
-    }
-    const before = { first: app.first_name, last: app.last_name };
-    applyWritable(app, body);
-    if (!app.first_name?.trim() || !app.last_name?.trim()) {
-      app.first_name = before.first;
-      app.last_name = before.last;
-      return errorResponse(422, "validation_error", "An application must keep a first and last name.", {
-        last_name: ["Required."]
-      });
-    }
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  // ── DELETE /applications/{id} — soft ────────────────────────────────────────
-  import_msw8.http.delete(`${API_BASE_URL}/applications/:applicationId`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status === "accepted") {
-      return errorResponse(
-        409,
-        "application_accepted",
-        "This application has been accepted and a student record exists for it."
-      );
-    }
-    D7.applications.splice(D7.applications.indexOf(app), 1);
-    return new import_msw8.HttpResponse(null, { status: 204 });
-  }),
-  // ── Transitions ─────────────────────────────────────────────────────────────
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/submit`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status !== "draft") {
-      return errorResponse(
-        409,
-        isDecided(app) ? "application_decided" : "application_not_draft",
-        `This application is already ${app.status}.`
-      );
-    }
-    const issues = submissionIssues(app);
-    if (issues.length > 0) {
-      return errorResponse(
-        422,
-        "application_incomplete",
-        "This application is not complete enough to submit.",
-        { application: issues }
-      );
-    }
-    app.status = "submitted";
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/review`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status !== "submitted") {
-      return errorResponse(
-        409,
-        "application_not_submitted",
-        `Only a submitted application can be moved under review (this one is ${app.status}).`
-      );
-    }
-    app.status = "under_review";
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/deny`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status !== "submitted" && app.status !== "under_review") {
-      return errorResponse(
-        409,
-        "application_not_decidable",
-        `Only a submitted or under-review application can be denied (this one is ${app.status}).`
-      );
-    }
-    const body = await request.json().catch(() => ({}));
-    app.status = "denied";
-    app.decided_by_user_id = DEMO_IDS.principalUserId;
-    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
-    if (body.reason) {
-      app.comments = app.comments ? `${app.comments}
-${body.reason}` : body.reason;
-    }
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/withdraw`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status === "accepted") {
-      return errorResponse(409, "application_accepted", "This application has already been accepted.");
-    }
-    if (isDecided(app)) {
-      return errorResponse(409, "application_decided", `This application is already ${app.status}.`);
-    }
-    app.status = "withdrawn";
-    app.decided_by_user_id = DEMO_IDS.principalUserId;
-    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  // ── POST /applications/{id}/accept — the whole point (decision #5) ──────────
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/accept`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (app.status === "accepted") {
-      return errorResponse(409, "application_accepted", "This application has already been accepted.");
-    }
-    if (app.status !== "submitted" && app.status !== "under_review") {
-      return errorResponse(
-        409,
-        "application_not_decidable",
-        `Only a submitted or under-review application can be accepted (this one is ${app.status}).`
-      );
-    }
-    const body = await request.json().catch(() => ({}));
-    const loginEmail = (body.login_email ?? app.email ?? "").trim();
-    const issues = acceptanceIssues(app).filter(
-      (issue) => !(loginEmail && issue.startsWith("An email address is required"))
-    );
-    if (issues.length > 0) {
-      return errorResponse(422, "application_incomplete", "This application cannot be accepted yet.", {
-        application: issues
-      });
-    }
-    if (D7.users.some((u) => u.email === loginEmail)) {
-      return errorResponse(409, "duplicate_email", "A user with this email already exists.");
-    }
-    const acceptedOn = body.date_accepted || DEMO_TODAY;
-    const studentNumber = allocateStudentNumber2();
-    const userId = nextId("user-stu");
-    const studentId = nextId("stu");
-    D7.users.push({
-      id: userId,
-      email: loginEmail,
-      username: null,
-      full_name: fullName(app),
-      role: "student",
-      is_active: true,
-      must_change_password: true,
-      last_login_at: null,
-      locale: "en",
-      theme: "light",
-      date_format: null,
-      default_page_size: 25
-    });
-    D7.students.push({
-      id: studentId,
-      user_id: userId,
-      student_number: studentNumber,
-      first_name: app.first_name,
-      middle_name: app.middle_name,
-      last_name: app.last_name,
-      full_name: fullName(app),
-      date_of_birth: app.date_of_birth ?? "2000-01-01",
-      // D37 — `canonicalGender`, mirroring the server's `normalise_gender` on this same
-      // copy. The old line was `app.gender === 'female' ? 'female' : 'male'`, which sent
-      // every unrecognised value — including a capitalised `'Female'` — to 'male'. That is
-      // the browser-side half of the bug the live data already had.
-      gender: canonicalGender(app.gender) ?? "female",
-      // D32 - acceptance copies the application's religion onto the student, mirroring
-      // `admissions/service.py:263`. This is the only path that ever populates it.
-      religion: app.religion ?? null,
-      enrollment_date: acceptedOn,
-      status: "Registered",
-      // The declared year IS the level — the application and the profile now speak the same
-      // `enum('First','Second')`, so this is a straight carry rather than a coercion.
-      year_of_study: app.year_of_study ?? "First",
-      program_id: app.program_id,
-      // These are non-null on `DemoStudent`; an application may legitimately omit them, so
-      // they degrade to an empty string rather than widening the demo type.
-      guardian_name: app.nok_name ?? app.mother_name ?? app.father_name ?? "",
-      guardian_phone: app.nok_phone ?? "",
-      guardian_email: "",
-      address: [app.street, app.city_town_village, app.district].filter(Boolean).join(", "),
-      phone: app.phone ?? "",
-      // D33 — acceptance carries the WHOLE of Sections A-E across, mirroring
-      // `admissions/service.py`. Before this only religion made the trip, so an accepted
-      // applicant's next of kin and financier were on the frozen application and nowhere
-      // on the live record the Registrar actually edits.
-      ssno: app.ssno ?? null,
-      civil_status: app.civil_status ?? null,
-      street: app.street ?? null,
-      city_town_village: app.city_town_village ?? null,
-      district: app.district ?? null,
-      mother_name: app.mother_name ?? null,
-      father_name: app.father_name ?? null,
-      nok_name: app.nok_name ?? null,
-      nok_relationship: app.nok_relationship ?? null,
-      nok_phone: app.nok_phone ?? null,
-      has_health_condition: app.has_health_condition ?? false,
-      health_condition_note: app.health_condition_note ?? null,
-      atlib_exam: app.atlib_exam ?? false,
-      num_csec: app.num_csec ?? null,
-      finance_name: app.finance_name ?? null,
-      finance_phone: app.finance_phone ?? null,
-      finance_email: app.finance_email ?? null,
-      enrollment_load: app.enrollment_load ?? null,
-      // ── D34 · the client's own columns ─────────────────────────────────────
-      // The applicant's email becomes BOTH their login and their contact address at
-      // acceptance; they are separate fields from here on, and only the login is
-      // maintained through the Users module.
-      email: app.email ?? null,
-      origin: "admissions",
-      student_id_original: null,
-      transferred_from: null,
-      graduation_date: null,
-      dropout_date: null,
-      dropout_reason: null,
-      comments: null,
-      educationbg_id: null,
-      doc_id: null
-    });
-    if (app.program_id) {
-      D7.student_program_history.push({
-        id: nextId("sph"),
-        student_id: studentId,
-        program_id: app.program_id,
-        started_at: acceptedOn,
-        ended_at: null,
-        reason: "Admitted"
-      });
-    }
-    app.status = "accepted";
-    app.student_id = studentId;
-    app.student_code = studentNumber;
-    app.date_accepted = acceptedOn;
-    app.academic_year_id = app.academic_year_id ?? DEMO_IDS.activeYearId;
-    app.enrolment_status = app.enrolment_status ?? app.enrollment_load;
-    app.decided_by_user_id = DEMO_IDS.principalUserId;
-    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
-    if (body.comments) {
-      app.comments = app.comments ? `${app.comments}
-${body.comments}` : body.comments;
-    }
-    const transferred = D7.credit_transfer_requests.filter((t) => t.application_id === app.id && t.status === "approved").map((t) => getCourse(t.target_course_id)?.code).filter((code) => Boolean(code)).sort();
-    return import_msw8.HttpResponse.json(
-      {
-        application: detail2(app),
-        student_id: studentId,
-        student_number: studentNumber,
-        // Only a SERVER-generated secret comes back, and only once — same discipline as
-        // `POST /settings/users`.
-        temporary_password: body.temporary_password ? null : "DemoTemp1!",
-        login_email: loginEmail,
-        transferred_course_codes: transferred
-      },
-      { status: 201 }
-    );
-  }),
-  // ── Section B ───────────────────────────────────────────────────────────────
-  import_msw8.http.put(`${API_BASE_URL}/applications/:applicationId/education`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (isDecided(app)) {
-      return errorResponse(409, "application_decided", `This application is ${app.status}.`);
-    }
-    const body = await request.json();
-    const items = body.items ?? [];
-    for (const item of items) {
-      if (item.graduated && !item.graduation_date) {
-        return errorResponse(422, "validation_error", "A graduated institution needs a graduation date.", {
-          graduation_date: [`Required for ${item.institution ?? "this institution"}.`]
-        });
-      }
-    }
-    for (let i = D7.application_education.length - 1; i >= 0; i -= 1) {
-      if (D7.application_education[i].application_id === app.id) {
-        D7.application_education.splice(i, 1);
-      }
-    }
-    items.forEach((item, index) => {
-      D7.application_education.push({
-        id: nextId("appedu"),
-        application_id: app.id,
-        institution: String(item.institution ?? "").trim(),
-        education_level: item.education_level ?? "High School",
-        graduated: Boolean(item.graduated),
-        graduation_date: item.graduation_date ?? null,
-        sort_order: index + 1
-      });
-    });
-    app.updated_at = `${DEMO_TODAY}T12:00:00Z`;
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  // ── Section F ───────────────────────────────────────────────────────────────
-  import_msw8.http.put(`${API_BASE_URL}/applications/:applicationId/documents`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (isDecided(app)) {
-      return errorResponse(409, "application_decided", `This application is ${app.status}.`);
-    }
-    const body = await request.json();
-    const items = body.items ?? [];
-    const existing = D7.application_documents.filter((d) => d.application_id === app.id);
-    const kept = /* @__PURE__ */ new Set();
-    for (const item of items) {
-      const target = item.id ? existing.find((d) => d.id === item.id) : void 0;
-      if (target) {
-        target.document_type = item.document_type ?? target.document_type;
-        target.file_name = item.file_name ?? null;
-        target.content_type = item.content_type ?? null;
-        target.size_bytes = item.size_bytes ?? null;
-        target.received = Boolean(item.received);
-        kept.add(target.id);
-      } else {
-        const created = {
-          id: nextId("appdoc"),
-          application_id: app.id,
-          document_type: item.document_type ?? "other",
-          file_name: item.file_name ?? null,
-          content_type: item.content_type ?? null,
-          size_bytes: item.size_bytes ?? null,
-          received: Boolean(item.received)
-        };
-        D7.application_documents.push(created);
-        kept.add(created.id);
-      }
-    }
-    const referenced = new Set(
-      D7.credit_transfer_requests.filter((t) => t.application_id === app.id).flatMap((t) => [t.cta_document_id, t.transcript_document_id, t.outline_document_id]).filter((id) => Boolean(id))
-    );
-    for (const doc of existing) {
-      if (kept.has(doc.id)) continue;
-      if (referenced.has(doc.id)) {
-        return errorResponse(
-          409,
-          "document_in_use",
-          `The ${doc.document_type} document is attached to a credit transfer request and cannot be removed.`
-        );
-      }
-      D7.application_documents.splice(D7.application_documents.indexOf(doc), 1);
-    }
-    app.updated_at = `${DEMO_TODAY}T12:00:00Z`;
-    return import_msw8.HttpResponse.json(detail2(app));
-  }),
-  // ── Credit transfer on an application ───────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/applications/:applicationId/credit-transfers`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    return import_msw8.HttpResponse.json(
-      D7.credit_transfer_requests.filter((t) => t.application_id === String(params.applicationId)).map(transferRead)
-    );
-  }),
-  import_msw8.http.post(`${API_BASE_URL}/applications/:applicationId/credit-transfers`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, "not_found", "Application not found.");
-    if (isDecided(app)) {
-      return errorResponse(
-        409,
-        "application_decided",
-        `Credit transfer may only be requested while the application is open \u2014 this one is ${app.status}.`
-      );
-    }
-    const body = await request.json();
-    const targetCourseId = String(body.target_course_id ?? "");
-    if (!getCourse(targetCourseId)) {
-      return errorResponse(422, "validation_error", "Target course not found.", {
-        target_course_id: ["Unknown course."]
-      });
-    }
-    if (D7.credit_transfer_requests.some(
-      (t) => t.application_id === app.id && t.target_course_id === targetCourseId && t.status !== "denied"
-    )) {
-      return errorResponse(
-        409,
-        "duplicate_credit_transfer",
-        "There is already a live credit transfer request for that course."
-      );
-    }
-    const created = {
-      id: nextId("cta"),
-      application_id: app.id,
-      external_institution: String(body.external_institution ?? "").trim(),
-      external_course_code: body.external_course_code ?? null,
-      external_course_name: String(body.external_course_name ?? "").trim(),
-      external_credits: body.external_credits ?? null,
-      external_grade: body.external_grade ?? null,
-      target_course_id: targetCourseId,
-      content_equivalency_pct: body.content_equivalency_pct ?? null,
-      cta_document_id: body.cta_document_id ?? null,
-      transcript_document_id: body.transcript_document_id ?? null,
-      outline_document_id: body.outline_document_id ?? null,
-      status: "pending",
-      decided_by_user_id: null,
-      decided_at: null,
-      note: body.note ?? null,
-      created_at: `${DEMO_TODAY}T12:00:00Z`
-    };
-    D7.credit_transfer_requests.push(created);
-    return import_msw8.HttpResponse.json(transferRead(created), { status: 201 });
-  }),
-  // ── Credit transfer by its own id ───────────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/credit-transfers`, ({ request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const url2 = new URL(request.url);
-    const status = url2.searchParams.get("status");
-    const applicationId = url2.searchParams.get("application_id");
-    let rows = [...D7.credit_transfer_requests];
-    if (status) rows = rows.filter((t) => t.status === status);
-    if (applicationId) rows = rows.filter((t) => t.application_id === applicationId);
-    return import_msw8.HttpResponse.json(rows.map(transferRead));
-  }),
-  import_msw8.http.patch(`${API_BASE_URL}/credit-transfers/:transferId`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = D7.credit_transfer_requests.find((t) => t.id === String(params.transferId));
-    if (!row) return errorResponse(404, "not_found", "Credit transfer request not found.");
-    if (row.status !== "pending") {
-      return errorResponse(
-        409,
-        "credit_transfer_decided",
-        `This request has already been ${row.status} and cannot be edited.`
-      );
-    }
-    const body = await request.json();
-    if ("target_course_id" in body && body.target_course_id) {
-      if (!getCourse(String(body.target_course_id))) {
-        return errorResponse(422, "validation_error", "Target course not found.", {
-          target_course_id: ["Unknown course."]
-        });
-      }
-    }
-    for (const [key, value] of Object.entries(body)) {
-      if (key in row) row[key] = value;
-    }
-    return import_msw8.HttpResponse.json(transferRead(row));
-  }),
-  import_msw8.http.delete(`${API_BASE_URL}/credit-transfers/:transferId`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = D7.credit_transfer_requests.find((t) => t.id === String(params.transferId));
-    if (!row) return errorResponse(404, "not_found", "Credit transfer request not found.");
-    if (row.status !== "pending") {
-      return errorResponse(
-        409,
-        "credit_transfer_decided",
-        `This request has been ${row.status}; the Dean's decision is kept.`
-      );
-    }
-    D7.credit_transfer_requests.splice(D7.credit_transfer_requests.indexOf(row), 1);
-    return new import_msw8.HttpResponse(null, { status: 204 });
-  }),
-  // ── The DEAN decides (brief §13) ────────────────────────────────────────────
-  import_msw8.http.post(`${API_BASE_URL}/credit-transfers/:transferId/decision`, async ({ params, request, cookies }) => {
-    const denied = assertDean4(cookies);
-    if (denied) return denied;
-    const row = D7.credit_transfer_requests.find((t) => t.id === String(params.transferId));
-    if (!row) return errorResponse(404, "not_found", "Credit transfer request not found.");
-    if (row.status !== "pending") {
-      return errorResponse(409, "credit_transfer_decided", `This request has already been ${row.status}.`);
-    }
-    const body = await request.json();
-    if (body.status !== "approved" && body.status !== "denied") {
-      return errorResponse(422, "validation_error", "A decision must be approved or denied.", {
-        status: ["Use approved or denied."]
-      });
-    }
-    if (body.content_equivalency_pct != null) {
-      row.content_equivalency_pct = body.content_equivalency_pct;
-    }
-    if (body.status === "approved") {
-      const pct = row.content_equivalency_pct;
-      if (pct == null || pct < MIN_EQUIVALENCY_PCT) {
-        return errorResponse(
-          422,
-          "equivalency_below_floor",
-          `Credit transfer requires at least ${MIN_EQUIVALENCY_PCT}% content equivalency (brief \xA713).`,
-          {
-            content_equivalency_pct: [
-              pct == null ? "Not assessed yet." : `${pct.toFixed(2)}% is below the ${MIN_EQUIVALENCY_PCT}% floor.`
-            ]
-          }
-        );
-      }
-      const hasTertiary = D7.application_education.some(
-        (e) => e.application_id === row.application_id && e.education_level === "Tertiary"
-      );
-      if (!hasTertiary) {
-        return errorResponse(
-          422,
-          "no_tertiary_institution",
-          "Credit may only transfer from a recognised tertiary institution, and this application lists none in Section B.",
-          { education: ["Add the tertiary institution to Section B."] }
-        );
-      }
-    }
-    row.status = body.status;
-    row.decided_by_user_id = DEMO_IDS.principalUserId;
-    row.decided_at = `${DEMO_TODAY}T12:00:00Z`;
-    if (body.note) row.note = row.note ? `${row.note}
-${body.note}` : body.note;
-    return import_msw8.HttpResponse.json(transferRead(row));
-  })
-];
-var maySeeAllPending = (role) => role === "principal";
-function actingUser(role) {
-  if (role === "principal") {
-    const dean = D7.users.find((u) => u.role === "principal");
-    return { id: dean?.id ?? "user-principal", name: dean?.full_name ?? "The Dean" };
-  }
-  const registrar = D7.users.find((u) => u.id === "user-secretary");
-  return { id: registrar?.id ?? "user-secretary", name: registrar?.full_name ?? "The Registrar" };
-}
-function findTemp(id, role) {
-  const row = D7.application_temp.find((t) => t.id === id);
-  if (!row) return void 0;
-  if (!maySeeAllPending(role) && row.created_by !== actingUser(role).id) return void 0;
-  return row;
-}
-var tempIssues = (row) => submissionIssues(row);
-function pendingListItem(row) {
-  return {
-    id: row.id,
-    status: row.status,
-    full_name: [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" "),
-    first_name: row.first_name,
-    middle_name: row.middle_name,
-    last_name: row.last_name,
-    school_year: row.school_year,
-    program: programRef(row.program_id),
-    year_of_study: row.year_of_study,
-    enrollment_load: row.enrollment_load,
-    email: row.email,
-    phone: row.phone,
-    gender: row.gender,
-    created_by: row.created_by,
-    created_by_name: row.created_by_name,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    blocking_issues: tempIssues(row)
-  };
-}
-function pendingDetail(row) {
-  return {
-    ...pendingListItem(row),
-    date_of_birth: row.date_of_birth,
-    ssno: row.ssno,
-    civil_status: row.civil_status,
-    religion: row.religion,
-    has_health_condition: row.has_health_condition,
-    health_condition_note: row.health_condition_note,
-    street: row.street,
-    city_town_village: row.city_town_village,
-    district: row.district,
-    mother_name: row.mother_name,
-    father_name: row.father_name,
-    nok_name: row.nok_name,
-    nok_relationship: row.nok_relationship,
-    nok_phone: row.nok_phone,
-    atlib_exam: row.atlib_exam,
-    num_csec: row.num_csec,
-    finance_name: row.finance_name,
-    finance_phone: row.finance_phone,
-    finance_email: row.finance_email,
-    recommendation_received: row.recommendation_received,
-    applicant_signed_at: row.applicant_signed_at,
-    guardian_signed_at: row.guardian_signed_at,
-    academic_year_id: row.academic_year_id,
-    enrolment_status: row.enrolment_status,
-    comments: row.comments,
-    education: [...row.education].sort((a, b) => a.sort_order - b.sort_order),
-    documents: row.documents
-  };
-}
-function tempChildren(tempId, body) {
-  const education = (Array.isArray(body.education) ? body.education : []).map(
-    (item, index) => ({
-      ...item,
-      id: `${tempId}-edu-${index + 1}`,
-      application_id: tempId,
-      sort_order: index + 1
-    })
-  );
-  const documents = (Array.isArray(body.documents) ? body.documents : []).map(
-    (item, index) => ({
-      ...item,
-      id: `${tempId}-doc-${index + 1}`,
-      application_id: tempId
-    })
-  );
-  return { education, documents };
-}
-var pendingApplicationsHandlers = [
-  // ── GET /pending-applications ───────────────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/pending-applications`, ({ request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const role = sessionRole2(cookies);
-    const url2 = new URL(request.url);
-    const params = listParamsFrom(url2);
-    const search = (url2.searchParams.get("search") ?? "").trim().toLowerCase();
-    let rows = maySeeAllPending(role) ? [...D7.application_temp] : D7.application_temp.filter((t) => t.created_by === actingUser(role).id);
-    if (search) {
-      rows = rows.filter(
-        (t) => [t.first_name, t.last_name, t.email].filter(Boolean).some((field) => String(field).toLowerCase().includes(search))
-      );
-    }
-    rows.sort(
-      (a, b) => a.last_name.localeCompare(b.last_name) || a.first_name.localeCompare(b.first_name)
-    );
-    const page = params.page ?? 1;
-    const pageSize = params.page_size ?? 25;
-    const start = (page - 1) * pageSize;
-    return import_msw8.HttpResponse.json({
-      items: rows.slice(start, start + pageSize).map(pendingListItem),
-      total: rows.length,
-      page,
-      page_size: pageSize,
-      total_pages: pageSize ? Math.ceil(rows.length / pageSize) : 0
-    });
-  }),
-  // ── POST /pending-applications ──────────────────────────────────────────────
-  import_msw8.http.post(`${API_BASE_URL}/pending-applications`, async ({ request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const body = await request.json();
-    const first = String(body.first_name ?? "").trim();
-    const last = String(body.last_name ?? "").trim();
-    if (!first || !last) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        last_name: ["Required."]
-      });
-    }
-    if (body.program_id && !D7.programs.some((p) => p.id === body.program_id)) {
-      return errorResponse(422, "validation_error", "Programme not found.", {
-        program_id: ["Unknown programme."]
-      });
-    }
-    const actor = actingUser(sessionRole2(cookies));
-    const id = nextId("temp");
-    const { education, documents } = tempChildren(id, body);
-    const row = {
-      id,
-      status: "pending",
-      school_year: null,
-      first_name: first,
-      middle_name: null,
-      last_name: last,
-      date_of_birth: null,
-      ssno: null,
-      gender: null,
-      civil_status: null,
-      religion: null,
-      phone: null,
-      email: null,
-      has_health_condition: false,
-      health_condition_note: null,
-      street: null,
-      city_town_village: null,
-      district: null,
-      mother_name: null,
-      father_name: null,
-      nok_name: null,
-      nok_relationship: null,
-      nok_phone: null,
-      atlib_exam: false,
-      num_csec: null,
-      finance_name: null,
-      finance_phone: null,
-      finance_email: null,
-      recommendation_received: false,
-      program_id: null,
-      year_of_study: null,
-      enrollment_load: null,
-      applicant_signed_at: null,
-      guardian_signed_at: null,
-      academic_year_id: null,
-      enrolment_status: null,
-      comments: null,
-      created_by: actor.id,
-      created_by_name: actor.name,
-      created_at: `${DEMO_TODAY}T12:00:00Z`,
-      updated_at: `${DEMO_TODAY}T12:00:00Z`,
-      education,
-      documents
-    };
-    applyWritable(row, body);
-    D7.application_temp.push(row);
-    return import_msw8.HttpResponse.json(pendingDetail(row), { status: 201 });
-  }),
-  // ── GET /pending-applications/{id} ──────────────────────────────────────────
-  import_msw8.http.get(`${API_BASE_URL}/pending-applications/:tempId`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = findTemp(String(params.tempId), sessionRole2(cookies));
-    if (!row) return errorResponse(404, "not_found", "Pending application not found.");
-    return import_msw8.HttpResponse.json(pendingDetail(row));
-  }),
-  // ── PATCH /pending-applications/{id} ────────────────────────────────────────
-  import_msw8.http.patch(`${API_BASE_URL}/pending-applications/:tempId`, async ({ params, request, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = findTemp(String(params.tempId), sessionRole2(cookies));
-    if (!row) return errorResponse(404, "not_found", "Pending application not found.");
-    const body = await request.json();
-    if (body.program_id && !D7.programs.some((p) => p.id === body.program_id)) {
-      return errorResponse(422, "validation_error", "Programme not found.", {
-        program_id: ["Unknown programme."]
-      });
-    }
-    applyWritable(row, body);
-    const { education, documents } = tempChildren(row.id, body);
-    row.education = education;
-    row.documents = documents;
-    return import_msw8.HttpResponse.json(pendingDetail(row));
-  }),
-  // ── DELETE /pending-applications/{id} — HARD ────────────────────────────────
-  import_msw8.http.delete(`${API_BASE_URL}/pending-applications/:tempId`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = findTemp(String(params.tempId), sessionRole2(cookies));
-    if (!row) return errorResponse(404, "not_found", "Pending application not found.");
-    D7.application_temp.splice(D7.application_temp.indexOf(row), 1);
-    return new import_msw8.HttpResponse(null, { status: 204 });
-  }),
-  // ── POST /pending-applications/{id}/submit — PROMOTE ────────────────────────
-  import_msw8.http.post(`${API_BASE_URL}/pending-applications/:tempId/submit`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const row = findTemp(String(params.tempId), sessionRole2(cookies));
-    if (!row) return errorResponse(404, "not_found", "Pending application not found.");
-    const issues = tempIssues(row);
-    if (issues.length > 0) {
-      return errorResponse(
-        422,
-        "application_incomplete",
-        "This application is not complete enough to submit.",
-        { application: issues }
-      );
-    }
-    const graduatedWithoutDate = row.education.find((e) => e.graduated && !e.graduation_date);
-    if (graduatedWithoutDate) {
-      return errorResponse(422, "validation_error", "Some fields need attention.", {
-        graduation_date: [`Required for ${graduatedWithoutDate.institution}.`]
-      });
-    }
-    const appId = nextId("app");
-    const app = {
-      ...row,
-      id: appId,
-      status: "submitted",
-      date_accepted: null,
-      student_code: null,
-      decided_by_user_id: null,
-      decided_at: null,
-      student_id: null,
-      updated_at: `${DEMO_TODAY}T12:00:00Z`
-    };
-    for (const key of ["education", "documents", "created_by", "created_by_name"]) {
-      delete app[key];
-    }
-    D7.applications.push(app);
-    row.education.forEach(
-      (e, index) => D7.application_education.push({ ...e, id: `${appId}-edu-${index + 1}`, application_id: appId })
-    );
-    row.documents.forEach(
-      (d, index) => D7.application_documents.push({ ...d, id: `${appId}-doc-${index + 1}`, application_id: appId })
-    );
-    D7.application_temp.splice(D7.application_temp.indexOf(row), 1);
-    return import_msw8.HttpResponse.json(detail2(app), { status: 201 });
-  })
-];
-
 // src/shared/api/mocks/handlers/teachers.ts
-var import_msw9 = require("msw");
-var D8 = DEMO_DATASET;
+var import_msw3 = require("msw");
+var D3 = DEMO_DATASET;
 var DEMO_STANDIN_TEACHER_ID = "teach-1";
 function resolveTeacher(rawId) {
   const t = getTeacher(rawId);
   if (t) return t;
   return rawId === "mock-teacher-profile" ? getTeacher(DEMO_STANDIN_TEACHER_ID) : void 0;
 }
-function toListItem2(t) {
+function toListItem(t) {
   return {
     id: t.id,
     staff_number: t.staff_number,
@@ -22555,6 +20383,19 @@ function toClassTaught(offering, teacherId) {
     is_lead: offering.lead_teacher_id === teacherId
   };
 }
+function offeringsTaught(teacherId, yearId) {
+  const owned = offeringsOwnedByTeacher(teacherId);
+  if (!yearId) return owned;
+  const inYear = new Set(offeringsForYear(yearId).map((o) => o.id));
+  return owned.filter((o) => inYear.has(o.id));
+}
+function yearsTaughtBy(teacherId) {
+  const semesterIds = new Set(offeringsOwnedByTeacher(teacherId).map((o) => o.semester_id));
+  const yearIds = new Set(
+    D3.semesters.filter((sem) => semesterIds.has(sem.id)).map((sem) => sem.academic_year_id)
+  );
+  return D3.academic_years.filter((y) => yearIds.has(y.id)).sort((a, b) => b.name.localeCompare(a.name));
+}
 function studentCountForTeacher(teacherId) {
   const ids = /* @__PURE__ */ new Set();
   for (const offering of offeringsOwnedByTeacher(teacherId)) {
@@ -22562,8 +20403,8 @@ function studentCountForTeacher(teacherId) {
   }
   return ids.size;
 }
-function toDetail(t) {
-  const owned = offeringsOwnedByTeacher(t.id);
+function toDetail(t, yearId) {
+  const owned = offeringsTaught(t.id, yearId);
   return {
     id: t.id,
     user_id: t.user_id,
@@ -22575,15 +20416,27 @@ function toDetail(t) {
     subject_specializations: t.subject_specializations,
     has_login: t.user_id !== null,
     classes_taught: owned.map((off) => toClassTaught(off, t.id)),
-    audit: { created_at: DEMO_TODAY_ISO, updated_at: DEMO_TODAY_ISO },
+    // D39 `015` — null until the lecturer is actually edited, mirroring the server.
+    audit: { created_at: DEMO_TODAY_ISO, updated_at: t.updated_at ?? null },
     // Extended profile (optional; may be undefined for freshly created teachers).
     avatar_url: t.avatar_url,
     bio: t.bio,
     gender: t.gender,
-    education: t.education,
+    academic_qualification: t.academic_qualification,
     designation: t.designation,
     address: t.address,
     expertise: t.expertise,
+    // Employment record (D39, Meeting #2 item 10). `is_employed` is DERIVED from status
+    // here exactly as `service._sync_is_employed` derives it — the mock must not offer a
+    // way for the two to disagree that the real API does not have.
+    first_name: t.first_name,
+    last_name: t.last_name,
+    ssno: t.ssno,
+    licensenum: t.licensenum,
+    is_employed: t.status === "active",
+    hire_date: t.hire_date ?? null,
+    end_date: t.end_date ?? null,
+    comments: t.comments,
     student_count: studentCountForTeacher(t.id)
   };
 }
@@ -22602,41 +20455,65 @@ function assignmentRefs(assignments) {
 var teacherSeq = 100;
 var teachersHandlers = [
   // GET /teachers — searchable directory (Page[TeacherListItem]). Teacher = RO; Student → 403.
-  import_msw9.http.get(`${API_BASE_URL}/teachers`, ({ request }) => {
+  import_msw3.http.get(`${API_BASE_URL}/teachers`, ({ request, cookies }) => {
     const url2 = new URL(request.url);
+    const role = cookies["sis_mock_session"] ?? "principal";
     const page = listTeachers({
       ...listParamsFrom(url2),
       status: url2.searchParams.get("status"),
       specialization: url2.searchParams.get("specialization"),
       // Per-module year switcher: restrict to teachers assigned in the chosen year.
-      academic_year_id: url2.searchParams.get("academic_year_id")
+      academic_year_id: url2.searchParams.get("academic_year_id"),
+      teacher_ids: role === "hod" ? demoHodTeacherIds(role) : null
     });
-    return import_msw9.HttpResponse.json({ ...page, items: page.items.map(toListItem2) });
+    return import_msw3.HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),
-  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
-  import_msw9.http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
+  // GET /teachers/{id}/years — the academic years this lecturer taught in (D42 §2).
+  // Declared BEFORE the bare `/teachers/:teacherId` for the same reason the router
+  // declares it first: a reader scanning this list should see the specific path win.
+  import_msw3.http.get(`${API_BASE_URL}/teachers/:teacherId/years`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, "not_found", "Lecturer not found.");
-    return import_msw9.HttpResponse.json(toDetail(teacher));
+    return import_msw3.HttpResponse.json({
+      items: yearsTaughtBy(teacher.id).map((y) => ({
+        id: y.id,
+        name: y.name,
+        status: y.status
+      }))
+    });
+  }),
+  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
+  // `?academic_year_id=` scopes `classes_taught` to that year (D42 §2).
+  import_msw3.http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params, request }) => {
+    const teacher = resolveTeacher(String(params.teacherId));
+    if (!teacher) return errorResponse(404, "not_found", "Lecturer not found.");
+    const yearId = new URL(request.url).searchParams.get("academic_year_id");
+    return import_msw3.HttpResponse.json(toDetail(teacher, yearId));
   }),
   // POST /teachers — create profile; optional create_login provisions a linked account
   // and returns a one-time temporary_password on the wrapper envelope.
-  import_msw9.http.post(`${API_BASE_URL}/teachers`, async ({ request }) => {
+  import_msw3.http.post(`${API_BASE_URL}/teachers`, async ({ request }) => {
     const body = await request.json();
     const staffNumber = (body.staff_number ?? "").trim();
-    const fullName2 = (body.full_name ?? "").trim();
-    if (!staffNumber || !fullName2) {
+    const fullName = (body.full_name ?? "").trim();
+    if (!staffNumber || !fullName) {
       return errorResponse(422, "validation_error", "Staff number and full name are required.", {
         ...staffNumber ? {} : { staff_number: ["Required."] },
-        ...fullName2 ? {} : { full_name: ["Required."] }
+        ...fullName ? {} : { full_name: ["Required."] }
       });
     }
-    if (D8.teachers.some((t) => t.staff_number.toLowerCase() === staffNumber.toLowerCase())) {
+    if (D3.teachers.some((t) => t.staff_number.toLowerCase() === staffNumber.toLowerCase())) {
       return errorResponse(409, "duplicate_staff_number", "A lecturer with this staff number already exists.");
     }
     const email = (body.email ?? "").trim();
-    if (email && D8.teachers.some((t) => t.email.toLowerCase() === email.toLowerCase())) {
+    if (email && D3.teachers.some((t) => t.email.toLowerCase() === email.toLowerCase())) {
       return errorResponse(409, "duplicate_email", "A lecturer with this email already exists.");
+    }
+    const licence = (body.licensenum ?? "").trim();
+    if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+      return errorResponse(422, "validation_error", "Some fields need attention.", {
+        licensenum: ["Letters, digits and hyphens only."]
+      });
     }
     teacherSeq += 1;
     const id = `teacher-new-${teacherSeq}`;
@@ -22644,7 +20521,7 @@ var teachersHandlers = [
     let temporaryPassword = null;
     if (body.create_login) {
       const loginEmail = body.create_login.email.trim();
-      if (D8.users.some((u) => u.email.toLowerCase() === loginEmail.toLowerCase())) {
+      if (D3.users.some((u) => u.email.toLowerCase() === loginEmail.toLowerCase())) {
         return errorResponse(409, "duplicate_email", "An account with this email already exists.");
       }
       teacherSeq += 1;
@@ -22654,7 +20531,7 @@ var teachersHandlers = [
         id: userId,
         email: loginEmail,
         username: null,
-        full_name: fullName2,
+        full_name: fullName,
         role: "teacher",
         is_active: true,
         must_change_password: true,
@@ -22664,26 +20541,45 @@ var teachersHandlers = [
         date_format: null,
         default_page_size: 25
       };
-      D8.users.push(user);
+      D3.users.push(user);
     }
     const created = {
       id,
       user_id: userId,
       staff_number: staffNumber,
-      full_name: fullName2,
+      full_name: fullName,
       email,
       phone: (body.phone ?? "").trim(),
       subject_specializations: body.subject_specializations ?? [],
-      status: body.status ?? "active"
+      status: body.status ?? "active",
+      // D40 — every optional profile field, stored the way the PATCH arm stores them:
+      // blank becomes `undefined`, so an untouched field reads as absent rather than as
+      // an empty string the profile card would render as a mysteriously blank line.
+      first_name: (body.first_name ?? "").trim() || void 0,
+      last_name: (body.last_name ?? "").trim() || void 0,
+      gender: body.gender ?? void 0,
+      bio: (body.bio ?? "").trim() || void 0,
+      academic_qualification: (body.academic_qualification ?? "").trim() || void 0,
+      designation: (body.designation ?? "").trim() || void 0,
+      address: (body.address ?? "").trim() || void 0,
+      ssno: (body.ssno ?? "").trim() || void 0,
+      licensenum: licence || void 0,
+      hire_date: body.hire_date || void 0,
+      end_date: body.end_date || void 0,
+      comments: (body.comments ?? "").trim() || void 0,
+      expertise: (body.expertise ?? []).map((e) => ({
+        area: e.area.trim(),
+        level: Math.max(0, Math.min(100, Math.round(e.level)))
+      })).filter((e) => e.area.length > 0)
     };
-    D8.teachers.push(created);
-    return import_msw9.HttpResponse.json(
+    D3.teachers.push(created);
+    return import_msw3.HttpResponse.json(
       { teacher: toDetail(created), temporary_password: temporaryPassword },
       { status: 201 }
     );
   }),
   // PATCH /teachers/{id} — benign profile edits (NOT status; NOT role).
-  import_msw9.http.patch(`${API_BASE_URL}/teachers/:teacherId`, async ({ params, request }) => {
+  import_msw3.http.patch(`${API_BASE_URL}/teachers/:teacherId`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, "not_found", "Lecturer not found.");
     const body = await request.json();
@@ -22693,7 +20589,7 @@ var teachersHandlers = [
       });
     }
     const email = body.email?.trim();
-    if (email && D8.teachers.some(
+    if (email && D3.teachers.some(
       (t) => t.id !== teacher.id && t.email.toLowerCase() === email.toLowerCase()
     )) {
       return errorResponse(409, "duplicate_email", "A lecturer with this email already exists.");
@@ -22706,21 +20602,41 @@ var teachersHandlers = [
     }
     if (body.bio !== void 0) teacher.bio = (body.bio ?? "").trim() || void 0;
     if (body.gender !== void 0) teacher.gender = body.gender ?? void 0;
-    if (body.education !== void 0) teacher.education = (body.education ?? "").trim() || void 0;
+    if (body.academic_qualification !== void 0)
+      teacher.academic_qualification = (body.academic_qualification ?? "").trim() || void 0;
     if (body.designation !== void 0)
       teacher.designation = (body.designation ?? "").trim() || void 0;
     if (body.address !== void 0) teacher.address = (body.address ?? "").trim() || void 0;
+    if (body.first_name !== void 0)
+      teacher.first_name = (body.first_name ?? "").trim() || void 0;
+    if (body.last_name !== void 0)
+      teacher.last_name = (body.last_name ?? "").trim() || void 0;
+    if (body.ssno !== void 0) teacher.ssno = (body.ssno ?? "").trim() || void 0;
+    if (body.licensenum !== void 0) {
+      const licence = (body.licensenum ?? "").trim();
+      if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+        return errorResponse(422, "validation_error", "Some fields need attention.", {
+          licensenum: ["Letters, digits and hyphens only."]
+        });
+      }
+      teacher.licensenum = licence || void 0;
+    }
+    if (body.hire_date !== void 0) teacher.hire_date = body.hire_date || void 0;
+    if (body.end_date !== void 0) teacher.end_date = body.end_date || void 0;
+    if (body.comments !== void 0)
+      teacher.comments = (body.comments ?? "").trim() || void 0;
+    teacher.updated_at = DEMO_TODAY_ISO;
     if (body.expertise !== void 0) {
       teacher.expertise = (body.expertise ?? []).map((e) => ({
         area: e.area.trim(),
         level: Math.max(0, Math.min(100, Math.round(e.level)))
       })).filter((e) => e.area.length > 0);
     }
-    return import_msw9.HttpResponse.json(toDetail(teacher));
+    return import_msw3.HttpResponse.json(toDetail(teacher));
   }),
   // POST /teachers/{id}/status — activate/deactivate. Deactivating a teacher who still
   // has active assignments is blocked (409 teacher_has_active_assignments).
-  import_msw9.http.post(`${API_BASE_URL}/teachers/:teacherId/status`, async ({ params, request }) => {
+  import_msw3.http.post(`${API_BASE_URL}/teachers/:teacherId/status`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, "not_found", "Lecturer not found.");
     const body = await request.json();
@@ -22736,10 +20652,10 @@ var teachersHandlers = [
       }
     }
     teacher.status = body.status;
-    return import_msw9.HttpResponse.json(toDetail(teacher));
+    return import_msw3.HttpResponse.json(toDetail(teacher));
   }),
   // DELETE /teachers/{id} — hard delete; blocked if assigned to any active class_subject.
-  import_msw9.http.delete(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
+  import_msw3.http.delete(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
     if (!teacher) return errorResponse(404, "not_found", "Lecturer not found.");
     const active = activeAssignmentsOf(teacher.id);
@@ -22751,18 +20667,457 @@ var teachersHandlers = [
         { assignments: assignmentRefs(active).map((a) => `${a.label} \xB7 ${a.course_name}`) }
       );
     }
-    D8.teachers = D8.teachers.filter((t) => t.id !== teacher.id);
-    return new import_msw9.HttpResponse(null, { status: 204 });
+    D3.teachers = D3.teachers.filter((t) => t.id !== teacher.id);
+    return new import_msw3.HttpResponse(null, { status: 204 });
   })
 ];
 
+// src/shared/api/mocks/handlers/grades.ts
+var import_msw4 = require("msw");
+var D4 = DEMO_DATASET;
+var SESSION_COOKIE2 = "sis_mock_session";
+function sessionRole2(cookies) {
+  return cookies[SESSION_COOKIE2] ?? "principal";
+}
+function currentTeacherId2(role) {
+  if (role !== "teacher") return null;
+  return D4.teachers.find((t) => t.user_id === "user-teach-1")?.id ?? D4.teachers[0]?.id ?? null;
+}
+function currentStudentId2(role) {
+  if (role !== "student") return null;
+  return D4.students.find((s) => s.user_id === "user-stu-1")?.id ?? D4.students[0]?.id ?? null;
+}
+function offeringRef2(offeringId) {
+  const offering = getOffering(offeringId);
+  if (!offering) return null;
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
+  const teachers2 = offering.teacher_ids.map((id) => getTeacher(id)).filter((tt) => Boolean(tt)).map((tt) => ({ id: tt.id, full_name: tt.full_name }));
+  return {
+    offering: {
+      id: offering.id,
+      course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
+      semester: semester ? {
+        id: semester.id,
+        name: semester.name,
+        sequence: semester.sequence,
+        is_active: semester.is_active
+      } : null,
+      section_code: offering.section_code,
+      label: offeringLabel(offering)
+    },
+    teachers: teachers2,
+    lead_teacher_id: offering.lead_teacher_id
+  };
+}
+function studentRef(studentId) {
+  const s = getStudent(studentId);
+  if (!s) return { id: studentId, full_name: "Unknown", student_number: "" };
+  return { id: s.id, full_name: s.full_name, student_number: s.student_number };
+}
+function assessmentSummary(a) {
+  const gradedCount = D4.assessment_grades.filter(
+    (g) => g.assessment_id === a.id && g.status === "graded" && g.score != null
+  ).length;
+  const enteredCount = D4.assessment_grades.filter(
+    (g) => g.assessment_id === a.id && g.status !== "pending"
+  ).length;
+  return {
+    id: a.id,
+    title: a.title,
+    type: a.type,
+    category_id: a.category_id,
+    max_score: a.max_score,
+    weight: a.weight,
+    assessment_date: a.assessment_date,
+    status: a.status,
+    is_released: a.is_released,
+    // Whether cells for this column are editable in the gradebook: only assessments
+    // that are being graded (published/grading/graded) accept entry, never drafts.
+    is_editable: a.status !== "draft",
+    graded_count: gradedCount,
+    entered_count: enteredCount
+  };
+}
+function semesterRefOf(offeringId) {
+  const offering = getOffering(offeringId);
+  const sem = offering ? getSemester(offering.semester_id) : void 0;
+  return sem ? { id: sem.id, name: sem.name, sequence: sem.sequence } : null;
+}
+function gradebookResponse(offeringId) {
+  const gb = gradebookFor(offeringId);
+  const ref = offeringRef2(offeringId);
+  const categories = D4.assessment_categories.filter((c) => c.offering_id === offeringId).map((c) => ({ id: c.id, name: c.name, weight: c.weight, drop_lowest_count: c.drop_lowest_count }));
+  const offering = getOffering(offeringId);
+  return {
+    offering: ref,
+    semester: semesterRefOf(offeringId),
+    assessments: gb.assessments.map(assessmentSummary),
+    categories,
+    rows: gb.rows.map((row) => ({
+      student: studentRef(row.student.id),
+      enrollment_id: row.enrollment_id,
+      is_active_member: row.is_active_member,
+      cells: row.cells,
+      term_numeric: row.term_numeric,
+      term_letter: row.term_letter
+    })),
+    drop_lowest_applied: (offering?.drop_lowest_count ?? 0) > 0
+  };
+}
+function midtermFreeze() {
+  const sem = getActiveSemester();
+  const start = sem?.midterm_submission_start ?? null;
+  const end = sem?.midterm_submission_end ?? null;
+  if (!start || !end) return { frozen: false, start: null, end: null };
+  const now = new Date(DEMO_TODAY_ISO).getTime();
+  const from = new Date(start).getTime();
+  const to = new Date(end).getTime();
+  if (Number.isNaN(from) || Number.isNaN(to)) return { frozen: false, start, end };
+  return { frozen: now >= from && now <= to, start, end };
+}
+var gradesHandlers = [
+  // ── Offering picker (which gradebooks the caller may open) ─────────────────────
+  // Lecturer → own offerings; Dean/Registrar → every live offering.
+  import_msw4.http.get(`${API_BASE_URL}/grades/offerings`, ({ cookies, request }) => {
+    const role = sessionRole2(cookies);
+    const teacherId = currentTeacherId2(role);
+    const url2 = new URL(request.url);
+    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
+    const inYear = yearId ? offeringsForYear(yearId) : D4.offerings.filter((o) => !o.is_archived);
+    const offerings2 = teacherId ? offeringsOwnedByTeacher(teacherId).filter((o) => inYear.some((y) => y.id === o.id)) : inYear;
+    const items = offerings2.map((offering) => {
+      const ref = offeringRef2(offering.id);
+      if (!ref) return null;
+      return {
+        ...ref,
+        assessment_count: assessmentsForOffering(offering.id).length,
+        // Whether the CURRENT caller may enter grades here (they teach it).
+        can_edit: role === "teacher" && teacherId != null && offering.teacher_ids.includes(teacherId)
+      };
+    }).filter((x) => Boolean(x)).sort(
+      (a, b) => (a.offering.course.code ?? "").localeCompare(b.offering.course.code ?? "") || (a.offering.section_code ?? "").localeCompare(b.offering.section_code ?? "")
+    );
+    return import_msw4.HttpResponse.json({ items });
+  }),
+  // ── The gradebook read ─────────────────────────────────────────────────────────
+  import_msw4.http.get(`${API_BASE_URL}/grades/offering/:offeringId`, ({ params, cookies }) => {
+    const offeringId = String(params.offeringId);
+    const offering = getOffering(offeringId);
+    if (!offering) return errorResponse(404, "not_found", "Gradebook not found.");
+    const role = sessionRole2(cookies);
+    const teacherId = currentTeacherId2(role);
+    if (role === "teacher" && teacherId != null && !offering.teacher_ids.includes(teacherId)) {
+      return errorResponse(404, "not_found", "Gradebook not found.");
+    }
+    const body = gradebookResponse(offeringId);
+    const canEdit = role === "teacher" && teacherId != null && offering.teacher_ids.includes(teacherId);
+    const freeze = midtermFreeze();
+    const rows = role === "teacher" ? body.rows : body.rows.map((row) => ({
+      ...row,
+      cells: row.cells.map((c) => ({
+        ...c,
+        can_request_revision: false,
+        revision_blocked_reason: null
+      }))
+    }));
+    return import_msw4.HttpResponse.json({
+      ...body,
+      rows,
+      can_edit: canEdit,
+      // D42 §5 — constants, matching the server. See the note where `gradeWindow()` was.
+      grade_window_closed: false,
+      grade_submission_deadline: null,
+      // D33 — reported for EVERY viewer, not just the one who can write: a Registrar asked
+      // "why can't the lecturer enter these?" must see the same frozen window.
+      midterm_frozen: freeze.frozen,
+      midterm_submission_start: freeze.start,
+      midterm_submission_end: freeze.end,
+      viewer_role: role
+    });
+  }),
+  // ── Grade entry / update — the ONLY grade-write path ───────────────────────────
+  import_msw4.http.put(`${API_BASE_URL}/assessments/:assessmentId/grades`, async ({ params, request, cookies }) => {
+    const assessmentId = String(params.assessmentId);
+    const asmt = D4.assessments.find((a) => a.id === assessmentId);
+    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
+    const offering = getOffering(asmt.offering_id);
+    if (!offering) return errorResponse(404, "not_found", "Offering not found.");
+    const writerRole = sessionRole2(cookies);
+    const writerTeacherId = currentTeacherId2(writerRole);
+    if (writerRole === "teacher" && writerTeacherId != null && !offering.teacher_ids.includes(writerTeacherId)) {
+      return errorResponse(403, "forbidden", "You do not teach this offering.");
+    }
+    if (writerRole !== "principal") {
+      const freeze = midtermFreeze();
+      if (freeze.frozen) {
+        return errorResponse(
+          409,
+          "midterm_frozen",
+          "The mid-session grading period is in progress, so grades for this session are frozen. Entry reopens once the period closes."
+        );
+      }
+    }
+    const payload = await request.json();
+    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+    const activeIds = new Set(
+      D4.enrollments.filter((e) => e.offering_id === offering.id && !e.unenrolled_at).map((e) => e.student_id)
+    );
+    const notEnrolled = [];
+    const scoreOffenders = [];
+    for (const entry of entries) {
+      if (!activeIds.has(entry.student_id)) {
+        notEnrolled.push(entry.student_id);
+        continue;
+      }
+      if (entry.status === "graded") {
+        const s = entry.score;
+        if (typeof s !== "number" || Number.isNaN(s) || s < 0 || s > asmt.max_score) {
+          scoreOffenders.push(entry.student_id);
+        }
+      }
+      if (entry.makeup_score != null) {
+        if (entry.status !== "absent") {
+          return errorResponse(422, "makeup_not_allowed", "Makeup score applies only to an absent result.");
+        }
+        if (!D4.assessment_policy.allow_makeup) {
+          return errorResponse(422, "makeup_not_allowed", "Makeups are disabled by the grading policy.");
+        }
+        if (entry.makeup_score < 0 || entry.makeup_score > asmt.max_score) {
+          scoreOffenders.push(entry.student_id);
+        }
+      }
+    }
+    if (notEnrolled.length > 0) {
+      return errorResponse(
+        422,
+        "student_not_enrolled",
+        "One or more students are not actively enrolled in this offering.",
+        { student_id: notEnrolled }
+      );
+    }
+    if (scoreOffenders.length > 0) {
+      return errorResponse(
+        422,
+        "score_exceeds_max",
+        `Score must be between 0 and ${asmt.max_score}.`,
+        { student_id: scoreOffenders }
+      );
+    }
+    const updated = entries.map((entry) => {
+      const existing = D4.assessment_grades.find(
+        (g) => g.assessment_id === assessmentId && g.student_id === entry.student_id
+      );
+      const nextScore = entry.status === "graded" ? entry.score ?? null : null;
+      const nextMakeup = entry.status === "absent" ? entry.makeup_score ?? null : null;
+      if (existing) {
+        existing.status = entry.status;
+        existing.score = nextScore;
+        existing.makeup_score = nextMakeup;
+      } else {
+        const enr = D4.enrollments.find(
+          (e) => e.student_id === entry.student_id && e.offering_id === offering.id && !e.unenrolled_at
+        );
+        D4.assessment_grades.push({
+          id: `grd-new-${assessmentId}-${entry.student_id}`,
+          assessment_id: assessmentId,
+          student_id: entry.student_id,
+          enrollment_id: enr?.id ?? "",
+          status: entry.status,
+          score: nextScore,
+          makeup_score: nextMakeup,
+          is_released: null
+        });
+      }
+      return {
+        student_id: entry.student_id,
+        status: entry.status,
+        score: nextScore,
+        makeup_score: nextMakeup,
+        ...entry.status === "graded" && nextScore != null ? { letter: letterFor(nextScore / asmt.max_score * 100) } : {}
+      };
+    });
+    return import_msw4.HttpResponse.json({ updated });
+  }),
+  // ── Release control (per-assessment; whole-column in the demo) ─────────────────
+  import_msw4.http.post(`${API_BASE_URL}/assessments/:assessmentId/release`, ({ params }) => {
+    const asmt = D4.assessments.find((a) => a.id === String(params.assessmentId));
+    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
+    asmt.is_released = true;
+    const releasedCount = D4.assessment_grades.filter((g) => g.assessment_id === asmt.id).length;
+    return import_msw4.HttpResponse.json({ assessment_id: asmt.id, is_released: true, released_count: releasedCount });
+  }),
+  import_msw4.http.post(`${API_BASE_URL}/assessments/:assessmentId/unrelease`, ({ params }) => {
+    const asmt = D4.assessments.find((a) => a.id === String(params.assessmentId));
+    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
+    asmt.is_released = false;
+    const releasedCount = D4.assessment_grades.filter((g) => g.assessment_id === asmt.id).length;
+    return import_msw4.HttpResponse.json({ assessment_id: asmt.id, is_released: false, released_count: releasedCount });
+  }),
+  // ── Nudge: remind the teacher to release (principal/secretary) ─────────────────
+  // Mirrors the backend's refusal order exactly (assessments/service.py::nudge_release):
+  // 403 role gate → 404 unknown → 409 no_assigned_teacher → 409 nothing_awaiting_release
+  // → 429 rate_limited. Getting the ORDER right matters: the UI distinguishes these.
+  import_msw4.http.post(`${API_BASE_URL}/assessments/:assessmentId/nudge-release`, ({ params, cookies }) => {
+    const role = sessionRole2(cookies);
+    if (role !== "principal" && role !== "secretary") {
+      return errorResponse(403, "forbidden", "You cannot send release reminders.");
+    }
+    const asmt = D4.assessments.find((a) => a.id === String(params.assessmentId));
+    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
+    const nudgeOffering = getOffering(asmt.offering_id);
+    const teachers2 = (nudgeOffering?.teacher_ids ?? []).map((id) => getTeacher(id)).filter((tt) => Boolean(tt)).map((tt) => ({ id: tt.id, full_name: tt.full_name }));
+    if (teachers2.length === 0) {
+      return errorResponse(
+        409,
+        "no_assigned_teacher",
+        "This offering has no assigned lecturer to remind."
+      );
+    }
+    const awaiting = D4.assessment_grades.filter(
+      (g) => g.assessment_id === asmt.id && g.status === "graded" && (g.is_released === false || g.is_released == null && !asmt.is_released)
+    ).length;
+    if (awaiting === 0) {
+      return errorResponse(
+        409,
+        "nothing_awaiting_release",
+        "Nothing is awaiting release for this assessment."
+      );
+    }
+    const retryAfter = nudgeRetryAfter(asmt.id);
+    if (retryAfter > 0) {
+      return errorResponse(
+        429,
+        "rate_limited",
+        "This lecturer was reminded recently. Try again later.",
+        { retry_after_seconds: [String(retryAfter)] }
+      );
+    }
+    const at = recordNudge(asmt.id);
+    return import_msw4.HttpResponse.json({
+      assessment_id: asmt.id,
+      awaiting_release_count: awaiting,
+      teachers: teachers2,
+      last_nudged_at: at,
+      next_nudge_allowed_at: new Date(
+        new Date(at).getTime() + NUDGE_COOLDOWN_SECONDS * 1e3
+      ).toISOString(),
+      cooldown_seconds: NUDGE_COOLDOWN_SECONDS
+    });
+  }),
+  // ── Computed-on-read term grade(s) ─────────────────────────────────────────────
+  import_msw4.http.get(`${API_BASE_URL}/grades/term`, ({ request, cookies }) => {
+    const url2 = new URL(request.url);
+    const scope = url2.searchParams.get("scope");
+    const role = sessionRole2(cookies);
+    const offeringId = url2.searchParams.get("offering_id");
+    if (scope === "me" || role === "student") {
+      const studentId = currentStudentId2(role) ?? url2.searchParams.get("student_id");
+      if (!studentId) return errorResponse(404, "not_found", "Student not found.");
+      const offerings2 = offeringsForStudent(studentId).filter((o) => !o.is_archived);
+      const items = offerings2.map((offering) => {
+        const term = computeTermGrade(studentId, offering.id);
+        return {
+          student: studentRef(studentId),
+          offering: offeringRef2(offering.id),
+          // The OFFERING's term, not the school's active one — the row describes work done
+          // in a specific semester and may well be a past one.
+          semester: semesterRefOf(offering.id),
+          numeric: term.numeric,
+          letter: term.letter,
+          weight_base_used: term.weight_base_used,
+          is_frozen: false
+        };
+      });
+      return import_msw4.HttpResponse.json({ items });
+    }
+    if (offeringId) {
+      const gb = gradebookFor(offeringId);
+      const items = gb.rows.map((row) => ({
+        student: studentRef(row.student.id),
+        offering: offeringRef2(offeringId),
+        semester: semesterRefOf(offeringId),
+        numeric: row.term_numeric,
+        letter: row.term_letter,
+        is_frozen: false
+      }));
+      return import_msw4.HttpResponse.json({ items });
+    }
+    return import_msw4.HttpResponse.json({ items: [] });
+  }),
+  // ── Student "My Grades" (released only) ────────────────────────────────────────
+  import_msw4.http.get(`${API_BASE_URL}/grades/me`, ({ cookies, request }) => {
+    const role = sessionRole2(cookies);
+    const studentId = currentStudentId2(role) ?? currentStudentId2("student");
+    if (!studentId) return errorResponse(404, "not_found", "Student profile not found.");
+    const url2 = new URL(request.url);
+    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
+    const semesterId = url2.searchParams.get("semester_id");
+    const offerings2 = offeringsForStudent(studentId, yearId);
+    const bySubject = offerings2.map((offering) => {
+      const ref = offeringRef2(offering.id);
+      const lead = offering.lead_teacher_id ? getTeacher(offering.lead_teacher_id) : void 0;
+      const asmts = assessmentsForOffering(offering.id).filter(
+        (a) => !semesterId || a.semester_id === semesterId
+      );
+      const assessments2 = asmts.map((a) => {
+        const g = D4.assessment_grades.find(
+          (row) => row.assessment_id === a.id && row.student_id === studentId
+        );
+        const released = g?.is_released ?? a.is_released;
+        if (!released) return null;
+        if (!g || g.status === "pending") return null;
+        return {
+          assessment_id: a.id,
+          title: a.title,
+          type: a.type,
+          max_score: a.max_score,
+          assessment_date: a.assessment_date,
+          status: g.status,
+          score: g.status === "graded" ? g.score : null,
+          ...g.status === "graded" && g.score != null ? { letter: letterFor(g.score / a.max_score * 100) } : {}
+        };
+      }).filter((x) => Boolean(x));
+      const term = computeReleasedTermGrade(studentId, offering.id, semesterId);
+      return {
+        offering: ref,
+        teacher: lead ? { id: lead.id, full_name: lead.full_name } : null,
+        assessments: assessments2,
+        term_numeric: term.numeric,
+        term_letter: term.letter
+      };
+    });
+    return import_msw4.HttpResponse.json({ student: studentRef(studentId), by_subject: bySubject });
+  })
+];
+function computeReleasedTermGrade(studentId, offeringId, semesterId) {
+  const asmts = assessmentsForOffering(offeringId).filter((a) => a.status === "graded").filter((a) => !semesterId || a.semester_id === semesterId);
+  let weightedSum = 0;
+  let weightBase = 0;
+  for (const a of asmts) {
+    const g = D4.assessment_grades.find(
+      (row) => row.assessment_id === a.id && row.student_id === studentId
+    );
+    if (!g) continue;
+    const released = g.is_released ?? a.is_released;
+    if (!released) continue;
+    if (g.status !== "graded" || g.score == null) continue;
+    const pct = g.score / a.max_score * 100;
+    weightedSum += pct * a.weight;
+    weightBase += a.weight;
+  }
+  if (weightBase === 0) return { numeric: null, letter: null };
+  const numeric = Math.round(weightedSum / weightBase * 100) / 100;
+  return { numeric, letter: letterFor(numeric) };
+}
+
 // src/shared/api/mocks/handlers/offerings.ts
-var import_msw10 = require("msw");
-var D9 = DEMO_DATASET;
+var import_msw5 = require("msw");
+var D5 = DEMO_DATASET;
 function sessionRole3(cookies) {
   return cookies["sis_mock_session"] ?? "principal";
 }
-function courseRef2(courseId2) {
+function courseRef(courseId2) {
   const c = getCourse(courseId2);
   return c ? { id: c.id, name: c.name, code: c.code, credits: c.credits } : { id: courseId2, name: "Unknown course", code: null, credits: null };
 }
@@ -22778,7 +21133,7 @@ function teacherRef(teacherId) {
     full_name: t?.full_name ?? "Unknown lecturer"
   };
 }
-function studentRef(student) {
+function studentRef2(student) {
   return {
     id: student.id,
     student_number: student.student_number,
@@ -22801,7 +21156,7 @@ function offeringCore(offering) {
   return {
     id: offering.id,
     label: offeringLabel(offering),
-    course: courseRef2(offering.course_id),
+    course: courseRef(offering.course_id),
     semester: semesterRef(offering.semester_id),
     section_code: offering.section_code,
     capacity: offering.capacity,
@@ -22819,7 +21174,7 @@ function offeringListItem(offering) {
 }
 function offeringDetail(offering) {
   const yearId = yearIdOfOffering(offering.id);
-  const year = yearId ? D9.academic_years.find((y) => y.id === yearId) : void 0;
+  const year = yearId ? D5.academic_years.find((y) => y.id === yearId) : void 0;
   const enrolled = rosterFor(offering.id).length;
   return {
     ...offeringCore(offering),
@@ -22830,12 +21185,12 @@ function offeringDetail(offering) {
   };
 }
 function rosterEntry(offering, student) {
-  const enr = D9.enrollments.find(
+  const enr = D5.enrollments.find(
     (e) => e.student_id === student.id && e.offering_id === offering.id && e.semester_id === offering.semester_id && !e.unenrolled_at
   );
   return {
     enrollment_id: enr?.id ?? `enr-${offering.id}-${student.id}`,
-    student: studentRef(student),
+    student: studentRef2(student),
     enrolled_at: enr?.enrolled_at ?? "",
     unenrolled_at: enr?.unenrolled_at ?? null,
     // D35 — the client's `coursestatus`. `enrolled` when there is no row to read it from,
@@ -22845,8 +21200,11 @@ function rosterEntry(offering, student) {
 }
 function notWritable(offering) {
   if (offering.is_archived) return true;
+  return yearArchived(offering);
+}
+function yearArchived(offering) {
   const yearId = yearIdOfOffering(offering.id);
-  return D9.academic_years.find((y) => y.id === yearId)?.status === "archived";
+  return D5.academic_years.find((y) => y.id === yearId)?.status === "archived";
 }
 var DAY_SHORT = { 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri" };
 function slotLabel(day, start, end) {
@@ -22859,7 +21217,7 @@ function scheduleConflictsForStudent(studentId, offering) {
   const mine = meetingsForOffering(offering.id);
   if (mine.length === 0) return [];
   const student = getStudent(studentId);
-  const otherOfferingIds = D9.enrollments.filter(
+  const otherOfferingIds = D5.enrollments.filter(
     (e) => e.student_id === studentId && e.semester_id === offering.semester_id && !e.unenrolled_at && e.offering_id !== offering.id
   ).map((e) => e.offering_id);
   const out = [];
@@ -22891,20 +21249,27 @@ function visibleOfferings(role) {
   const student = currentDemoStudent(role);
   if (student) {
     const ids = new Set(
-      D9.enrollments.filter((e) => e.student_id === student.id).map((e) => e.offering_id)
+      D5.enrollments.filter((e) => e.student_id === student.id).map((e) => e.offering_id)
     );
-    return D9.offerings.filter((o) => ids.has(o.id));
+    return D5.offerings.filter((o) => ids.has(o.id));
   }
   const teacher = currentDemoTeacher(role);
   if (teacher) {
     const ownedIds = new Set(offeringsOwnedByTeacher(teacher.id).map((o) => o.id));
-    return D9.offerings.filter((o) => ownedIds.has(o.id));
+    return D5.offerings.filter((o) => ownedIds.has(o.id));
   }
-  return D9.offerings;
+  if (role === "hod") {
+    const visible = /* @__PURE__ */ new Set([
+      ...demoHodOfferingIds(role),
+      ...currentDemoHodTeacher(role) ? offeringsOwnedByTeacher(currentDemoHodTeacher(role).id).map((o) => o.id) : []
+    ]);
+    return D5.offerings.filter((o) => visible.has(o.id));
+  }
+  return D5.offerings;
 }
 var offeringsHandlers = [
   // ── GET /offerings — list (Page[OfferingListItem]) ──────────────────────────────
-  import_msw10.http.get(`${API_BASE_URL}/offerings`, ({ request, cookies }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings`, ({ request, cookies }) => {
     const url2 = new URL(request.url);
     const role = sessionRole3(cookies);
     const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
@@ -22914,7 +21279,7 @@ var offeringsHandlers = [
     let rows = visibleOfferings(role);
     if (yearId) {
       const semIds = new Set(
-        D9.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id)
+        D5.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id)
       );
       rows = rows.filter((o) => semIds.has(o.semester_id));
     }
@@ -22932,10 +21297,10 @@ var offeringsHandlers = [
       ordered.map(offeringListItem),
       { ...listParamsFrom(url2), sort: void 0 }
     );
-    return import_msw10.HttpResponse.json(page);
+    return import_msw5.HttpResponse.json(page);
   }),
   // ── POST /offerings — schedule a course in a term (Dean/Registrar) ──────────────
-  import_msw10.http.post(`${API_BASE_URL}/offerings`, async ({ request }) => {
+  import_msw5.http.post(`${API_BASE_URL}/offerings`, async ({ request }) => {
     const body = await request.json();
     if (!body.course_id) {
       return errorResponse(422, "validation_error", "A course is required.", {
@@ -22949,7 +21314,7 @@ var offeringsHandlers = [
       return errorResponse(404, "semester_not_found", "Session not found.");
     }
     const sectionCode = body.section_code?.trim() || null;
-    const clash = D9.offerings.find(
+    const clash = D5.offerings.find(
       (o) => o.course_id === course.id && o.semester_id === semesterId && (o.section_code ?? "").toLowerCase() === (sectionCode ?? "").toLowerCase()
     );
     if (clash) {
@@ -22973,7 +21338,7 @@ var offeringsHandlers = [
       );
     }
     const created = {
-      id: `off-new-${D9.offerings.length + 1}`,
+      id: `off-new-${D5.offerings.length + 1}`,
       course_id: course.id,
       semester_id: semesterId,
       section_code: sectionCode,
@@ -22983,9 +21348,9 @@ var offeringsHandlers = [
       lead_teacher_id: lead ?? teacherIds[0] ?? null,
       drop_lowest_count: 0
     };
-    D9.offerings.push(created);
+    D5.offerings.push(created);
     (body.meetings ?? []).forEach((w, i) => {
-      D9.offering_meetings.push({
+      D5.offering_meetings.push({
         id: `mtg-new-${created.id}-${i + 1}`,
         offering_id: created.id,
         day_of_week: w.day_of_week,
@@ -22994,30 +21359,33 @@ var offeringsHandlers = [
         room: w.room?.trim() || null
       });
     });
-    return import_msw10.HttpResponse.json(offeringDetail(created), { status: 201 });
+    return import_msw5.HttpResponse.json(offeringDetail(created), { status: 201 });
   }),
   // ── GET /offerings/{id} — detail ────────────────────────────────────────────────
-  import_msw10.http.get(`${API_BASE_URL}/offerings/:offeringId`, ({ params }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings/:offeringId`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    return import_msw10.HttpResponse.json(offeringDetail(offering));
+    return import_msw5.HttpResponse.json(offeringDetail(offering));
   }),
   // ── PATCH /offerings/{id} — section code · capacity · archive ───────────────────
   //
   // The course and the semester are the offering's IDENTITY and are deliberately NOT
   // patchable: changing either would silently move every assessment, grade and enrolment
   // attached to it into a different course or term.
-  import_msw10.http.patch(`${API_BASE_URL}/offerings/:offeringId`, async ({ params, request, cookies }) => {
+  import_msw5.http.patch(`${API_BASE_URL}/offerings/:offeringId`, async ({ params, request, cookies }) => {
     const role = sessionRole3(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot change this offering.");
     }
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
+    if (yearArchived(offering)) {
+      return errorResponse(409, "year_archived", "This offering's year is archived.");
+    }
     const body = await request.json();
     if (body.section_code !== void 0) {
       const next = body.section_code?.trim() || null;
-      const clash = D9.offerings.find(
+      const clash = D5.offerings.find(
         (o) => o.id !== offering.id && o.course_id === offering.course_id && o.semester_id === offering.semester_id && (o.section_code ?? "").toLowerCase() === (next ?? "").toLowerCase()
       );
       if (clash) {
@@ -23033,18 +21401,18 @@ var offeringsHandlers = [
       offering.capacity = typeof body.capacity === "number" && body.capacity > 0 ? Math.floor(body.capacity) : null;
     }
     if (body.is_archived != null) offering.is_archived = body.is_archived;
-    return import_msw10.HttpResponse.json(offeringDetail(offering));
+    return import_msw5.HttpResponse.json(offeringDetail(offering));
   }),
   // ── DELETE /offerings/{id} — soft delete, only while it has no history ──────────
-  import_msw10.http.delete(`${API_BASE_URL}/offerings/:offeringId`, ({ params, cookies }) => {
+  import_msw5.http.delete(`${API_BASE_URL}/offerings/:offeringId`, ({ params, cookies }) => {
     const role = sessionRole3(cookies);
     if (role !== "principal" && role !== "secretary") {
       return errorResponse(403, "forbidden", "You cannot delete this offering.");
     }
-    const idx = D9.offerings.findIndex((o) => o.id === String(params.offeringId));
+    const idx = D5.offerings.findIndex((o) => o.id === String(params.offeringId));
     if (idx === -1) return errorResponse(404, "offering_not_found", "Offering not found.");
-    const offering = D9.offerings[idx];
-    const hasHistory = assessmentsForOffering(offering.id).length > 0 || D9.attendance_records.some((a) => a.offering_id === offering.id);
+    const offering = D5.offerings[idx];
+    const hasHistory = assessmentsForOffering(offering.id).length > 0 || D5.attendance_records.some((a) => a.offering_id === offering.id);
     if (hasHistory) {
       return errorResponse(
         409,
@@ -23052,19 +21420,19 @@ var offeringsHandlers = [
         "This offering has academic history \u2014 archive it instead."
       );
     }
-    D9.offerings.splice(idx, 1);
-    for (const e of D9.enrollments) {
+    D5.offerings.splice(idx, 1);
+    for (const e of D5.enrollments) {
       if (e.offering_id === offering.id && !e.unenrolled_at) {
         e.unenrolled_at = (/* @__PURE__ */ new Date()).toISOString();
       }
     }
-    return new import_msw10.HttpResponse(null, { status: 204 });
+    return new import_msw5.HttpResponse(null, { status: 204 });
   }),
   // ── GET /offerings/{id}/meetings — the weekly schedule (FR-SCH-01) ──────────────
-  import_msw10.http.get(`${API_BASE_URL}/offerings/:offeringId/meetings`, ({ params }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings/:offeringId/meetings`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    return import_msw10.HttpResponse.json({
+    return import_msw5.HttpResponse.json({
       meetings: meetingsForOffering(offering.id).map(meetingItem),
       conflicts: []
     });
@@ -23074,7 +21442,7 @@ var offeringsHandlers = [
   // Conflicts WARN, they do not block: the write always succeeds and the clashes ride back
   // in the response, matching the server (and the over-capacity precedent). A demo that
   // rejected a clashing save would teach the opposite of how the real screen behaves.
-  import_msw10.http.put(`${API_BASE_URL}/offerings/:offeringId/meetings`, async ({ params, request }) => {
+  import_msw5.http.put(`${API_BASE_URL}/offerings/:offeringId/meetings`, async ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     if (notWritable(offering)) {
@@ -23084,7 +21452,7 @@ var offeringsHandlers = [
     const wanted = body.meetings ?? [];
     const myTeacherIds = new Set(offering.teacher_ids);
     const conflicts = [];
-    for (const other of D9.offerings) {
+    for (const other of D5.offerings) {
       if (other.id === offering.id) continue;
       if (other.semester_id !== offering.semester_id) continue;
       const otherLabel = offeringLabel(other);
@@ -23124,11 +21492,11 @@ var offeringsHandlers = [
         }
       }
     }
-    for (let i = D9.offering_meetings.length - 1; i >= 0; i -= 1) {
-      if (D9.offering_meetings[i].offering_id === offering.id) D9.offering_meetings.splice(i, 1);
+    for (let i = D5.offering_meetings.length - 1; i >= 0; i -= 1) {
+      if (D5.offering_meetings[i].offering_id === offering.id) D5.offering_meetings.splice(i, 1);
     }
     wanted.forEach((w, i) => {
-      D9.offering_meetings.push({
+      D5.offering_meetings.push({
         id: `mtg-new-${offering.id}-${i + 1}`,
         offering_id: offering.id,
         day_of_week: w.day_of_week,
@@ -23138,31 +21506,31 @@ var offeringsHandlers = [
         room: w.room?.trim() || null
       });
     });
-    return import_msw10.HttpResponse.json({
+    return import_msw5.HttpResponse.json({
       meetings: meetingsForOffering(offering.id).map(meetingItem),
       conflicts
     });
   }),
   // ── GET /offerings/{id}/roster — active roster (RosterEntry[], not paginated) ───
-  import_msw10.http.get(`${API_BASE_URL}/offerings/:offeringId/roster`, ({ params }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings/:offeringId/roster`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     const entries = rosterFor(offering.id).slice().sort((a, b) => a.full_name.localeCompare(b.full_name)).map((student) => rosterEntry(offering, student));
-    return import_msw10.HttpResponse.json(entries);
+    return import_msw5.HttpResponse.json(entries);
   }),
   // ── GET /offerings/{id}/enrollable-students — picker for the enrol dialog ───────
   // Offerings-owned convenience read (the Students module owns /students). Returns active
   // students NOT already on this offering's roster, name-sorted.
-  import_msw10.http.get(`${API_BASE_URL}/offerings/:offeringId/enrollable-students`, ({ params, request }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings/:offeringId/enrollable-students`, ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     const onRoster = new Set(rosterFor(offering.id).map((s) => s.id));
     const url2 = new URL(request.url);
     const search = (url2.searchParams.get("search") ?? "").toLowerCase();
-    const rows = D9.students.filter((s) => s.status === "Registered" && !onRoster.has(s.id)).filter(
+    const rows = D5.students.filter((s) => s.status === "Registered" && !onRoster.has(s.id)).filter(
       (s) => !search || s.full_name.toLowerCase().includes(search) || s.student_number.toLowerCase().includes(search)
-    ).slice().sort((a, b) => a.full_name.localeCompare(b.full_name)).map(studentRef);
-    return import_msw10.HttpResponse.json({ items: rows });
+    ).slice().sort((a, b) => a.full_name.localeCompare(b.full_name)).map(studentRef2);
+    return import_msw5.HttpResponse.json({ items: rows });
   }),
   // ── POST /offerings/{id}/enrollments — enrol (bulk), warn-only capacity ─────────
   //
@@ -23170,7 +21538,7 @@ var offeringsHandlers = [
   // the semester and report it as a `transfer` — correct when a student had one homeroom,
   // and data loss the moment they legitimately take Algebra AND Biology. Both the transfer
   // and the `transferred` field are gone; `schedule_conflicts` replaces them.
-  import_msw10.http.post(`${API_BASE_URL}/offerings/:offeringId/enrollments`, async ({ params, request }) => {
+  import_msw5.http.post(`${API_BASE_URL}/offerings/:offeringId/enrollments`, async ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     if (notWritable(offering)) {
@@ -23194,23 +21562,23 @@ var offeringsHandlers = [
       const unmet = unmetPrerequisites(studentId, offering.course_id, semesterId);
       if (unmet.length > 0) {
         const student = getStudent(studentId);
-        const detail4 = unmet.map((u) => `${u.code} (${u.reason})`).join("; ");
+        const detail = unmet.map((u) => `${u.code} (${u.reason})`).join("; ");
         return errorResponse(
           409,
           "prerequisite_not_met",
-          `${student?.full_name ?? "This student"} has not met the prerequisites: ${detail4}.`
+          `${student?.full_name ?? "This student"} has not met the prerequisites: ${detail}.`
         );
       }
     }
     for (const studentId of ids) {
       const student = getStudent(studentId);
       if (!student) return errorResponse(404, "student_not_found", "Student not found.");
-      const alreadyHere = D9.enrollments.find(
+      const alreadyHere = D5.enrollments.find(
         (e) => e.student_id === studentId && e.offering_id === offering.id && e.semester_id === semesterId && !e.unenrolled_at
       );
       if (!alreadyHere) {
-        D9.enrollments.push({
-          id: `enr-new-${D9.enrollments.length + 1}`,
+        D5.enrollments.push({
+          id: `enr-new-${D5.enrollments.length + 1}`,
           student_id: studentId,
           offering_id: offering.id,
           semester_id: semesterId,
@@ -23223,14 +21591,14 @@ var offeringsHandlers = [
       }
       enrolled.push(rosterEntry(offering, student));
     }
-    return import_msw10.HttpResponse.json({
+    return import_msw5.HttpResponse.json({
       enrolled,
       over_capacity_warning: isOverCapacity(offering, rosterFor(offering.id).length),
       schedule_conflicts
     });
   }),
   // ── DELETE /offerings/{id}/enrollments/{enrollmentId} — withdraw ────────────────
-  import_msw10.http.delete(
+  import_msw5.http.delete(
     `${API_BASE_URL}/offerings/:offeringId/enrollments/:enrollmentId`,
     ({ params }) => {
       const offering = getOffering(String(params.offeringId));
@@ -23238,10 +21606,10 @@ var offeringsHandlers = [
       if (notWritable(offering)) {
         return errorResponse(409, "year_archived", "This offering belongs to an archived year.");
       }
-      const enr = D9.enrollments.find((e) => e.id === params.enrollmentId);
+      const enr = D5.enrollments.find((e) => e.id === params.enrollmentId);
       if (!enr) return errorResponse(404, "not_found", "Enrollment not found.");
       enr.unenrolled_at = (/* @__PURE__ */ new Date()).toISOString();
-      return new import_msw10.HttpResponse(null, { status: 204 });
+      return new import_msw5.HttpResponse(null, { status: 204 });
     }
   ),
   // ── PATCH /offerings/{id}/enrollments/{enrollmentId} — the course status (D35) ──
@@ -23249,7 +21617,7 @@ var offeringsHandlers = [
   // NOT the DELETE above. That un-enrols and takes the student off the roster; this
   // records that they SAT the course and left, so the row stays open — the transcript has
   // to print `AU` / `W/P` / `W/F` against it, and deleting it would erase that.
-  import_msw10.http.patch(
+  import_msw5.http.patch(
     `${API_BASE_URL}/offerings/:offeringId/enrollments/:enrollmentId`,
     async ({ params, request, cookies }) => {
       const role = sessionRole3(cookies);
@@ -23261,7 +21629,7 @@ var offeringsHandlers = [
       if (notWritable(offering)) {
         return errorResponse(409, "year_archived", "This offering belongs to an archived year.");
       }
-      const enr = D9.enrollments.find((e) => e.id === params.enrollmentId);
+      const enr = D5.enrollments.find((e) => e.id === params.enrollmentId);
       if (!enr) return errorResponse(404, "not_found", "Enrollment not found.");
       if (enr.unenrolled_at) {
         return errorResponse(
@@ -23284,9 +21652,9 @@ var offeringsHandlers = [
         });
       }
       enr.enrollment_status = next;
-      const student = D9.students.find((s) => s.id === enr.student_id);
+      const student = D5.students.find((s) => s.id === enr.student_id);
       if (!student) return errorResponse(404, "not_found", "Student not found.");
-      return import_msw10.HttpResponse.json(rosterEntry(offering, student));
+      return import_msw5.HttpResponse.json(rosterEntry(offering, student));
     }
   ),
   // ── PUT /offerings/{id}/teachers — set the lecturer(s) ─────────────────────────
@@ -23295,7 +21663,7 @@ var offeringsHandlers = [
   // `PUT /classes/{id}/subjects/{csId}/teachers`, threading two ids to reach one gradebook's
   // lecturers, because owning one subject of a section was a different question from owning
   // the section. One course per offering makes those the same question.
-  import_msw10.http.put(`${API_BASE_URL}/offerings/:offeringId/teachers`, async ({ params, request }) => {
+  import_msw5.http.put(`${API_BASE_URL}/offerings/:offeringId/teachers`, async ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     if (notWritable(offering)) {
@@ -23317,19 +21685,19 @@ var offeringsHandlers = [
     }
     offering.teacher_ids = teacherIds;
     offering.lead_teacher_id = lead ?? teacherIds[0] ?? null;
-    return import_msw10.HttpResponse.json(offeringDetail(offering));
+    return import_msw5.HttpResponse.json(offeringDetail(offering));
   }),
   // ── GET|POST /offerings/{id}/categories — assessment weighting groups ──────────
   //
   // Re-pathed from `/classes/{class_id}/subjects/{cs_id}/categories`, which threaded a
   // homeroom id AND a class_subject id to reach ONE gradebook's categories.
-  import_msw10.http.get(`${API_BASE_URL}/offerings/:offeringId/categories`, ({ params }) => {
+  import_msw5.http.get(`${API_BASE_URL}/offerings/:offeringId/categories`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    const items = D9.assessment_categories.filter((c) => c.offering_id === offering.id);
-    return import_msw10.HttpResponse.json({ items });
+    const items = D5.assessment_categories.filter((c) => c.offering_id === offering.id);
+    return import_msw5.HttpResponse.json({ items });
   }),
-  import_msw10.http.post(`${API_BASE_URL}/offerings/:offeringId/categories`, async ({ params, request }) => {
+  import_msw5.http.post(`${API_BASE_URL}/offerings/:offeringId/categories`, async ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
     const body = await request.json();
@@ -23339,21 +21707,21 @@ var offeringsHandlers = [
       });
     }
     const created = {
-      id: `cat-new-${D9.assessment_categories.length + 1}`,
+      id: `cat-new-${D5.assessment_categories.length + 1}`,
       offering_id: offering.id,
       name: body.name.trim(),
       weight: body.weight ?? 1,
       drop_lowest_count: body.drop_lowest_count ?? 0
     };
-    D9.assessment_categories.push(created);
-    return import_msw10.HttpResponse.json(created, { status: 201 });
+    D5.assessment_categories.push(created);
+    return import_msw5.HttpResponse.json(created, { status: 201 });
   }),
-  import_msw10.http.patch(
+  import_msw5.http.patch(
     `${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`,
     async ({ params, request }) => {
       const offering = getOffering(String(params.offeringId));
       if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-      const category = D9.assessment_categories.find(
+      const category = D5.assessment_categories.find(
         (c) => c.id === String(params.categoryId) && c.offering_id === offering.id
       );
       if (!category) return errorResponse(404, "not_found", "Category not found.");
@@ -23363,2564 +21731,37 @@ var offeringsHandlers = [
       if (body.drop_lowest_count !== void 0) {
         category.drop_lowest_count = body.drop_lowest_count;
       }
-      return import_msw10.HttpResponse.json(category);
+      return import_msw5.HttpResponse.json(category);
     }
   ),
-  import_msw10.http.delete(`${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`, ({ params }) => {
+  import_msw5.http.delete(`${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    const idx = D9.assessment_categories.findIndex(
+    const idx = D5.assessment_categories.findIndex(
       (c) => c.id === String(params.categoryId) && c.offering_id === offering.id
     );
     if (idx === -1) return errorResponse(404, "not_found", "Category not found.");
-    const category = D9.assessment_categories[idx];
-    if (D9.assessments.some((a) => a.category_id === category.id)) {
+    const category = D5.assessment_categories[idx];
+    if (D5.assessments.some((a) => a.category_id === category.id)) {
       return errorResponse(
         409,
         "category_in_use",
         "Assessments are grouped under this category. Move them first."
       );
     }
-    D9.assessment_categories.splice(idx, 1);
-    return new import_msw10.HttpResponse(null, { status: 204 });
+    D5.assessment_categories.splice(idx, 1);
+    return new import_msw5.HttpResponse(null, { status: 204 });
   })
-];
-
-// src/shared/api/mocks/handlers/assessments.ts
-var import_msw11 = require("msw");
-var D10 = DEMO_DATASET;
-var DEMO_STANDIN_TEACHER_ID2 = "teach-1";
-function offeringRef2(offering) {
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  return {
-    id: offering.id,
-    course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-    semester: semester ? {
-      id: semester.id,
-      name: semester.name,
-      sequence: semester.sequence,
-      is_active: semester.is_active
-    } : null,
-    section_code: offering.section_code,
-    label: offeringLabel(offering)
-  };
-}
-function assessmentListItem(a) {
-  const offering = getOffering(a.offering_id);
-  return {
-    id: a.id,
-    title: a.title,
-    type: a.type,
-    offering: offering ? offeringRef2(offering) : null,
-    category_id: a.category_id,
-    max_score: a.max_score,
-    weight: a.weight,
-    assessment_date: a.assessment_date,
-    status: a.status,
-    is_released: a.is_released
-  };
-}
-function assessmentDetail(a) {
-  const grades = gradesForAssessment(a.id);
-  const graded = grades.filter((g) => g.status === "graded").length;
-  return {
-    ...assessmentListItem(a),
-    semester_id: a.semester_id,
-    stats: {
-      grade_count: grades.length,
-      graded_count: graded,
-      pending_count: grades.filter((g) => g.status === "pending").length
-    }
-  };
-}
-var LEGAL_TRANSITIONS = {
-  draft: ["published"],
-  published: ["grading", "draft"],
-  grading: ["graded", "published"],
-  graded: []
-};
-function isLegalTransition(from, to) {
-  return LEGAL_TRANSITIONS[from]?.includes(to) ?? false;
-}
-var VALID_TYPES = ["quiz", "test", "exam", "assignment"];
-var VALID_STATUSES = ["draft", "published", "grading", "graded"];
-var newAssessmentSeq = 0;
-var assessmentsHandlers = [
-  // ── Picker feed: caller-scoped offerings with derived labels ─────────────────────
-  //
-  // Scope comes from the SESSION COOKIE, not from the query string. The predecessor read
-  // `scope=me&teacher_profile_id=…` off the URL — i.e. it let the caller name whose
-  // offerings to return.
-  import_msw11.http.get(`${API_BASE_URL}/assessments/offerings`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const role = cookies["sis_mock_session"] ?? "principal";
-    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-    let rows;
-    const student = currentDemoStudent(role);
-    if (student) {
-      rows = offeringsForStudent(student.id, yearId);
-    } else {
-      const teacherId = role === "teacher" ? DEMO_STANDIN_TEACHER_ID2 : null;
-      const inYear = yearId ? offeringsForYear(yearId) : D10.offerings;
-      rows = teacherId ? inYear.filter((o) => o.teacher_ids.includes(teacherId)) : inYear;
-    }
-    const items = rows.slice().sort(
-      (a, b) => (getCourse(a.course_id)?.code ?? "").localeCompare(getCourse(b.course_id)?.code ?? "") || (a.section_code ?? "").localeCompare(b.section_code ?? "")
-    ).map(offeringRef2);
-    return import_msw11.HttpResponse.json({ items });
-  }),
-  // ── Assessments list (Page[AssessmentListItem]) ───────────────────────────────────
-  import_msw11.http.get(`${API_BASE_URL}/assessments`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const role = cookies["sis_mock_session"] ?? "principal";
-    const offeringId = url2.searchParams.get("offering_id");
-    const type = url2.searchParams.get("type");
-    const status = url2.searchParams.get("status");
-    const scope = url2.searchParams.get("scope");
-    const semesterId = url2.searchParams.get("semester_id");
-    let rows;
-    const student = currentDemoStudent(role);
-    if (student) {
-      const studentYearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-      const ownIds = new Set(offeringsForStudent(student.id, studentYearId).map((o) => o.id));
-      const visibleIds = offeringId && ownIds.has(offeringId) ? /* @__PURE__ */ new Set([offeringId]) : offeringId ? /* @__PURE__ */ new Set() : ownIds;
-      rows = D10.assessments.filter(
-        (a) => visibleIds.has(a.offering_id) && a.status !== "draft"
-      );
-    } else if (offeringId) {
-      rows = assessmentsForOffering(offeringId);
-    } else {
-      const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-      const inYear = yearId ? offeringsForYear(yearId) : D10.offerings;
-      const teacherId = role === "teacher" ? DEMO_STANDIN_TEACHER_ID2 : null;
-      const visibleIds = new Set(
-        (scope === "me" && teacherId ? inYear.filter((o) => o.teacher_ids.includes(teacherId)) : inYear).map((o) => o.id)
-      );
-      rows = D10.assessments.filter((a) => visibleIds.has(a.offering_id));
-    }
-    if (semesterId) rows = rows.filter((a) => a.semester_id === semesterId);
-    if (type) rows = rows.filter((a) => a.type === type);
-    if (status) rows = rows.filter((a) => a.status === status);
-    const page = paginate(rows.map(assessmentListItem), {
-      ...listParamsFrom(url2),
-      sort: url2.searchParams.get("sort") ?? "-assessment_date"
-    });
-    return import_msw11.HttpResponse.json(page);
-  }),
-  // ── Assessment detail ─────────────────────────────────────────────────────────────
-  import_msw11.http.get(`${API_BASE_URL}/assessments/:id`, ({ params }) => {
-    const a = D10.assessments.find((row) => row.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Assessment not found.");
-    return import_msw11.HttpResponse.json(assessmentDetail(a));
-  }),
-  // ── Create (POST /assessments) — status draft, is_released false (§5.6) ────────────
-  import_msw11.http.post(`${API_BASE_URL}/assessments`, async ({ request }) => {
-    const body = await request.json();
-    const fields = {};
-    const title = (body.title ?? "").trim();
-    if (title.length < 1 || title.length > 160) {
-      fields.title = ["Title must be between 1 and 160 characters."];
-    }
-    if (!body.type || !VALID_TYPES.includes(body.type)) {
-      fields.type = ["A valid assessment type is required."];
-    }
-    if (typeof body.max_score !== "number" || body.max_score <= 0) {
-      fields.max_score = ["Max score must be greater than 0."];
-    }
-    if (body.weight !== void 0 && (typeof body.weight !== "number" || body.weight < 0)) {
-      fields.weight = ["Weight must be zero or greater."];
-    }
-    if (Object.keys(fields).length > 0) {
-      return errorResponse(422, "validation_error", "Please correct the highlighted fields.", fields);
-    }
-    const offering = body.offering_id ? getOffering(body.offering_id) : void 0;
-    if (!offering) {
-      return errorResponse(404, "offering_not_found", "Offering not found or not owned.");
-    }
-    if (body.category_id) {
-      const cat = D10.assessment_categories.find((c) => c.id === body.category_id);
-      if (!cat || cat.offering_id !== offering.id) {
-        return errorResponse(
-          409,
-          "category_offering_mismatch",
-          "The chosen category does not belong to this offering."
-        );
-      }
-    }
-    const created = {
-      id: `asmt-new-${newAssessmentSeq += 1}`,
-      offering_id: offering.id,
-      // The OFFERING's term wins over anything the body asks for: an offering belongs to
-      // one term, so an assessment on it cannot sit in another. `DEMO_IDS.activeSemesterId`
-      // was the previous fallback, which would have filed a Semester-2 offering's first
-      // assessment under Semester 1.
-      semester_id: offering.semester_id,
-      category_id: body.category_id ?? null,
-      title,
-      type: body.type,
-      max_score: body.max_score,
-      weight: typeof body.weight === "number" ? body.weight : 1,
-      assessment_date: body.assessment_date ?? null,
-      status: "draft",
-      is_released: false
-    };
-    D10.assessments.push(created);
-    return import_msw11.HttpResponse.json(assessmentDetail(created), { status: 201 });
-  }),
-  // ── Edit (PATCH /assessments/{id}) — status NOT settable here (§5.6) ───────────────
-  import_msw11.http.patch(`${API_BASE_URL}/assessments/:id`, async ({ params, request }) => {
-    const a = D10.assessments.find((row) => row.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Assessment not found.");
-    const body = await request.json();
-    const fields = {};
-    if (body.title !== void 0) {
-      const title = body.title.trim();
-      if (title.length < 1 || title.length > 160) {
-        fields.title = ["Title must be between 1 and 160 characters."];
-      }
-    }
-    if (body.type !== void 0 && !VALID_TYPES.includes(body.type)) {
-      fields.type = ["A valid assessment type is required."];
-    }
-    if (body.max_score !== void 0 && (typeof body.max_score !== "number" || body.max_score <= 0)) {
-      fields.max_score = ["Max score must be greater than 0."];
-    }
-    if (body.weight !== void 0 && (typeof body.weight !== "number" || body.weight < 0)) {
-      fields.weight = ["Weight must be zero or greater."];
-    }
-    if (Object.keys(fields).length > 0) {
-      return errorResponse(422, "validation_error", "Please correct the highlighted fields.", fields);
-    }
-    if (typeof body.max_score === "number" && body.max_score < a.max_score) {
-      const offenders = gradesForAssessment(a.id).filter(
-        (g) => g.status === "graded" && g.score != null && g.score > body.max_score
-      );
-      if (offenders.length > 0) {
-        return errorResponse(
-          409,
-          "scores_exceed_new_max",
-          `${offenders.length} recorded score(s) exceed the new maximum. Fix those scores first.`
-        );
-      }
-    }
-    if (body.category_id !== void 0) {
-      if (body.category_id) {
-        const cat = D10.assessment_categories.find((c) => c.id === body.category_id);
-        if (!cat || cat.offering_id !== a.offering_id) {
-          return errorResponse(
-            409,
-            "category_offering_mismatch",
-            "The chosen category does not belong to this offering."
-          );
-        }
-      }
-      a.category_id = body.category_id;
-    }
-    if (body.title !== void 0) a.title = body.title.trim();
-    if (body.type !== void 0) a.type = body.type;
-    if (body.max_score !== void 0) a.max_score = body.max_score;
-    if (body.weight !== void 0) a.weight = body.weight;
-    if (body.assessment_date !== void 0) a.assessment_date = body.assessment_date;
-    return import_msw11.HttpResponse.json(assessmentDetail(a));
-  }),
-  // ── Status transition (POST /assessments/{id}/status) — M1 / API-16 ────────────────
-  import_msw11.http.post(`${API_BASE_URL}/assessments/:id/status`, async ({ params, request }) => {
-    const a = D10.assessments.find((row) => row.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Assessment not found.");
-    const body = await request.json();
-    const next = body.status;
-    if (!next || !VALID_STATUSES.includes(next)) {
-      return errorResponse(422, "validation_error", "A valid target status is required.", {
-        status: ["Must be one of draft, published, grading, graded."]
-      });
-    }
-    if (next === a.status) {
-      return import_msw11.HttpResponse.json(assessmentDetail(a));
-    }
-    if (!isLegalTransition(a.status, next)) {
-      return errorResponse(
-        422,
-        "invalid_transition",
-        `Cannot move an assessment from "${a.status}" to "${next}".`
-      );
-    }
-    a.status = next;
-    return import_msw11.HttpResponse.json(assessmentDetail(a));
-  }),
-  // ── Delete (DELETE /assessments/{id}) — blocked if grades exist (§5.6) ─────────────
-  import_msw11.http.delete(`${API_BASE_URL}/assessments/:id`, ({ params }) => {
-    const a = D10.assessments.find((row) => row.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Assessment not found.");
-    const hasGrades = gradesForAssessment(a.id).some(
-      (g) => g.status !== "pending" || g.score != null
-    );
-    if (hasGrades) {
-      return errorResponse(
-        409,
-        "assessment_has_grades",
-        "This assessment has recorded grades. Clear the grades before deleting it."
-      );
-    }
-    D10.assessments = D10.assessments.filter((row) => row.id !== a.id);
-    return new import_msw11.HttpResponse(null, { status: 204 });
-  })
-];
-
-// src/shared/api/mocks/handlers/grades.ts
-var import_msw12 = require("msw");
-var D11 = DEMO_DATASET;
-var SESSION_COOKIE4 = "sis_mock_session";
-function sessionRole4(cookies) {
-  return cookies[SESSION_COOKIE4] ?? "principal";
-}
-function currentTeacherId2(role) {
-  if (role !== "teacher") return null;
-  return D11.teachers.find((t) => t.user_id === "user-teach-1")?.id ?? D11.teachers[0]?.id ?? null;
-}
-function currentStudentId2(role) {
-  if (role !== "student") return null;
-  return D11.students.find((s) => s.user_id === "user-stu-1")?.id ?? D11.students[0]?.id ?? null;
-}
-function offeringRef3(offeringId) {
-  const offering = getOffering(offeringId);
-  if (!offering) return null;
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  const teachers2 = offering.teacher_ids.map((id) => getTeacher(id)).filter((tt) => Boolean(tt)).map((tt) => ({ id: tt.id, full_name: tt.full_name }));
-  return {
-    offering: {
-      id: offering.id,
-      course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-      semester: semester ? {
-        id: semester.id,
-        name: semester.name,
-        sequence: semester.sequence,
-        is_active: semester.is_active
-      } : null,
-      section_code: offering.section_code,
-      label: offeringLabel(offering)
-    },
-    teachers: teachers2,
-    lead_teacher_id: offering.lead_teacher_id
-  };
-}
-function studentRef2(studentId) {
-  const s = getStudent(studentId);
-  if (!s) return { id: studentId, full_name: "Unknown", student_number: "" };
-  return { id: s.id, full_name: s.full_name, student_number: s.student_number };
-}
-function assessmentSummary(a) {
-  const gradedCount = D11.assessment_grades.filter(
-    (g) => g.assessment_id === a.id && g.status === "graded" && g.score != null
-  ).length;
-  const enteredCount = D11.assessment_grades.filter(
-    (g) => g.assessment_id === a.id && g.status !== "pending"
-  ).length;
-  return {
-    id: a.id,
-    title: a.title,
-    type: a.type,
-    category_id: a.category_id,
-    max_score: a.max_score,
-    weight: a.weight,
-    assessment_date: a.assessment_date,
-    status: a.status,
-    is_released: a.is_released,
-    // Whether cells for this column are editable in the gradebook: only assessments
-    // that are being graded (published/grading/graded) accept entry, never drafts.
-    is_editable: a.status !== "draft",
-    graded_count: gradedCount,
-    entered_count: enteredCount
-  };
-}
-function semesterRefOf(offeringId) {
-  const offering = getOffering(offeringId);
-  const sem = offering ? getSemester(offering.semester_id) : void 0;
-  return sem ? { id: sem.id, name: sem.name, sequence: sem.sequence } : null;
-}
-function gradebookResponse(offeringId) {
-  const gb = gradebookFor(offeringId);
-  const ref = offeringRef3(offeringId);
-  const categories = D11.assessment_categories.filter((c) => c.offering_id === offeringId).map((c) => ({ id: c.id, name: c.name, weight: c.weight, drop_lowest_count: c.drop_lowest_count }));
-  const offering = getOffering(offeringId);
-  return {
-    offering: ref,
-    semester: semesterRefOf(offeringId),
-    assessments: gb.assessments.map(assessmentSummary),
-    categories,
-    rows: gb.rows.map((row) => ({
-      student: studentRef2(row.student.id),
-      enrollment_id: row.enrollment_id,
-      is_active_member: row.is_active_member,
-      cells: row.cells,
-      term_numeric: row.term_numeric,
-      term_letter: row.term_letter
-    })),
-    drop_lowest_applied: (offering?.drop_lowest_count ?? 0) > 0
-  };
-}
-function gradeWindow() {
-  const deadline = getActiveSemester()?.grade_submission_deadline ?? null;
-  if (!deadline) return { closed: false, deadline: null };
-  const at = new Date(deadline).getTime();
-  return { closed: !Number.isNaN(at) && new Date(DEMO_TODAY_ISO).getTime() > at, deadline };
-}
-function midtermFreeze() {
-  const sem = getActiveSemester();
-  const start = sem?.midterm_submission_start ?? null;
-  const end = sem?.midterm_submission_end ?? null;
-  if (!start || !end) return { frozen: false, start: null, end: null };
-  const now = new Date(DEMO_TODAY_ISO).getTime();
-  const from = new Date(start).getTime();
-  const to = new Date(end).getTime();
-  if (Number.isNaN(from) || Number.isNaN(to)) return { frozen: false, start, end };
-  return { frozen: now >= from && now <= to, start, end };
-}
-var gradesHandlers = [
-  // ── Offering picker (which gradebooks the caller may open) ─────────────────────
-  // Lecturer → own offerings; Dean/Registrar → every live offering.
-  import_msw12.http.get(`${API_BASE_URL}/grades/offerings`, ({ cookies, request }) => {
-    const role = sessionRole4(cookies);
-    const teacherId = currentTeacherId2(role);
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-    const inYear = yearId ? offeringsForYear(yearId) : D11.offerings.filter((o) => !o.is_archived);
-    const offerings2 = teacherId ? offeringsOwnedByTeacher(teacherId).filter((o) => inYear.some((y) => y.id === o.id)) : inYear;
-    const items = offerings2.map((offering) => {
-      const ref = offeringRef3(offering.id);
-      if (!ref) return null;
-      return {
-        ...ref,
-        assessment_count: assessmentsForOffering(offering.id).length,
-        // Whether the CURRENT caller may enter grades here (they teach it).
-        can_edit: role === "teacher" && teacherId != null && offering.teacher_ids.includes(teacherId)
-      };
-    }).filter((x) => Boolean(x)).sort(
-      (a, b) => (a.offering.course.code ?? "").localeCompare(b.offering.course.code ?? "") || (a.offering.section_code ?? "").localeCompare(b.offering.section_code ?? "")
-    );
-    return import_msw12.HttpResponse.json({ items });
-  }),
-  // ── The gradebook read ─────────────────────────────────────────────────────────
-  import_msw12.http.get(`${API_BASE_URL}/grades/offering/:offeringId`, ({ params, cookies }) => {
-    const offeringId = String(params.offeringId);
-    const offering = getOffering(offeringId);
-    if (!offering) return errorResponse(404, "not_found", "Gradebook not found.");
-    const role = sessionRole4(cookies);
-    const teacherId = currentTeacherId2(role);
-    if (role === "teacher" && teacherId != null && !offering.teacher_ids.includes(teacherId)) {
-      return errorResponse(404, "not_found", "Gradebook not found.");
-    }
-    const body = gradebookResponse(offeringId);
-    const canEdit = role === "teacher" && teacherId != null && offering.teacher_ids.includes(teacherId);
-    const window2 = gradeWindow();
-    const freeze = midtermFreeze();
-    const rows = role === "teacher" ? body.rows : body.rows.map((row) => ({
-      ...row,
-      cells: row.cells.map((c) => ({
-        ...c,
-        can_request_revision: false,
-        revision_blocked_reason: null
-      }))
-    }));
-    return import_msw12.HttpResponse.json({
-      ...body,
-      rows,
-      can_edit: canEdit,
-      grade_window_closed: window2.closed,
-      grade_submission_deadline: window2.deadline,
-      // D33 — reported for EVERY viewer, like the deadline above: a Registrar asked "why
-      // can't the lecturer enter these?" must see the same frozen window.
-      midterm_frozen: freeze.frozen,
-      midterm_submission_start: freeze.start,
-      midterm_submission_end: freeze.end,
-      viewer_role: role
-    });
-  }),
-  // ── Grade entry / update — the ONLY grade-write path ───────────────────────────
-  import_msw12.http.put(`${API_BASE_URL}/assessments/:assessmentId/grades`, async ({ params, request, cookies }) => {
-    const assessmentId = String(params.assessmentId);
-    const asmt = D11.assessments.find((a) => a.id === assessmentId);
-    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
-    const offering = getOffering(asmt.offering_id);
-    if (!offering) return errorResponse(404, "not_found", "Offering not found.");
-    const writerRole = sessionRole4(cookies);
-    const writerTeacherId = currentTeacherId2(writerRole);
-    if (writerRole === "teacher" && writerTeacherId != null && !offering.teacher_ids.includes(writerTeacherId)) {
-      return errorResponse(403, "forbidden", "You do not teach this offering.");
-    }
-    if (writerRole !== "principal") {
-      const window2 = gradeWindow();
-      if (window2.closed) {
-        return errorResponse(
-          409,
-          "grade_window_closed",
-          "The grade submission deadline for this session has passed."
-        );
-      }
-      const freeze = midtermFreeze();
-      if (freeze.frozen) {
-        return errorResponse(
-          409,
-          "midterm_frozen",
-          "The mid-session grading period is in progress, so grades for this session are frozen. Entry reopens once the period closes."
-        );
-      }
-    }
-    const payload = await request.json();
-    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-    const activeIds = new Set(
-      D11.enrollments.filter((e) => e.offering_id === offering.id && !e.unenrolled_at).map((e) => e.student_id)
-    );
-    const notEnrolled = [];
-    const scoreOffenders = [];
-    for (const entry of entries) {
-      if (!activeIds.has(entry.student_id)) {
-        notEnrolled.push(entry.student_id);
-        continue;
-      }
-      if (entry.status === "graded") {
-        const s = entry.score;
-        if (typeof s !== "number" || Number.isNaN(s) || s < 0 || s > asmt.max_score) {
-          scoreOffenders.push(entry.student_id);
-        }
-      }
-      if (entry.makeup_score != null) {
-        if (entry.status !== "absent") {
-          return errorResponse(422, "makeup_not_allowed", "Makeup score applies only to an absent result.");
-        }
-        if (!D11.assessment_policy.allow_makeup) {
-          return errorResponse(422, "makeup_not_allowed", "Makeups are disabled by the grading policy.");
-        }
-        if (entry.makeup_score < 0 || entry.makeup_score > asmt.max_score) {
-          scoreOffenders.push(entry.student_id);
-        }
-      }
-    }
-    if (notEnrolled.length > 0) {
-      return errorResponse(
-        422,
-        "student_not_enrolled",
-        "One or more students are not actively enrolled in this offering.",
-        { student_id: notEnrolled }
-      );
-    }
-    if (scoreOffenders.length > 0) {
-      return errorResponse(
-        422,
-        "score_exceeds_max",
-        `Score must be between 0 and ${asmt.max_score}.`,
-        { student_id: scoreOffenders }
-      );
-    }
-    const updated = entries.map((entry) => {
-      const existing = D11.assessment_grades.find(
-        (g) => g.assessment_id === assessmentId && g.student_id === entry.student_id
-      );
-      const nextScore = entry.status === "graded" ? entry.score ?? null : null;
-      const nextMakeup = entry.status === "absent" ? entry.makeup_score ?? null : null;
-      if (existing) {
-        existing.status = entry.status;
-        existing.score = nextScore;
-        existing.makeup_score = nextMakeup;
-      } else {
-        const enr = D11.enrollments.find(
-          (e) => e.student_id === entry.student_id && e.offering_id === offering.id && !e.unenrolled_at
-        );
-        D11.assessment_grades.push({
-          id: `grd-new-${assessmentId}-${entry.student_id}`,
-          assessment_id: assessmentId,
-          student_id: entry.student_id,
-          enrollment_id: enr?.id ?? "",
-          status: entry.status,
-          score: nextScore,
-          makeup_score: nextMakeup,
-          is_released: null
-        });
-      }
-      return {
-        student_id: entry.student_id,
-        status: entry.status,
-        score: nextScore,
-        makeup_score: nextMakeup,
-        ...entry.status === "graded" && nextScore != null ? { letter: letterFor(nextScore / asmt.max_score * 100) } : {}
-      };
-    });
-    return import_msw12.HttpResponse.json({ updated });
-  }),
-  // ── Release control (per-assessment; whole-column in the demo) ─────────────────
-  import_msw12.http.post(`${API_BASE_URL}/assessments/:assessmentId/release`, ({ params }) => {
-    const asmt = D11.assessments.find((a) => a.id === String(params.assessmentId));
-    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
-    asmt.is_released = true;
-    const releasedCount = D11.assessment_grades.filter((g) => g.assessment_id === asmt.id).length;
-    return import_msw12.HttpResponse.json({ assessment_id: asmt.id, is_released: true, released_count: releasedCount });
-  }),
-  import_msw12.http.post(`${API_BASE_URL}/assessments/:assessmentId/unrelease`, ({ params }) => {
-    const asmt = D11.assessments.find((a) => a.id === String(params.assessmentId));
-    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
-    asmt.is_released = false;
-    const releasedCount = D11.assessment_grades.filter((g) => g.assessment_id === asmt.id).length;
-    return import_msw12.HttpResponse.json({ assessment_id: asmt.id, is_released: false, released_count: releasedCount });
-  }),
-  // ── Nudge: remind the teacher to release (principal/secretary) ─────────────────
-  // Mirrors the backend's refusal order exactly (assessments/service.py::nudge_release):
-  // 403 role gate → 404 unknown → 409 no_assigned_teacher → 409 nothing_awaiting_release
-  // → 429 rate_limited. Getting the ORDER right matters: the UI distinguishes these.
-  import_msw12.http.post(`${API_BASE_URL}/assessments/:assessmentId/nudge-release`, ({ params, cookies }) => {
-    const role = sessionRole4(cookies);
-    if (role !== "principal" && role !== "secretary") {
-      return errorResponse(403, "forbidden", "You cannot send release reminders.");
-    }
-    const asmt = D11.assessments.find((a) => a.id === String(params.assessmentId));
-    if (!asmt) return errorResponse(404, "not_found", "Assessment not found.");
-    const nudgeOffering = getOffering(asmt.offering_id);
-    const teachers2 = (nudgeOffering?.teacher_ids ?? []).map((id) => getTeacher(id)).filter((tt) => Boolean(tt)).map((tt) => ({ id: tt.id, full_name: tt.full_name }));
-    if (teachers2.length === 0) {
-      return errorResponse(
-        409,
-        "no_assigned_teacher",
-        "This offering has no assigned lecturer to remind."
-      );
-    }
-    const awaiting = D11.assessment_grades.filter(
-      (g) => g.assessment_id === asmt.id && g.status === "graded" && (g.is_released === false || g.is_released == null && !asmt.is_released)
-    ).length;
-    if (awaiting === 0) {
-      return errorResponse(
-        409,
-        "nothing_awaiting_release",
-        "Nothing is awaiting release for this assessment."
-      );
-    }
-    const retryAfter = nudgeRetryAfter(asmt.id);
-    if (retryAfter > 0) {
-      return errorResponse(
-        429,
-        "rate_limited",
-        "This lecturer was reminded recently. Try again later.",
-        { retry_after_seconds: [String(retryAfter)] }
-      );
-    }
-    const at = recordNudge(asmt.id);
-    return import_msw12.HttpResponse.json({
-      assessment_id: asmt.id,
-      awaiting_release_count: awaiting,
-      teachers: teachers2,
-      last_nudged_at: at,
-      next_nudge_allowed_at: new Date(
-        new Date(at).getTime() + NUDGE_COOLDOWN_SECONDS * 1e3
-      ).toISOString(),
-      cooldown_seconds: NUDGE_COOLDOWN_SECONDS
-    });
-  }),
-  // ── Computed-on-read term grade(s) ─────────────────────────────────────────────
-  import_msw12.http.get(`${API_BASE_URL}/grades/term`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const scope = url2.searchParams.get("scope");
-    const role = sessionRole4(cookies);
-    const offeringId = url2.searchParams.get("offering_id");
-    if (scope === "me" || role === "student") {
-      const studentId = currentStudentId2(role) ?? url2.searchParams.get("student_id");
-      if (!studentId) return errorResponse(404, "not_found", "Student not found.");
-      const offerings2 = offeringsForStudent(studentId).filter((o) => !o.is_archived);
-      const items = offerings2.map((offering) => {
-        const term = computeTermGrade(studentId, offering.id);
-        return {
-          student: studentRef2(studentId),
-          offering: offeringRef3(offering.id),
-          // The OFFERING's term, not the school's active one — the row describes work done
-          // in a specific semester and may well be a past one.
-          semester: semesterRefOf(offering.id),
-          numeric: term.numeric,
-          letter: term.letter,
-          weight_base_used: term.weight_base_used,
-          is_frozen: false
-        };
-      });
-      return import_msw12.HttpResponse.json({ items });
-    }
-    if (offeringId) {
-      const gb = gradebookFor(offeringId);
-      const items = gb.rows.map((row) => ({
-        student: studentRef2(row.student.id),
-        offering: offeringRef3(offeringId),
-        semester: semesterRefOf(offeringId),
-        numeric: row.term_numeric,
-        letter: row.term_letter,
-        is_frozen: false
-      }));
-      return import_msw12.HttpResponse.json({ items });
-    }
-    return import_msw12.HttpResponse.json({ items: [] });
-  }),
-  // ── Student "My Grades" (released only) ────────────────────────────────────────
-  import_msw12.http.get(`${API_BASE_URL}/grades/me`, ({ cookies, request }) => {
-    const role = sessionRole4(cookies);
-    const studentId = currentStudentId2(role) ?? currentStudentId2("student");
-    if (!studentId) return errorResponse(404, "not_found", "Student profile not found.");
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-    const semesterId = url2.searchParams.get("semester_id");
-    const offerings2 = offeringsForStudent(studentId, yearId);
-    const bySubject = offerings2.map((offering) => {
-      const ref = offeringRef3(offering.id);
-      const lead = offering.lead_teacher_id ? getTeacher(offering.lead_teacher_id) : void 0;
-      const asmts = assessmentsForOffering(offering.id).filter(
-        (a) => !semesterId || a.semester_id === semesterId
-      );
-      const assessments2 = asmts.map((a) => {
-        const g = D11.assessment_grades.find(
-          (row) => row.assessment_id === a.id && row.student_id === studentId
-        );
-        const released = g?.is_released ?? a.is_released;
-        if (!released) return null;
-        if (!g || g.status === "pending") return null;
-        return {
-          assessment_id: a.id,
-          title: a.title,
-          type: a.type,
-          max_score: a.max_score,
-          assessment_date: a.assessment_date,
-          status: g.status,
-          score: g.status === "graded" ? g.score : null,
-          ...g.status === "graded" && g.score != null ? { letter: letterFor(g.score / a.max_score * 100) } : {}
-        };
-      }).filter((x) => Boolean(x));
-      const term = computeReleasedTermGrade(studentId, offering.id, semesterId);
-      return {
-        offering: ref,
-        teacher: lead ? { id: lead.id, full_name: lead.full_name } : null,
-        assessments: assessments2,
-        term_numeric: term.numeric,
-        term_letter: term.letter
-      };
-    });
-    return import_msw12.HttpResponse.json({ student: studentRef2(studentId), by_subject: bySubject });
-  })
-];
-function computeReleasedTermGrade(studentId, offeringId, semesterId) {
-  const asmts = assessmentsForOffering(offeringId).filter((a) => a.status === "graded").filter((a) => !semesterId || a.semester_id === semesterId);
-  let weightedSum = 0;
-  let weightBase = 0;
-  for (const a of asmts) {
-    const g = D11.assessment_grades.find(
-      (row) => row.assessment_id === a.id && row.student_id === studentId
-    );
-    if (!g) continue;
-    const released = g.is_released ?? a.is_released;
-    if (!released) continue;
-    if (g.status !== "graded" || g.score == null) continue;
-    const pct = g.score / a.max_score * 100;
-    weightedSum += pct * a.weight;
-    weightBase += a.weight;
-  }
-  if (weightBase === 0) return { numeric: null, letter: null };
-  const numeric = Math.round(weightedSum / weightBase * 100) / 100;
-  return { numeric, letter: letterFor(numeric) };
-}
-
-// src/shared/api/mocks/handlers/revisions.ts
-var import_msw13 = require("msw");
-var D12 = DEMO_DATASET;
-var SESSION_COOKIE5 = "sis_mock_session";
-function sessionRole5(cookies) {
-  return cookies[SESSION_COOKIE5] ?? "principal";
-}
-function currentTeacherId3(role) {
-  if (role !== "teacher") return null;
-  return D12.teachers.find((t) => t.user_id === "user-teach-1")?.id ?? D12.teachers[0]?.id ?? null;
-}
-function currentUserId(role) {
-  if (role === "teacher") return "user-teach-1";
-  if (role === "principal") return "user-principal";
-  return `user-${role}`;
-}
-var idCounter2 = 0;
-var nextId2 = () => {
-  idCounter2 += 1;
-  return `rev-demo-${idCounter2}`;
-};
-function read(row, role) {
-  const grade = D12.assessment_grades.find((g) => g.id === row.assessment_grade_id);
-  const assessment = grade ? D12.assessments.find((a) => a.id === grade.assessment_id) : void 0;
-  const offering = assessment ? getOffering(assessment.offering_id) : void 0;
-  const course = offering ? getCourse(offering.course_id) : void 0;
-  const semester = offering ? getSemester(offering.semester_id) : void 0;
-  const student = grade ? getStudent(grade.student_id) : void 0;
-  const requester = D12.users.find((u) => u.id === row.requested_by_user_id);
-  const decider = row.decided_by_user_id ? D12.users.find((u) => u.id === row.decided_by_user_id) : void 0;
-  return {
-    id: row.id,
-    assessment_grade_id: row.assessment_grade_id,
-    status: row.status,
-    reason: row.reason,
-    original_score: row.original_score,
-    proposed_score: row.proposed_score,
-    decision_note: row.decision_note,
-    decided_at: row.decided_at,
-    created_at: row.created_at,
-    student: student ? {
-      id: student.id,
-      full_name: student.full_name,
-      student_number: student.student_number
-    } : null,
-    assessment_id: assessment?.id ?? null,
-    assessment_title: assessment?.title ?? "",
-    max_score: assessment?.max_score ?? null,
-    // D31: one shared `OfferingRef` replaces the flat `class_subject_id` + `subject_name` +
-    // `subject_code` + `section_name` quartet. Three of those existed only to render the
-    // queue row's label, and the label is derived in one place now.
-    offering: offering ? {
-      id: offering.id,
-      course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-      semester: semester ? {
-        id: semester.id,
-        name: semester.name,
-        sequence: semester.sequence,
-        is_active: semester.is_active
-      } : null,
-      section_code: offering.section_code,
-      label: offeringLabel(offering)
-    } : null,
-    requested_by_user_id: row.requested_by_user_id,
-    requested_by_name: requester?.full_name ?? "",
-    decided_by_user_id: row.decided_by_user_id,
-    decided_by_name: decider?.full_name ?? null,
-    can_withdraw: row.status === "pending" && row.requested_by_user_id === currentUserId(role)
-  };
-}
-function pendingRevisionsFor(role) {
-  if (role !== "principal") return 0;
-  return D12.grade_revision_requests.filter((r) => r.status === "pending").length;
-}
-var revisionsHandlers = [
-  // ── GET /grade-revisions ────────────────────────────────────────────────────
-  import_msw13.http.get(`${API_BASE_URL}/grade-revisions`, ({ request, cookies }) => {
-    const role = sessionRole5(cookies);
-    if (role !== "principal" && role !== "teacher") {
-      return errorResponse(
-        403,
-        "forbidden",
-        "Grade revisions are visible to the Dean and to the requesting Lecturer."
-      );
-    }
-    const url2 = new URL(request.url);
-    const status = url2.searchParams.get("status");
-    const offeringId = url2.searchParams.get("offering_id");
-    let rows = [...D12.grade_revision_requests];
-    if (role === "teacher") {
-      rows = rows.filter((r) => r.requested_by_user_id === currentUserId(role));
-    }
-    if (status) rows = rows.filter((r) => r.status === status);
-    if (offeringId) {
-      rows = rows.filter((r) => {
-        const grade = D12.assessment_grades.find((g) => g.id === r.assessment_grade_id);
-        const assessment = grade ? D12.assessments.find((a) => a.id === grade.assessment_id) : void 0;
-        return assessment?.offering_id === offeringId;
-      });
-    }
-    rows.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-    return import_msw13.HttpResponse.json({
-      items: rows.map((r) => read(r, role)),
-      pending_for_me: pendingRevisionsFor(role)
-    });
-  }),
-  // ── GET /grade-revisions/{id} ───────────────────────────────────────────────
-  import_msw13.http.get(`${API_BASE_URL}/grade-revisions/:revisionId`, ({ params, cookies }) => {
-    const role = sessionRole5(cookies);
-    if (role !== "principal" && role !== "teacher") {
-      return errorResponse(403, "forbidden", "Grade revisions are not visible to you.");
-    }
-    const row = D12.grade_revision_requests.find((r) => r.id === String(params.revisionId));
-    if (!row) return errorResponse(404, "not_found", "Grade revision request not found.");
-    if (role === "teacher" && row.requested_by_user_id !== currentUserId(role)) {
-      return errorResponse(404, "not_found", "Grade revision request not found.");
-    }
-    return import_msw13.HttpResponse.json(read(row, role));
-  }),
-  // ── POST /assessments/{id}/grade-revisions — the LECTURER asks ──────────────
-  import_msw13.http.post(
-    `${API_BASE_URL}/assessments/:assessmentId/grade-revisions`,
-    async ({ params, request, cookies }) => {
-      const role = sessionRole5(cookies);
-      const assessmentId = String(params.assessmentId);
-      const assessment = D12.assessments.find((a) => a.id === assessmentId);
-      if (!assessment) return errorResponse(404, "not_found", "Assessment not found.");
-      if (role !== "teacher") {
-        return errorResponse(
-          403,
-          "forbidden",
-          "Only the Lecturer who teaches the course may request a grade revision."
-        );
-      }
-      const teacherId = currentTeacherId3(role);
-      const offering = getOffering(assessment.offering_id);
-      if (!offering || teacherId && !offering.teacher_ids.includes(teacherId)) {
-        return errorResponse(404, "not_found", "Resource not found.");
-      }
-      const body = await request.json();
-      const grade = D12.assessment_grades.find(
-        (g) => g.assessment_id === assessmentId && g.student_id === body.student_id
-      );
-      if (!grade) {
-        return errorResponse(
-          422,
-          "grade_not_entered",
-          "This student has no result recorded for that assessment, so there is nothing to revise.",
-          { student_id: ["No grade on record."] }
-        );
-      }
-      if (grade.status !== "graded") {
-        return errorResponse(
-          422,
-          "grade_not_graded",
-          `This result is ${grade.status}, not graded. An absent result already has a makeup path.`,
-          { student_id: [`Result is ${grade.status}.`] }
-        );
-      }
-      const eligibility = midtermRevisionEligible(assessment, grade);
-      if (!eligibility.eligible) {
-        return errorResponse(
-          422,
-          "revision_not_eligible",
-          "This result was not part of the mid-session submission, so it cannot be revised.",
-          { assessment_id: [eligibility.reason ?? "not_eligible"] }
-        );
-      }
-      const proposed = Number(body.proposed_score);
-      if (!Number.isFinite(proposed) || proposed < 0 || proposed > assessment.max_score) {
-        return errorResponse(
-          422,
-          "score_exceeds_max",
-          `The proposed score must be between 0 and ${assessment.max_score}.`,
-          { proposed_score: [`Maximum is ${assessment.max_score}.`] }
-        );
-      }
-      if (grade.score != null && Math.abs(grade.score - proposed) < 1e-9) {
-        return errorResponse(
-          422,
-          "revision_no_change",
-          "The proposed score is the same as the current one.",
-          { proposed_score: ["Must differ from the current score."] }
-        );
-      }
-      if (!body.reason || !body.reason.trim()) {
-        return errorResponse(422, "validation_error", "A reason is required.", {
-          reason: ["Required."]
-        });
-      }
-      if (D12.grade_revision_requests.some(
-        (r) => r.assessment_grade_id === grade.id && r.status === "pending"
-      )) {
-        return errorResponse(
-          409,
-          "revision_already_pending",
-          "There is already a revision request awaiting the Dean's decision for this result."
-        );
-      }
-      const created = {
-        id: nextId2(),
-        assessment_grade_id: grade.id,
-        requested_by_user_id: currentUserId(role),
-        reason: body.reason.trim(),
-        // Snapshotted at request time — the point is what the student had THEN.
-        original_score: grade.score,
-        proposed_score: proposed,
-        status: "pending",
-        decided_by_user_id: null,
-        decided_at: null,
-        decision_note: null,
-        created_at: DEMO_TODAY_ISO
-      };
-      D12.grade_revision_requests.push(created);
-      return import_msw13.HttpResponse.json(read(created, role), { status: 201 });
-    }
-  ),
-  // ── DELETE /grade-revisions/{id} — the requester withdraws ──────────────────
-  import_msw13.http.delete(`${API_BASE_URL}/grade-revisions/:revisionId`, ({ params, cookies }) => {
-    const role = sessionRole5(cookies);
-    const row = D12.grade_revision_requests.find((r) => r.id === String(params.revisionId));
-    if (!row) return errorResponse(404, "not_found", "Grade revision request not found.");
-    if (row.requested_by_user_id !== currentUserId(role)) {
-      return errorResponse(404, "not_found", "Grade revision request not found.");
-    }
-    if (row.status !== "pending") {
-      return errorResponse(
-        409,
-        "revision_decided",
-        `This request has already been ${row.status}; the Dean's decision is kept.`
-      );
-    }
-    D12.grade_revision_requests.splice(D12.grade_revision_requests.indexOf(row), 1);
-    return new import_msw13.HttpResponse(null, { status: 204 });
-  }),
-  // ── POST /grade-revisions/{id}/decision — the DEAN rules ───────────────────
-  import_msw13.http.post(
-    `${API_BASE_URL}/grade-revisions/:revisionId/decision`,
-    async ({ params, request, cookies }) => {
-      const role = sessionRole5(cookies);
-      if (role !== "principal") {
-        return errorResponse(403, "forbidden", "Only the Dean may decide a grade revision.");
-      }
-      const row = D12.grade_revision_requests.find((r) => r.id === String(params.revisionId));
-      if (!row) return errorResponse(404, "not_found", "Grade revision request not found.");
-      if (row.status !== "pending") {
-        return errorResponse(
-          409,
-          "revision_decided",
-          `This request has already been ${row.status}.`
-        );
-      }
-      const body = await request.json();
-      if (body.status !== "approved" && body.status !== "denied") {
-        return errorResponse(422, "validation_error", "A decision must be approved or denied.", {
-          status: ["Use approved or denied."]
-        });
-      }
-      if (body.status === "approved") {
-        const grade = D12.assessment_grades.find((g) => g.id === row.assessment_grade_id);
-        if (grade) {
-          grade.makeup_score = row.proposed_score;
-        }
-      }
-      row.status = body.status;
-      row.decided_by_user_id = "user-principal";
-      row.decided_at = DEMO_TODAY_ISO;
-      if (body.decision_note) {
-        row.decision_note = row.decision_note ? `${row.decision_note}
-${body.decision_note}` : body.decision_note;
-      }
-      return import_msw13.HttpResponse.json(read(row, role));
-    }
-  )
-];
-
-// src/shared/api/mocks/handlers/attendance.ts
-var import_msw14 = require("msw");
-var D13 = DEMO_DATASET;
-var ATTENDANCE_STATUSES = ["present", "absent", "late", "excused"];
-var isAttendanceStatus = (v) => typeof v === "string" && ATTENDANCE_STATUSES.includes(v);
-function sessionRole6(cookies) {
-  return cookies["sis_mock_session"] ?? "principal";
-}
-function actingTeacherId() {
-  return getTeacher("teach-1")?.id ?? D13.teachers.find((t) => t.status === "active").id;
-}
-function actingStudentId() {
-  return getStudent("stu-1")?.id ?? D13.students.find((s) => s.status === "Registered").id;
-}
-function offeringsForRole(role, yearId) {
-  const all3 = role === "teacher" ? offeringsOwnedByTeacher(actingTeacherId()) : D13.offerings;
-  return yearId ? all3.filter((o) => yearIdOfOffering(o.id) === yearId) : all3.filter((o) => !o.is_archived);
-}
-function canAccessOffering(role, offeringId) {
-  if (role !== "teacher") return Boolean(getOffering(offeringId));
-  return offeringsOwnedByTeacher(actingTeacherId()).some((o) => o.id === offeringId);
-}
-function teachersForOffering(offering) {
-  return offering.teacher_ids.map((id) => getTeacher(id)).filter((t) => Boolean(t)).map((t) => ({ id: t.id, name: t.full_name })).sort((a, b) => a.name.localeCompare(b.name));
-}
-function offeringRef4(offering) {
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  return {
-    offering: {
-      id: offering.id,
-      course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-      semester: semester ? {
-        id: semester.id,
-        name: semester.name,
-        sequence: semester.sequence,
-        is_active: semester.is_active
-      } : null,
-      section_code: offering.section_code,
-      label: offeringLabel(offering)
-    },
-    teachers: teachersForOffering(offering)
-  };
-}
-function studentRef3(stu) {
-  return { id: stu.id, full_name: stu.full_name, student_number: stu.student_number };
-}
-function summarize(records) {
-  const counts = { present: 0, absent: 0, late: 0, excused: 0 };
-  for (const r of records) counts[r.status] += 1;
-  const total = records.length;
-  const pct_present = total === 0 ? 0 : Math.round((counts.present + counts.late) / total * 1e3) / 10;
-  return { ...counts, pct_present };
-}
-var attendanceHandlers = [
-  // ── Offering picker ─────────────────────────────────────────────────────────────
-  // GET /attendance/offerings — what the caller may pick (lecturer: own; Dean/Registrar: all).
-  import_msw14.http.get(`${API_BASE_URL}/attendance/offerings`, ({ cookies, request }) => {
-    const role = sessionRole6(cookies);
-    const canRecord = role === "teacher";
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-    return import_msw14.HttpResponse.json({
-      items: offeringsForRole(role, yearId).map((o) => ({
-        ...offeringRef4(o),
-        enrolled_count: rosterFor(o.id).length
-      })),
-      can_record: canRecord
-    });
-  }),
-  // ── Daily register read ───────────────────────────────────────────────────────
-  // GET /attendance?offering_id=&date= — roster ∪ any recorded status for the day.
-  import_msw14.http.get(`${API_BASE_URL}/attendance`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const offeringId = url2.searchParams.get("offering_id");
-    const date = url2.searchParams.get("date") ?? DEMO_TODAY;
-    const role = sessionRole6(cookies);
-    if (!offeringId) return errorResponse(422, "validation_error", "offering_id is required.");
-    const offering = getOffering(offeringId);
-    if (!offering || !canAccessOffering(role, offeringId)) {
-      return errorResponse(404, "offering_not_found", "Offering not found.");
-    }
-    const recorded = attendanceFor(offeringId, date);
-    const byStudent = new Map(recorded.map((r) => [r.student_id, r]));
-    const roster = rosterFor(offeringId);
-    const entries = roster.map((stu) => {
-      const rec = byStudent.get(stu.id);
-      const enr = activeEnrollmentFor(stu.id, offeringId);
-      return {
-        student: studentRef3(stu),
-        enrollment_id: enr?.id ?? null,
-        status: rec?.status ?? null,
-        // null = not yet recorded (UI defaults to present)
-        recorded_at: rec?.recorded_at ?? null
-      };
-    });
-    const lastStamp = recorded.map((r) => r.recorded_at).sort().at(-1);
-    const lastRec = recorded.find((r) => r.recorded_at === lastStamp);
-    const lastUser = lastRec ? D13.users.find((u) => u.id === lastRec.recorded_by_user_id) : void 0;
-    return import_msw14.HttpResponse.json({
-      offering: offeringRef4(offering),
-      date,
-      can_record: role === "teacher",
-      entries,
-      last_recorded: lastRec ? { by: lastUser?.full_name ?? "Staff", at: lastRec.recorded_at } : null
-    });
-  }),
-  // ── Bulk upsert the register ────────────────────────────────────────────────────
-  // PUT /attendance — upsert on (offering_id, student_id, date). Blocks future dates.
-  import_msw14.http.put(`${API_BASE_URL}/attendance`, async ({ request, cookies }) => {
-    const role = sessionRole6(cookies);
-    if (role !== "teacher") {
-      return errorResponse(403, "forbidden", "Only an assigned lecturer can record attendance.");
-    }
-    const body = await request.json();
-    const offeringId = body.offering_id;
-    const date = body.date;
-    if (!offeringId || !date) {
-      return errorResponse(422, "validation_error", "offering_id and date are required.");
-    }
-    const offering = getOffering(offeringId);
-    if (!offering || !canAccessOffering(role, offeringId)) {
-      return errorResponse(404, "offering_not_found", "Offering not found.");
-    }
-    if (date > DEMO_TODAY) {
-      return errorResponse(422, "future_date_not_allowed", "You can't record attendance for a future date.");
-    }
-    const rosterIds = new Set(rosterFor(offeringId).map((s) => s.id));
-    const recordedBy = getTeacher(actingTeacherId())?.user_id ?? DEMO_IDS.principalUserId;
-    const recordedAt = `${date}T08:15:00Z`;
-    let upserted = 0;
-    for (const entry of body.entries ?? []) {
-      if (!entry.student_id || !isAttendanceStatus(entry.status)) continue;
-      if (!rosterIds.has(entry.student_id)) continue;
-      const enr = activeEnrollmentFor(entry.student_id, offeringId);
-      if (!enr) continue;
-      const existing = D13.attendance_records.find(
-        (r) => r.offering_id === offeringId && r.student_id === entry.student_id && r.attendance_date === date
-      );
-      if (existing) {
-        existing.status = entry.status;
-        existing.recorded_by_user_id = recordedBy;
-        existing.recorded_at = recordedAt;
-      } else {
-        const created = {
-          id: `att-new-${D13.attendance_records.length + 1}`,
-          offering_id: offeringId,
-          student_id: entry.student_id,
-          enrollment_id: enr.id,
-          // The OFFERING's term, not "the active one" — a register for a Semester-2
-          // offering belongs to Semester 2 even while Semester 1 is the live term.
-          semester_id: offering.semester_id,
-          attendance_date: date,
-          status: entry.status,
-          recorded_by_user_id: recordedBy,
-          recorded_at: recordedAt
-        };
-        D13.attendance_records.push(created);
-      }
-      upserted += 1;
-    }
-    const dayRecords = attendanceFor(offeringId, date);
-    return import_msw14.HttpResponse.json({ upserted, summary: summarize(dayRecords) });
-  }),
-  // ── Per-offering summary (history/trend over the seeded window) ─────────────────
-  // GET /attendance/summary?offering_id= — daily rate points + overall counts.
-  import_msw14.http.get(`${API_BASE_URL}/attendance/summary`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const offeringId = url2.searchParams.get("offering_id");
-    const role = sessionRole6(cookies);
-    if (!offeringId) return errorResponse(422, "validation_error", "offering_id is required.");
-    const offering = getOffering(offeringId);
-    if (!offering || !canAccessOffering(role, offeringId)) {
-      return errorResponse(404, "offering_not_found", "Offering not found.");
-    }
-    const rows = D13.attendance_records.filter((r) => r.offering_id === offeringId);
-    const dates = [...new Set(rows.map((r) => r.attendance_date))].sort();
-    const by_date = dates.map((date) => {
-      const dayRows = rows.filter((r) => r.attendance_date === date);
-      return { date, ...summarize(dayRows) };
-    });
-    const by_student = rosterFor(offeringId).map((stu) => ({
-      student: studentRef3(stu),
-      ...summarize(rows.filter((r) => r.student_id === stu.id))
-    })).sort((a, b) => a.student.full_name.localeCompare(b.student.full_name));
-    return import_msw14.HttpResponse.json({
-      offering: offeringRef4(offering),
-      overall: summarize(rows),
-      by_date,
-      by_student
-    });
-  }),
-  // ── Student's own attendance (FR-ATT-07) ────────────────────────────────────────
-  // GET /attendance/me — summary + history for the signed-in student (self only).
-  import_msw14.http.get(`${API_BASE_URL}/attendance/me`, ({ cookies, request }) => {
-    const role = sessionRole6(cookies);
-    if (role !== "student") {
-      return errorResponse(403, "forbidden", "Only a student can view their own attendance.");
-    }
-    const studentId = actingStudentId();
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id") ?? getActiveYear()?.id ?? null;
-    const semesterId = url2.searchParams.get("semester_id");
-    const yearSemIds = new Set(
-      D13.semesters.filter((s) => !yearId || s.academic_year_id === yearId).map((s) => s.id)
-    );
-    const rows = D13.attendance_records.filter(
-      (r) => r.student_id === studentId && yearSemIds.has(r.semester_id) && // ADDITIONAL to the year fan-out, not instead of it — mirroring the backend.
-      // A semester paired with a foreign year intersects to nothing, and empty is
-      // the right answer rather than showing one period under another's heading.
-      (!semesterId || r.semester_id === semesterId)
-    ).sort((a, b) => b.attendance_date.localeCompare(a.attendance_date));
-    return import_msw14.HttpResponse.json({
-      summary: summarize(rows),
-      history: rows.map((r) => ({ date: r.attendance_date, status: r.status }))
-    });
-  })
-];
-
-// src/shared/api/mocks/handlers/announcements.ts
-var import_msw15 = require("msw");
-var D14 = DEMO_DATASET;
-var USER_BY_ROLE = {
-  principal: "user-principal",
-  secretary: "user-secretary",
-  teacher: "user-teach-1",
-  student: "user-stu-1"
-};
-function currentUser(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  const userId = USER_BY_ROLE[role] ?? USER_BY_ROLE.principal;
-  return D14.users.find((u) => u.id === userId) ?? D14.users[0];
-}
-var nowMs = () => (/* @__PURE__ */ new Date(`${DEMO_TODAY}T23:59:59Z`)).getTime();
-function isExpired(a) {
-  return Boolean(a.expires_at && new Date(a.expires_at).getTime() <= nowMs());
-}
-function userRef(userId) {
-  const u = D14.users.find((x) => x.id === userId);
-  return { id: userId, full_name: u?.full_name ?? "Unknown", role: u?.role ?? "principal" };
-}
-function offeringRef5(offeringId) {
-  if (!offeringId) return null;
-  const offering = getOffering(offeringId);
-  if (!offering) return null;
-  return {
-    id: offering.id,
-    label: offeringLabel(offering),
-    course_name: getCourse(offering.course_id)?.name ?? null
-  };
-}
-var BODY_PREVIEW_LEN = 140;
-function bodyPreview(body) {
-  const flat = body.replace(/\s+/g, " ").trim();
-  return flat.length > BODY_PREVIEW_LEN ? `${flat.slice(0, BODY_PREVIEW_LEN).trimEnd()}\u2026` : flat;
-}
-function listItem3(a, userId) {
-  return {
-    id: a.id,
-    title: a.title,
-    body_preview: bodyPreview(a.body),
-    audience: a.audience,
-    offering: offeringRef5(a.offering_id),
-    author: userRef(a.author_user_id),
-    published_at: a.published_at,
-    expires_at: a.expires_at,
-    is_read: a.read_by_user_ids.includes(userId)
-  };
-}
-function detail3(a, userId) {
-  return {
-    id: a.id,
-    title: a.title,
-    body: a.body,
-    audience: a.audience,
-    offering: offeringRef5(a.offering_id),
-    author: userRef(a.author_user_id),
-    published_at: a.published_at,
-    expires_at: a.expires_at,
-    is_read: a.read_by_user_ids.includes(userId)
-  };
-}
-function canCreate(user, audience, offeringId) {
-  if (user.role === "principal" || user.role === "secretary") return true;
-  if (user.role === "teacher") {
-    if (audience !== "class" || !offeringId) return false;
-    const teacher = D14.teachers.find((t) => t.user_id === user.id);
-    if (!teacher) return false;
-    return offeringsOwnedByTeacher(teacher.id).some((o) => o.id === offeringId);
-  }
-  return false;
-}
-function targetableOfferings(user) {
-  if (user.role === "principal" || user.role === "secretary") {
-    return D14.offerings.filter((o) => !o.is_archived);
-  }
-  if (user.role === "teacher") {
-    const teacher = D14.teachers.find((t) => t.user_id === user.id);
-    return teacher ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived) : [];
-  }
-  return [];
-}
-var announcementsHandlers = [
-  // ── GET /announcements — targeted, most-recent-first feed ─────────────────────
-  import_msw15.http.get(`${API_BASE_URL}/announcements`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const user = currentUser(cookies);
-    const unreadOnly = url2.searchParams.get("unread_only") === "true";
-    const audience = url2.searchParams.get("audience");
-    let rows = announcementsForUser(user.id);
-    if (audience) rows = rows.filter((a) => a.audience === audience);
-    if (unreadOnly) rows = rows.filter((a) => !a.read_by_user_ids.includes(user.id));
-    const items = rows.map((a) => listItem3(a, user.id));
-    const params = listParamsFrom(url2);
-    const page = paginate(items, {
-      ...params,
-      sort: params.sort ?? null
-    });
-    return import_msw15.HttpResponse.json(page);
-  }),
-  // ── GET /announcements/unread-count — bell badge ──────────────────────────────
-  // D30 §D8 — extended with pending GRADE REVISIONS rather than adding a notifications
-  // table. `unread_count` is the SUM, so a client reading only that field keeps working.
-  // The revision component is what awaits the CALLER'S decision, so it is non-zero only
-  // for the Dean: a badge counting a Lecturer's own pending request would nag them about
-  // work only the Dean can do.
-  import_msw15.http.get(`${API_BASE_URL}/announcements/unread-count`, ({ cookies }) => {
-    const user = currentUser(cookies);
-    const announcements2 = unreadCountForUser(user.id);
-    const revisions = pendingRevisionsFor(cookies["sis_mock_session"] ?? "principal");
-    return import_msw15.HttpResponse.json({
-      unread_count: announcements2 + revisions,
-      unread_announcements: announcements2,
-      pending_grade_revisions: revisions
-    });
-  }),
-  // ── GET /announcements/target-offerings — offerings the caller may target ─────
-  // A role-scoped source for the compose dialog, so it does not have to reach into
-  // /offerings and re-derive who may be targeted.
-  import_msw15.http.get(`${API_BASE_URL}/announcements/target-offerings`, ({ cookies }) => {
-    const user = currentUser(cookies);
-    const items = targetableOfferings(user).map((o) => ({
-      id: o.id,
-      label: offeringLabel(o),
-      course_name: getCourse(o.course_id)?.name ?? null
-    }));
-    return import_msw15.HttpResponse.json({ items });
-  }),
-  // ── GET /announcements/{id} — detail (must target the caller) ─────────────────
-  import_msw15.http.get(`${API_BASE_URL}/announcements/:id`, ({ params, cookies }) => {
-    const user = currentUser(cookies);
-    const targeted = announcementsForUser(user.id);
-    const a = targeted.find((x) => x.id === params.id);
-    const own2 = D14.announcements.find(
-      (x) => x.id === params.id && (x.author_user_id === user.id || user.role === "principal")
-    );
-    const found = a ?? (own2 && !isExpired(own2) ? own2 : void 0) ?? own2;
-    if (!found) return errorResponse(404, "not_found", "Announcement not found.");
-    return import_msw15.HttpResponse.json(detail3(found, user.id));
-  }),
-  // ── POST /announcements — create ──────────────────────────────────────────────
-  import_msw15.http.post(`${API_BASE_URL}/announcements`, async ({ request, cookies }) => {
-    const user = currentUser(cookies);
-    const body = await request.json();
-    const audience = body.audience ?? "all";
-    const offeringId = audience === "class" ? body.offering_id ?? null : null;
-    if (!body.title?.trim() || !body.body?.trim()) {
-      return errorResponse(422, "validation_error", "Title and body are required.", {
-        ...body.title?.trim() ? {} : { title: ["Title is required."] },
-        ...body.body?.trim() ? {} : { body: ["Body is required."] }
-      });
-    }
-    if (audience === "class" && !offeringId) {
-      return errorResponse(
-        422,
-        "class_audience_requires_offering_id",
-        "Choose a course offering for an offering-targeted announcement.",
-        { offering_id: ["An offering is required for this audience."] }
-      );
-    }
-    if (user.role === "teacher" && audience !== "class") {
-      return errorResponse(
-        403,
-        "teacher_cannot_broadcast",
-        "Lecturers can only post announcements to their own offerings."
-      );
-    }
-    if (!canCreate(user, audience, offeringId)) {
-      return errorResponse(403, "forbidden", "You cannot post to this audience.");
-    }
-    const publishedAt = body.published_at ?? `${DEMO_TODAY}T12:00:00Z`;
-    if (body.expires_at && new Date(body.expires_at).getTime() <= new Date(publishedAt).getTime()) {
-      return errorResponse(422, "validation_error", "Expiry must be after the publish date.", {
-        expires_at: ["Expiry must be after the publish date."]
-      });
-    }
-    const created = {
-      id: `ann-new-${D14.announcements.length + 1}`,
-      title: body.title.trim(),
-      body: body.body.trim(),
-      audience,
-      offering_id: offeringId,
-      author_user_id: user.id,
-      published_at: publishedAt,
-      expires_at: body.expires_at ?? null,
-      read_by_user_ids: [user.id]
-      // author has implicitly read their own
-    };
-    D14.announcements.push(created);
-    return import_msw15.HttpResponse.json(detail3(created, user.id), { status: 201 });
-  }),
-  // ── PATCH /announcements/{id} — edit (author or principal) ────────────────────
-  import_msw15.http.patch(`${API_BASE_URL}/announcements/:id`, async ({ params, request, cookies }) => {
-    const user = currentUser(cookies);
-    const a = D14.announcements.find((x) => x.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Announcement not found.");
-    if (a.author_user_id !== user.id && user.role !== "principal") {
-      return errorResponse(403, "forbidden", "Only the author or principal can edit this.");
-    }
-    const body = await request.json();
-    const audience = body.audience ?? a.audience;
-    const offeringId = audience === "class" ? body.offering_id ?? a.offering_id : null;
-    if (body.title !== void 0 && !body.title.trim()) {
-      return errorResponse(422, "validation_error", "Title cannot be empty.", {
-        title: ["Title is required."]
-      });
-    }
-    if (body.body !== void 0 && !body.body.trim()) {
-      return errorResponse(422, "validation_error", "Body cannot be empty.", {
-        body: ["Body is required."]
-      });
-    }
-    if (audience === "class" && !offeringId) {
-      return errorResponse(
-        422,
-        "class_audience_requires_offering_id",
-        "Choose a course offering for an offering-targeted announcement.",
-        { offering_id: ["An offering is required for this audience."] }
-      );
-    }
-    if (user.role === "teacher" && !canCreate(user, audience, offeringId)) {
-      return errorResponse(
-        403,
-        "teacher_cannot_broadcast",
-        "Lecturers can only post announcements to their own offerings."
-      );
-    }
-    const publishedAt = body.published_at ?? a.published_at;
-    if (body.expires_at && new Date(body.expires_at).getTime() <= new Date(publishedAt).getTime()) {
-      return errorResponse(422, "validation_error", "Expiry must be after the publish date.", {
-        expires_at: ["Expiry must be after the publish date."]
-      });
-    }
-    if (body.title !== void 0) a.title = body.title.trim();
-    if (body.body !== void 0) a.body = body.body.trim();
-    a.audience = audience;
-    a.offering_id = offeringId;
-    if (body.published_at !== void 0 && body.published_at) a.published_at = body.published_at;
-    if (body.expires_at !== void 0) a.expires_at = body.expires_at ?? null;
-    return import_msw15.HttpResponse.json(detail3(a, user.id));
-  }),
-  // ── DELETE /announcements/{id} — author or principal → 204 ────────────────────
-  import_msw15.http.delete(`${API_BASE_URL}/announcements/:id`, ({ params, cookies }) => {
-    const user = currentUser(cookies);
-    const a = D14.announcements.find((x) => x.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Announcement not found.");
-    if (a.author_user_id !== user.id && user.role !== "principal") {
-      return errorResponse(403, "forbidden", "Only the author or principal can delete this.");
-    }
-    D14.announcements = D14.announcements.filter((x) => x.id !== a.id);
-    return new import_msw15.HttpResponse(null, { status: 204 });
-  }),
-  // ── POST /announcements/{id}/read — idempotent mark-read → 204 ────────────────
-  import_msw15.http.post(`${API_BASE_URL}/announcements/:id/read`, ({ params, cookies }) => {
-    const user = currentUser(cookies);
-    const targeted = announcementsForUser(user.id);
-    const a = targeted.find((x) => x.id === params.id);
-    if (!a) return errorResponse(404, "not_found", "Announcement not found.");
-    if (!a.read_by_user_ids.includes(user.id)) a.read_by_user_ids.push(user.id);
-    return new import_msw15.HttpResponse(null, { status: 204 });
-  })
-];
-
-// src/shared/api/mocks/handlers/events.ts
-var import_msw16 = require("msw");
-var D15 = DEMO_DATASET;
-var USER_BY_ROLE2 = {
-  principal: DEMO_IDS.principalUserId,
-  secretary: "user-secretary",
-  teacher: "user-teach-1",
-  student: "user-stu-1"
-};
-function currentUser2(cookies) {
-  const role = cookies["sis_mock_session"] ?? "principal";
-  const userId = USER_BY_ROLE2[role] ?? USER_BY_ROLE2.principal;
-  return D15.users.find((u) => u.id === userId) ?? D15.users[0];
-}
-function canManage(user) {
-  return user.role === "principal" || user.role === "secretary";
-}
-function canSee(user, e) {
-  return e.visibility === "global" || user.role !== "student";
-}
-var VALID_CATEGORIES = ["holiday", "exam", "meeting", "activity", "other"];
-var VALID_VISIBILITIES = ["global", "internal"];
-var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-var TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-function eventView(e) {
-  const author = D15.users.find((u) => u.id === e.created_by_user_id);
-  return {
-    id: e.id,
-    title: e.title,
-    description: e.description,
-    category: e.category,
-    visibility: e.visibility,
-    start_date: e.start_date,
-    end_date: e.end_date,
-    all_day: e.all_day,
-    start_time: e.start_time,
-    end_time: e.end_time,
-    location: e.location,
-    created_by: { id: e.created_by_user_id, full_name: author?.full_name ?? "Unknown" },
-    created_at: e.created_at
-  };
-}
-function validate(body, existing) {
-  const fields = {};
-  const title = body.title ?? existing?.title;
-  if (title !== void 0 && !title.trim()) fields.title = ["Title is required."];
-  if (!existing && (title === void 0 || !title.trim())) fields.title = ["Title is required."];
-  const category = body.category ?? existing?.category;
-  if (category !== void 0 && !VALID_CATEGORIES.includes(category)) {
-    fields.category = ["Choose a valid category."];
-  }
-  const visibility = body.visibility ?? existing?.visibility;
-  if (visibility !== void 0 && !VALID_VISIBILITIES.includes(visibility)) {
-    fields.visibility = ["Choose who can see this event."];
-  }
-  const startDate = body.start_date ?? existing?.start_date;
-  if (!existing && !startDate) fields.start_date = ["A start date is required."];
-  if (startDate && !DATE_RE.test(startDate)) fields.start_date = ["Use a valid date."];
-  const endDate = body.end_date !== void 0 ? body.end_date : existing?.end_date ?? null;
-  if (endDate) {
-    if (!DATE_RE.test(endDate)) fields.end_date = ["Use a valid date."];
-    else if (startDate && endDate < startDate) {
-      fields.end_date = ["End date must be on or after the start date."];
-    }
-  }
-  const allDay = body.all_day !== void 0 ? body.all_day : existing?.all_day ?? true;
-  const startTime = body.start_time !== void 0 ? body.start_time : existing?.start_time ?? null;
-  const endTime = body.end_time !== void 0 ? body.end_time : existing?.end_time ?? null;
-  if (!allDay) {
-    if (!startTime) fields.start_time = ["A start time is required for a timed event."];
-    else if (!TIME_RE.test(startTime)) fields.start_time = ["Use 24-hour HH:mm."];
-    if (endTime) {
-      if (!TIME_RE.test(endTime)) fields.end_time = ["Use 24-hour HH:mm."];
-      else if (startTime && TIME_RE.test(startTime) && endTime <= startTime) {
-        fields.end_time = ["End time must be after the start time."];
-      }
-    }
-  }
-  return fields;
-}
-var eventsHandlers = [
-  // ── GET /events — role-scoped feed (students: global only) ─────────────────────
-  import_msw16.http.get(`${API_BASE_URL}/events`, ({ request, cookies }) => {
-    const url2 = new URL(request.url);
-    const user = currentUser2(cookies);
-    const from = url2.searchParams.get("from");
-    const to = url2.searchParams.get("to");
-    const items = listEvents(from, to).filter((e) => canSee(user, e)).map(eventView);
-    return import_msw16.HttpResponse.json({ items, reference_date: DEMO_TODAY });
-  }),
-  // ── POST /events — create (principal/secretary) ───────────────────────────────
-  import_msw16.http.post(`${API_BASE_URL}/events`, async ({ request, cookies }) => {
-    const user = currentUser2(cookies);
-    if (!canManage(user)) {
-      return errorResponse(403, "forbidden", "Only administrators can add calendar events.");
-    }
-    const body = await request.json();
-    const fields = validate(body);
-    if (Object.keys(fields).length > 0) {
-      return errorResponse(422, "validation_error", "Please fix the highlighted fields.", fields);
-    }
-    const allDay = body.all_day ?? true;
-    const created = {
-      id: `evt-new-${D15.events.length + 1}`,
-      title: body.title.trim(),
-      description: body.description?.trim() || null,
-      category: body.category ?? "other",
-      visibility: body.visibility ?? "global",
-      start_date: body.start_date,
-      end_date: body.end_date || null,
-      all_day: allDay,
-      start_time: allDay ? null : body.start_time ?? null,
-      end_time: allDay ? null : body.end_time ?? null,
-      location: body.location?.trim() || null,
-      created_by_user_id: user.id,
-      created_at: DEMO_TODAY_ISO
-    };
-    D15.events.push(created);
-    return import_msw16.HttpResponse.json(eventView(created), { status: 201 });
-  }),
-  // ── PATCH /events/{id} — edit (principal/secretary) ───────────────────────────
-  import_msw16.http.patch(`${API_BASE_URL}/events/:id`, async ({ params, request, cookies }) => {
-    const user = currentUser2(cookies);
-    if (!canManage(user)) {
-      return errorResponse(403, "forbidden", "Only administrators can edit calendar events.");
-    }
-    const e = getEvent(String(params.id));
-    if (!e) return errorResponse(404, "not_found", "Event not found.");
-    const body = await request.json();
-    const fields = validate(body, e);
-    if (Object.keys(fields).length > 0) {
-      return errorResponse(422, "validation_error", "Please fix the highlighted fields.", fields);
-    }
-    if (body.title !== void 0) e.title = body.title.trim();
-    if (body.description !== void 0) e.description = body.description?.trim() || null;
-    if (body.category !== void 0) e.category = body.category;
-    if (body.visibility !== void 0) e.visibility = body.visibility;
-    if (body.start_date !== void 0) e.start_date = body.start_date;
-    if (body.end_date !== void 0) e.end_date = body.end_date || null;
-    if (body.all_day !== void 0) e.all_day = body.all_day;
-    if (body.location !== void 0) e.location = body.location?.trim() || null;
-    if (e.all_day) {
-      e.start_time = null;
-      e.end_time = null;
-    } else {
-      if (body.start_time !== void 0) e.start_time = body.start_time ?? null;
-      if (body.end_time !== void 0) e.end_time = body.end_time ?? null;
-    }
-    return import_msw16.HttpResponse.json(eventView(e));
-  }),
-  // ── DELETE /events/{id} — delete (principal/secretary) → 204 ──────────────────
-  import_msw16.http.delete(`${API_BASE_URL}/events/:id`, ({ params, cookies }) => {
-    const user = currentUser2(cookies);
-    if (!canManage(user)) {
-      return errorResponse(403, "forbidden", "Only administrators can delete calendar events.");
-    }
-    const e = getEvent(String(params.id));
-    if (!e) return errorResponse(404, "not_found", "Event not found.");
-    D15.events = D15.events.filter((x) => x.id !== e.id);
-    return new import_msw16.HttpResponse(null, { status: 204 });
-  })
-];
-
-// src/shared/api/mocks/handlers/dashboard.ts
-var import_msw17 = require("msw");
-var D16 = DEMO_DATASET;
-var REPRESENTATIVE_USER_ID = {
-  principal: DEMO_IDS.principalUserId,
-  secretary: "user-secretary",
-  teacher: "user-teach-1",
-  // Maria Reyes — leads several Algebra offerings
-  student: "user-stu-1"
-  // Freddy Lopez — active, first-year, MATH1110-01
-};
-function resolveUser(role) {
-  const id = REPRESENTATIVE_USER_ID[role];
-  return D16.users.find((u) => u.id === id) ?? D16.users.find((u) => u.role === role) ?? D16.users[0];
-}
-function announcementView(a, userId) {
-  return {
-    id: a.id,
-    title: a.title,
-    body: a.body,
-    audience: a.audience,
-    published_at: a.published_at,
-    is_read: a.read_by_user_ids.includes(userId)
-  };
-}
-function offeringRef6(offering) {
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  return {
-    id: offering.id,
-    course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-    semester: semester ? {
-      id: semester.id,
-      name: semester.name,
-      sequence: semester.sequence,
-      is_active: semester.is_active
-    } : null,
-    section_code: offering.section_code,
-    label: offeringLabel(offering)
-  };
-}
-function termHeader() {
-  const year = getActiveYear();
-  const semester = getActiveSemester();
-  return {
-    academic_year_name: year?.name ?? null,
-    semester_name: semester?.name ?? null
-  };
-}
-function adminPayload(user) {
-  const activeStudents = D16.students.filter((s) => s.status === "Registered");
-  const liveOfferings = D16.offerings.filter((o) => !o.is_archived);
-  const active_students = activeStudents.length;
-  const student_capacity = liveOfferings.reduce((sum, o) => sum + (o.capacity ?? 0), 0);
-  const new_students_term = activeStudents.filter((s) => s.year_of_study === "First").length;
-  const total_courses = liveOfferings.length;
-  const trendPeriods = ["S2 2022\u201323", "S1 2023\u201324", "S2 2023\u201324", "S1 2024\u201325", "S2 2024\u201325", "S1 2025\u201326"];
-  const trendOffsets = [15, 13, 10, 7, 4, 0];
-  const enrollment_trend = trendPeriods.map((period, i) => ({
-    period,
-    count: Math.max(0, active_students - trendOffsets[i])
-  }));
-  const recent_teachers = D16.teachers.filter((t) => t.status === "active").slice(0, 6).map((t) => ({
-    id: t.id,
-    name: t.full_name,
-    secondary: t.subject_specializations.join(" \xB7 ") || "General",
-    status: { label: "Active", kind: "success" }
-  }));
-  const recent_students = activeStudents.filter((s) => currentOfferingsFor(s.id).length > 0).slice(0, 6).map((s) => ({
-    id: s.id,
-    name: s.full_name,
-    // A student has no single class to name here, so the row shows their level.
-    secondary: s.year_of_study ?? "\u2014",
-    status: { label: "Active", kind: "success" }
-  }));
-  return {
-    role: user.role,
-    user_full_name: user.full_name,
-    ...termHeader(),
-    stats: {
-      active_students,
-      active_teachers: D16.teachers.filter((t) => t.status === "active").length,
-      total_sections: liveOfferings.length,
-      attendance_rate: schoolAttendanceRate(),
-      unread_announcements: unreadCountForUser(user.id),
-      new_students_term,
-      total_courses,
-      student_capacity
-    },
-    /**
-     * Bucketed by PROGRAMME (D31), not by Form. `classes.grade_level` was a homeroom column
-     * and a K-12 axis a junior college does not have; the SAME breakdown backs the
-     * enrolment report, so the tile and the report cannot disagree.
-     *
-     * Counted per STUDENT, not per offering: by offering, one student would be counted once
-     * per course they take.
-     */
-    enrollment_by_programme: (() => {
-      const byId = /* @__PURE__ */ new Map();
-      for (const s of activeStudents) {
-        if (!s.program_id) continue;
-        byId.set(s.program_id, (byId.get(s.program_id) ?? 0) + 1);
-      }
-      return [...byId.entries()].map(([programme_id, count]) => {
-        const programme = D16.programs.find((pr) => pr.id === programme_id);
-        return {
-          programme_id,
-          programme_code: programme?.code ?? "?",
-          programme_name: programme?.name ?? "Unknown programme",
-          count
-        };
-      }).sort((a, b) => b.count - a.count || a.programme_code.localeCompare(b.programme_code));
-    })(),
-    grade_distribution: gradeDistribution(),
-    enrollment_trend,
-    recent_teachers,
-    recent_students,
-    recent_announcements: announcementsForUser(user.id).slice(0, 5).map((a) => announcementView(a, user.id))
-  };
-}
-function secretaryPayload(user) {
-  const offerings2 = D16.offerings.filter((o) => !o.is_archived);
-  const unstaffed_subjects = offerings2.filter((o) => o.teacher_ids.length === 0).length;
-  const over_capacity_sections = offerings2.filter(
-    (o) => o.capacity != null && o.capacity > 0 && rosterFor(o.id).length > o.capacity
-  ).length;
-  const recent_enrollments = D16.enrollments.filter((e) => !e.unenrolled_at).slice().sort(
-    (a, b) => b.enrolled_at.localeCompare(a.enrolled_at) || b.id.localeCompare(a.id)
-  ).slice(0, 6).map((e) => ({
-    enrollment_id: e.id,
-    student_name: getStudent(e.student_id)?.full_name ?? "Unknown student",
-    offering_label: offeringLabel(getOffering(e.offering_id)) || "Unknown offering",
-    enrolled_at: e.enrolled_at
-  }));
-  return {
-    role: "secretary",
-    user_full_name: user.full_name,
-    ...termHeader(),
-    stats: {
-      active_students: D16.students.filter((s) => s.status === "Registered").length,
-      active_teachers: D16.teachers.filter((t) => t.status === "active").length,
-      total_sections: offerings2.length,
-      unstaffed_subjects,
-      over_capacity_sections,
-      unread_announcements: unreadCountForUser(user.id)
-    },
-    recent_enrollments,
-    recent_announcements: announcementsForUser(user.id).slice(0, 5).map((a) => announcementView(a, user.id))
-  };
-}
-function teacherPayload(user) {
-  const teacher = getTeacher(
-    D16.teachers.find((t) => t.user_id === user.id)?.id ?? ""
-  );
-  const owned = teacher ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived) : [];
-  const today_classes = owned.map((offering) => ({
-    offering: offeringRef6(offering),
-    attendance_recorded: attendanceFor(offering.id, DEMO_TODAY).length > 0
-  }));
-  const recent_assessments = owned.flatMap(
-    (offering) => assessmentsForOffering(offering.id).filter((a) => a.status === "published" || a.status === "grading").map((a) => ({
-      id: a.id,
-      title: a.title,
-      offering: offeringRef6(offering),
-      assessment_date: a.assessment_date,
-      status: a.status
-    }))
-  ).sort((x, y) => (x.assessment_date ?? "").localeCompare(y.assessment_date ?? "")).slice(0, 6);
-  const ungraded_items = owned.reduce(
-    (n, offering) => n + assessmentsForOffering(offering.id).filter(
-      (a) => a.status === "published" || a.status === "grading"
-    ).length,
-    0
-  );
-  const awaiting_release = owned.flatMap(
-    (offering) => assessmentsForOffering(offering.id).map((a) => {
-      const graded_unreleased_count = D16.assessment_grades.filter(
-        (g) => g.assessment_id === a.id && g.status === "graded" && (g.is_released === false || g.is_released == null && !a.is_released)
-      ).length;
-      return {
-        id: a.id,
-        title: a.title,
-        offering: offeringRef6(offering),
-        assessment_date: a.assessment_date,
-        status: a.status,
-        // The flat id as well as the ref: the row LINKS to the gradebook, which is
-        // addressed by offering id, and a link target should not have to reach into a
-        // nested object.
-        offering_id: offering.id,
-        graded_unreleased_count
-      };
-    }).filter((row) => row.graded_unreleased_count > 0)
-  ).sort((x, y) => (x.assessment_date ?? "").localeCompare(y.assessment_date ?? ""));
-  return {
-    role: "teacher",
-    user_full_name: user.full_name,
-    ...termHeader(),
-    stats: {
-      // ONE count. It used to report `my_sections` (distinct homerooms) AND
-      // `my_class_subjects` (offerings), which were the same number the moment a class
-      // taught one subject — the card showed the same figure twice under two names.
-      my_offerings: owned.length,
-      attendance_due_today: today_classes.filter((c) => !c.attendance_recorded).length,
-      ungraded_items,
-      awaiting_release_items: awaiting_release.length
-    },
-    today_classes,
-    recent_assessments,
-    awaiting_release,
-    recent_announcements: announcementsForUser(user.id).slice(0, 4).map((a) => announcementView(a, user.id))
-  };
-}
-function studentPayload(user) {
-  const student = D16.students.find((s) => s.user_id === user.id);
-  const offerings2 = student ? offeringsForStudent(student.id).filter((o) => !o.is_archived) : [];
-  const my_classes = offerings2.map((offering) => {
-    const lead = offering.lead_teacher_id ? getTeacher(offering.lead_teacher_id) : void 0;
-    return {
-      offering: offeringRef6(offering),
-      teacher_name: lead?.full_name ?? "Unassigned"
-    };
-  });
-  const perSubject = student ? offerings2.map((offering) => computeTermGrade(student.id, offering.id).numeric).filter((n) => n != null) : [];
-  const term_average = perSubject.length > 0 ? Math.round(perSubject.reduce((a, b) => a + b, 0) / perSubject.length * 10) / 10 : null;
-  const term_letter = term_average != null ? letterFor(term_average) : null;
-  const termGpa = student ? gpaFor(
-    offerings2.map((offering) => ({
-      credits: getCourse(offering.course_id)?.credits ?? null,
-      letter: computeTermGrade(student.id, offering.id).letter
-    }))
-  ) : { gpa: null, total_credits: 0 };
-  const recent_grades = student ? offerings2.flatMap(
-    (offering) => assessmentsForOffering(offering.id).filter((a) => a.status === "graded" && a.is_released).map((a) => {
-      const g = D16.assessment_grades.find(
-        (row) => row.assessment_id === a.id && row.student_id === student.id
-      );
-      const released = g?.is_released ?? a.is_released;
-      if (!g || g.status !== "graded" || g.score == null || !released) return null;
-      return {
-        assessment_id: a.id,
-        title: a.title,
-        offering: offeringRef6(offering),
-        score: g.score,
-        max_score: a.max_score,
-        letter: letterFor(g.score / a.max_score * 100),
-        _date: a.assessment_date ?? ""
-      };
-    })
-  ).filter((r) => r != null).sort((x, y) => y._date.localeCompare(x._date)).slice(0, 6).map(({ _date, ...rest }) => rest) : [];
-  const upcoming_assessments = offerings2.flatMap(
-    (offering) => assessmentsForOffering(offering.id).filter((a) => a.assessment_date != null && a.assessment_date > DEMO_TODAY).map((a) => ({
-      id: a.id,
-      title: a.title,
-      offering: offeringRef6(offering),
-      assessment_date: a.assessment_date
-    }))
-  ).sort((x, y) => (x.assessment_date ?? "").localeCompare(y.assessment_date ?? "")).slice(0, 5);
-  const attendance_rate = student ? attendanceRateForStudent(student.id) : 0;
-  return {
-    role: "student",
-    user_full_name: user.full_name,
-    ...termHeader(),
-    stats: {
-      term_average,
-      term_letter,
-      gpa: termGpa.gpa,
-      total_credits: termGpa.total_credits,
-      attendance_rate,
-      upcoming_count: upcoming_assessments.length
-    },
-    my_classes,
-    recent_grades,
-    upcoming_assessments,
-    announcements: announcementsForUser(user.id).slice(0, 5).map((a) => announcementView(a, user.id))
-  };
-}
-var dashboardHandlers = [
-  import_msw17.http.get(`${API_BASE_URL}/dashboard`, ({ cookies }) => {
-    const role = cookies["sis_mock_session"] ?? "principal";
-    const user = resolveUser(role);
-    const semester = getActiveSemester();
-    if (!semester) {
-      return errorResponse(409, "no_active_semester", "No active academic session is configured.");
-    }
-    if (user.role === "teacher") return import_msw17.HttpResponse.json(teacherPayload(user));
-    if (user.role === "student") return import_msw17.HttpResponse.json(studentPayload(user));
-    if (user.role === "secretary") return import_msw17.HttpResponse.json(secretaryPayload(user));
-    return import_msw17.HttpResponse.json(adminPayload(user));
-  })
-];
-
-// src/shared/api/mocks/handlers/reports.ts
-var import_msw18 = require("msw");
-var D17 = DEMO_DATASET;
-var SESSION_COOKIE6 = "sis_mock_session";
-function sessionRole7(cookies) {
-  return cookies[SESSION_COOKIE6] ?? null;
-}
-function selfStudent() {
-  return D17.students.find((s) => s.status === "Registered" && s.user_id) ?? D17.students[0];
-}
-function studentRef4(s) {
-  return {
-    id: s.id,
-    full_name: s.full_name,
-    student_number: s.student_number,
-    date_of_birth: s.date_of_birth,
-    status: s.status,
-    year_of_study: s.year_of_study
-  };
-}
-function offeringRef7(offering) {
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  return {
-    id: offering.id,
-    course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-    semester: semester ? {
-      id: semester.id,
-      name: semester.name,
-      sequence: semester.sequence,
-      is_active: semester.is_active
-    } : null,
-    section_code: offering.section_code,
-    label: offeringLabel(offering)
-  };
-}
-function schoolIdentity() {
-  const p = D17.school_profile;
-  return { name: p.name, address: p.address, phone: p.phone, email: p.email, logo_url: p.logo_url };
-}
-function semesterRef2(sem) {
-  const year = D17.academic_years.find((y) => y.id === sem.academic_year_id);
-  return {
-    id: sem.id,
-    name: sem.name,
-    sequence: sem.sequence,
-    academic_year_id: sem.academic_year_id,
-    academic_year_name: year?.name ?? ""
-  };
-}
-function periodFor(sem) {
-  const month = (iso) => {
-    const d = /* @__PURE__ */ new Date(`${iso}T00:00:00`);
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  };
-  return `${sem.name}, ${month(sem.start_date)} - ${month(sem.end_date)}`;
-}
-function leadTeacherName(offering) {
-  const id = offering.lead_teacher_id ?? offering.teacher_ids[0] ?? null;
-  return id ? getTeacher(id)?.full_name ?? null : null;
-}
-function offeringFullyReleased(offering) {
-  const graded = D17.assessments.filter(
-    (a) => a.offering_id === offering.id && a.status === "graded"
-  );
-  if (graded.length === 0) return true;
-  return graded.every((a) => a.is_released);
-}
-function buildReportCard(student, semester, releaseFilter) {
-  const offerings2 = offeringsForStudent(student.id).filter(
-    (o) => !o.is_archived && o.semester_id === semester.id
-  );
-  const subjects = offerings2.map((offering) => {
-    const course = getCourse(offering.course_id);
-    const term = computeTermGrade(student.id, offering.id);
-    const released = offeringFullyReleased(offering);
-    const pending = releaseFilter && !released;
-    return {
-      // The wire key stays `subject` (the server still spells the catalog entry that way
-      // on report-card rows); it carries the COURSE.
-      subject: { id: offering.course_id, name: course?.name ?? "", code: course?.code ?? "" },
-      teacher: leadTeacherName(offering),
-      credits: course?.credits ?? null,
-      numeric: pending ? null : term.numeric,
-      letter: pending ? null : term.letter,
-      status: pending ? "pending" : "graded"
-    };
-  }).sort((a, b) => a.subject.name.localeCompare(b.subject.name));
-  const graded = subjects.filter((s) => s.status === "graded" && s.numeric != null);
-  const termAverage = graded.length > 0 ? Math.round(graded.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / graded.length * 100) / 100 : null;
-  const gpa = gpaFor(subjects.map((s) => ({ credits: s.credits, letter: s.letter })));
-  const attRows = D17.attendance_records.filter(
-    (r) => r.student_id === student.id && r.semester_id === semester.id
-  );
-  const attCounts = { present: 0, absent: 0, late: 0, excused: 0 };
-  for (const r of attRows) attCounts[r.status] += 1;
-  const att = {
-    ...attCounts,
-    pct_present: attRows.length ? Math.round(attCounts.present / attRows.length * 1e3) / 10 : 0
-  };
-  return {
-    student: studentRef4(student),
-    // The `section` block is gone (D29) — the card spans every offering the student sits,
-    // so there is no one class to name. The header shows their level instead.
-    year_of_study: student.year_of_study,
-    semester: semesterRef2(semester),
-    school: schoolIdentity(),
-    // Every demo student is registered on a real BAJC programme (§D12), so this prints.
-    program_code: D17.programs.find((pr) => pr.id === student.program_id)?.code ?? null,
-    period: periodFor(semester),
-    // Meaning unconfirmed with BAJC (plan §G item 3); the sample prints `-`.
-    block: null,
-    subjects,
-    attendance_summary: {
-      pct_present: att.pct_present,
-      absent: att.absent,
-      late: att.late,
-      excused: att.excused
-    },
-    term_average: termAverage,
-    term_average_letter: termAverage != null ? letterFor(termAverage) : null,
-    gpa: gpa.gpa,
-    total_credits: gpa.total_credits,
-    is_frozen: false,
-    // demo: live compute-on-read only (no archived snapshots)
-    // Widened deliberately: `freezeMidtermFor` re-labels the same payload as 'midterm',
-    // so pinning this to a literal would make the frozen copy untypeable.
-    report_kind: "endterm",
-    frozen_at: null
-  };
-}
-var midtermSnapshots = /* @__PURE__ */ new Map();
-function midtermKey(studentId, semesterId) {
-  return `${studentId}|${semesterId}`;
-}
-function freezeMidtermFor(student, semester) {
-  const payload = buildReportCard(student, semester, false);
-  midtermSnapshots.set(midtermKey(student.id, semester.id), {
-    payload: { ...payload, is_frozen: true, report_kind: "midterm" },
-    frozen_at: DEMO_TODAY_ISO
-  });
-}
-function midtermReportResponse(student, semester) {
-  const start = semester.midterm_submission_start;
-  const end = semester.midterm_submission_end;
-  if (!start || !end) {
-    return errorResponse(
-      422,
-      "no_midterm_window",
-      "This session has no mid-session grading period configured, so there are no mid-session grades to freeze."
-    );
-  }
-  if (new Date(DEMO_TODAY_ISO).getTime() <= new Date(end).getTime()) {
-    return errorResponse(
-      409,
-      "midterm_window_open",
-      "The mid-session grading period is still open. Mid-session grades can be frozen once it closes."
-    );
-  }
-  const key = midtermKey(student.id, semester.id);
-  if (!midtermSnapshots.has(key)) freezeMidtermFor(student, semester);
-  const snap = midtermSnapshots.get(key);
-  return import_msw18.HttpResponse.json({ ...snap.payload, frozen_at: snap.frozen_at });
-}
-function buildTranscript(student) {
-  const activeSemester = getActiveSemester();
-  const allOfferings = offeringsForStudent(student.id, null);
-  const historic = /* @__PURE__ */ new Map();
-  for (const e of D17.enrollments.filter((x) => x.student_id === student.id)) {
-    const offering = getOffering(e.offering_id);
-    if (!offering) continue;
-    const list2 = historic.get(offering.semester_id) ?? [];
-    if (!list2.some((o) => o.id === offering.id)) list2.push(offering);
-    historic.set(offering.semester_id, list2);
-  }
-  const years = [...D17.academic_years].sort((a, b) => b.name.localeCompare(a.name)).map((year) => {
-    const semesters2 = D17.semesters.filter((s) => s.academic_year_id === year.id).sort((a, b) => a.sequence - b.sequence).map((sem) => {
-      const termOfferings = historic.get(sem.id) ?? [];
-      const subjects = termOfferings.map((offering) => {
-        const course = getCourse(offering.course_id);
-        const term = computeTermGrade(student.id, offering.id);
-        const enr = D17.enrollments.find(
-          (e) => e.student_id === student.id && e.offering_id === offering.id && !e.unenrolled_at
-        );
-        const notation = enr ? NOTATION[enr.enrollment_status] : null;
-        return {
-          subject: {
-            id: offering.course_id,
-            name: course?.name ?? "",
-            code: course?.code ?? ""
-          },
-          teacher: leadTeacherName(offering),
-          credits: course?.credits ?? null,
-          numeric: notation ? null : term.numeric,
-          letter: notation ? "" : term.letter ?? "",
-          notation
-        };
-      }).sort((a, b) => a.subject.name.localeCompare(b.subject.name));
-      const counted = subjects.filter((r) => !r.notation || r.notation === "W/F");
-      const termGpa = gpaFor(counted.map((r) => ({ credits: r.credits, letter: r.letter })));
-      const gradedRows = subjects.filter((r) => r.numeric != null);
-      const termAverage = gradedRows.length > 0 ? Math.round(
-        gradedRows.reduce((sum, s) => sum + (s.numeric ?? 0), 0) / gradedRows.length * 100
-      ) / 100 : null;
-      return {
-        semester: semesterRef2(sem),
-        is_current: activeSemester?.id === sem.id && year.status === "active",
-        term_average: termAverage,
-        gpa: termGpa.gpa,
-        total_credits: termGpa.total_credits,
-        gpaEntries: counted.map((r) => ({ credits: r.credits, letter: r.letter })),
-        // Graded lines PLUS the notated ones — the notation is the information.
-        subjects: subjects.filter((r) => r.numeric != null || r.notation)
-      };
-    }).filter((s) => s.subjects.length > 0 || s.is_current);
-    const termAverages = semesters2.map((s) => s.term_average).filter((n) => n != null);
-    const yearAverage = termAverages.length > 0 ? Math.round(termAverages.reduce((a, b) => a + b, 0) / termAverages.length * 100) / 100 : null;
-    const yearGpa = gpaFor(semesters2.flatMap((sem) => sem.gpaEntries));
-    return {
-      academic_year: { id: year.id, name: year.name, status: year.status },
-      year_average: yearAverage,
-      gpa: yearGpa.gpa,
-      total_credits: yearGpa.total_credits,
-      semesters: semesters2.map(({ gpaEntries: _drop, ...rest }) => rest),
-      gpaEntries: semesters2.flatMap((sem) => sem.gpaEntries)
-    };
-  }).filter((y) => y.semesters.length > 0);
-  const allTermAverages = years.flatMap((y) => y.semesters.map((s) => s.term_average)).filter((n) => n != null);
-  const cumulativeAverage = allTermAverages.length > 0 ? Math.round(allTermAverages.reduce((a, b) => a + b, 0) / allTermAverages.length * 100) / 100 : null;
-  const cumulative = gpaFor(years.flatMap((y) => y.gpaEntries));
-  return {
-    student: studentRef4(student),
-    school: schoolIdentity(),
-    issued_at: DEMO_TODAY_ISO,
-    years: years.map(({ gpaEntries: _drop, ...rest }) => rest),
-    cumulative_average: cumulativeAverage,
-    cumulative_gpa: cumulative.gpa,
-    total_credits: cumulative.total_credits
-  };
-}
-var NOTATION = {
-  enrolled: null,
-  audit: "AU",
-  withdraw_passing: "W/P",
-  withdraw_failing: "W/F"
-};
-var reportsHandlers = [
-  // ── Student picker source (self-contained for the Reports module) ────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/students`, ({ request }) => {
-    const url2 = new URL(request.url);
-    const page = listStudents({
-      ...listParamsFrom(url2),
-      status: url2.searchParams.get("status")
-    });
-    return import_msw18.HttpResponse.json({ ...page, items: page.items.map(studentRef4) });
-  }),
-  // ── Report card (self) ───────────────────────────────────────────────────────────
-  // NOTE: /me must be registered before the query-based route so MSW matches it first.
-  import_msw18.http.get(`${API_BASE_URL}/reports/report-card/me`, ({ request, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    const student = selfStudent();
-    if (!student) return errorResponse(404, "no_records", "No report card is available.");
-    const url2 = new URL(request.url);
-    const semester = D17.semesters.find((s) => s.id === url2.searchParams.get("semester_id")) ?? getActiveSemester();
-    if (!semester) return errorResponse(409, "no_active_semester", "No active session is configured.");
-    if (url2.searchParams.get("kind") === "midterm") {
-      return midtermReportResponse(student, semester);
-    }
-    return import_msw18.HttpResponse.json(buildReportCard(student, semester, true));
-  }),
-  // ── Report card (by student_id; P/S any, teacher own students) ───────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/report-card`, ({ request, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    const url2 = new URL(request.url);
-    const studentId = url2.searchParams.get("student_id");
-    if (!studentId) return errorResponse(422, "validation_error", "student_id is required.");
-    if (role === "student") {
-      return errorResponse(403, "forbidden", "Use your own report card.");
-    }
-    const student = getStudent(studentId);
-    if (!student) return errorResponse(404, "student_not_found", "Student not found.");
-    const semester = D17.semesters.find((s) => s.id === url2.searchParams.get("semester_id")) ?? getActiveSemester();
-    if (!semester) return errorResponse(409, "no_active_semester", "No active session is configured.");
-    if (url2.searchParams.get("kind") === "midterm") {
-      return midtermReportResponse(student, semester);
-    }
-    return import_msw18.HttpResponse.json(buildReportCard(student, semester, false));
-  }),
-  /*
-   * D32 (brief §6) — the Dean's explicit mid-term freeze.
-   *
-   * Lives in THIS file rather than in `settings.ts`, even though the path is under
-   * `/settings`, because the snapshot store and `buildReportCard` are here. Same
-   * reasoning as the server, where `reports/freeze.py` owns the computation and
-   * `settings/service` just calls it: a snapshot IS a report card, and putting the
-   * shaping logic anywhere else would guarantee the two drift.
-   */
-  import_msw18.http.post(`${API_BASE_URL}/settings/semesters/:semesterId/midterm-freeze`, ({ params, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    if (role !== "principal") {
-      return errorResponse(403, "forbidden", "Only the Dean may freeze mid-session grades.");
-    }
-    const semester = D17.semesters.find((sem) => sem.id === String(params.semesterId));
-    if (!semester) return errorResponse(404, "not_found", "Semester not found.");
-    const start = semester.midterm_submission_start;
-    const end = semester.midterm_submission_end;
-    if (!start || !end) {
-      return errorResponse(
-        422,
-        "no_midterm_window",
-        "This session has no mid-session grading period configured, so there are no mid-session grades to freeze."
-      );
-    }
-    if (new Date(DEMO_TODAY_ISO).getTime() <= new Date(end).getTime()) {
-      return errorResponse(
-        409,
-        "midterm_window_open",
-        "The mid-session grading period is still open. Mid-session grades can be frozen once it closes."
-      );
-    }
-    const semesterOfferings = new Set(
-      D17.offerings.filter((o) => o.semester_id === semester.id).map((o) => o.id)
-    );
-    const studentIds = new Set(
-      D17.enrollments.filter((e) => semesterOfferings.has(e.offering_id) && !e.unenrolled_at).map((e) => e.student_id)
-    );
-    let written = 0;
-    for (const id of studentIds) {
-      const student = getStudent(id);
-      if (!student) continue;
-      freezeMidtermFor(student, semester);
-      written += 1;
-    }
-    return import_msw18.HttpResponse.json({
-      snapshots_written: written,
-      semester_id: semester.id,
-      frozen_at: DEMO_TODAY_ISO
-    });
-  }),
-  // ── Transcript (multi-year; Principal / Secretary ONLY — D26) ────────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/transcript`, ({ request, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    if (role !== "principal" && role !== "secretary") {
-      return errorResponse(403, "forbidden", "The transcript is restricted to principals and secretaries.");
-    }
-    const url2 = new URL(request.url);
-    const studentId = url2.searchParams.get("student_id");
-    if (!studentId) return errorResponse(422, "validation_error", "student_id is required.");
-    const student = getStudent(studentId);
-    if (!student) return errorResponse(404, "student_not_found", "Student not found.");
-    return import_msw18.HttpResponse.json(buildTranscript(student));
-  }),
-  // ── Offering grade summary ───────────────────────────────────────────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/offering-grades`, ({ request, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    const url2 = new URL(request.url);
-    const offeringId = url2.searchParams.get("offering_id");
-    if (!offeringId) return errorResponse(422, "validation_error", "offering_id is required.");
-    const offering = getOffering(offeringId);
-    if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    const students2 = rosterFor(offering.id);
-    const rows = students2.map((s) => {
-      const term = computeTermGrade(s.id, offering.id);
-      return {
-        student: { id: s.id, full_name: s.full_name, student_number: s.student_number },
-        numeric: term.numeric,
-        letter: term.letter
-      };
-    }).sort((a, b) => a.student.full_name.localeCompare(b.student.full_name));
-    const graded = rows.filter((r) => r.numeric != null);
-    const classAverage = graded.length > 0 ? Math.round(graded.reduce((sum, r) => sum + (r.numeric ?? 0), 0) / graded.length * 100) / 100 : null;
-    const scale = D17.grading_scales.find((g) => g.academic_year_id === getActiveYear()?.id);
-    const distribution = (scale?.bands ?? []).map((b) => ({
-      letter: b.letter,
-      count: rows.filter((r) => r.letter === b.letter).length
-    }));
-    const reportSem = getSemester(offering.semester_id);
-    return import_msw18.HttpResponse.json({
-      // One shared ref replaces the flat `id` + `section_id` + `section_name` +
-      // `subject_name` quartet — four fields describing what `offering.label` says once.
-      offering: offeringRef7(offering),
-      // The OFFERING's term, not the school's active one: this report is read for archived
-      // terms too, where "the active semester" would name the wrong period.
-      semester: reportSem ? semesterRef2(reportSem) : null,
-      students: rows,
-      class_average: classAverage,
-      distribution
-    });
-  }),
-  // ── Attendance summary (per offering) ────────────────────────────────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/attendance`, ({ request, cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    const url2 = new URL(request.url);
-    const offeringId = url2.searchParams.get("offering_id");
-    if (!offeringId) return errorResponse(422, "validation_error", "offering_id is required.");
-    const offering = getOffering(offeringId);
-    if (!offering) return errorResponse(404, "offering_not_found", "Offering not found.");
-    const summary = attendanceSummaryForOffering(offering.id);
-    const sem = getSemester(offering.semester_id);
-    return import_msw18.HttpResponse.json({
-      offering: offeringRef7(offering),
-      // The OFFERING's term, not the school's active one.
-      semester: sem ? semesterRef2(sem) : null,
-      summary
-    });
-  }),
-  // ── Enrollment / headcount report ────────────────────────────────────────────────
-  import_msw18.http.get(`${API_BASE_URL}/reports/enrollment`, ({ cookies }) => {
-    const role = sessionRole7(cookies);
-    if (!role) return errorResponse(401, "unauthenticated", "Not signed in.");
-    if (role !== "principal" && role !== "secretary") {
-      return errorResponse(403, "forbidden", "Enrollment reports are restricted to principals and secretaries.");
-    }
-    const activeStudents = D17.students.filter((s) => s.status === "Registered");
-    const byProgrammeMap = /* @__PURE__ */ new Map();
-    for (const s of activeStudents) {
-      const programme = D17.programs.find((pr) => pr.id === s.program_id)?.name;
-      if (!programme) continue;
-      byProgrammeMap.set(programme, (byProgrammeMap.get(programme) ?? 0) + 1);
-    }
-    const byProgramme = [...byProgrammeMap.entries()].map(([programme, count]) => ({ programme, count })).sort((a, b) => a.programme.localeCompare(b.programme));
-    const liveOfferings = offeringsForYear(getActiveYear()?.id ?? "").filter(
-      (o) => !o.is_archived
-    );
-    const byOffering = liveOfferings.map((offering) => ({
-      offering: offeringRef7(offering),
-      enrolled: rosterFor(offering.id).length,
-      capacity: offering.capacity
-    }));
-    return import_msw18.HttpResponse.json({
-      totals: { students: activeStudents.length, offerings: liveOfferings.length },
-      by_programme: byProgramme,
-      by_offering: byOffering
-    });
-  })
-];
-
-// src/shared/api/mocks/handlers/timetable.ts
-var import_msw19 = require("msw");
-var DAY_NAMES = {
-  1: "Monday",
-  2: "Tuesday",
-  3: "Wednesday",
-  4: "Thursday",
-  5: "Friday"
-};
-function sessionRole8(cookies) {
-  return cookies["sis_mock_session"] ?? "principal";
-}
-function offeringRef8(offering) {
-  const course = getCourse(offering.course_id);
-  const semester = getSemester(offering.semester_id);
-  return {
-    id: offering.id,
-    course: course ? { id: course.id, name: course.name, code: course.code, credits: course.credits } : { id: offering.course_id, name: "Unknown course", code: null, credits: null },
-    semester: semester ? {
-      id: semester.id,
-      name: semester.name,
-      sequence: semester.sequence,
-      is_active: semester.is_active
-    } : null,
-    section_code: offering.section_code,
-    label: offeringLabel(offering)
-  };
-}
-function teacherRef2(teacherId) {
-  const t = getTeacher(teacherId);
-  return {
-    id: teacherId,
-    staff_number: t?.staff_number ?? "",
-    full_name: t?.full_name ?? "Unknown lecturer"
-  };
-}
-function buildView(offerings2, student, yearId) {
-  const days = [1, 2, 3, 4, 5].map((d) => ({
-    day_of_week: d,
-    day_name: DAY_NAMES[d],
-    entries: []
-  }));
-  const byDay = new Map(days.map((d) => [d.day_of_week, d]));
-  const unscheduled = [];
-  for (const offering of offerings2) {
-    const ref = offeringRef8(offering);
-    const teachers2 = offering.teacher_ids.map(teacherRef2);
-    const meetings = meetingsForOffering(offering.id);
-    if (meetings.length === 0) {
-      unscheduled.push({ offering: ref, teachers: teachers2 });
-      continue;
-    }
-    for (const m of meetings) {
-      byDay.get(m.day_of_week)?.entries.push({
-        meeting_id: m.id,
-        offering: ref,
-        teachers: teachers2,
-        room: m.room,
-        day_of_week: m.day_of_week,
-        start_time: m.start_time,
-        end_time: m.end_time
-      });
-    }
-  }
-  const labelOf = (row) => String(row.offering?.label ?? "");
-  for (const d of days) {
-    d.entries.sort(
-      (a, b) => String(a.start_time).localeCompare(String(b.start_time)) || labelOf(a).localeCompare(labelOf(b))
-    );
-  }
-  unscheduled.sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
-  return {
-    student: student ? {
-      id: student.id,
-      full_name: student.full_name,
-      student_number: student.student_number
-    } : null,
-    academic_year_id: yearId,
-    days,
-    unscheduled
-  };
-}
-function studentOfferings(studentId, yearId) {
-  return yearId ? offeringsForStudentInYear(studentId, yearId) : currentOfferingsFor(studentId);
-}
-var timetableHandlers = [
-  // ── GET /timetable/me — the caller's own week ─────────────────────────────────
-  import_msw19.http.get(`${API_BASE_URL}/timetable/me`, ({ cookies, request }) => {
-    const role = sessionRole8(cookies);
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id");
-    if (role === "student") {
-      const student = currentDemoStudent(role);
-      if (!student) return errorResponse(404, "student_not_found", "Student profile not found.");
-      return import_msw19.HttpResponse.json(buildView(studentOfferings(student.id, yearId), student, yearId));
-    }
-    if (role === "teacher") {
-      const teacher = currentDemoTeacher(role);
-      const owned = teacher ? offeringsOwnedByTeacher(teacher.id) : [];
-      const scoped = yearId ? owned.filter((o) => yearIdOfOffering(o.id) === yearId) : owned;
-      return import_msw19.HttpResponse.json(buildView(scoped, void 0, yearId));
-    }
-    return import_msw19.HttpResponse.json(buildView([], void 0, yearId));
-  }),
-  // ── GET /timetable/students/{id} — any student's week (P/S) ───────────────────
-  import_msw19.http.get(`${API_BASE_URL}/timetable/students/:studentId`, ({ params, cookies, request }) => {
-    const role = sessionRole8(cookies);
-    if (role !== "principal" && role !== "secretary") {
-      return errorResponse(403, "forbidden", "Only the office can view another student\u2019s timetable.");
-    }
-    const student = getStudent(String(params.studentId));
-    if (!student) return errorResponse(404, "student_not_found", "Student not found.");
-    const url2 = new URL(request.url);
-    const yearId = url2.searchParams.get("academic_year_id");
-    return import_msw19.HttpResponse.json(buildView(studentOfferings(student.id, yearId), student, yearId));
-  })
-];
-
-// src/shared/api/mocks/handlers/index.ts
-var handlers = [
-  ...authHandlers,
-  ...settingsHandlers,
-  ...coursesHandlers,
-  ...programsHandlers,
-  ...prerequisitesHandlers,
-  ...studentsHandlers,
-  ...admissionsHandlers,
-  // D38 — declared AFTER the applications handlers, but the paths cannot collide: they are
-  // a separate prefix (`/pending-applications`), which is why the server uses one too.
-  ...pendingApplicationsHandlers,
-  ...teachersHandlers,
-  ...offeringsHandlers,
-  ...assessmentsHandlers,
-  ...gradesHandlers,
-  ...revisionsHandlers,
-  ...attendanceHandlers,
-  ...announcementsHandlers,
-  ...eventsHandlers,
-  ...dashboardHandlers,
-  ...reportsHandlers,
-  ...timetableHandlers
 ];
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  handlers
+  DEMO_DATASET,
+  DEMO_TODAY_ISO,
+  gradesHandlers,
+  offeringsHandlers,
+  offeringsOwnedByTeacher,
+  studentsHandlers,
+  teachersHandlers
 });
 /*! Bundled license information:
 

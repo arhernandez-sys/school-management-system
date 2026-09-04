@@ -127,6 +127,20 @@ export interface DemoProgram {
  * `term_order` drives display order because "Spring 1" sorts before "Summer 1"
  * alphabetically, so the label can never be the ordering key.
  */
+/**
+ * Who heads which programme (D43). Mirrors the `program_heads` table.
+ *
+ * Many-to-many on purpose, like the real one: a lecturer can head two programmes and a
+ * programme can have co-heads. Note the appointment does NOT imply the lecturer's
+ * `users.role` is `hod` — the server keeps those two acts apart and so does the seed.
+ */
+export interface DemoProgramHead {
+  id: string;
+  program_id: string;
+  teacher_id: string;
+  appointed_at: string;
+}
+
 export interface DemoProgramCourse {
   id: string;
   program_id: string;
@@ -728,6 +742,8 @@ export interface DemoDataset {
   courses: DemoCourse[];
   programs: DemoProgram[];
   program_courses: DemoProgramCourse[];
+  /** D43 — HOD appointments. */
+  program_heads: DemoProgramHead[];
   course_prerequisites: DemoCoursePrerequisite[];
   offerings: DemoOffering[];
   teachers: DemoTeacher[];

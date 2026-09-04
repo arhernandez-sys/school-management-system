@@ -20,11 +20,16 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { StatCard, StatusBadge, EmptyState } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
-import type { TeacherDashboard as TeacherDashboardData } from '../types';
+import type {
+  TeacherDashboard as TeacherDashboardData,
+  HodDashboard as HodDashboardData,
+} from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
 
 export interface TeacherDashboardProps {
-  data: TeacherDashboardData;
+  /** D43 — also accepts the HOD variant, which is the same payload with an honest
+   *  discriminator. A head's landing page IS their own teaching. */
+  data: TeacherDashboardData | HodDashboardData;
 }
 
 function formatDate(iso: string | null): string {

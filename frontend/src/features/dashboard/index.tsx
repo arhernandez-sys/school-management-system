@@ -18,12 +18,20 @@ import type { DashboardResponse } from './types';
  */
 function renderVariant(data: DashboardResponse) {
   switch (data.role) {
+    // D43 — an HOD lands on their own teaching, so their payload IS a lecturer's and the
+    // lecturer layout is the right one. Pairing it with `teacher` here is not optional:
+    // `default` below renders AdminDashboard, and a teacher-shaped payload has none of
+    // its fields, so a head's dashboard would have come up empty or thrown.
     case 'teacher':
+    case 'hod':
       return <TeacherDashboard data={data} />;
     case 'student':
       return <StudentDashboard data={data} />;
     case 'secretary':
       return <SecretaryDashboard data={data} />;
+    // The Auditor's payload is the admin one, school-wide and read-only. Named rather
+    // than left to `default` so the mapping is a decision on the page, not a fallthrough.
+    case 'auditor':
     default:
       return <AdminDashboard data={data} />;
   }

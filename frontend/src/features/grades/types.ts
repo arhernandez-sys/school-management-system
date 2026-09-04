@@ -148,20 +148,20 @@ export interface Gradebook {
   /** Whether the current viewer may write (lecturer owns it). */
   can_edit: boolean;
   /**
-   * True once the term's `grade_submission_deadline` has passed (D30 §D6). Kept
-   * SEPARATE from `can_edit`, which still means "your role and ownership permit
-   * writing here" — a shut deadline and a Registrar's read-only view are different
-   * situations and the Lecturer needs to know which one they are looking at.
+   * D30 §D6, **retired by D42 §5**. Always `false` / `null` — the end-of-session grade
+   * submission deadline is neither configurable nor enforced. Kept on the type because
+   * the server still sends both keys; nothing in the app reads them.
    */
   grade_window_closed: boolean;
   grade_submission_deadline: string | null;
   /**
-   * D33 (client ask 7) — true while the term's mid-term grading period is RUNNING, during
-   * which nobody enters a grade for this term. A third flag rather than a value folded
-   * into `grade_window_closed`, for the reason that field's note gives: the three states
-   * are answered differently, and `midterm_frozen` is the only one that resolves on its
-   * own. The dates travel with it so the UI can name the reopen date rather than saying
-   * "later".
+   * D33 (client ask 7) — true while the term's mid-session grading period is RUNNING,
+   * during which nobody enters a grade for this term. The only closing window left.
+   *
+   * Kept SEPARATE from `can_edit`, which means "your role and ownership permit writing
+   * here": a running freeze and a Registrar's read-only view are different situations and
+   * the Lecturer needs to know which one they are looking at. The dates travel with it so
+   * the UI can name the reopen date rather than saying "later".
    */
   midterm_frozen: boolean;
   midterm_submission_start: string | null;

@@ -15,10 +15,10 @@ import {
   useTheme,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import { YearSelect } from '@shared/components';
+import { SearchableSelect, YearSelect } from '@shared/components';
 import type { YearOption } from '@shared/hooks/useYearFilter';
 import { strings } from '@i18n/strings';
-import { GENDERS, GENDER_LABEL } from '@shared/types/enums';
+import { CIVIL_STATUSES, GENDERS, GENDER_LABEL } from '@shared/types/enums';
 import type { StudentStatus } from '@shared/types/enums';
 import { STUDENT_STATUS_LABEL } from '../constants';
 import { EMPTY_STUDENT_FILTERS, activeStudentFilterCount } from './studentFilters';
@@ -34,7 +34,13 @@ export interface StudentFiltersDialogProps {
   years: YearOption[];
   activeYearId?: string;
   yearsLoading?: boolean;
+  /**
+   * The `religions` table's names (D39/D40), already merged with any legacy religion
+   * still stored on a student — see `StudentsListPage`, which builds it.
+   */
   religionOptions: string[];
+  /** Legacy civil statuses present in the register that `CIVIL_STATUSES` omits. */
+  legacyCivilStatuses?: string[];
   programOptions: { id: string; code: string; name: string }[];
   offeringOptions: { id: string; label: string; course_name?: string | null }[];
   offeringsLoading?: boolean;
@@ -66,6 +72,7 @@ export function StudentFiltersDialog({
   activeYearId,
   yearsLoading,
   religionOptions,
+  legacyCivilStatuses = [],
   programOptions,
   offeringOptions,
   offeringsLoading,
@@ -188,15 +195,50 @@ export function StudentFiltersDialog({
             value={draft.religion}
             onChange={(e) => set('religion', e.target.value)}
             fullWidth
-            helperText={religionOptions.length === 0 ? 'None recorded yet' : undefined}
+            helperText={
+              religionOptions.length === 0 ? 'No religions configured yet' : undefined
+            }
           >
-            {/* DISCOVERED, not hardcoded: religion is free text on the admissions form
-                (D32). Empty until admissions has run, which is why the helper text says
-                so rather than showing an empty menu with no explanation. */}
+            {/* D40 — the options are the client-owned `religions` table, not the values
+                DISCOVERED in the register as they were under D32. The Dean can now filter
+                by a religion nobody has been recorded with yet, which is what "show me the
+                Methodist students" has to be able to answer before it answers "none".
+
+                The parent merges any religion still stored that the table does not carry,
+                so an imported student stays selectable — the column is free text and
+                always will be (D37). */}
             <MenuItem value="">All religions</MenuItem>
             {religionOptions.map((r) => (
               <MenuItem key={r} value={r}>
                 {r}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            size="small"
+            label="Civil status"
+            value={draft.civilStatus}
+            onChange={(e) => set('civilStatus', e.target.value)}
+            fullWidth
+          >
+            {/* D40 — a fixed vocabulary, like Gender and unlike Religion: these four are
+                the only values the forms write, and the server folds recognised spellings
+                onto them. Nothing to discover from the directory. */}
+            <MenuItem value="">All civil statuses</MenuItem>
+            {CIVIL_STATUSES.map((cs) => (
+              <MenuItem key={cs} value={cs}>
+                {cs}
+              </MenuItem>
+            ))}
+            {/* A value the register holds that the four do not cover. Offered rather than
+                dropped: the column is free text, the Religion column beside it shows such
+                a value in the table, and a filter that cannot select what the table
+                displays makes those students unfindable. */}
+            {legacyCivilStatuses.map((cs) => (
+              <MenuItem key={cs} value={cs}>
+                {cs} (as recorded)
               </MenuItem>
             ))}
           </TextField>
@@ -218,22 +260,22 @@ export function StudentFiltersDialog({
           </TextField>
 
           <Box sx={{ gridColumn: { sm: '1 / -1' } }}>
-            <TextField
-              select
-              size="small"
+            {/* D43-b — every offering in the year is a long list, and the thing people
+                know is the code. Typing it beats scrolling. */}
+            <SearchableSelect
               label={strings.terms.courseOffering}
               value={draft.offeringId}
-              onChange={(e) => set('offeringId', e.target.value)}
+              onChange={(v) => set('offeringId', v)}
+              allOption="All offerings"
+              options={offeringOptions.map((o) => ({
+                value: o.id,
+                label: o.course_name ?? o.label,
+                hint: o.label,
+              }))}
               disabled={offeringsLoading}
+              loading={offeringsLoading}
               fullWidth
-            >
-              <MenuItem value="">All offerings</MenuItem>
-              {offeringOptions.map((o) => (
-                <MenuItem key={o.id} value={o.id}>
-                  {o.course_name ? `${o.label} — ${o.course_name}` : o.label}
-                </MenuItem>
-              ))}
-            </TextField>
+            />
           </Box>
         </Box>
       </DialogContent>

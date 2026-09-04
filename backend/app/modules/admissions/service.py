@@ -34,6 +34,7 @@ from app.common.enums import (
     EducationLevel,
     Role,
     StudentStatus,
+    normalise_civil_status,
     normalise_gender,
 )
 from app.core.errors import Conflict, NotFound, ValidationError
@@ -550,6 +551,11 @@ def create_application(
             # and passes anything unrecognised through untouched.
             if name == "gender":
                 value = normalise_gender(value)
+            # D40 — `civil_status` is the second free-text vocabulary and gets the same
+            # treatment: 'single' and 'Single' are one value to MariaDB's collation but
+            # two to the browser, and the mismatched one renders a blank <select>.
+            if name == "civil_status":
+                value = normalise_civil_status(value)
             setattr(row, name, value)
     # Booleans are `bool | None` on the wire so a PATCH can leave them alone; the column
     # is NOT NULL, so an omitted one has to fall back to its default rather than to None.
@@ -611,6 +617,8 @@ def update_application(
             value = value.strip() or None
         if name == "gender":
             value = normalise_gender(value)  # D37 — see `create_application`
+        if name == "civil_status":
+            value = normalise_civil_status(value)  # D40 — see `create_application`
         setattr(row, name, value)
 
     # Required names cannot be cleared to null even though the schema allows the key.
@@ -868,7 +876,10 @@ def accept_application(
         phone=row.phone,
         ssno=row.ssno,
         religion=row.religion,
-        civil_status=row.civil_status,
+        # D40 — normalised on the copy for exactly the reason `gender` is (see above):
+        # an application written before the dropdown shipped still holds whatever was
+        # typed, and copying it verbatim would spread the drift into the register.
+        civil_status=normalise_civil_status(row.civil_status),
         street=row.street,
         city_town_village=row.city_town_village,
         district=row.district,
@@ -1535,6 +1546,8 @@ def _apply_pending_fields(row: ApplicationTemp, payload: PendingApplicationWrite
             value = value.strip() or None
         if name == "gender":
             value = normalise_gender(value)  # D37 -- one canonical vocabulary
+        if name == "civil_status":
+            value = normalise_civil_status(value)  # D40 -- one canonical vocabulary
         setattr(row, name, value)
 
     # The names are NOT NULL, and the strip above can turn "  " into None.

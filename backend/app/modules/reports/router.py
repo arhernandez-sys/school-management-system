@@ -47,8 +47,13 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 _ERR = {"model": ErrorResponse}
-_staff = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
-_admins = require_role(Role.PRINCIPAL, Role.SECRETARY)
+_staff = require_role(
+    Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER, Role.HOD, Role.AUDITOR
+)
+#: D43 — the Auditor joins the admins here (this gate carries TRANSCRIPT access) but
+#: the HOD does NOT: their reports reach is their programme's gradebooks, not a
+#: permanent record they have no role in issuing.
+_admins = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
 #: D32 (brief §4) — a student's own report card is grade information, so it is gated by
 #: the Dean's `students_can_view_grades` switch exactly like `/grades/me` (403
 #: `grades_hidden` when off). Staff report cards below are NOT gated: the switch governs

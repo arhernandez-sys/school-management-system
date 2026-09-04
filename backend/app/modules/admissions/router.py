@@ -101,7 +101,9 @@ pending_applications_router = APIRouter(
 
 _ERR = {"model": ErrorResponse}
 #: Registrar + Dean. Admission is administration (§D14).
-_admissions = require_role(Role.PRINCIPAL, Role.SECRETARY)
+#: D43 — the Auditor reads admissions; every write here is refused centrally. The HOD
+#: is absent: admissions is the Registrar's, and a head has no part in it.
+_admissions = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
 #: The Dean alone decides a credit transfer (brief §13).
 _dean = require_role(Role.PRINCIPAL)
 

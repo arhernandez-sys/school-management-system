@@ -4,6 +4,7 @@ import type {
   ProgramCourseUpdatePayload,
   ProgramCourseWritePayload,
   ProgramDetail,
+  ProgramHeadsResponse,
   ProgramListItem,
   ProgramWritePayload,
   ProgramsListParams,
@@ -75,5 +76,31 @@ export async function removeProgramCourse(
   const res = await api.delete<ProgramDetail>(
     `/programs/${programId}/courses/${programCourseId}`,
   );
+  return res.data;
+}
+
+/** GET /programs/{id}/heads — who heads this programme (D43). */
+export async function getProgramHeads(
+  programId: string,
+  signal?: AbortSignal,
+): Promise<ProgramHeadsResponse> {
+  const res = await api.get<ProgramHeadsResponse>(`/programs/${programId}/heads`, { signal });
+  return res.data;
+}
+
+/**
+ * PUT /programs/{id}/heads — replace the appointments (Dean only).
+ *
+ * A whole-list PUT, not add/remove: the screen edits a multi-select and submits it, and
+ * swapping two co-heads in one action would otherwise be an add plus a delete that can
+ * half-fail. `[]` clears the appointments.
+ */
+export async function setProgramHeads(
+  programId: string,
+  teacherIds: string[],
+): Promise<ProgramHeadsResponse> {
+  const res = await api.put<ProgramHeadsResponse>(`/programs/${programId}/heads`, {
+    teacher_ids: teacherIds,
+  });
   return res.data;
 }

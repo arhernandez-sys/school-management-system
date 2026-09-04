@@ -9,6 +9,7 @@ import {
   createTeacher,
   deleteTeacher,
   getTeacher,
+  getTeacherYears,
   listTeachers,
   setTeacherStatus,
   updateTeacher,
@@ -19,7 +20,15 @@ import type { TeacherStatus } from '@shared/types/enums';
 export const teacherKeys = {
   all: ['teachers'] as const,
   list: (params: TeachersListParams) => [...teacherKeys.all, 'list', params] as const,
-  detail: (id: string) => [...teacherKeys.all, 'detail', id] as const,
+  /**
+   * The YEAR is part of the key (D42 §2), not just the request. Two years' assignments are
+   * two different answers for the same lecturer, and sharing one cache entry would show
+   * last year's courses for an instant after every switch — the same reasoning that put
+   * `kind` in the report-card key.
+   */
+  detail: (id: string, yearId?: string) =>
+    [...teacherKeys.all, 'detail', id, yearId ?? null] as const,
+  years: (id: string) => [...teacherKeys.all, 'years', id] as const,
 };
 
 // ── Reads ──────────────────────────────────────────────────────────────────────
@@ -36,12 +45,41 @@ export function useTeachersList(params: TeachersListParams, enabled = true) {
   });
 }
 
-/** GET /teachers/{id} — full detail incl. classes_taught. */
-export function useTeacherDetail(teacherId: string | undefined) {
+/**
+ * GET /teachers/{id} — full detail incl. classes_taught, optionally year-scoped.
+ *
+ * `enabled` exists for the profile's year switcher (D42 §2). The selected year is resolved
+ * from `useTeacherYears`, so on the first render it is still `undefined` — and an UNSCOPED
+ * read is not a harmless approximation of the scoped one here: it returns every assignment
+ * the lecturer has ever held. Firing it would flash all years' courses under a switcher
+ * already displaying one year, then quietly swap them. The profile therefore waits for the
+ * years, and asks once.
+ *
+ * (The student profile deliberately does NOT do this: its unscoped read answers the ACTIVE
+ * semester, which is what the switcher lands on anyway, so there is nothing to flash.)
+ */
+export function useTeacherDetail(
+  teacherId: string | undefined,
+  academicYearId?: string,
+  enabled = true,
+) {
   return useQuery({
-    queryKey: teacherKeys.detail(teacherId ?? ''),
+    queryKey: teacherKeys.detail(teacherId ?? '', academicYearId),
+    enabled: Boolean(teacherId) && enabled,
+    queryFn: ({ signal }) => getTeacher(teacherId as string, academicYearId, signal),
+    // Keep the previous year's answer on screen while the next one loads, so switching
+    // year does not blank the whole profile body between two renders.
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** GET /teachers/{id}/years — the years this lecturer taught in (for the year switcher). */
+export function useTeacherYears(teacherId: string | undefined) {
+  return useQuery({
+    queryKey: teacherKeys.years(teacherId ?? ''),
     enabled: Boolean(teacherId),
-    queryFn: ({ signal }) => getTeacher(teacherId as string, signal),
+    queryFn: ({ signal }) => getTeacherYears(teacherId as string, signal),
+    staleTime: 5 * 60 * 1000, // a lecturer's teaching history is stable within a session
   });
 }
 
@@ -63,7 +101,7 @@ export function useUpdateTeacher(teacherId: string) {
   return useMutation({
     mutationFn: (body: TeacherUpdateBody) => updateTeacher(teacherId, body),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: teacherKeys.detail(teacherId) });
+      void qc.invalidateQueries({ queryKey: [...teacherKeys.all, 'detail', teacherId] });
       void qc.invalidateQueries({ queryKey: [...teacherKeys.all, 'list'] });
     },
   });
@@ -75,7 +113,7 @@ export function useSetTeacherStatus(teacherId: string) {
   return useMutation({
     mutationFn: (status: TeacherStatus) => setTeacherStatus(teacherId, status),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: teacherKeys.detail(teacherId) });
+      void qc.invalidateQueries({ queryKey: [...teacherKeys.all, 'detail', teacherId] });
       void qc.invalidateQueries({ queryKey: [...teacherKeys.all, 'list'] });
     },
   });

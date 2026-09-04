@@ -32,7 +32,7 @@ from app.common.enums import (
     StudentStatus,
     TeacherStatus,
 )
-from app.core.errors import Conflict
+from app.core.errors import Conflict, Forbidden
 from app.core.rbac import teacher_offering_ids
 from app.core.timeutil import school_today
 from app.modules.announcements import service as announcements_service
@@ -52,6 +52,7 @@ from app.modules.offerings.models import (
 )
 from app.modules.dashboard.schemas import (
     AdminDashboard,
+    AuditorDashboard,
     AdminStats,
     DashboardAnnouncement,
     DashboardPerson,
@@ -59,6 +60,7 @@ from app.modules.dashboard.schemas import (
     EnrollmentByProgrammeItem,
     EnrollmentTrendItem,
     GradeDistributionItem,
+    HodDashboard,
     PersonStatus,
     SecretaryDashboard,
     SecretaryEnrollmentItem,
@@ -1078,4 +1080,27 @@ def get_dashboard(db: Session, *, actor: User) -> DashboardResponse:
         return _student_payload(db, actor, year, semester)
     if actor.role == Role.SECRETARY:
         return _secretary_payload(db, actor, year, semester)
-    return _admin_payload(db, actor, year, semester)
+    # D43 — a head lands on their own teaching; an auditor on the school-wide figures.
+    # Both reuse an existing payload and re-tag it, so the client's `role` discriminator
+    # stays truthful (see the schema note).
+    #
+    # `exclude={"role"}` is NOT cosmetic. `_teacher_payload` returns a `TeacherDashboard`,
+    # whose `role` field is `Literal["teacher"]` with a default — so its `model_dump()`
+    # carries `role="teacher"`, and splatting that into `HodDashboard` (`Literal["hod"]`)
+    # is a ValidationError, i.e. a 500 on the head's dashboard. Dropping the key lets each
+    # subclass apply its OWN discriminator default, which is the whole point of re-tagging.
+    if actor.role == Role.HOD:
+        return HodDashboard(
+            **_teacher_payload(db, actor, year, semester).model_dump(exclude={"role"})
+        )
+    if actor.role == Role.AUDITOR:
+        return AuditorDashboard(
+            **_admin_payload(db, actor, year, semester).model_dump(exclude={"role"})
+        )
+    if actor.role == Role.PRINCIPAL:
+        return _admin_payload(db, actor, year, semester)
+    # No silent fallback. This used to `return _admin_payload(...)` for anything
+    # unmatched, so ANY role added later would have been handed the Dean's school-wide
+    # dashboard by default — the most privileged view in the app, reached by omission.
+    # Failing closed makes the next role's author add a branch instead of shipping a leak.
+    raise Forbidden("No dashboard is available for this account.")

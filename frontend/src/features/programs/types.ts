@@ -102,3 +102,23 @@ export interface ProgramsListParams {
    *  "Show retired" needs; it wins over `is_active` when both are sent. */
   include_retired?: boolean;
 }
+
+// ── Heads of Department (D43) ──────────────────────────────────────────────────
+/** One head of a programme, named well enough to render without a second call. */
+export interface ProgramHeadItem {
+  teacher_id: string;
+  full_name: string;
+  staff_number: string;
+  /**
+   * The head's LOGIN role. A lecturer can be appointed here while their role is still
+   * `teacher` — appointing the head and granting the reach are two separate acts, and
+   * the screen shows that gap rather than implying the appointment did something it
+   * did not.
+   */
+  role: string | null;
+  appointed_at: string | null;
+}
+
+export interface ProgramHeadsResponse {
+  items: ProgramHeadItem[];
+}

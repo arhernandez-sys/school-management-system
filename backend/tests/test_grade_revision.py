@@ -10,8 +10,10 @@ The load-bearing behaviours pinned here:
     who could file one would leave the trail with no independent authority in it.
   * **An approved revision actually moves the grade**, through `calc`'s graded-row makeup
     arm. A workflow that recorded a decision and changed nothing would be theatre.
-  * **Approval writes through a CLOSED grade-submission window** (client decision, Phase 5)
-    — this is the post-deadline path Phase 3's dormant Dean bypass was pointing at.
+  * **Approval writes through a RUNNING mid-session freeze** (client decision, Phase 5)
+    — this is the post-cutoff path Phase 3's dormant Dean bypass was pointing at. It used
+    to be phrased against the end-of-session grade-submission deadline, which D42 §5
+    retired; the freeze is the window that survived.
   * **One pending request per grade**, enforced by `uq_grade_revision_open` over a generated
     `pending_flag`, with a test that goes round the API to prove the index is real.
 
@@ -459,40 +461,56 @@ class TestAnApprovedRevisionMovesTheGrade:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-class TestThePostDeadlinePath:
+class TestTheDeanWritesThroughTheFreeze:
     """**Phase 3 left the Dean's direct-entry bypass dormant on the note that THIS
-    workflow would be the real post-deadline path.** These tests are that promise kept."""
+    workflow would be the real post-cutoff path.** These tests are that promise kept.
 
-    def _close_the_window(self, db_session, graph) -> None:
-        graph.sem.grade_submission_deadline = datetime.now(tz=timezone.utc) - timedelta(days=2)
+    Was `TestThePostDeadlinePath`. **D42 §5 retired the end-of-session deadline**, so the
+    window a Lecturer is walled out of is now the MID-SESSION FREEZE — the one that
+    survived. The shape of the claim is unchanged: the wall stops the Lecturer, the Dean's
+    approval goes through it.
+
+    Note the ORDER matters and is not incidental. A revision can only be REQUESTED once a
+    mid-session window has closed (`midterm_revision_eligible` rule 1: while the period is
+    open the Lecturer can simply fix the mark), so the request is filed against the closed
+    window `marked` sets up, and only then is the term re-frozen. Filing first and freezing
+    second is the real sequence, not a way around the gate.
+    """
+
+    def _freeze_now(self, db_session, graph) -> None:
+        """Put the term back inside a running mid-session freeze."""
+        now = datetime.now(tz=timezone.utc)
+        graph.sem.midterm_submission_start = now - timedelta(days=1)
+        graph.sem.midterm_submission_end = now + timedelta(days=1)
         db_session.flush()
 
-    def test_a_lecturer_may_still_REQUEST_after_the_deadline(
+    def test_a_lecturer_cannot_write_directly_while_frozen(
         self, client, graph, marked, db_session
     ) -> None:
-        """Requesting writes no grade. Asking the Dean to look at something is exactly what
-        should still be possible once the window has shut."""
+        """The wall. Without this the next test proves nothing — "the Dean's approval
+        landed" is only interesting if the Lecturer's own write would not have."""
         assessment, student, _grade = marked
-        self._close_the_window(db_session, graph)
-        # The direct write is refused...
+        self._freeze_now(db_session, graph)
         direct = client.put(
             f"{A}/{assessment.id}/grades",
             headers=graph.H,
             json={"entries": [{"student_id": str(student.id), "status": "graded", "score": 91}]},
         )
-        assert direct.status_code == 409
-        _assert_envelope(direct.json(), code="grade_window_closed")
-        # ...and the request is not.
-        assert _request(client, graph, assessment, student).status_code == 201
+        assert direct.status_code == 409, direct.text
+        _assert_envelope(direct.json(), code="midterm_frozen")
 
-    def test_the_dean_approves_THROUGH_a_closed_window(
+    def test_the_dean_approves_THROUGH_a_running_freeze(
         self, client, graph, marked, db_session
     ) -> None:
-        """The client decision, and the whole reason the deadline is usable: the cutoff
-        stops Lecturers editing freely, and a revision is the sanctioned exception."""
+        """The client decision, and the whole reason the freeze is usable: it stops
+        Lecturers editing freely, and an approved revision is the sanctioned exception.
+
+        `decide_revision` deliberately does not call `_assert_midterm_not_frozen`; this is
+        the test that keeps that deliberate omission from looking like an oversight.
+        """
         assessment, student, grade = marked
         revision_id = _request(client, graph, assessment, student).json()["id"]
-        self._close_the_window(db_session, graph)
+        self._freeze_now(db_session, graph)
 
         r = client.post(f"{R}/{revision_id}/decision", headers=graph.P, json={"status": "approved"})
         assert r.status_code == 200, r.text
@@ -501,6 +519,23 @@ class TestThePostDeadlinePath:
         row = db_session.get(AssessmentGrade, grade.id)
         assert float(row.makeup_score) == 91.0
         assert float(row.score) == 60.0
+
+    def test_a_retired_end_of_session_deadline_changes_nothing(
+        self, client, graph, marked, db_session
+    ) -> None:
+        """D42 §5 — a term still carrying an expired `grade_submission_deadline` must
+        behave exactly like one that does not. This is the regression that would bite
+        first: the column is still written, and every seeded term from before the change
+        may hold a date in the past."""
+        assessment, student, _grade = marked
+        graph.sem.grade_submission_deadline = _utc(-30)
+        db_session.flush()
+        direct = client.put(
+            f"{A}/{assessment.id}/grades",
+            headers=graph.H,
+            json={"entries": [{"student_id": str(student.id), "status": "graded", "score": 91}]},
+        )
+        assert direct.status_code == 200, direct.text
 
 
 # ════════════════════════════════════════════════════════════════════════════

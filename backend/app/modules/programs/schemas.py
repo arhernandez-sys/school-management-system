@@ -5,6 +5,7 @@ Write models set `extra="forbid"` (api-spec §1.4). Wire format snake_case.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -127,3 +128,36 @@ class ProgramCourseUpdateRequest(BaseModel):
     term_label: str | None = Field(default=None, min_length=1, max_length=50)
     term_order: int | None = Field(default=None, gt=0, le=99)
     is_required: bool | None = None
+
+
+# ── Heads of Department (D43) ──────────────────────────────────────────────────
+class ProgramHeadItem(BaseModel):
+    """One head of this programme, named well enough to render without a second call."""
+
+    model_config = ConfigDict(from_attributes=True)
+    teacher_id: UUID
+    full_name: str
+    staff_number: str
+    #: The head's login role. A profile may be appointed here while their `users.role`
+    #: is still `teacher` — appointing the head and granting the reach are two acts, and
+    #: the screen must be able to SHOW that gap rather than imply the appointment did
+    #: something it did not.
+    role: str | None = None
+    appointed_at: datetime | None = None
+
+
+class ProgramHeadsResponse(BaseModel):
+    items: list[ProgramHeadItem] = Field(default_factory=list)
+
+
+class ProgramHeadsSetRequest(BaseModel):
+    """PUT /programs/{id}/heads — the COMPLETE list of heads, replacing what is there.
+
+    A whole-list PUT rather than add/remove endpoints: the screen edits a multi-select
+    and submits it, and two co-heads swapped in one action would otherwise be an add and
+    a delete that can half-fail. Sending `[]` clears the appointments, which is how a
+    head is removed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    teacher_ids: list[UUID] = Field(default_factory=list)

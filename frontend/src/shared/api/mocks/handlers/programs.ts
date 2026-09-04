@@ -113,6 +113,30 @@ function findProgram(id: string): DemoProgram | undefined {
   return D.programs.find((p) => p.id === id);
 }
 
+/**
+ * Shape a programme's heads for the wire. `role` is the head's LOGIN role, and it is
+ * reported rather than assumed: a lecturer can be appointed here while their account is
+ * still `teacher`, and the card on the programme page warns about exactly that gap.
+ */
+function headsOf(programId: string) {
+  return D.program_heads
+    .filter((h) => h.program_id === programId)
+    .map((h) => {
+      const teacher = D.teachers.find((t) => t.id === h.teacher_id);
+      const user = teacher?.user_id
+        ? D.users.find((u) => u.id === teacher.user_id)
+        : undefined;
+      return {
+        teacher_id: h.teacher_id,
+        full_name: teacher?.full_name ?? 'Unknown',
+        staff_number: teacher?.staff_number ?? '',
+        role: user?.role ?? null,
+        appointed_at: h.appointed_at,
+      };
+    })
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
 export const programsHandlers = [
   http.get(`${API_BASE_URL}/programs`, ({ request }) => {
     const url = new URL(request.url);
@@ -284,6 +308,78 @@ export const programsHandlers = [
       return HttpResponse.json(detail(program));
     },
   ),
+
+  // ── Heads of Department (D43) ─────────────────────────────────────────────────
+  // Declared BEFORE the `/courses/:programCourseId` routes for readability only — the
+  // paths cannot collide (`/heads` is its own segment).
+  http.get(`${API_BASE_URL}/programs/:programId/heads`, ({ params }) => {
+    const program = findProgram(String(params.programId));
+    if (!program) return errorResponse(404, 'not_found', 'Program not found.');
+    return HttpResponse.json({ items: headsOf(program.id) });
+  }),
+
+  http.put(`${API_BASE_URL}/programs/:programId/heads`, async ({ params, request, cookies }) => {
+    // Dean-only, like every other programme write. An HOD appointing themselves head of
+    // a neighbouring department is the role's obvious abuse and this gate is what stops
+    // it — mirrored here because the demo has certified a missing gate before.
+    const denied = assertDean(cookies);
+    if (denied) return denied;
+    const program = findProgram(String(params.programId));
+    if (!program) return errorResponse(404, 'not_found', 'Program not found.');
+
+    const body = (await request.json()) as { teacher_ids?: string[] };
+    const wanted = body.teacher_ids ?? [];
+    const unknown = wanted.filter((id) => !D.teachers.some((t) => t.id === id));
+    if (unknown.length > 0) {
+      return errorResponse(422, 'unknown_teacher', 'One or more lecturers could not be found.');
+    }
+
+    // Diffed, not delete-all-then-insert, so `appointed_at` survives on a head who was
+    // already there — matching the server, where re-saving the list with one name added
+    // must not reset everyone else's appointment date.
+    const existing = D.program_heads.filter((h) => h.program_id === program.id);
+    const keep = existing.filter((h) => wanted.includes(h.teacher_id));
+    const added = wanted
+      .filter((id) => !existing.some((h) => h.teacher_id === id))
+      .map((id) => ({
+        id: `phead-${program.id}-${id}`,
+        program_id: program.id,
+        teacher_id: id,
+        appointed_at: new Date().toISOString(),
+      }));
+    D.program_heads = [
+      ...D.program_heads.filter((h) => h.program_id !== program.id),
+      ...keep,
+      ...added,
+    ];
+
+    // Appointing PROMOTES, removing demotes — mirroring `programs/service._sync_head_roles`
+    // including both of its safeguards, because a demo that promoted where the server did
+    // not would be the fourth recorded case of this layer certifying behaviour the backend
+    // does not have.
+    const loginOf = (teacherId: string) => {
+      const teacher = D.teachers.find((t) => t.id === teacherId);
+      return teacher?.user_id ? D.users.find((u) => u.id === teacher.user_id) : undefined;
+    };
+
+    for (const h of added) {
+      const user = loginOf(h.teacher_id);
+      // Only a plain lecturer is promoted — a Dean who also teaches keeps their account.
+      if (user && user.role === 'teacher') user.role = 'hod';
+    }
+    for (const teacherId of existing
+      .filter((h) => !wanted.includes(h.teacher_id))
+      .map((h) => h.teacher_id)) {
+      const user = loginOf(teacherId);
+      if (!user || user.role !== 'hod') continue;
+      // Still heads another programme? Keep the role — otherwise removing someone from
+      // one of their two departments would revoke access to the other.
+      const stillHeads = D.program_heads.some((h) => h.teacher_id === teacherId);
+      if (!stillHeads) user.role = 'teacher';
+    }
+
+    return HttpResponse.json({ items: headsOf(program.id) });
+  }),
 
   http.delete(
     `${API_BASE_URL}/programs/:programId/courses/:programCourseId`,

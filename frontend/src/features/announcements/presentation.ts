@@ -5,7 +5,7 @@
  * label always carries the meaning; color is never the only signal).
  */
 import type { Role } from '@shared/types/enums';
-import { formatSchoolDate } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
 import { strings } from '@i18n/strings';
 import type { AnnouncementAudience } from './types';
 
@@ -37,6 +37,13 @@ export const RECEIVABLE_AUDIENCES: Record<Role, AnnouncementAudience[]> = {
   secretary: ['all', 'teachers', 'students', 'class'],
   teacher: ['all', 'teachers', 'class'],
   student: ['all', 'students', 'class'],
+  // D43 — an HOD receives exactly what a lecturer does. Heading a programme changes
+  // what they can SEE elsewhere in the app, not which notices are addressed to them.
+  hod: ['all', 'teachers', 'class'],
+  // The Auditor receives nothing targeted — nobody posts to auditors — but reads every
+  // bucket, so the filter offers all four. Note `_authors` on the server does not
+  // include them: they read the feed, they never write to it.
+  auditor: ['all', 'teachers', 'students', 'class'],
 };
 
 /**
@@ -80,35 +87,22 @@ export function formatDate(iso: string | null | undefined): string {
   return formatSchoolDate(d);
 }
 
-/** Format an RFC3339 instant to date + time (detail view). */
+/**
+ * Format an RFC3339 instant to date + time (detail view).
+ *
+ * D42 §6 — delegates to `formatSchoolDateTime` rather than calling
+ * `toLocaleString(undefined, …)`. The browser's locale printed `Aug 24, 2026, 5:00 PM`
+ * here while `formatSchoolDate` above already rendered `24/08/2026` two lines away, so one
+ * announcement showed two different date formats depending on which field you read.
+ */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatSchoolDateTime(iso);
 }
 
-/** For a datetime-local input value (YYYY-MM-DDTHH:mm) → RFC3339-ish, or null. */
-export function localInputToIso(value: string): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
-
-/** RFC3339 → datetime-local input value (YYYY-MM-DDTHH:mm) in local time. */
-export function isoToLocalInput(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-    d.getMinutes(),
-  )}`;
-}
+/*
+ * D42 §6 — `localInputToIso` / `isoToLocalInput` lived here. They existed only to feed a
+ * native `<input type="datetime-local">`, which is gone: `DateTimeField` owns the
+ * local↔UTC conversion for every datetime in the app now, and the announcement form holds
+ * the UTC instant it actually sends.
+ */

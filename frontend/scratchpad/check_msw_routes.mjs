@@ -67,6 +67,11 @@ for (const h of handlers) {
 // that is NOT in the contract is normally a bug (it would 404 against the real backend).
 const DEMO_ONLY = new Set([
   'POST /auth/mock-login', // the demo's role switcher
+  // D43 — the auditor read-only guard. An `http.all('*')` that sits in FRONT of every
+  // handler and returns `undefined` (fall through) for anyone who is not an auditor, so
+  // it is a cross-cutting filter rather than a route. It is the demo's mirror of the
+  // server's central `get_current_user` refusal, and by design it matches no single path.
+  '/.+/ *',
 ]);
 
 const ghosts = [...mocked].filter((r) => !real.has(r) && !DEMO_ONLY.has(r)).sort();

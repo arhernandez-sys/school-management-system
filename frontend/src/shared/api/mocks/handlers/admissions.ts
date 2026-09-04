@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
-import { canonicalGender } from '@shared/types/enums';
+import { canonicalGender, normaliseCivilStatus } from '@shared/types/enums';
 import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, getCourse } from '@shared/api/mocks/demo/dataset';
 import type {
   DemoApplication,
@@ -293,6 +293,13 @@ function applyWritable(app: DemoApplication, body: Record<string, unknown>): voi
     const value = body[key];
     if (BOOLEANS.has(key)) {
       (app as unknown as Record<string, unknown>)[key] = Boolean(value);
+      continue;
+    }
+    if (key === 'civil_status') {
+      // D40 — folded here, mirroring the server's `normalise_civil_status` on this same
+      // arm. It also covers the blank-to-null case the line below handles for everything
+      // else, which is why it returns rather than falling through.
+      app.civil_status = normaliseCivilStatus(value as string | null | undefined);
       continue;
     }
     (app as unknown as Record<string, unknown>)[key] =
@@ -667,7 +674,9 @@ export const admissionsHandlers = [
       // applicant's next of kin and financier were on the frozen application and nowhere
       // on the live record the Registrar actually edits.
       ssno: app.ssno ?? null,
-      civil_status: app.civil_status ?? null,
+      // D40 — normalised on the copy for the same reason `gender` is: an application
+      // written before the dropdown shipped still holds whatever was typed.
+      civil_status: normaliseCivilStatus(app.civil_status),
       street: app.street ?? null,
       city_town_village: app.city_town_village ?? null,
       district: app.district ?? null,

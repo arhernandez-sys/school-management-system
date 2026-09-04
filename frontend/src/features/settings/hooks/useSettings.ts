@@ -4,7 +4,8 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@shared/api/client';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
@@ -241,5 +242,62 @@ export function useUpdateAccount() {
     mutation: {
       onSuccess: () => qc.invalidateQueries({ queryKey: getGetAccountApiV1SettingsAccountGetQueryKey() }),
     },
+  });
+}
+
+// ── Audit log (D43) ────────────────────────────────────────────────────────────
+/**
+ * The audit trail is NOT in the orval-generated surface, so this calls the shared axios
+ * client directly — the same approach `features/offerings/hooks/useOfferings.ts` takes
+ * for its endpoints. Regenerating is not an option: `npm run generate:api` is forbidden
+ * in this repo.
+ */
+export interface AuditLogParams {
+  action?: string;
+  entity_type?: string;
+  actor_user_id?: string;
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  page_size?: number;
+  sort?: string;
+}
+
+export interface AuditLogItem {
+  id: number;
+  actor_user_id: string | null;
+  /** Null when the actor's account was deleted — the FK is ON DELETE SET NULL, so the
+   *  ACTION outlives the actor and the row must still render. */
+  actor_name: string | null;
+  actor_role: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  summary: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AuditLogPage {
+  items: AuditLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export const auditLogKeys = {
+  all: ['audit-log'] as const,
+  list: (params: AuditLogParams) => [...auditLogKeys.all, 'list', params] as const,
+};
+
+/** GET /settings/audit-log — paginated, newest first. Dean + Auditor only. */
+export function useAuditLog(params: AuditLogParams) {
+  return useQuery({
+    queryKey: auditLogKeys.list(params),
+    queryFn: async ({ signal }) => {
+      const res = await api.get<AuditLogPage>('/settings/audit-log', { params, signal });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
   });
 }

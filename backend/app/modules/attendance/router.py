@@ -44,8 +44,12 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
 _ERR = {"model": ErrorResponse}
-_staff = require_role(Role.TEACHER, Role.PRINCIPAL, Role.SECRETARY)
-_teacher = require_role(Role.TEACHER)
+_staff = require_role(
+    Role.TEACHER, Role.PRINCIPAL, Role.SECRETARY, Role.HOD, Role.AUDITOR
+)
+#: D43 — the HOD is a lecturer and records attendance for the offerings they teach.
+#: OWNERSHIP, not this tuple, is what stops them touching a colleague's register.
+_teacher = require_role(Role.TEACHER, Role.HOD)
 # D39 (Meeting #2 item 6) — a graduated student past the school's post-graduation window
 # loses access to their attendance record along with their grades.
 _student = require_role_within_access_window(Role.STUDENT)

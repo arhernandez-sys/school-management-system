@@ -55,6 +55,10 @@ const REPRESENTATIVE_USER_ID: Record<string, string> = {
   secretary: 'user-secretary',
   teacher: 'user-teach-1', // Maria Reyes — leads several Algebra offerings
   student: 'user-stu-1', // Freddy Lopez — active, first-year, MATH1110-01
+  // D43 — a DIFFERENT lecturer from the `teacher` login, so the two roles' dashboards
+  // are visibly different people rather than the same figures under a new label.
+  hod: 'user-teach-2',
+  auditor: 'user-auditor',
 };
 
 function resolveUser(role: string): DemoUser {
@@ -473,6 +477,16 @@ export const dashboardHandlers = [
     if (user.role === 'teacher') return HttpResponse.json(teacherPayload(user));
     if (user.role === 'student') return HttpResponse.json(studentPayload(user));
     if (user.role === 'secretary') return HttpResponse.json(secretaryPayload(user));
+    // D43 — a head's landing page is their own teaching, so this is the LECTURER
+    // payload re-tagged. Without the branch they fell to `adminPayload` below, which
+    // echoes `user.role` — producing admin-shaped data labelled `hod`, which the page
+    // then routes to the lecturer layout. Every field would have been missing.
+    if (user.role === 'hod') {
+      return HttpResponse.json({ ...teacherPayload(user), role: 'hod' as const });
+    }
+    // The Auditor's IS the admin payload, and `adminPayload` already echoes their role,
+    // so this needs no re-tag — but it is named rather than left to the fallthrough, so
+    // the mapping is a decision someone made.
     return HttpResponse.json(adminPayload(user));
   }),
 ];

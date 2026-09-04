@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role
+from app.common.enums import LECTURER_ROLES, Role
 from app.common.schemas import CurrentUser, UserPreferences
 from app.config import Settings
 from app.core.errors import (
@@ -109,7 +109,11 @@ def build_current_user(db: Session, user: User) -> CurrentUser:
                 StudentProfile.deleted_at.is_(None),
             )
         )
-    elif user.role == Role.TEACHER:
+    elif user.role in LECTURER_ROLES:
+        # D43 — `LECTURER_ROLES` is {TEACHER, HOD}, not just TEACHER. An HOD IS a
+        # lecturer with a `teacher_profiles` row, and this id is what the frontend uses
+        # to route "My profile" and to recognise its own rows. Left as `== Role.TEACHER`
+        # it would come back None and an HOD would look like an admin with no profile.
         teacher_profile_id = db.scalar(
             select(TeacherProfile.id).where(
                 TeacherProfile.user_id == user.id,

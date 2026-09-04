@@ -24,6 +24,7 @@ import type {
   OfferingDetail,
   OfferingListParams,
   OfferingListResponse,
+  OfferingUpdateBody,
   RosterEntry,
   StudentRef,
   TeacherAssignBody,
@@ -49,6 +50,33 @@ export function useOfferingsList(params: OfferingListParams) {
       return res.data;
     },
     placeholderData: (prev) => prev, // keep the previous page visible during pagination
+  });
+}
+
+/**
+ * The same filters, unpaginated, for the print sheet (D43).
+ *
+ * Same argument as `useCoursesForPrint`: "print Semester 1 2026" means every offering in
+ * it, not the 25 rows the table is showing. `page_size` goes to the server's ceiling of
+ * 200 (`MAX_PAGE_SIZE`). Unlike the catalog, the offerings list CAN exceed that in a busy
+ * term, which is why the dialog's "showing the first N of M" warning is load-bearing here
+ * rather than merely defensive.
+ *
+ * The server scopes this per caller (Dean/Registrar all, Lecturer their own), so the sheet
+ * a lecturer prints is their own teaching load — correct, and worth knowing.
+ */
+export function useOfferingsForPrint(params: OfferingListParams, enabled: boolean) {
+  const printParams: OfferingListParams = { ...params, page: 1, page_size: 200 };
+  return useQuery({
+    queryKey: [...offeringKeys.list(printParams), 'print'],
+    enabled,
+    queryFn: async ({ signal }) => {
+      const res = await api.get<OfferingListResponse>('/offerings', {
+        params: printParams,
+        signal,
+      });
+      return res.data;
+    },
   });
 }
 
@@ -130,15 +158,37 @@ export function useCreateOffering() {
   });
 }
 
-/*
- * NOTE — no `useUpdateOffering` / `useDeleteOffering`.
+/**
+ * PATCH /offerings/{id} — section code · capacity · archive (Dean/Registrar).
  *
- * `PATCH /offerings/{id}` (section code · capacity · archive) and `DELETE /offerings/{id}`
- * (soft delete) both exist on the server, but no screen calls them yet: an offering is
- * created complete, and the list has no edit or archive affordance. `OfferingUpdateBody`
- * is typed in `../types` so the body is documented when a screen wants it — adding the
- * hook then is three lines. A hook nothing renders is the thing that rots.
+ * D41 — the screen this was waiting for. The note that stood here said adding the hook
+ * would be three lines once something rendered it, and the list's Edit button is that
+ * something. `DELETE /offerings/{id}` is still unused and still has no hook, for the same
+ * reason: nothing calls it.
+ *
+ * **The body is only ever these three**, and the two absences are the whole design.
+ * `course_id` and `semester_id` are the offering's IDENTITY — changing either would
+ * silently move every assessment, grade and enrolment attached to it into a different
+ * course or term — so the server's `OfferingUpdateRequest` does not accept them and the
+ * form renders them read-only rather than pretending.
+ *
+ * Invalidates the LIST as well as the detail: the row prints the section code inside its
+ * server-computed `label`, so an edit that refreshed only the detail would leave the
+ * directory showing the old name of a thing the user just renamed.
  */
+export function useUpdateOffering(offeringId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: OfferingUpdateBody) => {
+      const res = await api.patch<OfferingDetail>(`/offerings/${offeringId}`, body);
+      return res.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: offeringKeys.detail(offeringId) });
+      void qc.invalidateQueries({ queryKey: [...offeringKeys.all, 'list'] });
+    },
+  });
+}
 
 /**
  * PUT /offerings/{id}/meetings — replace the whole weekly schedule (P/S only).

@@ -30,11 +30,17 @@ from datetime import datetime, timezone
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AcademicYearStatus, Role, StudentStatus, normalise_gender
+from app.common.enums import (
+    AcademicYearStatus,
+    Role,
+    StudentStatus,
+    normalise_civil_status,
+    normalise_gender,
+)
 from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
-from app.core.rbac import _teacher_profile_id
+from app.core.rbac import _teacher_profile_id, hod_program_ids
 from app.core.timeutil import school_today
 from app.modules.assessments import release_nudge
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
@@ -219,10 +225,56 @@ def student_offerings_in_year(
     return list(seen.values())
 
 
+def _teacher_owned_offering_ids(
+    db: Session, teacher_id: uuid.UUID, offering_ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Of `offering_ids`, the ones `teacher_id` is assigned to teach.
+
+    **D42 §3.** A Lecturer reaches a student's profile as soon as they share ONE offering
+    with them (`_assert_teacher_can_see_student`). That is the right rule for reachability
+    and the wrong one for content: it admitted them to a page that then listed every course
+    the student takes and every mark in all of them. The client asked for the narrower
+    view — "only theirs" — so both the enrolment list and the assessments tab are filtered
+    through here before they are shaped for the wire.
+
+    Returns a SET rather than filtering in SQL because both callers already hold the
+    offering rows in memory; re-querying them would cost a round trip to answer a question
+    one `IN` can settle.
+    """
+    if not offering_ids:
+        return set()
+    from app.modules.offerings.models import ClassTeacher
+
+    return set(
+        db.scalars(
+            select(ClassTeacher.offering_id).where(
+                ClassTeacher.offering_id.in_(offering_ids),
+                ClassTeacher.teacher_id == teacher_id,
+            )
+        ).all()
+    )
+
+
+def _viewer_teacher_id(db: Session, caller: User | None) -> uuid.UUID | None:
+    """The lecturer profile id to scope a read by, or None for every other role."""
+    if caller is None or caller.role != Role.TEACHER:
+        return None
+    return _teacher_profile_id(db, caller)
+
+
 def _assessments_classes(
-    db: Session, *, student_id: uuid.UUID, academic_year_id: uuid.UUID | None
+    db: Session,
+    *,
+    student_id: uuid.UUID,
+    academic_year_id: uuid.UUID | None,
+    viewer_teacher_id: uuid.UUID | None = None,
 ) -> list[CourseOffering]:
     """The classes that scope the assessments tab.
+
+    `viewer_teacher_id` narrows the result to the offerings that lecturer teaches (D42 §3)
+    — applied LAST, after the year resolution below, so a Lecturer sees their own subset of
+    exactly the classes a Dean would see for the same year rather than a differently
+    resolved set.
 
     An EXPLICIT year is strict — if the student never sat that year the tab is
     empty, rather than silently answering about a different year. With no year
@@ -233,38 +285,47 @@ def _assessments_classes(
     `grades_service.student_assessment_groups`, which re-resolves the course itself.
     """
     if academic_year_id is not None:
-        return [
+        classes = [
             offering
             for offering, _course in student_offerings_in_year(
                 db, student_id=student_id, academic_year_id=academic_year_id
             )
         ]
-
-    active_year_id = _active_year_id(db)
-    classes = (
-        [
-            offering
-            for offering, _course in student_offerings_in_year(
-                db, student_id=student_id, academic_year_id=active_year_id
-            )
-        ]
-        if active_year_id is not None
-        else []
-    )
-    if not classes:
-        classes = list(
-            db.execute(
-                select(CourseOffering)
-                .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
-                .join(Course, CourseOffering.course_id == Course.id)
-                .where(
-                    ClassEnrollment.student_id == student_id,
-                    ClassEnrollment.unenrolled_at.is_(None),
-                    CourseOffering.deleted_at.is_(None),
+    else:
+        active_year_id = _active_year_id(db)
+        classes = (
+            [
+                offering
+                for offering, _course in student_offerings_in_year(
+                    db, student_id=student_id, academic_year_id=active_year_id
                 )
-                .order_by(*OFFERING_ORDER)
-            ).scalars()
+            ]
+            if active_year_id is not None
+            else []
         )
+        if not classes:
+            classes = list(
+                db.execute(
+                    select(CourseOffering)
+                    .join(
+                        ClassEnrollment,
+                        ClassEnrollment.offering_id == CourseOffering.id,
+                    )
+                    .join(Course, CourseOffering.course_id == Course.id)
+                    .where(
+                        ClassEnrollment.student_id == student_id,
+                        ClassEnrollment.unenrolled_at.is_(None),
+                        CourseOffering.deleted_at.is_(None),
+                    )
+                    .order_by(*OFFERING_ORDER)
+                ).scalars()
+            )
+
+    if viewer_teacher_id is not None:
+        owned = _teacher_owned_offering_ids(
+            db, viewer_teacher_id, [c.id for c in classes]
+        )
+        classes = [c for c in classes if c.id in owned]
     return classes
 
 
@@ -323,6 +384,7 @@ def _detail(
     *,
     semester_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None = None,
+    viewer_teacher_id: uuid.UUID | None = None,
 ) -> StudentDetail:
     """Shape a StudentDetail. `current_offerings` is the student's ACTIVE-semester
     subject classes, unless `academic_year_id` is supplied — then it is the classes
@@ -331,7 +393,12 @@ def _detail(
 
     The branch is on the PRESENCE of the param, not on resolving-then-falling-back:
     an explicit year the student never sat in yields `[]`, never another year's
-    classes."""
+    classes.
+
+    `viewer_teacher_id` narrows `current_offerings` to the offerings that lecturer
+    teaches (D42 §3). It is a VIEW filter, not an access check — the caller has already
+    passed `_assert_teacher_can_see_student`, and this only decides how much of a student
+    they were admitted to is theirs to read."""
     detail = StudentDetail.model_validate(student)
     if academic_year_id is not None:
         detail.current_offerings = [
@@ -344,6 +411,13 @@ def _detail(
         detail.current_offerings = _current_offerings_map(
             db, [student.id], semester_id=semester_id
         ).get(student.id, [])
+    if viewer_teacher_id is not None:
+        owned = _teacher_owned_offering_ids(
+            db, viewer_teacher_id, [o.id for o in detail.current_offerings]
+        )
+        detail.current_offerings = [
+            o for o in detail.current_offerings if o.id in owned
+        ]
     # The programme is a REF, not the raw uuid: every screen that shows a student shows
     # the code, and making each one fetch `/programs/{id}` to render one chip would be a
     # request per row (D30 §D12).
@@ -395,6 +469,7 @@ def list_students(
     year_of_study: str | None,
     academic_year_id: uuid.UUID | None = None,
     religion: str | None = None,
+    civil_status: str | None = None,
     gender: str | None = None,
     program_id: uuid.UUID | None = None,
 ):
@@ -461,16 +536,39 @@ def list_students(
         stmt = stmt.where(StudentProfile.gender == gender)
 
     if religion is not None:
-        # Exact match, not a LIKE. The values come from `/students/filter-options`, which
-        # returns the DISTINCT strings actually stored, so a substring match would only
-        # ever conflate two real values ("Catholic" swallowing "Roman Catholic").
+        # Exact match, not a LIKE. The values come from the `religions` table (D39) plus
+        # whatever `/students/filter-options` still reports as present, so a substring
+        # match would only ever conflate two real values ("Catholic" swallowing "Roman
+        # Catholic").
         stmt = stmt.where(StudentProfile.religion == religion)
+
+    if civil_status is not None:
+        # D40. Exact match for the same reason, and safe to keep exact because the write
+        # path normalises: `normalise_civil_status` folds 'single' onto 'Single' on every
+        # save, so the four canonical values are what the column holds going forward.
+        #
+        # A row this system never wrote can still hold something else, which is why the
+        # dropdown carries a stored value it does not offer as an "(as recorded)" option
+        # rather than dropping it — an unfilterable value would be an invisible student.
+        stmt = stmt.where(StudentProfile.civil_status == civil_status)
 
     if program_id is not None:
         # `student_profiles.program_id` — the CURRENT programme. Not
         # `student_program_history`, which would also match a programme the student has
         # since left, and "print all students in Programme X" means the ones in it now.
         stmt = stmt.where(StudentProfile.program_id == program_id)
+
+    if caller.role == Role.HOD:
+        # D43 — a head sees the students OF THEIR PROGRAMME, which is a different
+        # question from the lecturer scope below and is answered by a different column.
+        # A lecturer sees students they SHARE AN OFFERING with (enrolment); a head sees
+        # everyone reading for the degree they run, including a first-year who has not
+        # been enrolled in anything yet. Routing this through the enrolment EXISTS would
+        # have silently dropped exactly those students.
+        #
+        # Combines with an explicit `program_id` filter by intersection: a head who
+        # filters to a programme they do not head correctly gets nothing.
+        stmt = stmt.where(StudentProfile.program_id.in_(hod_program_ids(db, caller)))
 
     # Offering filter and teacher scope constrain via class_enrollments → offerings.
     # We
@@ -532,10 +630,27 @@ def list_students(
     page = paginate(db, stmt, params, serialize=StudentListItem.model_validate)
 
     # Attach offering_count to each item in ONE batched query (no N+1).
+    #
+    # D42 §3 — counted through the caller's own lens. The directory's "Courses" column is
+    # the same fact the profile's enrolment list shows, and that list is now scoped to a
+    # Lecturer's own offerings: leaving the count global would have printed 4 in the
+    # directory and 1 on the profile of the same student, which reads as a bug rather than
+    # as a rule. One extra query for the whole page, and only for a Lecturer.
     ids = [item.id for item in page.items]
     offerings_map = _current_offerings_map(db, ids, semester_id=semester_id)
+    viewer_teacher_id = _viewer_teacher_id(db, caller)
+    owned_offering_ids: set[uuid.UUID] | None = None
+    if viewer_teacher_id is not None:
+        owned_offering_ids = _teacher_owned_offering_ids(
+            db,
+            viewer_teacher_id,
+            [o.id for refs in offerings_map.values() for o in refs],
+        )
     for item in page.items:
-        item.offering_count = len(offerings_map.get(item.id, []))
+        refs = offerings_map.get(item.id, [])
+        if owned_offering_ids is not None:
+            refs = [o for o in refs if o.id in owned_offering_ids]
+        item.offering_count = len(refs)
 
     # D32 — programme CODE for the printed list. One query for the whole page, not one
     # per row: the print view raises `page_size` to cover the entire filtered result, so
@@ -577,29 +692,47 @@ def _attach_program_codes(db: Session, items: list[StudentListItem]) -> None:
         item.program_code = codes.get(pid) if pid is not None else None
 
 
-def filter_options(db: Session) -> StudentFilterOptions:
-    """GET /students/filter-options — DISTINCT religions present in the directory (D32).
+def _distinct_present(db: Session, column) -> list[str]:
+    """DISTINCT non-null, non-blank values of one `student_profiles` column, sorted.
 
-    Derived rather than hardcoded because `religion` is free text from the admissions
-    form; see `StudentFilterOptions` for why that matters. Soft-deleted students are
-    excluded, so a value that only ever belonged to a removed record does not linger as a
-    filter option that matches nothing.
+    Soft-deleted students are excluded, so a value that only ever belonged to a removed
+    record does not linger as a filter option matching nothing.
+
+    **`DISTINCT` here is case-INSENSITIVE**, because the collation is
+    (`utf8mb4_uca1400_ai_ci`): 'Single' and 'single' collapse into one row and MariaDB
+    returns whichever it saw first. That is fine for what this list is FOR — it feeds a
+    dropdown whose options are compared against the same collation on the way back — but
+    it is why this cannot be used to audit for case drift. `GROUP BY HEX(col)` is the
+    query for that.
     """
-    religions = [
-        r
-        for r in db.scalars(
-            select(StudentProfile.religion)
+    return [
+        v
+        for v in db.scalars(
+            select(column)
             .where(
                 StudentProfile.deleted_at.is_(None),
-                StudentProfile.religion.is_not(None),
-                StudentProfile.religion != "",
+                column.is_not(None),
+                column != "",
             )
             .distinct()
-            .order_by(StudentProfile.religion.asc())
+            .order_by(column.asc())
         ).all()
-        if r
+        if v
     ]
-    return StudentFilterOptions(religions=religions)
+
+
+def filter_options(db: Session) -> StudentFilterOptions:
+    """GET /students/filter-options — the free-text values actually present (D32, D40).
+
+    Derived rather than hardcoded because both columns are free text; see
+    `StudentFilterOptions` for what the two lists are now for, which is narrower than it
+    was: the dropdowns lead with their vocabularies (the `religions` table, `CivilStatus`)
+    and use these to keep a legacy value selectable rather than to build the list.
+    """
+    return StudentFilterOptions(
+        religions=_distinct_present(db, StudentProfile.religion),
+        civil_statuses=_distinct_present(db, StudentProfile.civil_status),
+    )
 
 
 def _apply_teacher_ownership(enr_stmt, teacher_id: uuid.UUID):
@@ -647,13 +780,13 @@ def get_student(
     selecting a past year can never widen a teacher's reach.
     """
     student = _student_or_404(db, student_id)
-    if caller.role == Role.TEACHER:
-        _assert_teacher_can_see_student(db, caller, student.id)
+    _assert_caller_can_see_student(db, caller, student)
     return _detail(
         db,
         student,
         semester_id=_active_semester_id(db),
         academic_year_id=academic_year_id,
+        viewer_teacher_id=_viewer_teacher_id(db, caller),
     )
 
 
@@ -680,6 +813,38 @@ def _assert_teacher_can_see_student(
     )
     if not shares:
         raise NotFound("Student not found.", code="not_found")
+
+
+def _assert_caller_can_see_student(
+    db: Session, caller: User, student: StudentProfile
+) -> None:
+    """Reachability for a single student, per role (D43).
+
+    Dean, Registrar and Auditor reach anyone and return early. The two scoped roles:
+
+      * **Lecturer** — shares an active enrolment in an offering they teach.
+      * **HOD** — the student is reading for a programme they head, OR they teach them.
+
+    The second clause of the HOD rule is not redundant. A head also teaches, and their
+    teaching is not confined to their own programme: a Business head taking a shared GEC
+    course must still reach the Primary Education students sitting in it. Dropping it
+    would take reach AWAY from a promoted lecturer, which is the opposite of what the
+    promotion means.
+
+    The programme test comes first because it is one query against a column already
+    loaded, where the ownership test is a three-table join.
+
+    Denial is the lecturer guard's 404, byte-identical to "no such student" (§3.3).
+    """
+    if caller.role == Role.TEACHER:
+        _assert_teacher_can_see_student(db, caller, student.id)
+        return
+    if caller.role == Role.HOD:
+        if student.program_id is not None and student.program_id in set(
+            hod_program_ids(db, caller)
+        ):
+            return
+        _assert_teacher_can_see_student(db, caller, student.id)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -830,7 +995,20 @@ def create_student(
         phone=payload.phone,
         # D33 — the registration form IS the application form (ask 3), so create writes
         # the same Sections A–E the acceptance path does.
-        **{f: getattr(payload, f) for f in ADMISSION_PROFILE_FIELDS},
+        #
+        # D40 — `civil_status` comes out of that loop already normalised. It is the one
+        # member of the set with a vocabulary behind it, and it is handled here rather
+        # than inside `ADMISSION_PROFILE_FIELDS` because that tuple's contract is
+        # "plain scalars, copied verbatim" — putting a transform inside the loop would
+        # make every other field's behaviour a question.
+        **{
+            f: (
+                normalise_civil_status(getattr(payload, f))
+                if f == "civil_status"
+                else getattr(payload, f)
+            )
+            for f in ADMISSION_PROFILE_FIELDS
+        },
         program_id=payload.program_id,
         created_by=actor.id,
     )
@@ -994,6 +1172,11 @@ def update_student(
         if field in ("has_health_condition", "atlib_exam") and value is None:
             # Explicitly sent as null. The column is NOT NULL, so read it as "no".
             value = False
+        if field == "civil_status":
+            # D40 — the same fold `create_student` applies, for the same reason
+            # `gender` is normalised two arms above: the column is free text, so the
+            # write path is the only place consistency can be enforced.
+            value = normalise_civil_status(value)
         setattr(student, field, value)
 
     student.updated_by = actor.id
@@ -1132,11 +1315,13 @@ def list_student_assessments(
     and maps the dataclasses it returns onto the Students wire schema.
     """
     student = _student_or_404(db, student_id)
-    if caller.role == Role.TEACHER:
-        _assert_teacher_can_see_student(db, caller, student.id)
+    _assert_caller_can_see_student(db, caller, student)
 
     sections = _assessments_classes(
-        db, student_id=student.id, academic_year_id=academic_year_id
+        db,
+        student_id=student.id,
+        academic_year_id=academic_year_id,
+        viewer_teacher_id=_viewer_teacher_id(db, caller),
     )
     groups = grades_service.student_assessment_groups(
         db, student_id=student.id, sections=sections
@@ -1176,8 +1361,14 @@ def list_student_assessments(
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /students/{id}/years + GET /students/me/years — the year switcher
 # ──────────────────────────────────────────────────────────────────────────────
-def _years_for_student(db: Session, student_id: uuid.UUID) -> list[AcademicYear]:
+def _years_for_student(
+    db: Session, student_id: uuid.UUID, *, viewer_teacher_id: uuid.UUID | None = None
+) -> list[AcademicYear]:
     """Academic years the student was ACTUALLY enrolled in, newest first.
+
+    `viewer_teacher_id` narrows it to the years that lecturer taught them in (D42 §3).
+    Without it the switcher offered a Lecturer years in which every tab below would be
+    empty, which reads as a broken screen rather than as a scoping rule.
 
     Resolved through `class_enrollments → semesters → academic_years`. Ended
     enrollments count (`unenrolled_at` is not filtered) — the whole point of the
@@ -1190,6 +1381,17 @@ def _years_for_student(db: Session, student_id: uuid.UUID) -> list[AcademicYear]
         .join(ClassEnrollment, ClassEnrollment.semester_id == Semester.id)
         .where(ClassEnrollment.student_id == student_id)
     )
+    if viewer_teacher_id is not None:
+        from app.modules.offerings.models import ClassTeacher
+
+        enrolled_year_ids = enrolled_year_ids.where(
+            select(ClassTeacher.id)
+            .where(
+                ClassTeacher.offering_id == ClassEnrollment.offering_id,
+                ClassTeacher.teacher_id == viewer_teacher_id,
+            )
+            .exists()
+        )
     return list(
         db.scalars(
             select(AcademicYear)
@@ -1199,10 +1401,15 @@ def _years_for_student(db: Session, student_id: uuid.UUID) -> list[AcademicYear]
     )
 
 
-def _years_response(db: Session, student_id: uuid.UUID) -> StudentYearsResponse:
+def _years_response(
+    db: Session, student_id: uuid.UUID, *, viewer_teacher_id: uuid.UUID | None = None
+) -> StudentYearsResponse:
     return StudentYearsResponse(
         items=[
-            StudentYearItem.model_validate(y) for y in _years_for_student(db, student_id)
+            StudentYearItem.model_validate(y)
+            for y in _years_for_student(
+                db, student_id, viewer_teacher_id=viewer_teacher_id
+            )
         ]
     )
 
@@ -1213,9 +1420,10 @@ def list_student_years(
     """GET /students/{id}/years (P/S any; Teacher must own a section the student is
     in → else 404, §3.3). Students are denied at the role gate → use /me/years."""
     student = _student_or_404(db, student_id)
-    if caller.role == Role.TEACHER:
-        _assert_teacher_can_see_student(db, caller, student.id)
-    return _years_response(db, student.id)
+    _assert_caller_can_see_student(db, caller, student)
+    return _years_response(
+        db, student.id, viewer_teacher_id=_viewer_teacher_id(db, caller)
+    )
 
 
 def list_my_years(db: Session, *, caller: User) -> StudentYearsResponse:

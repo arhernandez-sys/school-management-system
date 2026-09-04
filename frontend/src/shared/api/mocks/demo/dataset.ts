@@ -49,13 +49,20 @@
  *  - Wire format is snake_case; entity rows already use snake_case fields, so handlers
  *    mostly pick/rename into the exact api-spec response shapes.
  *  - `paginate(items, params)` returns `{ items, total, page, page_size, total_pages }`
- *    — the `Page[T]` envelope (api-spec §4.1). `page` is 1-based; `page_size` clamps ≤100.
+ *    — the `Page[T]` envelope (api-spec §4.1). `page` is 1-based; `page_size` clamps ≤200
+ *    (`MAX_PAGE_SIZE`; it said 100 here until D43, which did not match the server).
  *  - Handlers may MUTATE `DEMO_DATASET` arrays for create/update/delete in-session.
  */
 
 export { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, DEMO_TODAY_ISO } from './data';
 
 export {
+  // D43 — HOD programme scope (mirrors backend/app/core/rbac.py).
+  demoHodProgramIds,
+  demoHodOfferingIds,
+  demoHodStudentIds,
+  demoHodTeacherIds,
+  currentDemoHodTeacher,
   paginate,
   getCourse,
   getOffering,
@@ -95,6 +102,7 @@ export {
   gradebookFor,
   midtermRevisionEligible,
   studentReligions,
+  studentCivilStatuses,
   computeTermGrade,
   letterFor,
   gradePointFor,

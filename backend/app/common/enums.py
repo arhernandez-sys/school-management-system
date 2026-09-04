@@ -15,10 +15,43 @@ import enum
 
 
 class Role(str, enum.Enum):
+    """One role per user (A-ONE-ROLE). Values are the wire labels AND the DB enum labels.
+
+    The DISPLAY vocabulary differs and is a frontend concern (D30, decision #3):
+    principal -> Dean, secretary -> Registrar, teacher -> Lecturer. The values below were
+    deliberately not renamed with it.
+
+    D43 added the last two:
+
+      AUDITOR  Reads everything, writes nothing. Not "an admin who should behave" - the
+               refusal is enforced in `get_current_user`, which every authenticated route
+               passes through, so no route can opt out of it by omission. `require_role`
+               is a role allowlist and cannot express "GET only", which is why the guard
+               lives there and not in 121 dependency tuples.
+
+      HOD      Head of Department: a LECTURER who also supervises a programme. Keeps every
+               lecturer power on offerings they are actually assigned to - ownership, not
+               role, is what limits that - and additionally READS everything in the
+               programme(s) they head. The link is `program_heads`; there is no
+               `departments` table and a programme is the unit BAJC actually has.
+    """
+
     PRINCIPAL = "principal"
     SECRETARY = "secretary"
     TEACHER = "teacher"
     STUDENT = "student"
+    HOD = "hod"
+    AUDITOR = "auditor"
+
+
+#: Roles that may never write, whatever route they reach. Enforced centrally in
+#: `app.core.deps.get_current_user` - see `Role.AUDITOR` above.
+READ_ONLY_ROLES: frozenset[Role] = frozenset({Role.AUDITOR})
+
+#: Roles that carry a `teacher_profiles` row and can therefore own an offering.
+#: Anywhere that resolves a lecturer profile from the principal must accept both, or an
+#: HOD silently becomes a lecturer with no offerings rather than one with their own.
+LECTURER_ROLES: frozenset[Role] = frozenset({Role.TEACHER, Role.HOD})
 
 
 class StudentStatus(str, enum.Enum):
@@ -180,6 +213,86 @@ def normalise_gender(value: str | None) -> str | None:
     if not cleaned:
         return None
     match = _GENDER_ALIASES.get(cleaned.casefold())
+    return match.value if match is not None else cleaned
+
+
+class CivilStatus(str, enum.Enum):
+    """Civil status, the values the forms offer (D40, client ask).
+
+    **A `str` enum, but the COLUMNS stay free text** - the same split D37 settled for
+    `Gender`, for the same reason. `student_profiles.civil_status` and
+    `applications.civil_status` are `varchar(50)`; narrowing them to a DB enum would reject
+    the historical rows this system did not write, and no migration can safely guess what a
+    value it has never seen was meant to be.
+
+    So this constrains the WRITE PATH: the dropdowns offer exactly these four, and
+    `normalise_civil_status` folds recognised spellings onto them before they are stored.
+    Reads stay permissive.
+
+    TitleCase, unlike `Gender`, because that is what the live dump already holds
+    (`student_profiles.civil_status` = 'Single'). Matching the data beats matching the
+    other enum's style - re-casing it would put this system out of step with the client's
+    own tooling for a cosmetic gain, and MariaDB's case-insensitive collation means the
+    database cannot see the difference anyway. The BROWSER can, which is the whole reason
+    the normaliser exists: a stray 'single' renders an empty select and the next save
+    writes NULL over a real value.
+
+    `WIDOWER` keeps its parenthetical because the client's paper form does. It is one
+    status, not two; splitting it would make the dropdown ask for a fact the form does not
+    collect.
+    """
+
+    SINGLE = "Single"
+    MARRIED = "Married"
+    DIVORCED = "Divorced"
+    WIDOWER = "Widow(er)"
+
+
+#: Accepted spellings -> the canonical value. Generous for the same reason
+#: `_GENDER_ALIASES` is: a Registrar transcribing a paper form, an import, and the
+#: client's own dump have each produced a different spelling of the same status, and
+#: rejecting one over a letter case would block a real record.
+#:
+#: `widow` and `widower` both map to `Widow(er)` - the parentheses are unlikely to survive
+#: a hand-typed import, and the form does not distinguish them.
+_CIVIL_STATUS_ALIASES: dict[str, CivilStatus] = {
+    "single": CivilStatus.SINGLE,
+    "s": CivilStatus.SINGLE,
+    "married": CivilStatus.MARRIED,
+    "m": CivilStatus.MARRIED,
+    "divorced": CivilStatus.DIVORCED,
+    "d": CivilStatus.DIVORCED,
+    "widow(er)": CivilStatus.WIDOWER,
+    "widow": CivilStatus.WIDOWER,
+    "widower": CivilStatus.WIDOWER,
+    "widowed": CivilStatus.WIDOWER,
+    "w": CivilStatus.WIDOWER,
+}
+
+
+def normalise_civil_status(value: str | None) -> str | None:
+    """Fold a submitted civil status onto the canonical vocabulary.
+
+    Behaves exactly like `normalise_gender`, and deliberately so - one rule for both
+    free-text vocabularies is one rule to remember:
+
+    * `None` and blank pass through as `None`. The field is optional on the column and an
+      empty string is not a value.
+    * **An UNRECOGNISED value is returned unchanged**, not rejected. This runs on every
+      write including the admissions transcription path, and turning an unexpected spelling
+      ('Common law') into a 422 would stop a Registrar recording a real student over
+      something cosmetic. The dropdowns keep new data clean; this is the safety net.
+    * Case- and whitespace-insensitive, which is the drift that actually occurs.
+
+    Returns a plain `str`, never the enum member - see `normalise_gender` for why
+    `.value` is not optional here.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = _CIVIL_STATUS_ALIASES.get(cleaned.casefold())
     return match.value if match is not None else cleaned
 
 

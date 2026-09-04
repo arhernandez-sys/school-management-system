@@ -3,9 +3,13 @@
 `get_db`            — request-scoped SQLAlchemy session (commit/rollback handled
                       by the service layer; this just provides + closes it).
 `get_current_user`  — verifies the Bearer access token, loads the live user row,
-                      enforces is_active AND the forced password change, and stashes
-                      user_id for request logging.
+                      enforces is_active, the forced password change AND the read-only
+                      roles' write ban (D43), and stashes user_id for request logging.
 `require_role(...)` — coarse role gate (architecture §3.2 layer 1).
+
+Note the asymmetry: role REACH is per-route (`require_role`), but the read-only WRITE
+ban is central, because a route can be forgotten and an allowlist cannot express a verb.
+See `_is_read_only_refusal`.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role, StudentStatus
+from app.common.enums import READ_ONLY_ROLES, Role, StudentStatus
 from app.core.errors import (
     AccountInactive,
     Forbidden,
@@ -63,8 +67,30 @@ _FORCED_CHANGE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def _is_forced_change_exempt(request: Request) -> bool:
-    """Whether this request is one of the three a flagged account may still make.
+#: HTTP verbs that change state. A read-only role is refused all of them.
+_WRITE_METHODS: frozenset[str] = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: (method, path suffix) pairs a READ-ONLY role may still reach despite the verb (D43).
+#:
+#: These are the three writes that are not writes to school data — they act on the
+#: caller's own session and credentials. An auditor who cannot log out, cannot change the
+#: temporary password they were issued, and cannot set their own page size is not
+#: read-only, they are unusable: the forced-change flow would trap them permanently,
+#: since `PATCH /auth/me/password` is the only way out of `must_change_password`.
+#:
+#: Deliberately NOT here: `POST /auth/login` and `POST /auth/refresh`, which never reach
+#: this guard because neither depends on `get_current_user`.
+_READ_ONLY_EXEMPT: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", "/auth/logout"),
+        ("PATCH", "/auth/me/password"),
+        ("PATCH", "/auth/me/preferences"),
+    }
+)
+
+
+def _matches(request: Request, pairs: frozenset[tuple[str, str]]) -> bool:
+    """Whether (method, path) matches one of `pairs`.
 
     Matched on the REQUEST PATH's suffix rather than on the router prefix, so it holds
     whether the app is mounted at `/api/v1` (main.py) or bare (a unit test building its
@@ -73,9 +99,34 @@ def _is_forced_change_exempt(request: Request) -> bool:
     """
     path = request.url.path.rstrip("/") or "/"
     return any(
-        request.method == method and path.endswith(suffix)
-        for method, suffix in _FORCED_CHANGE_EXEMPT
+        request.method == method and path.endswith(suffix) for method, suffix in pairs
     )
+
+
+def _is_forced_change_exempt(request: Request) -> bool:
+    """Whether this request is one of the three a flagged account may still make."""
+    return _matches(request, _FORCED_CHANGE_EXEMPT)
+
+
+def _is_read_only_refusal(request: Request, user: User) -> bool:
+    """Whether this request must be refused because the caller's role cannot write.
+
+    **Why this lives in `get_current_user` and not in `require_role`.** `require_role`
+    is an allowlist of role NAMES and has no idea what verb it is guarding — it cannot
+    express "GET only". Expressing the auditor's rule through it would mean auditing all
+    121 `Depends(...)` tuples across 17 routers and getting every one right, where the
+    failure mode of a single miss is a read-only account that can delete a student.
+
+    `get_current_user` is the one dependency every authenticated route passes through,
+    so a route cannot opt out of this by being forgotten — including a route written
+    next year by someone who has never heard of the auditor role. That inversion is the
+    whole point: new endpoints are read-only for auditors by default.
+    """
+    if user.role not in READ_ONLY_ROLES:
+        return False
+    if request.method not in _WRITE_METHODS:
+        return False
+    return not _matches(request, _READ_ONLY_EXEMPT)
 
 
 def get_db() -> Iterator[Session]:
@@ -114,6 +165,12 @@ def get_current_user(
         # until the temporary password has been replaced (see _FORCED_CHANGE_EXEMPT).
         raise PasswordChangeRequired(
             "You must change your password before continuing."
+        )
+    if _is_read_only_refusal(request, user):
+        # D43 — the auditor's read-only guarantee, enforced once for every route.
+        raise Forbidden(
+            "This account has read-only access and cannot make changes.",
+            code="read_only_role",
         )
 
     # For structured request logging (logging.py reads request.state.user_id).

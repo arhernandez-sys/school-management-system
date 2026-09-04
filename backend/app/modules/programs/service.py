@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import Conflict, NotFound
+from app.common.enums import Role
+from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.modules.offerings.models import Course
-from app.modules.programs.models import Program, ProgramCourse
+from app.modules.programs.models import Program, ProgramCourse, ProgramHead
 from app.modules.programs.schemas import (
     CourseRef,
     ProgramCourseCreateRequest,
@@ -28,12 +29,15 @@ from app.modules.programs.schemas import (
     ProgramCourseUpdateRequest,
     ProgramCreateRequest,
     ProgramDetail,
+    ProgramHeadItem,
+    ProgramHeadsResponse,
     ProgramListItem,
     ProgramUpdateRequest,
     TermBlock,
 )
 from app.modules.settings.models import AuditLog
 from app.modules.students.models import StudentProfile
+from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
 _PROGRAM_SORT_FIELDS = {
@@ -483,3 +487,204 @@ def remove_program_course(
     _audit(db, actor=actor, action="program.course_remove", entity_id=program.id)
     db.commit()
     return _detail(db, program)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Heads of Department (D43)
+# ══════════════════════════════════════════════════════════════════════════════
+def list_program_heads(db: Session, *, program_id: uuid.UUID) -> ProgramHeadsResponse:
+    """GET /programs/{id}/heads — who heads this programme.
+
+    Readable by any authenticated user, like the rest of the programme. Who runs a
+    department is not confidential; it is the answer to "who do I ask about this
+    course", and hiding it from the people who need it serves nobody.
+    """
+    _program_or_404(db, program_id)
+    rows = db.execute(
+        select(ProgramHead, TeacherProfile, User.role)
+        .join(TeacherProfile, TeacherProfile.id == ProgramHead.teacher_id)
+        .outerjoin(User, User.id == TeacherProfile.user_id)
+        .where(
+            ProgramHead.program_id == program_id,
+            TeacherProfile.deleted_at.is_(None),
+        )
+        .order_by(TeacherProfile.full_name.asc())
+    ).all()
+    return ProgramHeadsResponse(
+        items=[
+            ProgramHeadItem(
+                teacher_id=tp.id,
+                full_name=tp.full_name,
+                staff_number=tp.staff_number,
+                role=role.value if role is not None else None,
+                appointed_at=ph.appointed_at,
+            )
+            for (ph, tp, role) in rows
+        ]
+    )
+
+
+def set_program_heads(
+    db: Session, *, actor: User, program_id: uuid.UUID, teacher_ids: list[uuid.UUID]
+) -> ProgramHeadsResponse:
+    """PUT /programs/{id}/heads — replace the appointments (Dean only).
+
+    **Appointing a head PROMOTES them; removing one demotes them.** The appointment and
+    the access are one action. The earlier two-step version put the Dean in the position
+    of having done something that visibly had no effect: they appoint a head, the head
+    signs in, and nothing has changed until somebody remembers a second screen.
+
+    Three rules keep that safe, and each is load-bearing:
+
+      1. **Only a `teacher` is promoted.** A Dean, Registrar or Auditor who is also
+         appointed keeps the role they have — this endpoint must never be a way to give
+         an account MORE reach than an HOD, and silently demoting a Dean to a lecturer
+         would be worse still.
+
+      2. **A removed head is demoted only if they head NOTHING ELSE.** Someone running
+         two programmes who is taken off one is still a Head of Department, and dropping
+         them to `teacher` would revoke their access to the department they still run.
+         The check runs AFTER the diff is flushed, against what remains.
+
+      3. **Only an `hod` is demoted, and only back to `teacher`.** Any other role was not
+         granted here and is not this endpoint's to take away.
+
+    A lecturer with no linked login is appointed normally and simply has no role to
+    change — the appointment is still recorded, which is what lets a profile be prepared
+    before the account exists.
+
+    Every role change is written to `audit_log` as `user.role_change`, the same action
+    the Settings screen records, so the trail does not depend on which screen did it.
+
+    The appointments themselves are diffed rather than delete-all-then-insert, so
+    `appointed_at` survives on a head who was already there — re-saving the multi-select
+    with one name added must not reset everyone else's appointment date.
+    """
+    _program_or_404(db, program_id)
+
+    wanted = set(teacher_ids)
+    if wanted:
+        found = set(
+            db.scalars(
+                select(TeacherProfile.id).where(
+                    TeacherProfile.id.in_(wanted),
+                    TeacherProfile.deleted_at.is_(None),
+                )
+            ).all()
+        )
+        missing = wanted - found
+        if missing:
+            raise ValidationError(
+                "One or more lecturers could not be found.",
+                code="unknown_teacher",
+                fields={"teacher_ids": [str(m) for m in sorted(missing, key=str)]},
+            )
+
+    existing = {
+        ph.teacher_id: ph
+        for ph in db.scalars(
+            select(ProgramHead).where(ProgramHead.program_id == program_id)
+        ).all()
+    }
+
+    added = wanted - existing.keys()
+    removed = existing.keys() - wanted
+
+    for teacher_id in added:
+        db.add(
+            ProgramHead(
+                program_id=program_id,
+                teacher_id=teacher_id,
+                created_by=actor.id,
+            )
+        )
+    for teacher_id in removed:
+        db.delete(existing[teacher_id])
+
+    # FLUSH before the role sync. Rule 2 asks "does this person still head anything
+    # else?", and that can only be answered against the POST-diff state — reading it
+    # before the delete lands would see the row just removed and never demote.
+    db.flush()
+
+    _sync_head_roles(db, actor=actor, added=added, removed=removed)
+
+    _audit(
+        db,
+        actor=actor,
+        action="program.heads.set",
+        entity_id=program_id,
+        summary={"teacher_ids": [str(t) for t in sorted(wanted, key=str)]},
+    )
+    db.commit()
+    return list_program_heads(db, program_id=program_id)
+
+
+def _sync_head_roles(
+    db: Session,
+    *,
+    actor: User,
+    added: set[uuid.UUID],
+    removed: set[uuid.UUID],
+) -> None:
+    """Promote newly-appointed heads to `hod`; demote departing ones back to `teacher`.
+
+    Split out of `set_program_heads` because the three safety rules in that docstring are
+    the substance of this operation, and burying them in the diff loop is how one of them
+    quietly stops being true.
+
+    Call only AFTER the `program_heads` diff has been flushed — the demotion test reads
+    the rows that remain.
+    """
+    for teacher_id in added:
+        user = _login_of(db, teacher_id)
+        # Rule 1 — promote a plain lecturer and nobody else. A Dean or Auditor who is
+        # also appointed keeps the role they came with.
+        if user is not None and user.role == Role.TEACHER:
+            _set_role(db, actor=actor, user=user, new_role=Role.HOD, reason="appointed")
+
+    for teacher_id in removed:
+        user = _login_of(db, teacher_id)
+        # Rule 3 — only an HOD is demoted, and only back to `teacher`.
+        if user is None or user.role != Role.HOD:
+            continue
+        # Rule 2 — still heads something else? Keep the role. This is the check that
+        # makes removing a two-programme head from one of them safe.
+        still_heads = db.scalar(
+            select(ProgramHead.id).where(ProgramHead.teacher_id == teacher_id).limit(1)
+        )
+        if still_heads is None:
+            _set_role(
+                db, actor=actor, user=user, new_role=Role.TEACHER, reason="unappointed"
+            )
+
+
+def _login_of(db: Session, teacher_id: uuid.UUID) -> User | None:
+    """The login linked to a lecturer profile, or None — a profile may have no account."""
+    user_id = db.scalar(
+        select(TeacherProfile.user_id).where(TeacherProfile.id == teacher_id)
+    )
+    return db.get(User, user_id) if user_id is not None else None
+
+
+def _set_role(
+    db: Session, *, actor: User, user: User, new_role: Role, reason: str
+) -> None:
+    """Change a role and record it under the SAME audit action the Settings screen uses.
+
+    An auditor reading the trail should not have to know which screen a promotion came
+    from; `reason` distinguishes it, in the summary rather than in the action name.
+    """
+    previous = user.role
+    user.role = new_role
+    user.updated_by = actor.id
+    _audit(
+        db,
+        actor=actor,
+        action="user.role_change",
+        entity_id=user.id,
+        summary={
+            "from": previous.value,
+            "to": new_role.value,
+            "reason": f"program_head_{reason}",
+        },
+    )

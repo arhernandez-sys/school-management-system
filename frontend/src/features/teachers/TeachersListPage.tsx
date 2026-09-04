@@ -1,13 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert,
-  Box,
   Button,
   Chip,
   Link as MuiLink,
   MenuItem,
-  Snackbar,
   Stack,
   TextField,
   Typography,
@@ -21,15 +18,12 @@ import {
   YearSelect,
   type DataTableColumn,
 } from '@shared/components';
-import { TempPasswordDialog } from '@features/settings/components/TempPasswordDialog';
 import { useDebounce, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
-import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import { strings } from '@i18n/strings';
-import { useCreateTeacher, useTeachersList } from './hooks/useTeachers';
-import { TeacherFormDialog, type TeacherFormValues } from './components/TeacherFormDialog';
+import { useTeachersList } from './hooks/useTeachers';
 import type { TeacherListItem, TeachersListParams } from './types';
 import type { TeacherStatus } from '@shared/types/enums';
 
@@ -54,13 +48,6 @@ export function TeachersListPage() {
   const [page, setPage] = useState(0); // 0-based for MUI TablePagination
   const [pageSize, setPageSize] = useState(25);
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
-  const [tempPassword, setTempPassword] = useState<string | null>(null);
-  const [tempSubject, setTempSubject] = useState<string | undefined>(undefined);
-  const [toast, setToast] = useState<string | null>(null);
-
   const params = useMemo<TeachersListParams>(
     () => ({
       search: debouncedSearch || undefined,
@@ -75,41 +62,8 @@ export function TeachersListPage() {
   );
 
   const query = useTeachersList(params);
-  const createMut = useCreateTeacher();
 
   const goToTeacher = (id: string) => navigate(`${ROUTES.teachers}/${id}`);
-
-  const handleCreate = (values: TeacherFormValues) => {
-    setFormError(null);
-    setFieldErrors(undefined);
-    createMut.mutate(
-      {
-        staff_number: values.staff_number,
-        full_name: values.full_name,
-        email: values.email || null,
-        phone: values.phone || null,
-        subject_specializations: values.subject_specializations,
-        create_login: values.create_login
-          ? { email: values.login_email, role: 'teacher' }
-          : null,
-      },
-      {
-        onSuccess: (result) => {
-          setCreateOpen(false);
-          if (result.temporary_password) {
-            setTempPassword(result.temporary_password);
-            setTempSubject(result.teacher.full_name);
-          } else {
-            setToast(`${result.teacher.full_name} was added.`);
-          }
-        },
-        onError: (err) => {
-          setFormError(apiErrorMessage(err));
-          setFieldErrors(fieldErrorsFrom(err));
-        },
-      },
-    );
-  };
 
   const columns: DataTableColumn<TeacherListItem>[] = [
     {
@@ -178,11 +132,9 @@ export function TeachersListPage() {
             <Button
               variant="contained"
               startIcon={<PersonAddAlt1Icon />}
-              onClick={() => {
-                setFormError(null);
-                setFieldErrors(undefined);
-                setCreateOpen(true);
-              }}
+              // D40 — a page, not a modal. The lecturer record is ~20 fields and the
+              // create form now shows all of them; see `TeacherFormScreen`.
+              onClick={() => navigate(`${ROUTES.teachers}/new`)}
             >
               Add Lecturer
             </Button>
@@ -269,41 +221,11 @@ export function TeachersListPage() {
         }
       />
 
-      {canManage && (
-        <TeacherFormDialog
-          open={createOpen}
-          submitting={createMut.isPending}
-          error={formError}
-          fieldErrors={fieldErrors}
-          onSubmit={handleCreate}
-          onClose={() => setCreateOpen(false)}
-        />
-      )}
-
-      <TempPasswordDialog
-        open={Boolean(tempPassword)}
-        password={tempPassword}
-        subject={tempSubject}
-        onClose={() => {
-          setTempPassword(null);
-          setTempSubject(undefined);
-        }}
-      />
-
-      <Snackbar
-        open={Boolean(toast)}
-        autoHideDuration={5000}
-        onClose={() => setToast(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        {toast ? (
-          <Alert severity="success" onClose={() => setToast(null)} variant="filled">
-            {toast}
-          </Alert>
-        ) : (
-          <Box />
-        )}
-      </Snackbar>
+      {/* D40 — the create dialog, its temp-password dialog and this page's success
+          toast all moved to `TeacherFormScreen`, which is where the create now happens.
+          The one-time password especially: it is shown ONCE and never again, so it has to
+          belong to the screen that provisions the login rather than to a list this page
+          would have navigated away from. */}
     </>
   );
 }

@@ -87,7 +87,7 @@ All instants are `timestamptz`, never naive `timestamp` — the app is region-fl
 
 | Domain | Mechanism | Rationale |
 |---|---|---|
-| `user_role` (principal/secretary/teacher/student) | **Native enum** | Fixed at 4 (A-ONE-ROLE); changes only via deploy. |
+| `user_role` (principal/secretary/teacher/student/**hod**/**auditor**) | **Native enum** | Fixed at 6 since D43 (A-ONE-ROLE); changes only via deploy. Widening is append-only — MariaDB stores the ordinal, so new labels must go on the END or existing rows change meaning. |
 | `attendance_status` (present/absent/late/excused) | **Native enum** | Fixed small set (D-Q4). |
 | `assessment_type` (quiz/test/exam/assignment) | **Native enum** | Fixed (FR-ASMT-01). |
 | `assessment_status` (draft/published/grading/graded) | **Native enum** | Fixed (FR-ASMT-04). |
@@ -984,7 +984,7 @@ A `class` is a **section/homeroom** (subject-agnostic). `classes` 1—N `class_s
 
 ## 9. RBAC Data Structures
 
-**Representation: a single `user_role` enum column on `users`** — no role/permission join tables. Justified by locked decisions: **4 fixed roles, one role per user (A-ONE-ROLE), single tenant (D8)** (architecture §3.2 "no role/permission join tables needed for v1"). Permissions are a static code-level map (`shared/auth/permissions.ts` front; FastAPI `require_role` deps back) mirroring the requirements §2 matrix — they don't change at runtime, so they don't belong in tables.
+**Representation: a single `user_role` enum column on `users`** — no role/permission join tables. Justified by locked decisions: **6 fixed roles (D43), one role per user (A-ONE-ROLE), single tenant (D8)** (architecture §3.2 "no role/permission join tables needed for v1"). Permissions are a static code-level map (`shared/auth/permissions.ts` front; FastAPI `require_role` deps back) mirroring the requirements §2 matrix — they don't change at runtime, so they don't belong in tables.
 
 **One role per user — confirmed, with a flag.** The schema models exactly one role (matches A-ONE-ROLE). **Watch-item for the orchestrator:** a future "person who is both" (teacher who is also a guardian-with-login, or an admin who also teaches) would need a `user_roles` M:N table. For v1 it is correctly single-valued — noted in §12, not changed.
 
@@ -1127,7 +1127,41 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 | DB-6 | **Compute-on-read term grades + derive-on-read letters; freeze on archival** into snapshot tables | Implements architecture §7.1/§8.5; snapshot (not materialized view) preserves the historical scale (§10.4). |
 | DB-7 | **Single-row `school_profile`** with `CHECK (id=1)` | Single tenant (D8). |
 | DB-8 | **Soft-delete only on history-bearing tables**, partial unique indexes for re-issuable natural keys | Preserve academic records (A-SOFT-DELETE) without blocking id reuse (§8). |
-| DB-9 | **Role = enum column, no RBAC join tables** | 4 fixed roles, one per user, single tenant (architecture §3.2) (§9). |
+### `program_heads` (D43)
+
+Who heads which programme — the HOD role's entire scope.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `program_id` | uuid FK → `programs` | ON DELETE CASCADE |
+| `teacher_id` | uuid FK → `teacher_profiles` | ON DELETE CASCADE |
+| `appointed_at` | datetime | Display/audit only — scope is never time-sliced |
+| audit columns | | `updated_at` NULL until edited (the 015 convention) |
+
+`UNIQUE (program_id, teacher_id)` — re-appointing is an upsert, not a second row, so the
+scope query can never double-count a programme. `KEY (teacher_id)` serves the hot path
+("which programmes does THIS lecturer head"), which the unique index cannot because
+`teacher_id` is its second column.
+
+**Many-to-many on purpose.** `teacher_profiles.headed_program_id` would have been smaller
+and wrong in both directions at a college this size: a lecturer can head two programmes,
+and a programme can have co-heads across a handover. Mirrors `class_teachers`, which
+solved the same shape for (offering, lecturer).
+
+**It hangs off `teacher_profiles`, not `users`**, because an HOD is a lecturer first and
+every scope it feeds is already expressed in terms of a teacher-profile id.
+
+**The role is still not enforced by this table**, but the SERVICE keeps the two in step:
+`PUT /programs/{id}/heads` promotes a newly-appointed lecturer to `hod` and demotes one
+whose last appointment is removed. Authorization continues to read `users.role` first and
+this table second — never this table alone — so a row written by hand (a direct SQL insert,
+a restore) grants nothing on its own. That is deliberate: the table records the
+appointment, the role grants the reach, and only the service is trusted to link them.
+
+DDL: `backend/db/mariadb/016_hod_auditor_roles.sql`.
+
+| DB-9 | **Role = enum column, no RBAC join tables** | 6 fixed roles since D43, one per user, single tenant (architecture §3.2) (§9). D43 kept the invariant deliberately: an HOD is a single role value that CARRIES lecturer powers, not a second role stacked on `teacher`, so no `user_roles` M:N table was needed (see `progress-tracker.md` OQ-DB3). |
 | DB-10 | **Server-layer enforcement list** (score≤max, no-future-date, band contiguity, ownership, archived-year read-only) | Cross-row/temporal/ownership rules a stored CHECK can't express; centralized & testable (§5). |
 | DB-11 | **`subject_specializations text[]`** on teacher (denormalized, GIN-indexed) | Display/search tag, not referential truth (which is the class graph) (§3.B). |
 | DB-12 | **`semester_id` denormalized onto term-scoped children** (enrollments, assessments, attendance) | Keeps hot queries single-join; year derivable via semester→year (§1.6). |

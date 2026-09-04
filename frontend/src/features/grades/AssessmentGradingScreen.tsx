@@ -34,6 +34,8 @@ import { GradeCell, type GradeCellValue } from './components/GradeCell';
 import { RequestRevisionDialog } from './components/RequestRevisionDialog';
 import { useGradebook, useSaveGrades, useSetRelease } from './hooks/useGrades';
 import type { GradeEntry, RevisionBlockedReason } from './types';
+import { formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { isLecturerRole } from '@shared/auth/permissions';
 
 /**
  * Tooltip copy per blocked reason (D32, brief §1). Short by design — the server's
@@ -55,22 +57,13 @@ const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
   not_graded: 'Only a recorded grade can be revised.',
 };
 
-/**
- * A stored UTC deadline in the reader's own timezone, to the minute — "grades due on the
- * 15th" and "grades due 17:00 on the 15th" are different instructions, and the second is
- * what is enforced.
+/*
+ * D42 §6 — this file's private date+time formatter is gone. It called
+ * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
+ * stamp on a US-locale machine while every plain date on the same screen was already
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * the one place that decision lives.
  */
-function formatDeadline(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 /**
  * Per-assessment class grading page (`/grades/assessment/:assessmentId`).
@@ -88,7 +81,9 @@ export function AssessmentGradingScreen() {
   const { user } = useAuth();
   // Only the Lecturer who teaches the offering may request one (§D7); the server
   // enforces ownership and 403s anybody else, so this is UX, not the boundary.
-  const isLecturer = user?.role === 'teacher';
+  // D43 — an HOD is a lecturer. Whether they may edit THIS gradebook is the server's
+  // answer (`can_edit` on the offering), not this flag's.
+  const isLecturer = isLecturerRole(user?.role);
   const [searchParams] = useSearchParams();
   const offeringId = searchParams.get('offering_id');
 
@@ -116,24 +111,23 @@ export function AssessmentGradingScreen() {
     () => gradebook?.assessments.find((a) => a.id === assessmentId) ?? null,
     [gradebook, assessmentId],
   );
-  // D30 §D6 — the term's grade window. Kept separate from `can_edit` on the wire (a shut
-  // deadline and a read-only role are different situations) but folded together HERE,
-  // because from the cell's point of view both mean "you cannot type in me".
-  const windowClosed = gradebook?.grade_window_closed ?? false;
-  const deadline = gradebook?.grade_submission_deadline ?? null;
   /**
-   * D33 (client ask 7) — the MID-TERM FREEZE. While
+   * D33 (client ask 7) — the MID-SESSION FREEZE. While
    * `[midterm_submission_start, midterm_submission_end]` is running, nobody enters a grade
    * for this term; the server refuses the write with 409 `midterm_frozen`.
    *
-   * A THIRD state, not a synonym for `windowClosed`, because the three have different
-   * answers and the Lecturer acts on which one it is:
+   * **D42 §5 — this is now the ONLY window that closes.** The end-of-session
+   * `grade_window_closed` state that used to sit beside it is retired: the server always
+   * reports it false, and reading it here would have left a "Grading closed" banner that
+   * no longer matches a form which saves perfectly well.
    *
-   *   read-only        → "not your offering"
-   *   grading closed   → "the term is over; ask the Dean or file a revision"
-   *   mid-term frozen  → "wait — entry reopens on this date"
+   * A SEPARATE state from `can_edit`, because the two have different answers and the
+   * Lecturer acts on which one it is:
    *
-   * Folded into `canEdit` all the same, because from a cell's point of view all three mean
+   *   read-only         → "not your offering"
+   *   mid-session frozen → "wait — entry reopens on this date"
+   *
+   * Folded into `canEdit` all the same, because from a cell's point of view both mean
    * "you cannot type in me".
    */
   const midtermFrozen = gradebook?.midterm_frozen ?? false;
@@ -141,7 +135,6 @@ export function AssessmentGradingScreen() {
   const canEdit =
     (gradebook?.can_edit ?? false) &&
     (assessment?.is_editable ?? false) &&
-    !windowClosed &&
     !midtermFrozen;
 
   /**
@@ -281,13 +274,8 @@ export function AssessmentGradingScreen() {
               label={assessment.is_released ? 'Released' : 'Not released'}
               kind={assessment.is_released ? 'success' : 'neutral'}
             />
-            {windowClosed && <StatusBadge label="Grading closed" kind="warning" />}
-            {midtermFrozen && !windowClosed && (
-              <StatusBadge label="Mid-session frozen" kind="warning" />
-            )}
-            {!canEdit && !windowClosed && !midtermFrozen && (
-              <StatusBadge label="Read-only" kind="neutral" />
-            )}
+            {midtermFrozen && <StatusBadge label="Mid-session frozen" kind="warning" />}
+            {!canEdit && !midtermFrozen && <StatusBadge label="Read-only" kind="neutral" />}
             <Box sx={{ flexGrow: 1 }} />
             {isLecturer && (
               <Button size="small" onClick={() => navigate(ROUTES.gradeRevisions)}>
@@ -296,28 +284,15 @@ export function AssessmentGradingScreen() {
             )}
           </Stack>
 
-          {/* Explain the disabled form BEFORE the Lecturer types forty marks into it.
-              Without this the save bar simply refuses and the only feedback is a 409. */}
-          {windowClosed && (
-            <Alert severity="warning" sx={{ mb: 2 }}>
-              <strong>Grade submission has closed for this session.</strong>{' '}
-              {deadline
-                ? `The deadline was ${formatDeadline(deadline)}.`
-                : 'The deadline has passed.'}{' '}
-              Ask the Dean to reopen the window or to review a grade revision.
-            </Alert>
-          )}
-
-          {/* D33 ask 7 — the freeze, explained with its REOPEN DATE. "Frozen" on its own
-              is unactionable: the Lecturer's next question is always wait-or-file-a-
-              revision, and the end date is what answers it. Suppressed when the term's
-              own deadline has also passed, because then waiting would not help and the
-              banner above is the one that applies. */}
-          {midtermFrozen && !windowClosed && (
+          {/* D33 ask 7 — the freeze, explained with its REOPEN DATE, BEFORE the Lecturer
+              types forty marks into a form that will refuse them. "Frozen" on its own is
+              unactionable: the next question is always wait-or-file-a-revision, and the
+              end date is what answers it. */}
+          {midtermFrozen && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               <strong>Mid-session grades are frozen.</strong>{' '}
               {midtermEnd
-                ? `Grade entry for this session reopens after ${formatDeadline(midtermEnd)}.`
+                ? `Grade entry for this session reopens after ${formatSchoolDateTime(midtermEnd)}.`
                 : 'Grade entry for this session reopens once the mid-session period closes.'}{' '}
               After that you can enter new marks as normal, and request a revision to
               change one that was already recorded.
@@ -444,7 +419,6 @@ export function AssessmentGradingScreen() {
           maxScore={assessment.max_score}
           student={revisionFor}
           currentScore={revisionFor?.currentScore ?? null}
-          windowClosed={windowClosed}
           onClose={() => setRevisionFor(null)}
         />
       )}
@@ -504,11 +478,11 @@ export function AssessmentGradingScreen() {
             <Button
               variant="contained"
               onClick={() => void saveAll()}
-              // Also disabled on a closed window OR a frozen mid-term: the cells are
+              // Also disabled during a mid-session freeze: the cells are
               // already locked, but a draft entered before the deadline lapsed — or before
               // a refetch flipped the freeze on — could otherwise still be submitted into a
               // guaranteed 409. Same argument for both windows (D33).
-              disabled={saveMut.isPending || windowClosed || midtermFrozen}
+              disabled={saveMut.isPending || midtermFrozen}
               startIcon={saveMut.isPending ? <CircularProgress size={16} color="inherit" /> : undefined}
             >
               {saveMut.isPending ? 'Saving…' : 'Save changes'}

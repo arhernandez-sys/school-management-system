@@ -62,7 +62,9 @@ router = APIRouter(prefix="/offerings", tags=["offerings"])
 
 _ERR = {"model": ErrorResponse}
 _manage = require_role(Role.PRINCIPAL, Role.SECRETARY)
-_roster_read = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER)
+_roster_read = require_role(
+    Role.PRINCIPAL, Role.SECRETARY, Role.TEACHER, Role.HOD, Role.AUDITOR
+)
 _any = get_current_user
 
 

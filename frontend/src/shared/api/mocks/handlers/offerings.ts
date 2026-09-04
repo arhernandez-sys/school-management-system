@@ -7,6 +7,8 @@ import {
   compareOfferings,
   currentDemoStudent,
   currentDemoTeacher,
+  currentDemoHodTeacher,
+  demoHodOfferingIds,
   getActiveSemester,
   getActiveYear,
   getCourse,
@@ -178,6 +180,19 @@ function rosterEntry(offering: DemoOffering, student: DemoStudent) {
 /** Reject writes to an archived offering (FR-CLS-06 → 409 year_archived). */
 function notWritable(offering: DemoOffering): boolean {
   if (offering.is_archived) return true;
+  return yearArchived(offering);
+}
+
+/**
+ * The YEAR half of the check above, on its own.
+ *
+ * `PATCH /offerings/{id}` needs this one and not the offering flag, because it is the
+ * endpoint that OWNS `is_archived`: refusing it on an archived offering makes archiving a
+ * one-way door, since the request that would clear the flag is refused for having it set.
+ * A closed year still refuses everything (D41; mirrors `_assert_year_writable`'s
+ * `allow_archived_offering`).
+ */
+function yearArchived(offering: DemoOffering): boolean {
   const yearId = yearIdOfOffering(offering.id);
   return D.academic_years.find((y) => y.id === yearId)?.status === 'archived';
 }
@@ -262,6 +277,23 @@ function visibleOfferings(role: string): DemoOffering[] {
   if (teacher) {
     const ownedIds = new Set(offeringsOwnedByTeacher(teacher.id).map((o) => o.id));
     return D.offerings.filter((o) => ownedIds.has(o.id));
+  }
+  if (role === 'hod') {
+    // D43 — their programme's offerings UNION their own teaching. The union is not
+    // belt-and-braces: a head can teach a shared course that belongs to another
+    // programme, and scoping to the programme alone would hide their own gradebook
+    // from them.
+    //
+    // Without this branch an HOD falls through to `return D.offerings` and sees the
+    // whole college — the exact shape of the bug the real backend had before its own
+    // `elif` was added.
+    const visible = new Set([
+      ...demoHodOfferingIds(role),
+      ...(currentDemoHodTeacher(role)
+        ? offeringsOwnedByTeacher(currentDemoHodTeacher(role)!.id).map((o) => o.id)
+        : []),
+    ]);
+    return D.offerings.filter((o) => visible.has(o.id));
   }
   return D.offerings;
 }
@@ -422,6 +454,9 @@ export const offeringsHandlers = [
     }
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    if (yearArchived(offering)) {
+      return errorResponse(409, 'year_archived', "This offering's year is archived.");
+    }
 
     const body = (await request.json()) as {
       section_code?: string | null;

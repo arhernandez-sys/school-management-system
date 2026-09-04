@@ -9,9 +9,10 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { DateTimeField, FormDialog } from '@shared/components';
+import { isLecturerRole } from '@shared/auth/permissions';
 import type { Role } from '@shared/types/enums';
-import { AUDIENCE_LABEL, isoToLocalInput } from '../presentation';
+import { AUDIENCE_LABEL } from '../presentation';
 import { useTargetOfferings } from '../hooks/useAnnouncements';
 import type {
   AnnouncementAudience,
@@ -35,8 +36,14 @@ export interface AnnouncementFormValues {
   body: string;
   audience: AnnouncementAudience;
   offering_id: string | null;
-  /** datetime-local string; '' = no expiry. */
-  expires_at_local: string;
+  /**
+   * A UTC ISO instant; `''` = no expiry.
+   *
+   * D42 §6 — this held a `datetime-local` wall-clock string, because that is what the
+   * native input it fed spoke. `DateTimeField` owns the local↔UTC conversion now, so the
+   * form holds the value it actually sends and `isoToLocalInput` has no caller left.
+   */
+  expires_at: string;
 }
 
 export interface AnnouncementFormDialogProps {
@@ -54,7 +61,8 @@ export interface AnnouncementFormDialogProps {
 const BROADCAST_AUDIENCES: AnnouncementAudience[] = ['all', 'teachers', 'students'];
 
 function audienceOptionsFor(role: Role): AnnouncementAudience[] {
-  if (role === 'teacher') return ['class'];
+  // D43 — an HOD posts as a lecturer does: to their own courses, not school-wide.
+  if (isLecturerRole(role)) return ['class'];
   // principal / secretary
   return [...BROADCAST_AUDIENCES, 'class'];
 }
@@ -62,9 +70,9 @@ function audienceOptionsFor(role: Role): AnnouncementAudience[] {
 const emptyValues = (role: Role): AnnouncementFormValues => ({
   title: '',
   body: '',
-  audience: role === 'teacher' ? 'class' : 'all',
+  audience: isLecturerRole(role) ? 'class' : 'all',
   offering_id: null,
-  expires_at_local: '',
+  expires_at: '',
 });
 
 export function AnnouncementFormDialog({
@@ -95,7 +103,7 @@ export function AnnouncementFormDialog({
         body: announcement.body,
         audience: announcement.audience,
         offering_id: announcement.offering?.id ?? null,
-        expires_at_local: isoToLocalInput(announcement.expires_at),
+        expires_at: announcement.expires_at ?? '',
       });
     } else {
       setValues(emptyValues(role));
@@ -123,8 +131,7 @@ export function AnnouncementFormDialog({
       body: bodyTrimmed,
       audience: values.audience,
       offering_id: values.audience === 'class' ? values.offering_id : null,
-      expires_at:
-        values.expires_at_local === '' ? null : new Date(values.expires_at_local).toISOString(),
+      expires_at: values.expires_at === '' ? null : values.expires_at,
     };
     onSubmit(payload);
   };
@@ -217,13 +224,11 @@ export function AnnouncementFormDialog({
           </FormControl>
         )}
 
-        <TextField
+        <DateTimeField
           label="Expires (optional)"
-          type="datetime-local"
-          value={values.expires_at_local}
-          onChange={(e) => setValues((v) => ({ ...v, expires_at_local: e.target.value }))}
+          value={values.expires_at}
+          onChange={(v) => setValues((prev) => ({ ...prev, expires_at: v }))}
           fullWidth
-          InputLabelProps={{ shrink: true }}
           helperText={fieldError('expires_at') ?? 'Leave blank to keep it visible indefinitely.'}
           error={Boolean(fieldError('expires_at'))}
         />

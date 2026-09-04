@@ -3,6 +3,11 @@
  * Do not edit manually.
  * Student Management Information System API
  * OpenAPI spec version: 1.0.0
+ *
+ * ⚠️ HAND-EDITED (D43) — `hod` and `auditor` were added here by hand, because
+ * `npm run generate:api` is forbidden in this repo (see `schoolProfileRead.ts`).
+ * `backend/openapi.json` and `frontend/openapi.json` both carry the six-value enum,
+ * so a future regeneration would produce exactly this file.
  */
 
 export type Role = (typeof Role)[keyof typeof Role];
@@ -13,4 +18,6 @@ export const Role = {
   secretary: 'secretary',
   teacher: 'teacher',
   student: 'student',
+  hod: 'hod',
+  auditor: 'auditor',
 } as const;

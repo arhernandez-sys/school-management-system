@@ -64,18 +64,30 @@ export interface StudentListItem extends StudentNameParts {
    */
   gender: string | null;
   religion: string | null;
+  /** D40 — on the row as well as in the query, for the same reason as the three above. */
+  civil_status: string | null;
   /** The programme CODE, e.g. "BMAD". Null until a student is assigned one. */
   program_code: string | null;
 }
 
-/** GET /students/filter-options — values the directory filters can take (D32). */
+/**
+ * GET /students/filter-options — the free-text values actually PRESENT in the register
+ * (D32, D40).
+ *
+ * Neither list is the dropdown's primary source any more. Religion offers the
+ * client-owned `religions` table (D39) and civil status offers the four `CivilStatus`
+ * values; these two supply the RESIDUE — what is already stored that those vocabularies
+ * do not carry, so a student imported with a religion nobody configured is still
+ * selectable rather than being a row the directory shows but cannot filter to.
+ */
 export interface StudentFilterOptions {
-  /**
-   * DISTINCT religions actually present. Derived rather than hardcoded because religion
-   * is free text from the admissions form; a fixed list would go stale and would offer
-   * options matching nothing. Empty until admissions has run.
-   */
+  /** DISTINCT religions present on non-deleted students. Empty until admissions has run. */
   religions: string[];
+  /**
+   * DISTINCT civil statuses present (D40). Usually a subset of the four canonical values —
+   * anything else is a row this system did not write.
+   */
+  civil_statuses: string[];
 }
 
 /**
@@ -95,8 +107,12 @@ export interface StudentFilterOptions {
 export interface StudentAdmissionFields {
   /** Social Security number, 9 chars. Transcribed as the card reads. */
   ssno: string | null;
+  /**
+   * D40 — written from a fixed dropdown (`CIVIL_STATUSES`), but the COLUMN stays free
+   * text so a row this system did not write keeps whatever it holds.
+   */
   civil_status: string | null;
-  /** Free text — which is why the directory DISCOVERS its filter options (D32). */
+  /** Free text on the column; the form writes from the `religions` table (D39). */
   religion: string | null;
   street: string | null;
   city_town_village: string | null;
@@ -315,6 +331,12 @@ export interface StudentsListParams {
   religion?: string;
   gender?: string;
   program_id?: string;
+  /**
+   * D40. Matched EXACTLY, like `religion` — the write path normalises spellings
+   * (`normalise_civil_status`), so the column converges on the four canonical values and
+   * a fuzzy match here would only conflate them.
+   */
+  civil_status?: string;
 }
 
 export type StudentsPage = Page<StudentListItem>;

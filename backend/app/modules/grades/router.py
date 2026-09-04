@@ -81,8 +81,13 @@ _ERR = {"model": ErrorResponse}
 #:
 #: The Registrar keeps everything else — students, enrolment, offerings, admissions
 #: (§D14). This narrows grades alone.
-_staff = require_role(Role.TEACHER, Role.PRINCIPAL)
-_teacher = require_role(Role.TEACHER)
+#: D43 — HOD and Auditor read here. Neither can WRITE a grade through this gate: the
+#: Auditor is refused every mutating verb centrally (`deps._is_read_only_refusal`), and
+#: the HOD is held to their own offerings by `assert_teacher_owns_offering`.
+_staff = require_role(Role.TEACHER, Role.PRINCIPAL, Role.HOD, Role.AUDITOR)
+#: D43 — grade ENTRY. The HOD is here because they teach; ownership is what makes
+#: "their own courses only" true, and it is checked on every one of these routes.
+_teacher = require_role(Role.TEACHER, Role.HOD)
 #: D32 — a student's own grades are gated by the Dean's `students_can_view_grades`
 #: switch on top of the role check (403 `grades_hidden` when off).
 _student = require_student_grade_visibility(Role.STUDENT)

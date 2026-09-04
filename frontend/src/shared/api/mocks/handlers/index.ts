@@ -10,6 +10,7 @@
  * already imported and spread below. Just fill in your `<module>Handlers` array.
  * (Adding a brand-new module? Then, and only then, add one import + one spread here.)
  */
+import { readOnlyGuardHandlers } from './readOnlyGuard';
 import { authHandlers } from './auth';
 import { settingsHandlers } from './settings';
 import { coursesHandlers } from './courses';
@@ -30,6 +31,11 @@ import { reportsHandlers } from './reports';
 import { timetableHandlers } from './timetable';
 
 export const handlers = [
+  // D43 — FIRST, deliberately. MSW matches in array order and a resolver returning
+  // `undefined` falls through, so this refuses an auditor's writes in front of every
+  // module rather than each module remembering to. Mirrors the server, which enforces
+  // the same rule once in `get_current_user`.
+  ...readOnlyGuardHandlers,
   ...authHandlers,
   ...settingsHandlers,
   ...coursesHandlers,
