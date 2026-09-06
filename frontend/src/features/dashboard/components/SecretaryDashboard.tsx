@@ -38,7 +38,7 @@ const QUICK_ACTIONS = [
   // D38 — a student is created by ACCEPTING an application, so this tile leads to
   // Admissions rather than to the directory, which no longer has a create action.
   { label: 'Add student', to: ROUTES.applications, icon: <PersonAddAlt1Icon /> },
-  { label: 'Add teacher', to: ROUTES.teachers, icon: <SchoolIcon /> },
+  { label: 'Add lecturer', to: ROUTES.teachers, icon: <SchoolIcon /> },
   { label: 'Create class', to: ROUTES.offerings, icon: <AddBusinessIcon /> },
   { label: 'Post announcement', to: ROUTES.announcements, icon: <CampaignIcon /> },
 ];

@@ -20,6 +20,8 @@ Hermetic + rolled back via `db_session`.
 
 from __future__ import annotations
 
+import re
+
 import uuid
 from datetime import date, timedelta
 
@@ -217,7 +219,7 @@ class TestPatchIsPerSection:
 
     def test_a_decided_application_cannot_be_edited(self, client, graph) -> None:
         app_id = _file(client, graph, submit=True).json()["id"]
-        client.post(f"{A}/{app_id}/deny", headers=graph.S, json={})
+        client.post(f"{A}/{app_id}/reject", headers=graph.S, json={})
         r = client.patch(f"{A}/{app_id}", headers=graph.S, json={"religion": "X"})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_decided")
@@ -417,9 +419,10 @@ class TestAcceptance:
         assert r.status_code == 201, r.text
         body = r.json()
 
-        # The `YYYYMM###` was issued server-side (§D9).
-        assert len(body["student_number"]) == 9 and body["student_number"].isdigit()
-        assert body["student_number"].startswith(school_today().strftime("%Y%m"))
+        # The number was issued server-side (§D9). D44 — `YYYY-NNNNN`, was `YYYYMM###`:
+        # the MONTH left the format, so the prefix is the year alone.
+        assert re.fullmatch(r"\d{4}-\d{5}", body["student_number"]), body
+        assert body["student_number"].startswith(school_today().strftime("%Y-"))
         # A generated password comes back exactly ONCE.
         assert body["temporary_password"]
         assert body["application"]["status"] == "accepted"
@@ -558,11 +561,11 @@ class TestDenyWithdrawDelete:
     def test_deny_records_the_reason_and_the_decider(self, client, graph) -> None:
         app_id = _file(client, graph, submit=True).json()["id"]
         r = client.post(
-            f"{A}/{app_id}/deny", headers=graph.S, json={"reason": "Insufficient CSEC passes."}
+            f"{A}/{app_id}/reject", headers=graph.S, json={"reason": "Insufficient CSEC passes."}
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["status"] == "denied"
+        assert body["status"] == "rejected"  # D44 renamed `denied`
         assert "Insufficient CSEC" in body["comments"]
         assert body["decided_by_user_id"] == str(graph.registrar_user.id)
         assert body["decided_at"] is not None
@@ -570,14 +573,14 @@ class TestDenyWithdrawDelete:
     def test_deny_appends_rather_than_overwriting_comments(self, client, graph) -> None:
         """A Registrar's earlier notes are part of the record."""
         app_id = _file(client, graph, submit=True, comments="Chased transcript twice.").json()["id"]
-        body = client.post(f"{A}/{app_id}/deny", headers=graph.S, json={"reason": "No."}).json()
+        body = client.post(f"{A}/{app_id}/reject", headers=graph.S, json={"reason": "No."}).json()
         assert "Chased transcript twice." in body["comments"]
         assert "No." in body["comments"]
 
     def test_a_draft_cannot_be_denied(self, client, graph) -> None:
         """A draft is not a decision waiting to be made — it is a form nobody finished."""
         app_id = _file_draft(client, graph).json()["id"]
-        r = client.post(f"{A}/{app_id}/deny", headers=graph.S, json={})
+        r = client.post(f"{A}/{app_id}/reject", headers=graph.S, json={})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_not_decidable")
 

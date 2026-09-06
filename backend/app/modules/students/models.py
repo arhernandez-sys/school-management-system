@@ -240,29 +240,16 @@ STUDENT_NAME_ORDER = (
 )
 
 
-class StudentNumberSequence(Base):
-    """Per-month counter behind the `YYYYMM###` student ID (D30 §D9, brief §10).
-
-    One row per calendar month. Allocation is a single
-    `INSERT … ON DUPLICATE KEY UPDATE last_seq = last_seq + 1` inside the caller's
-    transaction: the row lock that statement takes is what makes two simultaneous
-    registrations safe, which a `SELECT MAX(...) + 1` never would be.
-
-    Created by `005_tertiary.sql` §10. See `app/modules/students/numbering.py`.
-    """
-
-    __tablename__ = "student_number_sequences"
-
-    year_month: Mapped[str] = mapped_column(String(6), primary_key=True)
-    last_seq: Mapped[int] = mapped_column(
-        Integer(), nullable=False, server_default=text("0")
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
-    )
+# D44 — `StudentNumberSequence` was here, mapping `student_number_sequences`. The student
+# ID format changed from `YYYYMM###` to `YYYY-NNNNN` and applications gained a counter of
+# their own, so the table's `year_month char(6)` primary key — which encoded the retired
+# format in the schema — was generalised to `number_sequences(scope, seq_key, last_seq)`.
+# The model now lives in `app/common/models.py`, because it serves two modules and belongs
+# to neither; the allocators are in `app/common/numbering.py`.
+#
+# The old TABLE is kept on disk holding the provenance of every pre-D44 number (the 006
+# convention), but nothing maps it any more: a model for a table no code may write is an
+# invitation to write to it.
 
 
 class StudentDocument(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):

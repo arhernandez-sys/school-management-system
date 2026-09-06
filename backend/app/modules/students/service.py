@@ -40,7 +40,12 @@ from app.common.enums import (
 from app.common.schemas import AuditStamp, OfferingRef, CourseRef, UserRef
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
-from app.core.rbac import _teacher_profile_id, hod_program_ids
+from app.core.rbac import (
+    _teacher_profile_id,
+    hod_offering_ids,
+    hod_program_ids,
+    teacher_offering_ids,
+)
 from app.core.timeutil import school_today
 from app.modules.assessments import release_nudge
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
@@ -49,7 +54,7 @@ from app.modules.offerings.models import ClassEnrollment, Course, CourseOffering
 from app.modules.grades import service as grades_service
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile, StudentProgramHistory
-from app.modules.students.numbering import allocate_student_number
+from app.common.numbering import allocate_student_number
 from app.modules.programs.models import Program
 from app.modules.students.schemas import (
     ProgramRef,
@@ -58,6 +63,7 @@ from app.modules.students.schemas import (
     StudentAssessmentsResponse,
     StudentCreateRequest,
     StudentDetail,
+    StudentOfferingRef,
     StudentFilterOptions,
     StudentListItem,
     StudentStatusRequest,
@@ -255,6 +261,35 @@ def _teacher_owned_offering_ids(
     )
 
 
+def _openable_offering_ids(
+    db: Session, caller: User | None, offering_ids: list[uuid.UUID]
+) -> set[uuid.UUID] | None:
+    """Of `offering_ids`, the ones `caller` may open the offering page for (D44).
+
+    Returns **None** when the caller may open all of them — the Dean, the Registrar, the
+    Auditor, a student on their own profile, or any unauthenticated internal call. None
+    rather than "the whole set" so the common case costs no query at all and the caller
+    can leave the schema default alone.
+
+    The two narrowed roles read the SAME helpers the offerings module itself enforces
+    with, rather than re-deriving ownership here:
+
+        lecturer  `rbac.teacher_offering_ids`  — the offerings they are assigned to
+        HOD       `rbac.hod_offering_ids`      — every offering in the programmes they head
+
+    An HOD is a lecturer too, so their own teaching is already inside their programme
+    reach; `hod_offering_ids` returning `[]` for an unconfigured head correctly closes
+    everything rather than opening it.
+    """
+    if caller is None or not offering_ids:
+        return None
+    if caller.role == Role.TEACHER:
+        return set(teacher_offering_ids(db, caller)) & set(offering_ids)
+    if caller.role == Role.HOD:
+        return set(hod_offering_ids(db, hod_program_ids(db, caller))) & set(offering_ids)
+    return None
+
+
 def _viewer_teacher_id(db: Session, caller: User | None) -> uuid.UUID | None:
     """The lecturer profile id to scope a read by, or None for every other role."""
     if caller is None or caller.role != Role.TEACHER:
@@ -385,6 +420,7 @@ def _detail(
     semester_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None = None,
     viewer_teacher_id: uuid.UUID | None = None,
+    caller: User | None = None,
 ) -> StudentDetail:
     """Shape a StudentDetail. `current_offerings` is the student's ACTIVE-semester
     subject classes, unless `academic_year_id` is supplied — then it is the classes
@@ -395,29 +431,45 @@ def _detail(
     an explicit year the student never sat in yields `[]`, never another year's
     classes.
 
-    `viewer_teacher_id` narrows `current_offerings` to the offerings that lecturer
-    teaches (D42 §3). It is a VIEW filter, not an access check — the caller has already
-    passed `_assert_teacher_can_see_student`, and this only decides how much of a student
-    they were admitted to is theirs to read."""
+    `viewer_teacher_id` still narrows the ASSESSMENTS tab to the offerings that lecturer
+    teaches (D42 §3) — a colleague's marks are not theirs to read.
+
+    **D44 changed what it does to `current_offerings`.** It used to filter that list the
+    same way, so a colleague's course vanished from the profile entirely and a lecturer
+    could not tell whether their advisee was taking three courses or eight. The client
+    asked for the whole enrolment to be VISIBLE with only their own courses clickable, so
+    the list is now complete and each row carries `can_open`. See `StudentOfferingRef`,
+    including the note that `can_open` is an affordance and never the boundary."""
     detail = StudentDetail.model_validate(student)
     if academic_year_id is not None:
-        detail.current_offerings = [
+        base_offerings = [
             offering_ref(offering, course)
             for offering, course in student_offerings_in_year(
                 db, student_id=student.id, academic_year_id=academic_year_id
             )
         ]
     else:
-        detail.current_offerings = _current_offerings_map(
+        base_offerings = _current_offerings_map(
             db, [student.id], semester_id=semester_id
         ).get(student.id, [])
-    if viewer_teacher_id is not None:
-        owned = _teacher_owned_offering_ids(
-            db, viewer_teacher_id, [o.id for o in detail.current_offerings]
+
+    # D44 — MARK, do not remove. Both sources above build the shared `OfferingRef`
+    # (`offerings.labels.offering_ref` is the one place an offering is named, and it
+    # rightly knows nothing about who is looking), so the rows are widened here into the
+    # students-local `StudentOfferingRef`. The conversion is explicit because pydantic
+    # does not coerce on assignment — the annotation alone would have left plain
+    # `OfferingRef` objects in the list and `can_open` would fail to set.
+    #
+    # `_openable_offering_ids` returns None for the roles that may open everything, which
+    # leaves the schema default `can_open=True` standing and costs no query.
+    openable = _openable_offering_ids(db, caller, [o.id for o in base_offerings])
+    detail.current_offerings = [
+        StudentOfferingRef(
+            **o.model_dump(),
+            can_open=True if openable is None else o.id in openable,
         )
-        detail.current_offerings = [
-            o for o in detail.current_offerings if o.id in owned
-        ]
+        for o in base_offerings
+    ]
     # The programme is a REF, not the raw uuid: every screen that shows a student shows
     # the code, and making each one fetch `/programs/{id}` to render one chip would be a
     # request per row (D30 §D12).
@@ -631,26 +683,21 @@ def list_students(
 
     # Attach offering_count to each item in ONE batched query (no N+1).
     #
-    # D42 §3 — counted through the caller's own lens. The directory's "Courses" column is
-    # the same fact the profile's enrolment list shows, and that list is now scoped to a
-    # Lecturer's own offerings: leaving the count global would have printed 4 in the
-    # directory and 1 on the profile of the same student, which reads as a bug rather than
-    # as a rule. One extra query for the whole page, and only for a Lecturer.
+    # D42 §3 counted this through the caller's own lens, narrowing a Lecturer's count to
+    # their own offerings. The REASON was consistency: the directory's "Courses" column is
+    # the same fact the profile's enrolment list shows, and that list was scoped, so a
+    # global count would have printed 4 in the directory and 1 on the profile of the same
+    # student — a bug, not a rule.
+    #
+    # **D44 removed the narrowing, and for the same reason.** The profile now shows the
+    # student's FULL enrolment with a lecturer's own courses merely clickable, so it is the
+    # narrowed COUNT that would now disagree with it. The invariant D42 wrote down is
+    # unchanged and still enforced by `test_the_directory_COUNT_agrees_with_the_profile`;
+    # only the side both were moved to has changed. One fewer query, too.
     ids = [item.id for item in page.items]
     offerings_map = _current_offerings_map(db, ids, semester_id=semester_id)
-    viewer_teacher_id = _viewer_teacher_id(db, caller)
-    owned_offering_ids: set[uuid.UUID] | None = None
-    if viewer_teacher_id is not None:
-        owned_offering_ids = _teacher_owned_offering_ids(
-            db,
-            viewer_teacher_id,
-            [o.id for refs in offerings_map.values() for o in refs],
-        )
     for item in page.items:
-        refs = offerings_map.get(item.id, [])
-        if owned_offering_ids is not None:
-            refs = [o for o in refs if o.id in owned_offering_ids]
-        item.offering_count = len(refs)
+        item.offering_count = len(offerings_map.get(item.id, []))
 
     # D32 — programme CODE for the printed list. One query for the whole page, not one
     # per row: the print view raises `page_size` to cover the entire filtered result, so
@@ -787,6 +834,7 @@ def get_student(
         semester_id=_active_semester_id(db),
         academic_year_id=academic_year_id,
         viewer_teacher_id=_viewer_teacher_id(db, caller),
+        caller=caller,
     )
 
 

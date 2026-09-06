@@ -17,6 +17,16 @@ export const ROUTES = {
    * shared links), so leaving `/classes` on a screen titled "Course Offerings" would be
    * the one place the retired homeroom noun still showed.
    */
+  /**
+   * D44 — Courses and Programmes left Settings for the main menu. They were
+   * `/settings/courses` and `/settings/programs`, which is where the CATALOG lived
+   * because nothing else claimed it; the client asked for them where the work is.
+   *
+   * The old paths still resolve — `features/settings/index.tsx` redirects them — so
+   * existing bookmarks and the links in older report pages keep working.
+   */
+  courses: '/courses',
+  programs: '/programs',
   offerings: '/offerings',
   /** Student / teacher Mon–Fri week, built from offering meetings. */
   timetable: '/timetable',

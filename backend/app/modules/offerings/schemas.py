@@ -26,6 +26,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.common.enums import EnrollmentStatus
+from app.modules.classrooms.schemas import ClassroomRef
 from app.common.schemas import (
     AcademicYearRef,
     AuditStamp,
@@ -79,6 +80,12 @@ class OfferingListItem(BaseModel):
     semester: SemesterRef | None = None
     section_code: str | None = None
     capacity: int | None = None
+    #: D44 — where this offering meets. NULL = no room assigned.
+    #:
+    #: ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+    #: places describe the same fact until the timetable is moved onto this one; see
+    #: `docs/d44-sims10-and-meeting3.md`.
+    classroom: ClassroomRef | None = None
     enrolled_count: int = 0
     is_archived: bool
     teachers: list[TeacherRef] = Field(default_factory=list)
@@ -102,6 +109,12 @@ class OfferingDetail(BaseModel):
     academic_year: AcademicYearRef | None = None
     section_code: str | None = None
     capacity: int | None = None
+    #: D44 — where this offering meets. NULL = no room assigned.
+    #:
+    #: ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+    #: places describe the same fact until the timetable is moved onto this one; see
+    #: `docs/d44-sims10-and-meeting3.md`.
+    classroom: ClassroomRef | None = None
     enrolled_count: int = 0
     over_capacity: bool = False
     is_archived: bool
@@ -209,6 +222,9 @@ class OfferingCreateRequest(BaseModel):
     #: "01", "02" for parallel sections of the same course in the same term.
     section_code: str | None = Field(default=None, max_length=10)
     capacity: int | None = Field(default=None, gt=0)
+    #: D44 — FK to `classroom`. Omit or send null for "no room yet", which is what all
+    #: 19 pre-D44 offerings are.
+    classroom_id: UUID | None = None
     teacher_ids: list[UUID] = Field(default_factory=list)
     lead_teacher_id: UUID | None = None
     meetings: list[OfferingMeetingInput] = Field(default_factory=list)
@@ -226,6 +242,10 @@ class OfferingUpdateRequest(BaseModel):
 
     section_code: str | None = Field(default=None, max_length=10)
     capacity: int | None = Field(default=None, gt=0)
+    #: D44. Send `null` EXPLICITLY to unassign the room; omit to leave it alone. The
+    #: service reads `exclude_unset`, so the two are distinguishable here — unlike
+    #: `capacity` above, which cannot be cleared and predates the distinction mattering.
+    classroom_id: UUID | None = None
     is_archived: bool | None = None
 
 

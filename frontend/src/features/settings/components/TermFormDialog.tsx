@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { DateField, DateTimeField, FormDialog } from '@shared/components';
+import { TERM_TYPE_OPTIONS } from '../termTypes';
 import type { SemesterDetail, TermType } from '@shared/api/generated/model';
 
 export interface TermFormValues {
@@ -34,12 +35,6 @@ export interface TermFormDialogProps {
   onSubmit: (values: TermFormValues) => void;
   onClose: () => void;
 }
-
-const TERM_TYPES: { value: TermType; label: string }[] = [
-  { value: 'semester', label: 'Semester' },
-  { value: 'summer', label: 'Summer block' },
-  { value: 'spring', label: 'Spring block' },
-];
 
 /*
  * D42 §6 — `toLocalInput` / `fromLocalInput` lived here and converted between a stored UTC
@@ -168,7 +163,7 @@ export function TermFormDialog({
             onChange={(e) => setTermType(e.target.value as TermType)}
             fullWidth
           >
-            {TERM_TYPES.map((t) => (
+            {TERM_TYPE_OPTIONS.map((t) => (
               <MenuItem key={t.value} value={t.value}>
                 {t.label}
               </MenuItem>

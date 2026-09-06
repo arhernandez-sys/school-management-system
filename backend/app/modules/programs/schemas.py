@@ -25,6 +25,13 @@ class ProgramListItem(BaseModel):
     code: str
     name: str
     award: str | None = None
+    #: D44, from the client's `sims_10` dump. Prose, not rules: `program_courses` and
+    #: `course_prerequisites` already express what the system can ENFORCE, and these two
+    #: are the prospectus text around them.
+    admission_requirements: str | None = None
+    graduation_requirements: str | None = None
+    #: D44. Registrar's free-text notes on the programme.
+    comments: str | None = None
     #: Total credits as PRINTED on the programme's course sequence (86–102).
     total_credits: int | None = None
     #: The programme's pass mark as a grade point — 2.50 (C+) everywhere except
@@ -86,6 +93,10 @@ class ProgramCreateRequest(BaseModel):
     code: str = Field(min_length=1, max_length=CODE_MAX)
     name: str = Field(min_length=1, max_length=NAME_MAX)
     award: str | None = Field(default=None, max_length=100)
+    # D44 — the client's own column widths, kept as dumped.
+    admission_requirements: str | None = Field(default=None, max_length=100)
+    graduation_requirements: str | None = Field(default=None, max_length=100)
+    comments: str | None = None
     total_credits: int | None = Field(default=None, gt=0, le=999)
     #: Defaults to C+ — correct for seven of the eight BAJC programmes. Primary
     #: Education is the exception and is created with 2.00.
@@ -101,6 +112,11 @@ class ProgramUpdateRequest(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=CODE_MAX)
     name: str | None = Field(default=None, min_length=1, max_length=NAME_MAX)
     award: str | None = Field(default=None, max_length=100)
+    # D44. Nullable AND omittable, which are different things here: `None` sent
+    # explicitly clears the field, omitting it leaves it alone. See `update_program`.
+    admission_requirements: str | None = Field(default=None, max_length=100)
+    graduation_requirements: str | None = Field(default=None, max_length=100)
+    comments: str | None = None
     total_credits: int | None = Field(default=None, gt=0, le=999)
     min_passing_grade_point: Decimal | None = Field(
         default=None, ge=Decimal("0"), le=Decimal("4")

@@ -126,11 +126,16 @@ class TestInsertLeavesItEmpty:
 class TestTheWholeSchemaWasConverted:
     """One column left NOT NULL is one table that silently keeps the old behaviour."""
 
-    #: The deliberate exception. `student_number_sequences` is a COUNTER, not a record:
-    #: one row per `YYYYMM` whose only purpose is to be UPDATEd to hand out the next
-    #: student number. Its `updated_at` is "when was a number last issued" — real
-    #: information about a row that is only ever written by being updated.
-    EXEMPT = {"student_number_sequences"}
+    #: The deliberate exceptions, and they are the same exception twice. A COUNTER is not
+    #: a record: its only purpose is to be UPDATEd to hand out the next number, so its
+    #: `updated_at` means "when was a number last issued" — real information about a row
+    #: that is only ever written by being updated. The 015 convention (NULL until edited)
+    #: says nothing useful about a row like that.
+    #:
+    #: `number_sequences` is D44's generalisation of `student_number_sequences` and
+    #: inherits the exemption for the identical reason. The old table is still on disk
+    #: holding pre-D44 provenance, so both are listed.
+    EXEMPT = {"student_number_sequences", "number_sequences"}
 
     def test_every_updated_at_is_nullable_in_the_orm(self) -> None:
         offenders = sorted(
@@ -157,7 +162,13 @@ class TestTheWholeSchemaWasConverted:
         assert offenders == [], f"still NOT NULL in the database: {offenders}"
 
     def test_the_counter_table_is_still_not_null(self, db_session) -> None:
-        """Pinned so the exemption is a decision someone has to undo on purpose."""
+        """Pinned so the exemption is a decision someone has to undo on purpose.
+
+        D44 — checks the LIVE counter table (`number_sequences`) as well as the retired
+        one. Pinning only `student_number_sequences` would have kept passing forever
+        against a table nothing writes to any more, which is a pin that has stopped
+        holding anything down."""
         insp = inspect(db_session.get_bind())
-        cols = {c["name"]: c for c in insp.get_columns("student_number_sequences")}
-        assert cols["updated_at"]["nullable"] is False
+        for table in ("student_number_sequences", "number_sequences"):
+            cols = {c["name"]: c for c in insp.get_columns(table)}
+            assert cols["updated_at"]["nullable"] is False, table

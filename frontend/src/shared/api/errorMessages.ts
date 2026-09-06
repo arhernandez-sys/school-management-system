@@ -45,6 +45,40 @@ const ERROR_COPY: Record<string, string> = {
   // Users
   role_change_forbidden: 'You do not have permission to change this user’s role or status.',
   duplicate_email: 'An account with this email already exists.',
+  // Admissions (D44). The two SSN codes are deliberately DIFFERENT sentences: one points
+  // at an application to finish, the other at a student who already exists, and telling
+  // the Registrar which of the two they are looking at is the whole value of the check.
+  // Both fall through to the server's own message, which names the specific record — the
+  // generic copy here is the safety net, not the primary.
+  duplicate_ssn:
+    'An application for this Social Security number is already open. Finish or close it before filing another.',
+  duplicate_ssn_student:
+    'This Social Security number belongs to a student already enrolled here. Check the student record before filing a new application.',
+  application_decided:
+    'A decision has already been recorded on this application, so it can no longer be edited.',
+  application_not_decidable:
+    'This application is not at a stage where that decision can be taken.',
+  application_not_reviewable:
+    'Only a submitted or under-review application can be moved to that stage.',
+  application_not_accepted: 'Only an accepted application can be marked enrolled.',
+  application_no_student:
+    'This application has no student record yet, so it cannot be marked enrolled. Accept it first.',
+  // Classrooms (D44).
+  duplicate_room_code: 'A classroom with this code already exists. Choose a different code.',
+  classroom_in_use:
+    'This room is assigned to course offerings. Reassign them first, or set the room Inactive instead of deleting it.',
+  classroom_not_found: 'That classroom no longer exists. Pick another one.',
+  classroom_status_not_settable:
+    'A room is set Active or Inactive. In-Use, Available and Occupied are worked out from the timetable.',
+  // The mid-session freeze (D33/D44). The SERVER says "mid-term" in these three; the
+  // whole frontend says "mid-session". Without these overrides the server's wording
+  // reaches the user verbatim and the app appears to have two names for one rule.
+  midterm_frozen:
+    'Grades are currently closed for this session and will accept new grades once the mid-session freeze ends.',
+  midterm_window_open:
+    'Grades are closed while the mid-session freeze is running. Revisions open when it ends.',
+  no_midterm_window:
+    'This session has no mid-session period. The Dean sets one in Settings → Academic structure.',
   duplicate_username: 'This username is already taken.',
   // Generic
   validation_error: 'Some fields need attention. Please review and try again.',

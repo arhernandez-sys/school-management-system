@@ -123,6 +123,19 @@ function isOverCapacity(offering: DemoOffering, enrolled: number): boolean {
  * The real API attaches course / lecturers / meetings to BOTH: an offering row is
  * unreadable without them, and fetching them per row would be N+1 from the client.
  */
+/** D44 — the minimal room embedded on an offering. Null when none is assigned. */
+function classroomRef(roomId: string | null) {
+  if (!roomId) return null;
+  const room = D.classrooms.find((r) => r.id === roomId);
+  if (!room) return null;
+  return {
+    id: room.id,
+    room_code: room.room_code,
+    building: room.building,
+    label: `${room.room_code} · ${room.building}`,
+  };
+}
+
 function offeringCore(offering: DemoOffering) {
   return {
     id: offering.id,
@@ -131,6 +144,9 @@ function offeringCore(offering: DemoOffering) {
     semester: semesterRef(offering.semester_id),
     section_code: offering.section_code,
     capacity: offering.capacity,
+    // D44 — the room ref, built here so the list and the detail cannot disagree about it.
+    // `label` is sent prebuilt, matching the server: no client assembles a second version.
+    classroom: classroomRef(offering.classroom_id),
     enrolled_count: rosterFor(offering.id).length,
     is_archived: offering.is_archived,
     teachers: offering.teacher_ids.map(teacherRef),
@@ -350,6 +366,8 @@ export const offeringsHandlers = [
       semester_id?: string | null;
       section_code?: string | null;
       capacity?: number | null;
+      /** D44 — FK to `classrooms`; explicit null unassigns. */
+      classroom_id?: string | null;
       teacher_ids?: string[];
       lead_teacher_id?: string | null;
       meetings?: Array<{
@@ -412,6 +430,8 @@ export const offeringsHandlers = [
       section_code: sectionCode,
       capacity:
         typeof body.capacity === 'number' && body.capacity > 0 ? Math.floor(body.capacity) : null,
+      // D44 — the room, if the form picked one.
+      classroom_id: typeof body.classroom_id === 'string' ? body.classroom_id : null,
       is_archived: false,
       teacher_ids: teacherIds,
       lead_teacher_id: lead ?? teacherIds[0] ?? null,
@@ -461,9 +481,16 @@ export const offeringsHandlers = [
     const body = (await request.json()) as {
       section_code?: string | null;
       capacity?: number | null;
+      /** D44 — FK to `classrooms`; explicit null unassigns. */
+      classroom_id?: string | null;
       is_archived?: boolean | null;
     };
 
+    // D44 — `!== undefined` so an explicit null UNASSIGNS the room, matching the server's
+    // `model_fields_set` handling. Absent means leave alone.
+    if (body.classroom_id !== undefined) {
+      offering.classroom_id = body.classroom_id ?? null;
+    }
     if (body.section_code !== undefined) {
       const next = body.section_code?.trim() || null;
       const clash = D.offerings.find(

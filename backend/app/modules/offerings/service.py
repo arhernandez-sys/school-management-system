@@ -65,6 +65,8 @@ from app.core.rbac import (
     hod_program_ids,
 )
 from app.modules.offerings.labels import OFFERING_ORDER, offering_label
+from app.modules.classrooms.models import Classroom
+from app.modules.classrooms.schemas import ClassroomRef
 from app.modules.offerings.models import (
     ClassEnrollment,
     ClassMeeting,
@@ -342,6 +344,24 @@ def _owned_offering_ids(
     )
 
 
+def _validated_room_id(db: Session, room_id: uuid.UUID | None) -> uuid.UUID | None:
+    """Resolve a room id, or 422 if it names no room (D44).
+
+    The FK would raise a 1452 on its own, which reaches the client as a 500. This turns it
+    into a field error naming `classroom_id`, the same courtesy every other reference on
+    this payload already gets.
+    """
+    if room_id is None:
+        return None
+    if db.get(Classroom, room_id) is None:
+        raise ValidationError(
+            "That classroom does not exist.",
+            code="classroom_not_found",
+            fields={"classroom_id": ["Unknown classroom."]},
+        )
+    return room_id
+
+
 def _decorate_offering_rows(db: Session, items: list, *, caller: User) -> None:
     """Attach course / semester / label / lecturers / meetings / counts in a fixed
     number of queries, whatever the row count."""
@@ -365,6 +385,16 @@ def _decorate_offering_rows(db: Session, items: list, *, caller: User) -> None:
         s.id: s
         for s in db.execute(select(Semester).where(Semester.id.in_(semester_ids))).scalars()
     }
+    # D44 — one query for every room on the page, like the courses and semesters above.
+    # `{None}` is filtered out: most offerings have no room and `IN (NULL)` matches
+    # nothing anyway, but sending it is noise in the slow log.
+    room_ids = {o.classroomid for o in offerings.values() if o.classroomid is not None}
+    rooms = {
+        r.classroomid: r
+        for r in db.execute(
+            select(Classroom).where(Classroom.classroomid.in_(room_ids))
+        ).scalars()
+    }
     teachers, leads = _teachers_map(db, ids)
     meetings = _meetings_map(db, ids)
     enrolled = _enrolled_counts(db, ids)
@@ -385,6 +415,17 @@ def _decorate_offering_rows(db: Session, items: list, *, caller: User) -> None:
         item.meetings = meetings.get(o.id, [])
         item.enrolled_count = enrolled.get(o.id, 0)
         item.actionable_by_caller = o.id in owned
+        room = rooms.get(o.classroomid) if o.classroomid else None
+        item.classroom = (
+            ClassroomRef(
+                id=room.classroomid,
+                room_code=room.roomcode,
+                building=room.building,
+                label=room.label,
+            )
+            if room
+            else None
+        )
 
 
 def _audit_stamp(db: Session, offering: CourseOffering) -> AuditStamp:
@@ -826,6 +867,7 @@ def create_offering(db: Session, *, actor: User, payload):
         semester_id=semester_id,
         section_code=section_code,
         capacity=payload.capacity,
+        classroomid=_validated_room_id(db, payload.classroom_id),
         is_archived=False,
         created_by=actor.id,
     )
@@ -912,6 +954,11 @@ def update_offering(db: Session, *, actor: User, offering_id: uuid.UUID, payload
         # NULL is a real value here: it means no limit, which is not the same as 0 and is
         # the state a new offering starts in.
         offering.capacity = payload.capacity
+    if "classroom_id" in supplied:
+        # D44. NULL is a real value here too — it unassigns the room, which is a thing a
+        # Registrar legitimately does when a class moves. Same `model_fields_set` rule the
+        # docstring above sets out for `capacity` and `section_code`.
+        offering.classroomid = _validated_room_id(db, payload.classroom_id)
     if "is_archived" in supplied and payload.is_archived is not None:
         # The column is NOT NULL, so an explicit null cannot be honoured — it is read as
         # "leave alone" rather than crashing on the flush.

@@ -150,3 +150,45 @@ class MyAttendanceHistoryItem(BaseModel):
 class MyAttendanceResponse(BaseModel):
     summary: AttendanceCounts
     history: list[MyAttendanceHistoryItem] = Field(default_factory=list)
+
+
+# ── GET /attendance/alerts (D44) ───────────────────────────────────────────────
+class AttendanceAlertOffering(AttendanceCounts):
+    """One class whose overall attendance has fallen below the threshold."""
+
+    offering: AttendanceOfferingRef
+    #: Enrolled students, so a 50% built from two marked days is visibly not a crisis.
+    enrolled_count: int = 0
+    #: `present + absent + late + excused` — the DENOMINATOR the percentage came from.
+    #: Surfaced because it is the single most important caveat about that number: see
+    #: `service.get_alerts`.
+    sessions_recorded: int = 0
+
+
+class AttendanceAlertStudent(AttendanceCounts):
+    """One student below the threshold, in one class.
+
+    Per (student, offering) rather than per student: a student can be diligent in three
+    courses and absent from a fourth, and an average across all four would hide exactly
+    the case the alert exists to surface.
+    """
+
+    student: AttendanceStudentRef
+    offering: AttendanceOfferingRef
+    sessions_recorded: int = 0
+
+
+class AttendanceAlertsResponse(BaseModel):
+    """Everything below the threshold for one academic year.
+
+    Both lists are ordered worst-first — the point of an alert list is the top of it.
+    """
+
+    #: The percentage the two lists were filtered on. Echoed back so the UI states the
+    #: rule it is showing rather than hard-coding a second copy of the number.
+    threshold: float
+    #: NULL when the school has no active year and none was asked for; both lists are
+    #: then empty and the UI can say so rather than showing a clean bill of health.
+    academic_year_id: UUID | None = None
+    offerings: list[AttendanceAlertOffering] = Field(default_factory=list)
+    students: list[AttendanceAlertStudent] = Field(default_factory=list)

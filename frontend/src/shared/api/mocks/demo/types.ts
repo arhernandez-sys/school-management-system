@@ -63,7 +63,8 @@ export interface DemoSemester {
    * two symmetrical semesters. NOT a curriculum position: "Semester 1" in a
    * programme's PLAN is `DemoProgramCourse.term_label`, a different fact.
    */
-  term_type: 'summer' | 'semester' | 'spring';
+  // D44 — `independent`, lowercase on the wire (see features/settings/termTypes.ts).
+  term_type: 'summer' | 'semester' | 'spring' | 'independent';
   /** 1-based, unique within the year. The old `1 | 2` cap went with D30. */
   sequence: number;
   start_date: string;
@@ -108,6 +109,11 @@ export interface DemoProgram {
   code: string; // e.g. BMAD — printed on the report card
   name: string;
   award: string | null;
+  /** D44, from the client's `sims_10` dump. Prospectus prose; not enforced. */
+  admission_requirements: string | null;
+  graduation_requirements: string | null;
+  /** D44. Internal notes; not shown to students. */
+  comments: string | null;
   /** Total credits as printed on the course sequence (BAJC: 86–102). */
   total_credits: number | null;
   /**
@@ -196,6 +202,26 @@ export interface DemoCourse {
  * a section — so two unsectioned offerings of one course in one term collide, matching the
  * `COALESCE` in the real unique index.
  */
+/**
+ * A physical room (D44), from the client's `sims_10` dump.
+ *
+ * `status` carries the full five-value vocabulary because the client's data does, but only
+ * `Active`/`Inactive` may be SET — the other three describe live occupancy, which the
+ * timetable derives.
+ */
+export interface DemoClassroom {
+  id: string;
+  room_code: string;
+  building: string;
+  /** `0` = not recorded, which is not the same as a room with no chairs. */
+  capacity: number;
+  room_type: string | null;
+  status: 'Active' | 'Inactive' | 'In-Use' | 'Available' | 'Occupied';
+  created_on: string;
+  /** NULL until edited — the 015 convention. */
+  edited_on: string | null;
+}
+
 export interface DemoOffering {
   id: string;
   course_id: string;
@@ -204,6 +230,8 @@ export interface DemoOffering {
   /** "01", "02" for parallel sections; null when the course has only one. */
   section_code: string | null;
   capacity: number | null;
+  /** D44 — FK to `classrooms`. Null = no room assigned. */
+  classroom_id: string | null;
   is_archived: boolean;
   /** Assigned lecturer(s); the lead is named separately, not implied by position. */
   teacher_ids: string[];
@@ -550,7 +578,20 @@ export interface DemoUser {
  */
 export interface DemoApplication {
   id: string;
-  status: 'draft' | 'submitted' | 'under_review' | 'accepted' | 'denied' | 'withdrawn';
+  // D44 — the client's ten-state vocabulary. `denied` was renamed `rejected`.
+  status:
+    | 'draft'
+    | 'submitted'
+    | 'under_review'
+    | 'documents_pending'
+    | 'eligible'
+    | 'accepted'
+    | 'rejected'
+    | 'deferred'
+    | 'withdrawn'
+    | 'enrolled';
+  /** D44 — `APP-YYYY-NNNNN`. */
+  application_number: string | null;
   school_year: string | null;
   first_name: string;
   middle_name: string | null;
@@ -615,7 +656,16 @@ export interface DemoApplication {
 export interface DemoApplicationTemp
   extends Omit<
     DemoApplication,
-    'status' | 'date_accepted' | 'student_code' | 'decided_by_user_id' | 'decided_at' | 'student_id'
+    // D44 — `application_number` joins the omitted set. A pending row is a holding area,
+    // not an application: the number is allocated at PROMOTION, so a temp row that
+    // carried one would be claiming a reference nothing has issued.
+    | 'status'
+    | 'application_number'
+    | 'date_accepted'
+    | 'student_code'
+    | 'decided_by_user_id'
+    | 'decided_at'
+    | 'student_id'
   > {
   status: 'pending';
   /** THE SCOPE. A Registrar sees only their own rows; the Dean sees all of them. */
@@ -745,6 +795,8 @@ export interface DemoDataset {
   /** D43 — HOD appointments. */
   program_heads: DemoProgramHead[];
   course_prerequisites: DemoCoursePrerequisite[];
+  /** D44 — physical rooms. */
+  classrooms: DemoClassroom[];
   offerings: DemoOffering[];
   teachers: DemoTeacher[];
   students: DemoStudent[];

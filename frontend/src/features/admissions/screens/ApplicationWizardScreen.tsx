@@ -338,6 +338,20 @@ export function ApplicationWizardScreen() {
 
   const detail = detailQuery.data;
   const pending = pendingQuery.data;
+
+  /**
+   * D44 — IS THIS AN EDIT OF AN ALREADY-SUBMITTED APPLICATION?
+   *
+   * The third mode (`/applications/:id/edit`) was built for pre-D38 DRAFTS, and its footer
+   * offers *Save and submit* accordingly. D44 pointed the Review screen's new Edit button
+   * at the same route for applications that are already `submitted` / `under_review` /
+   * `documents_pending` / `eligible` — and on those, *Save and submit* calls
+   * `POST /applications/{id}/submit`, which answers 409 `application_not_draft`.
+   *
+   * So the footer becomes mode-aware: an already-submitted application offers ONE action,
+   * *Save changes*, because submitting it again is not a thing that can happen.
+   */
+  const isEditingSubmitted = Boolean(detail && detail.status !== 'draft');
   const programmeOptions = programsQuery.data?.items ?? [];
 
   // ── D37: the two new dropdowns ──────────────────────────────────────────────
@@ -587,8 +601,18 @@ export function ApplicationWizardScreen() {
       </Button>
 
       <PageHeader
-        title={applicationId || pendingId ? 'Continue application' : 'New application'}
-        subtitle="The BAJC application form, one section at a time. Nothing is saved until you reach Section G."
+        title={
+          isEditingSubmitted
+            ? 'Edit application'
+            : applicationId || pendingId
+              ? 'Continue application'
+              : 'New application'
+        }
+        subtitle={
+          isEditingSubmitted
+            ? 'Correcting an application that has already been submitted. Your changes save on Section G.'
+            : 'The BAJC application form, one section at a time. Nothing is saved until you reach Section G.'
+        }
       />
 
       <Stepper
@@ -1265,24 +1289,31 @@ export function ApplicationWizardScreen() {
             <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
               <span>
                 <Button
+                  variant={isEditingSubmitted ? 'contained' : 'text'}
                   onClick={() => void finish()}
                   disabled={saving || !personalInfoComplete}
                 >
-                  Save and close
+                  {/* D44 — an already-submitted application is being CORRECTED, and there
+                      is nothing left to submit. */}
+                  {isEditingSubmitted ? 'Save changes' : 'Save and close'}
                 </Button>
               </span>
             </Tooltip>
-            <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
-              <span>
-                <Button
-                  variant="contained"
-                  onClick={() => void submitNow()}
-                  disabled={saving || !personalInfoComplete}
-                >
-                  Save and submit
-                </Button>
-              </span>
-            </Tooltip>
+            {/* Hidden rather than disabled: a disabled button invites the question "why
+                can't I?", and the answer here is that the action does not apply at all. */}
+            {!isEditingSubmitted && (
+              <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
+                <span>
+                  <Button
+                    variant="contained"
+                    onClick={() => void submitNow()}
+                    disabled={saving || !personalInfoComplete}
+                  >
+                    Save and submit
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </>
         ) : (
           <Tooltip title={step === 0 && !personalInfoComplete ? PERSONAL_INFO_HINT : ''}>

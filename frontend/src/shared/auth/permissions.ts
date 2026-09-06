@@ -25,8 +25,13 @@ export type ModuleKey =
    * edit, or delete academic courses." The Registrar still schedules offerings and
    * enrols students; they just cannot change the catalog itself.
    *
-   * Not a nav module yet — it renders as the Settings → Courses tab, alongside
-   * Programmes and Academic structure.
+   * D44 — this IS a nav module now. It was the Settings → Courses tab; it is now the
+   * "Courses" group in the main menu, which collapses to reveal Course Offerings.
+   *
+   * ⚠️ It also gates PROGRAMMES, which looks arbitrary and is not: `programs` below is
+   * `'view-all'` for EVERY role, so gating the Programmes nav entry on its own module
+   * would put it in front of Lecturers and Students. `courses` is `'none'` for exactly
+   * those two, which is the line actually wanted.
    */
   | 'courses'
   /**

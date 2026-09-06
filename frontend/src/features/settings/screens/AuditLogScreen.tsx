@@ -22,15 +22,23 @@ import { useAuditLog, type AuditLogItem } from '../hooks/useSettings';
  */
 
 /** Entity types worth offering as a filter. Free-text `action` covers the long tail. */
-const ENTITY_TYPES = [
-  'user',
-  'student',
-  'teacher',
-  'course',
-  'course_offering',
-  'program',
-  'grade',
-  'academic_year',
+/**
+ * D44 — `{ value, label }` rather than bare strings.
+ *
+ * The filter used to render the wire value through `humanizeAction`, which printed
+ * "Teacher" — the one place in the frontend still showing that word to a user. The wire
+ * value has to stay `teacher` (it is what `audit_log.entity_type` holds), so the label is
+ * carried separately instead of being derived from it.
+ */
+const ENTITY_TYPES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'user', label: 'User' },
+  { value: 'student', label: 'Student' },
+  { value: 'teacher', label: 'Lecturer' },
+  { value: 'course', label: 'Course' },
+  { value: 'course_offering', label: 'Course offering' },
+  { value: 'program', label: 'Programme' },
+  { value: 'grade', label: 'Grade' },
+  { value: 'academic_year', label: 'Academic year' },
 ] as const;
 
 /**
@@ -158,8 +166,8 @@ export function AuditLogScreen() {
             >
               <MenuItem value="">All entities</MenuItem>
               {ENTITY_TYPES.map((t) => (
-                <MenuItem key={t} value={t}>
-                  {humanizeAction(t)}
+                <MenuItem key={t.value} value={t.value}>
+                  {t.label}
                 </MenuItem>
               ))}
             </TextField>

@@ -50,6 +50,10 @@ function listItem(p: DemoProgram) {
     code: p.code,
     name: p.name,
     award: p.award,
+    // D44 — from the client's sims_10 dump.
+    admission_requirements: p.admission_requirements ?? null,
+    graduation_requirements: p.graduation_requirements ?? null,
+    comments: p.comments ?? null,
     total_credits: p.total_credits,
     min_passing_grade_point: p.min_passing_grade_point,
     is_active: p.is_active,
@@ -205,6 +209,9 @@ export const programsHandlers = [
       code: body.code,
       name: body.name,
       award: body.award ?? null,
+      admission_requirements: body.admission_requirements ?? null,
+      graduation_requirements: body.graduation_requirements ?? null,
+      comments: body.comments ?? null,
       total_credits: body.total_credits ?? null,
       min_passing_grade_point: body.min_passing_grade_point ?? '2.50',
       is_active: true,
@@ -228,6 +235,13 @@ export const programsHandlers = [
     if (body.code !== undefined) program.code = body.code;
     if (body.name !== undefined) program.name = body.name;
     if (body.award !== undefined) program.award = body.award ?? null;
+    // D44 — an explicit null CLEARS; an absent key leaves it alone. Mirrors the
+    // server's `exclude_unset` handling of these three.
+    if (body.admission_requirements !== undefined)
+      program.admission_requirements = body.admission_requirements ?? null;
+    if (body.graduation_requirements !== undefined)
+      program.graduation_requirements = body.graduation_requirements ?? null;
+    if (body.comments !== undefined) program.comments = body.comments ?? null;
     if (body.total_credits !== undefined) program.total_credits = body.total_credits ?? null;
     if (body.min_passing_grade_point !== undefined) {
       program.min_passing_grade_point = body.min_passing_grade_point;

@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Box, Button, Chip, MenuItem, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import {
+  Box,
+  Button,
+  Chip,
+  IconButton,
+  MenuItem,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
@@ -9,13 +20,15 @@ import {
   PageHeader,
   StatusBadge,
   type DataTableColumn,
-  type StatusKind,
 } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
+import { useAuth } from '@features/auth/hooks/useAuth';
 import { AdmissionsTabs } from '../components/AdmissionsTabs';
 import { usePendingApplications, useApplications } from '../hooks/useAdmissions';
 import {
   APPLICATION_STATUS_LABEL,
+  APPLICATION_STATUS_KIND,
+  isDecidedApplication,
   type ApplicationListItem,
   type ApplicationStatus,
 } from '../types';
@@ -30,29 +43,30 @@ import {
  * The `pending_credit_transfers` count is on the ROW, so the Dean can see where the work
  * is without opening each application (brief §13 — they decide every transfer).
  */
-const STATUS_KIND: Record<ApplicationStatus, StatusKind> = {
-  draft: 'neutral',
-  submitted: 'info',
-  under_review: 'warning',
-  accepted: 'success',
-  denied: 'error',
-  withdrawn: 'neutral',
-};
-
 const STATUS_OPTIONS: { value: ApplicationStatus | 'all'; label: string }[] = [
   { value: 'submitted', label: 'Submitted' },
   { value: 'under_review', label: 'Under review' },
   // D38 — a form being typed today is a PENDING row on its own tab, not a draft here.
   // This filter now reaches only `applications.draft` rows filed before that change.
-  { value: 'draft', label: 'Drafts (pre-D38)' },
+  { value: 'draft', label: 'Drafts' },
+  // D44 — the four states the client's vocabulary added, in the order an application
+  // moves through them rather than alphabetically.
+  { value: 'documents_pending', label: 'Waiting on documents' },
+  { value: 'eligible', label: 'Eligible' },
   { value: 'accepted', label: 'Accepted' },
-  { value: 'denied', label: 'Denied' },
+  { value: 'enrolled', label: 'Enrolled' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'deferred', label: 'Deferred' },
   { value: 'withdrawn', label: 'Withdrawn' },
   { value: 'all', label: 'All applications' },
 ];
 
 export function ApplicationsListScreen() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // D44 — the two roles that own admissions. The Auditor reaches this list and every
+  // write it could reach is refused centrally, so it is not offered an Edit button.
+  const canEdit = user?.role === 'principal' || user?.role === 'secretary';
   const [status, setStatus] = useState<ApplicationStatus | 'all'>('submitted');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
@@ -70,6 +84,18 @@ export function ApplicationsListScreen() {
 
   const columns = useMemo<DataTableColumn<ApplicationListItem>[]>(
     () => [
+      {
+        // D44 — the reference the applicant is given and quotes back. First column,
+        // because it is the thing someone arrives at this screen holding.
+        field: 'application_number',
+        headerName: 'Application',
+        hideOnMobile: true,
+        render: (row) => (
+          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+            {row.application_number ?? '—'}
+          </Typography>
+        ),
+      },
       {
         field: 'full_name',
         headerName: 'Applicant',
@@ -93,7 +119,7 @@ export function ApplicationsListScreen() {
         render: (row) => (
           <StatusBadge
             label={APPLICATION_STATUS_LABEL[row.status]}
-            kind={STATUS_KIND[row.status]}
+            kind={APPLICATION_STATUS_KIND[row.status]}
           />
         ),
       },
@@ -240,9 +266,27 @@ export function ApplicationsListScreen() {
           onClick: () => navigate(`${ROUTES.applications}/new`),
         }}
         rowActions={(row) => (
-          <Button size="small" component={RouterLink} to={`${ROUTES.applications}/${row.id}`}>
-            {row.status === 'draft' ? 'Continue' : 'Review'}
-          </Button>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+            <Button size="small" component={RouterLink} to={`${ROUTES.applications}/${row.id}`}>
+              {row.status === 'draft' ? 'Continue' : 'Review'}
+            </Button>
+            {/* D44 — straight to the form, without the detour through the review page.
+                Offered on anything not yet decided, which is exactly what the server's
+                `_assert_editable` permits; a draft already has "Continue" for this, so it
+                is excluded rather than given two buttons that do the same thing. */}
+            {canEdit && !isDecidedApplication(row.status) && row.status !== 'draft' && (
+              <Tooltip title="Edit application">
+                <IconButton
+                  size="small"
+                  aria-label={`Edit the application from ${row.full_name}`}
+                  component={RouterLink}
+                  to={`${ROUTES.applications}/${row.id}/edit`}
+                >
+                  <EditIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
         )}
       />
     </PageContainer>

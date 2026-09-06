@@ -115,6 +115,57 @@ def column_exists(table: str, column: str):
     return probe
 
 
+def enum_has(table: str, column: str, *values: str):
+    """The column's enum offers every named label.
+
+    Reads `COLUMN_TYPE` rather than trying to INSERT one, because a fingerprint must not
+    write. The match is on the rendered `enum('a','b')` text, quoted, so `spring` cannot
+    be satisfied by `springboard`.
+    """
+
+    def probe(cur):
+        cur.execute(
+            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+            (table, column),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, f"`{table}`.`{column}` MISSING"
+        rendered = row[0]
+        missing = [v for v in values if f"'{v}'" not in rendered]
+        if missing:
+            return False, f"`{table}`.`{column}` lacks: {', '.join(missing)}"
+        return True, f"`{table}`.`{column}` offers {', '.join(values)}"
+
+    return probe
+
+
+def enum_lacks(table: str, column: str, *values: str):
+    """The column's enum does NOT offer the named labels.
+
+    The mirror of `enum_has`, for a RENAME. D44 turned `denied` into `rejected`; probing
+    only that `rejected` exists would pass on a database where the widen ran and the
+    narrow did not, leaving both labels storable and the two spellings free to drift.
+    """
+
+    def probe(cur):
+        cur.execute(
+            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+            (table, column),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, f"`{table}`.`{column}` MISSING"
+        present = [v for v in values if f"'{v}'" in row[0]]
+        if present:
+            return False, f"`{table}`.`{column}` still offers: {', '.join(present)}"
+        return True, f"`{table}`.`{column}` no longer offers {', '.join(values)}"
+
+    return probe
+
+
 def no_not_null_updated_at_except(*exempt: str):
     """Every `updated_at` in the schema is NULLable, bar the named exemptions.
 
@@ -435,9 +486,59 @@ MIGRATIONS: list[tuple[str, str, list]] = [
         "D39 - a new row leaves `updated_at` empty; it means 'when was this EDITED'",
         [
             # Probing ONE table would pass while thirty-five stayed NOT NULL, so this
-            # asserts the property across the schema. `student_number_sequences` is the
-            # deliberate exemption (a counter, not a record) and is excluded by the probe.
-            no_not_null_updated_at_except("student_number_sequences"),
+            # asserts the property across the schema. The two COUNTER tables are the
+            # deliberate exemptions (a counter is not a record) and are excluded here.
+            # D44 added `number_sequences` alongside its predecessor.
+            no_not_null_updated_at_except(
+                "student_number_sequences", "number_sequences"
+            ),
+        ],
+    ),
+    (
+        # D44 - 016 was never registered here when it shipped, so `--expect 016` matched
+        # nothing and a database missing `program_heads` reported clean. Added with 017.
+        "016_hod_auditor_roles.sql",
+        "D43 - the auditor and hod roles, and the programme an HOD is scoped by",
+        [
+            enum_has("users", "role", "hod", "auditor"),
+            table_exists("program_heads"),
+        ],
+    ),
+    (
+        "017_sims10_reconcile.sql",
+        "D44 - the client's sims_10 dump, plus the two ID formats it did not carry",
+        [
+            # The ten-state vocabulary, and the RENAME. Both halves: see `enum_lacks`.
+            enum_has(
+                "applications",
+                "status",
+                "documents_pending",
+                "eligible",
+                "rejected",
+                "deferred",
+                "enrolled",
+            ),
+            enum_lacks("applications", "status", "denied"),
+            column_exists("applications", "application_number"),
+            column_exists("applications", "conditions_of_admission"),
+            # LOWERCASE, against the client's dump. A capitalised label round-trips to a
+            # ValueError through `TermType`; see 017 header note 1.
+            enum_has("semesters", "term_type", "independent"),
+            enum_lacks("semesters", "term_type", "Independent"),
+            column_exists("semesters", "semester_status"),
+            column_exists("programs", "admission_requirements"),
+            column_exists("programs", "graduation_requirements"),
+            column_exists("programs", "comments"),
+            # Deliberately NOT added - see 017 header note 2. Probed as an ABSENCE so that
+            # applying the client's dump wholesale later reports PARTIAL rather than
+            # quietly accepting a second, FK-less home for a fact `program_heads` owns.
+            column_absent("programs", "head_of_dept_id"),
+            table_exists("classroom"),
+            column_exists("course_offerings", "classroomid"),
+            fk_targets("course_offerings", "classroomid", "classroom"),
+            table_exists("number_sequences"),
+            pk_columns("number_sequences", ["scope", "seq_key"]),
+            enum_has("users", "role", "sysadmin"),
         ],
     ),
 ]

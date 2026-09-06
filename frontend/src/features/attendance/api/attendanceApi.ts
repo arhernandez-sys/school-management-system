@@ -9,6 +9,7 @@ import { api } from '@shared/api/client';
 import type {
   AttendanceRegister,
   AttendanceOfferingsResponse,
+  AttendanceAlertsResponse,
   AttendanceSummaryResponse,
   AttendanceUpsertRequest,
   AttendanceUpsertResponse,
@@ -51,6 +52,27 @@ export async function getAttendanceSummary(
 ): Promise<AttendanceSummaryResponse> {
   const res = await api.get<AttendanceSummaryResponse>('/attendance/summary', {
     params: { offering_id: offeringId },
+    signal,
+  });
+  return res.data;
+}
+
+/**
+ * GET /attendance/alerts — classes and students below the floor, for one academic year.
+ *
+ * Server-scoped exactly as `/attendance/offerings` is: a lecturer is alerted about their
+ * own classes and no one else's, without this client saying anything about it.
+ */
+export async function getAttendanceAlerts(
+  academicYearId?: string,
+  threshold?: number,
+  signal?: AbortSignal,
+): Promise<AttendanceAlertsResponse> {
+  const params: Record<string, string | number> = {};
+  if (academicYearId) params.academic_year_id = academicYearId;
+  if (threshold !== undefined) params.threshold = threshold;
+  const res = await api.get<AttendanceAlertsResponse>('/attendance/alerts', {
+    params,
     signal,
   });
   return res.data;

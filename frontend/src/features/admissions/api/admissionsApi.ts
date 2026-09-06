@@ -74,11 +74,53 @@ export async function reviewApplication(id: string): Promise<ApplicationDetail> 
   return res.data;
 }
 
-export async function denyApplication(
+/**
+ * D44 — `/reject`, renamed from `/deny` along with the status. Not aliased on either
+ * side: two spellings of one decision is how an audit trail ends up with both in it.
+ */
+export async function rejectApplication(
   id: string,
   reason?: string | null,
 ): Promise<ApplicationDetail> {
-  const res = await api.post<ApplicationDetail>(`/applications/${id}/deny`, { reason });
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/reject`, { reason });
+  return res.data;
+}
+
+/**
+ * D44 — back to the applicant for missing paperwork. The only REVERSIBLE move in the
+ * machine: `reviewApplication` brings it back when the papers arrive.
+ */
+export async function requestDocuments(
+  id: string,
+  reason?: string | null,
+): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/request-documents`, {
+    reason,
+  });
+  return res.data;
+}
+
+/**
+ * D44 — the applicant meets the requirements. Deliberately NOT a decision: the college
+ * may have more eligible applicants than places, so `decided_at` stays null.
+ */
+export async function markEligible(id: string): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/eligible`);
+  return res.data;
+}
+
+/** D44 — hold the decision to a later intake. TERMINAL; the applicant re-applies. */
+export async function deferApplication(
+  id: string,
+  reason?: string | null,
+): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/defer`, { reason });
+  return res.data;
+}
+
+/** D44 — accepted AND registered. Closes the application behind the student record. */
+export async function markEnrolled(id: string): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/enrolled`);
   return res.data;
 }
 

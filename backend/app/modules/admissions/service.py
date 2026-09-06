@@ -29,6 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import (
+    OPEN_APPLICATION_STATUSES,
     ApplicationStatus,
     CreditTransferStatus,
     EducationLevel,
@@ -75,7 +76,7 @@ from app.modules.offerings.models import Course
 from app.modules.programs.models import Program
 from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.students.models import StudentProfile, StudentProgramHistory
-from app.modules.students.numbering import allocate_student_number
+from app.common.numbering import allocate_application_number, allocate_student_number
 from app.modules.users.models import User
 
 #: The content-equivalency floor for a credit transfer (brief §13). Mirrored by
@@ -84,9 +85,32 @@ from app.modules.users.models import User
 #: surfacing a driver-level CHECK violation as a 500.
 MIN_EQUIVALENCY_PCT = 75.0
 
-#: Statuses from which a decision may be taken. A `draft` is not a decision waiting to be
-#: made — it is a form nobody has finished.
-_DECIDABLE = (ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW)
+#: Statuses a final decision (accept / reject / defer) may be taken from. A `draft` is
+#: not a decision waiting to be made — it is a form nobody has finished.
+#:
+#: D44 widened this from (SUBMITTED, UNDER_REVIEW). `ELIGIBLE` joins them because it is
+#: precisely the state that says "the checking is done, the decision is not" — refusing to
+#: decide from it would make marking an applicant eligible a step BACKWARDS. Note
+#: `DOCUMENTS_PENDING` is deliberately absent: the point of that state is that the file is
+#: incomplete, so a decision taken from it would be taken on a file the college knows it
+#: has not finished reading.
+_DECIDABLE = (
+    ApplicationStatus.SUBMITTED,
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.ELIGIBLE,
+)
+
+#: Statuses that may move to UNDER_REVIEW. `SUBMITTED` is the original path;
+#: `DOCUMENTS_PENDING` is the return trip once the applicant sends the missing paperwork.
+#:
+#: `DEFERRED` is deliberately NOT here, and this is the one place the D44 state machine had
+#: to choose. A deferred application could either be reopened at the next intake, or be
+#: terminal with the applicant re-applying. It cannot be both: if it reopens, it is still
+#: OPEN, and the SSN duplicate guard would then refuse the very re-application the client
+#: asked to be possible. Terminal is the answer that makes the two rules agree — and it is
+#: also the more honest record, because an intake is what an application is FOR. The new
+#: row gets its own APP number and its own decision trail.
+_REVIEWABLE = (ApplicationStatus.SUBMITTED, ApplicationStatus.DOCUMENTS_PENDING)
 
 
 def _now() -> datetime:
@@ -216,6 +240,7 @@ def _list_item(
 ) -> ApplicationListItem:
     return ApplicationListItem(
         id=row.id,
+        application_number=row.application_number,
         status=row.status,
         full_name=row.full_name,
         first_name=row.first_name,
@@ -288,6 +313,7 @@ def _detail(db: Session, row: Application) -> ApplicationDetail:
         guardian_signed_at=row.guardian_signed_at,
         academic_year_id=row.academic_year_id,
         enrolment_status=row.enrolment_status,
+        conditions_of_admission=row.conditions_of_admission,
         comments=row.comments,
         decided_by_user_id=row.decided_by_user_id,
         decided_at=row.decided_at,
@@ -368,8 +394,15 @@ def acceptance_issues(db: Session, app_row: Application) -> list[str]:
     """
     if app_row.status == ApplicationStatus.ACCEPTED:
         return ["This application has already been accepted."]
-    if app_row.status in (ApplicationStatus.DENIED, ApplicationStatus.WITHDRAWN):
+    if app_row.status in (
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.WITHDRAWN,
+        ApplicationStatus.DEFERRED,
+        ApplicationStatus.ENROLLED,
+    ):
         return [f"This application is {app_row.status.value}."]
+    if app_row.status == ApplicationStatus.DOCUMENTS_PENDING:
+        return ["This application is waiting on documents from the applicant."]
 
     issues = list(submission_issues(app_row))
     if app_row.status == ApplicationStatus.DRAFT:
@@ -495,6 +528,9 @@ _WRITABLE = (
     "guardian_signed_at",
     "academic_year_id",
     "enrolment_status",
+    # D44. Editable like the rest of the official-use block; it is a note the college
+    # attaches to its own offer, not a value the acceptance transition derives.
+    "conditions_of_admission",
     "comments",
 )
 
@@ -522,6 +558,67 @@ def _assert_year_exists(db: Session, year_id: uuid.UUID | None) -> None:
         )
 
 
+def _assert_no_open_application(
+    db: Session, ssno: str | None, *, exclude_id: uuid.UUID | None = None
+) -> None:
+    """Refuse a second application while an earlier one for the same SSN is still open (D44).
+
+    WHAT "OPEN" MEANS AND WHY IT IS NOT "EXISTS". The client's ask was to stop duplicates
+    *so that people can re-register* — those are the same sentence, and a naive
+    one-application-per-SSN rule would satisfy the first half by breaking the second: a
+    rejected applicant could never apply again. So the guard is on
+    `OPEN_APPLICATION_STATUSES`, which is derived from `DECIDED_APPLICATION_STATUSES`
+    rather than listed separately, precisely so a status cannot be added to the enum and
+    quietly fall outside both.
+
+    ENROLLED STUDENTS COUNT TOO. `student_profiles.ssno` is checked alongside, because the
+    likeliest real duplicate is not two applications — it is somebody already studying here
+    filling in the form again. The application's own accepted row is excluded from that
+    check by matching on `application_id`, or accepting an application would immediately
+    make its own applicant a duplicate of themselves.
+
+    A BLANK SSN IS NOT A DUPLICATE. The column is nullable, the college is explicitly not
+    the authority on the format (`models.Application.ssno`), and treating "" as a value
+    would make every SSN-less draft collide with every other one.
+    """
+    if not ssno or not ssno.strip():
+        return
+    ssno = ssno.strip()
+
+    # A plain `=` is doing case-insensitive matching here, because `utf8mb4_uca1400_ai_ci`
+    # is. That is normally the trap in this database — it hides case drift from GROUP BY
+    # and `<>` — but for a duplicate check it is exactly the wanted behaviour, so this is
+    # one of the few places NOT to reach for HEX()/BINARY.
+    stmt = select(Application).where(
+        Application.ssno == ssno,
+        Application.status.in_(OPEN_APPLICATION_STATUSES),
+        Application.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Application.id != exclude_id)
+    existing = db.scalars(stmt).first()
+    if existing is not None:
+        raise Conflict(
+            f"An application for this Social Security number is already open "
+            f"({existing.application_number or existing.full_name}, "
+            f"{existing.status.value}). Finish or close it before filing another.",
+            code="duplicate_ssn",
+        )
+
+    student = db.scalars(
+        select(StudentProfile).where(
+            StudentProfile.ssno == ssno,
+            StudentProfile.deleted_at.is_(None),
+        )
+    ).first()
+    if student is not None:
+        raise Conflict(
+            f"This Social Security number belongs to an existing student "
+            f"({student.student_number}).",
+            code="duplicate_ssn_student",
+        )
+
+
 def create_application(
     db: Session, *, actor: User, payload: ApplicationCreateRequest
 ) -> ApplicationDetail:
@@ -534,10 +631,16 @@ def create_application(
     """
     _assert_program_exists(db, payload.program_id)
     _assert_year_exists(db, payload.academic_year_id)
+    _assert_no_open_application(db, payload.ssno)
 
     row = Application(
         status=ApplicationStatus.DRAFT,
         created_by=actor.id,
+        # D44 — allocated BEFORE the flush, inside this transaction, so the sequence row
+        # and the application row commit together and a failed create does not burn a
+        # number. Drafts included: the number is what the Registrar quotes on the phone,
+        # and that call happens long before anyone decides anything.
+        application_number=allocate_application_number(db),
     )
     supplied = payload.model_dump(exclude_unset=True)
     for name in _WRITABLE:
@@ -692,12 +795,15 @@ def set_under_review(
 
     A staging state, so a queue of submitted applications can be triaged without the only
     two options being "decide now" and "leave it".
+
+    D44 also made this the RETURN path from `documents_pending` — the missing paperwork
+    arrived and the file rejoins the queue. See `_REVIEWABLE`.
     """
     row = _application_or_404(db, application_id)
-    if row.status != ApplicationStatus.SUBMITTED:
+    if row.status not in _REVIEWABLE:
         raise Conflict(
-            f"Only a submitted application can be moved under review "
-            f"(this one is {row.status.value}).",
+            f"Only a submitted application, or one waiting on documents, can be moved "
+            f"under review (this one is {row.status.value}).",
             code="application_not_submitted",
         )
     row.status = ApplicationStatus.UNDER_REVIEW
@@ -707,25 +813,176 @@ def set_under_review(
     return _detail(db, row)
 
 
-def deny_application(
+def _append_comment(row: Application, reason: str | None) -> None:
+    """Append a decision note. Never overwrites — a Registrar's earlier notes are part of
+    the record, and a decision that erases the reasoning before it is not a record."""
+    if reason:
+        row.comments = f"{row.comments}\n{reason}".strip() if row.comments else reason
+
+
+def reject_application(
     db: Session, *, actor: User, application_id: uuid.UUID, reason: str | None
 ) -> ApplicationDetail:
-    """POST /applications/{id}/deny (Registrar + Dean). Terminal, and not a delete."""
+    """POST /applications/{id}/reject (Registrar + Dean). Terminal, and not a delete.
+
+    D44 renamed this from `deny_application` along with the status itself. The old name is
+    NOT kept as an alias: two names for one decision is how an audit trail ends up with
+    both `application.deny` and `application.reject` rows meaning the same thing.
+    """
     row = _application_or_404(db, application_id)
     if row.status not in _DECIDABLE:
         raise Conflict(
-            f"Only a submitted or under-review application can be denied "
+            f"Only a submitted, under-review or eligible application can be rejected "
             f"(this one is {row.status.value}).",
             code="application_not_decidable",
         )
-    row.status = ApplicationStatus.DENIED
+    row.status = ApplicationStatus.REJECTED
     row.decided_by_user_id = actor.id
     row.decided_at = _now()
-    if reason:
-        # Appended, never overwritten: a Registrar's earlier notes are part of the record.
-        row.comments = f"{row.comments}\n{reason}".strip() if row.comments else reason
+    _append_comment(row, reason)
     row.updated_by = actor.id
-    _audit(db, actor=actor, action="application.deny", entity_id=row.id)
+    _audit(db, actor=actor, action="application.reject", entity_id=row.id)
+    db.commit()
+    return _detail(db, row)
+
+
+def request_documents(
+    db: Session, *, actor: User, application_id: uuid.UUID, reason: str | None
+) -> ApplicationDetail:
+    """POST /applications/{id}/request-documents — back to the applicant (D44).
+
+    The one REVERSIBLE state in the machine: the file is short something, the applicant is
+    told, and `set_under_review` picks it up again when the paperwork arrives. Before D44
+    this had to be expressed as "leave it under review and remember why", which is to say
+    it could not be expressed at all — nothing in the queue distinguished an application
+    being read from one waiting on someone else.
+
+    Reachable from SUBMITTED and UNDER_REVIEW but not from ELIGIBLE: an application whose
+    requirements have been confirmed met is not one with missing documents.
+    """
+    row = _application_or_404(db, application_id)
+    if row.status not in (ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW):
+        raise Conflict(
+            f"Only a submitted or under-review application can be sent back for "
+            f"documents (this one is {row.status.value}).",
+            code="application_not_reviewable",
+        )
+    row.status = ApplicationStatus.DOCUMENTS_PENDING
+    _append_comment(row, reason)
+    row.updated_by = actor.id
+    _audit(db, actor=actor, action="application.request_documents", entity_id=row.id)
+    db.commit()
+    return _detail(db, row)
+
+
+def mark_eligible(
+    db: Session, *, actor: User, application_id: uuid.UUID
+) -> ApplicationDetail:
+    """POST /applications/{id}/eligible — requirements met, decision still to come (D44).
+
+    NOT a decision, and deliberately not recorded as one: `decided_by_user_id` and
+    `decided_at` stay NULL. Eligibility is a finding about the applicant; acceptance is a
+    commitment by the college, and the college may have more eligible applicants than
+    places. Collapsing the two would make the count of accepted students meaningless.
+
+    Refuses when the FORM is not complete, using `submission_issues` — deliberately NOT
+    `acceptance_issues`.
+
+    The difference is the whole point of the state. `acceptance_issues` adds the checks
+    ACCEPTANCE needs, and one of them is "an email address is required to issue the student
+    a login". That is a provisioning prerequisite, not an academic finding: an applicant can
+    plainly meet the college's requirements while the Registrar is still chasing them for an
+    email address. Gating eligibility on it would mean the college could not record that
+    someone qualifies until it was ready to enrol them — which is the exact conflation this
+    state was added to undo.
+
+    Caught by driving the API rather than by the type checker: the first version of this
+    function reused `acceptance_issues` and refused a complete, submitted application for
+    want of an email.
+    """
+    row = _application_or_404(db, application_id)
+    if row.status not in (ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW):
+        raise Conflict(
+            f"Only a submitted or under-review application can be marked eligible "
+            f"(this one is {row.status.value}).",
+            code="application_not_reviewable",
+        )
+    issues = submission_issues(row)
+    if issues:
+        raise ValidationError(
+            "This application does not yet meet the requirements.",
+            code="application_incomplete",
+            fields={"application": issues},
+        )
+    row.status = ApplicationStatus.ELIGIBLE
+    row.updated_by = actor.id
+    _audit(db, actor=actor, action="application.eligible", entity_id=row.id)
+    db.commit()
+    return _detail(db, row)
+
+
+def defer_application(
+    db: Session, *, actor: User, application_id: uuid.UUID, reason: str | None
+) -> ApplicationDetail:
+    """POST /applications/{id}/defer — the decision is held to a later intake (D44).
+
+    ⚠️ TERMINAL for this application. The applicant re-applies for the intake they are
+    deferred to; this row is not reopened.
+
+    That is a real choice and the alternative was considered. Reopening would have made
+    `deferred` an OPEN status, and the D44 duplicate guard refuses a second application
+    while an earlier one is open — so a deferred applicant would have been unable to apply
+    for the intake they were deferred to, which is the opposite of the point. Terminal also
+    matches what an application IS: a request for a place in a particular intake.
+    """
+    row = _application_or_404(db, application_id)
+    if row.status not in _DECIDABLE:
+        raise Conflict(
+            f"Only a submitted, under-review or eligible application can be deferred "
+            f"(this one is {row.status.value}).",
+            code="application_not_decidable",
+        )
+    row.status = ApplicationStatus.DEFERRED
+    row.decided_by_user_id = actor.id
+    row.decided_at = _now()
+    _append_comment(row, reason)
+    row.updated_by = actor.id
+    _audit(db, actor=actor, action="application.defer", entity_id=row.id)
+    db.commit()
+    return _detail(db, row)
+
+
+def mark_enrolled(
+    db: Session, *, actor: User, application_id: uuid.UUID
+) -> ApplicationDetail:
+    """POST /applications/{id}/enrolled — accepted AND registered (D44).
+
+    Only from ACCEPTED, and only once the student record actually exists. `student_id` is
+    the check rather than the status alone: acceptance is what creates the student
+    (`accept_application`), so an accepted application with no `student_id` is a row that
+    got its status by some path that did not go through there, and marking it enrolled
+    would assert a registration nobody can point at.
+
+    Closes the application. It does NOT touch `student_profiles.status`, which has its own
+    vocabulary (`Registered`/`Unregistered`/`DropOut`) and its own lifecycle — the student
+    record outlives the application by years, and letting an admissions transition write to
+    it would be the two-enums-one-fact mistake D30 §B4 already found here once.
+    """
+    row = _application_or_404(db, application_id)
+    if row.status != ApplicationStatus.ACCEPTED:
+        raise Conflict(
+            f"Only an accepted application can be marked enrolled "
+            f"(this one is {row.status.value}).",
+            code="application_not_accepted",
+        )
+    if row.student_id is None:
+        raise Conflict(
+            "This application has no student record, so it cannot be marked enrolled.",
+            code="application_no_student",
+        )
+    row.status = ApplicationStatus.ENROLLED
+    row.updated_by = actor.id
+    _audit(db, actor=actor, action="application.enrolled", entity_id=row.id)
     db.commit()
     return _detail(db, row)
 
@@ -1387,10 +1644,18 @@ def decide_credit_transfer(
 # that a real hole rather than a theoretical one, since ids travel in URLs.
 # ══════════════════════════════════════════════════════════════════════════════
 
-#: Every field a client may write onto a pending form. Identical to `_WRITABLE` by
-#: construction — the temp table mirrors the client-writable half of `applications` — and
-#: aliased rather than re-listed so the two cannot drift apart.
-_TEMP_WRITABLE = _WRITABLE
+#: Every field a client may write onto a pending form.
+#:
+#: DERIVED from `_WRITABLE` rather than re-listed, so the two cannot drift — but no longer
+#: identical to it. `student_profile_temp` mirrors the *applicant-supplied* half of
+#: `applications`, and D44's `conditions_of_admission` is not that: it is a condition the
+#: COLLEGE attaches to its own offer, which cannot exist on a form nobody has decided on
+#: yet. The temp table has no such column, so copying it across would raise AttributeError
+#: at promotion.
+#:
+#: Anything added to `_WRITABLE` that the temp table does not carry belongs here too.
+_APPLICATION_ONLY_FIELDS = frozenset({"conditions_of_admission"})
+_TEMP_WRITABLE = tuple(n for n in _WRITABLE if n not in _APPLICATION_ONLY_FIELDS)
 
 
 def _may_see_all_pending(actor: User) -> bool:
@@ -1625,6 +1890,10 @@ def create_pending_application(
     """POST /pending-applications -- *Save and close* on a form not yet on disk."""
     _assert_program_exists(db, payload.program_id)
     _assert_year_exists(db, payload.academic_year_id)
+    # D44 — checked here as well as at promotion. Catching it at the first save is the
+    # whole point: telling the Registrar at the END of a seven-step wizard that the
+    # applicant already has an open file wastes the entire transcription.
+    _assert_no_open_application(db, payload.ssno)
 
     row = ApplicationTemp(
         status="pending",
@@ -1717,6 +1986,13 @@ def submit_pending_application(
             fields={"application": issues},
         )
 
+    # D44 — re-checked at promotion, not only at create. The pending row may have sat for
+    # days, and this is the moment it becomes a real application; a duplicate that opened
+    # in between has to be caught here or it reaches `applications` unchallenged. Raising
+    # BEFORE anything is staged keeps D38's contract: a refused submit leaves the pending
+    # row exactly where it was.
+    _assert_no_open_application(db, temp.ssno)
+
     education = _temp_education(temp)
     documents = _temp_documents(temp)
     for item in education:
@@ -1729,6 +2005,11 @@ def submit_pending_application(
     row = Application(
         status=ApplicationStatus.SUBMITTED,
         created_by=temp.created_by,
+        # D44 — the pending row never had a number: `student_profile_temp` is a holding
+        # area, not an application, and issuing references for forms that may never be
+        # filed would leave gaps in the sequence for no one's benefit. The number is
+        # allocated at the moment the real `applications` row is created, which is here.
+        application_number=allocate_application_number(db),
         # THE ONE INSERT THAT STILL STAMPS `updated_by` (D39). Everywhere else a new row
         # leaves it NULL, because the creator has not yet EDITED anything. Here the actor
         # is deliberately NOT the creator: `created_by` is carried across from the pending
@@ -1737,7 +2018,9 @@ def submit_pending_application(
         # actually performed the submit, so dropping it would lose the fact outright.
         updated_by=actor.id,
     )
-    for name in _WRITABLE:
+    # `_TEMP_WRITABLE`, not `_WRITABLE`: the source is the temp row, which does not carry
+    # the application-only fields. See `_APPLICATION_ONLY_FIELDS`.
+    for name in _TEMP_WRITABLE:
         setattr(row, name, getattr(temp, name))
     db.add(row)
     db.flush()

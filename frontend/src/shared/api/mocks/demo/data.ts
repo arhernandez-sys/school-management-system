@@ -45,6 +45,7 @@
  * build-time handle for wiring loads together; it is never stored on a row.
  */
 import type {
+  DemoClassroom,
   DemoAcademicYear,
   DemoApplication,
   DemoApplicationTemp,
@@ -447,10 +448,73 @@ const teacherByName = (fullName: string): DemoTeacher => {
   return found;
 };
 
+// ── classrooms (D44) ────────────────────────────────────────────────────────────
+//
+// A small, plausible estate: two buildings, a lecture room, a lab and a computer lab, plus
+// one Inactive room so the "taken out of service" state is visible without anyone having to
+// create it. Rooms are ASSIGNED to a few offerings below rather than to all of them, because
+// "no room yet" is the state most real offerings are in.
+const classrooms: DemoClassroom[] = [
+  {
+    id: 'room-a101',
+    room_code: 'A-101',
+    building: 'Main Block',
+    capacity: 40,
+    room_type: 'Lecture',
+    status: 'Active',
+    created_on: `${DEMO_TODAY}T08:00:00Z`,
+    edited_on: null,
+  },
+  {
+    id: 'room-a102',
+    room_code: 'A-102',
+    building: 'Main Block',
+    capacity: 32,
+    room_type: 'Lecture',
+    status: 'Active',
+    created_on: `${DEMO_TODAY}T08:00:00Z`,
+    edited_on: null,
+  },
+  {
+    id: 'room-b201',
+    room_code: 'B-201',
+    building: 'Science Wing',
+    capacity: 24,
+    room_type: 'Laboratory',
+    status: 'Active',
+    created_on: `${DEMO_TODAY}T08:00:00Z`,
+    edited_on: null,
+  },
+  {
+    id: 'room-b202',
+    room_code: 'B-202',
+    building: 'Science Wing',
+    capacity: 20,
+    room_type: 'Computer lab',
+    status: 'Active',
+    created_on: `${DEMO_TODAY}T08:00:00Z`,
+    edited_on: null,
+  },
+  {
+    id: 'room-c301',
+    room_code: 'C-301',
+    building: 'Annex',
+    // 0 = not recorded, which the list renders as an em dash rather than as zero seats.
+    capacity: 0,
+    room_type: null,
+    status: 'Inactive',
+    created_on: `${DEMO_TODAY}T08:00:00Z`,
+    edited_on: `${DEMO_TODAY}T09:30:00Z`,
+  },
+];
+
 // ── offerings: one row per seed (D31) ───────────────────────────────────────────
 //
 // `off-N` lines up with `offeringSeed[N-1]`, which keeps the fixtures readable. There is no
 // second table behind these: the D29 pair of `sec-N` + `cs-N` is this one row.
+// D44 — the ACTIVE rooms, in order, for the round-robin below.
+const ROOMED = ['room-a101', 'room-a102', 'room-b201', 'room-b202'];
+
 const offerings: DemoOffering[] = offeringSeed.map((o, i) => {
   const lead = o.teacherNames?.[0] ? teacherByName(o.teacherNames[0]) : teacherByCode(o.code);
   const extra = (o.teacherNames ?? []).slice(1).map((name) => teacherByName(name).id);
@@ -467,6 +531,9 @@ const offerings: DemoOffering[] = offeringSeed.map((o, i) => {
     semester_id: o.semesterId ?? SEM_ACTIVE,
     section_code: o.sectionCode,
     capacity: o.capacity,
+    // D44 — only the first four get a room; the rest are "not decided yet",
+    // which is the state most real offerings are in.
+    classroom_id: ROOMED[i] ?? null,
     is_archived: false,
     teacher_ids: [...new Set(teacher_ids)],
     lead_teacher_id: lead.id,
@@ -1350,6 +1417,9 @@ const histOfferings: DemoOffering[] = histSeed.map((o, i) => {
     semester_id: SEM_2024_1,
     section_code: o.sectionCode,
     capacity: o.capacity,
+    // Archived offerings keep whatever room they ran in; null here because
+    // the 2024 seed predates rooms existing at all.
+    classroom_id: null,
     is_archived: true,
     teacher_ids: [lead.id],
     lead_teacher_id: lead.id,
@@ -1529,6 +1599,12 @@ const programs: DemoProgram[] = BAJC_PROGRAMS.map(
     code,
     name,
     award,
+    // D44 — the client's dump has these three empty on every programme, and inventing
+    // prospectus prose for eight real BAJC degrees would put words in the college's mouth.
+    // `BAJC_PROGRAMS` is generated from their own catalog; it does not carry them.
+    admission_requirements: null,
+    graduation_requirements: null,
+    comments: null,
     total_credits: totalCredits,
     min_passing_grade_point: minGp,
     is_active: true,
@@ -1610,6 +1686,7 @@ const applicationsSeed: DemoApplication[] = [
   {
     id: 'app-draft-1',
     status: 'draft',
+    application_number: 'APP-2026-00001',
     school_year: '2026-2027',
     first_name: 'Marisol',
     middle_name: null,
@@ -1657,6 +1734,7 @@ const applicationsSeed: DemoApplication[] = [
   {
     id: 'app-ready-1',
     status: 'submitted',
+    application_number: 'APP-2026-00002',
     school_year: '2026-2027',
     first_name: 'Presley',
     middle_name: 'A',
@@ -1703,6 +1781,7 @@ const applicationsSeed: DemoApplication[] = [
   {
     id: 'app-transfer-1',
     status: 'under_review',
+    application_number: 'APP-2026-00003',
     school_year: '2026-2027',
     first_name: 'Kenrick',
     middle_name: null,
@@ -1749,6 +1828,7 @@ const applicationsSeed: DemoApplication[] = [
   {
     id: 'app-accepted-1',
     status: 'accepted',
+    application_number: 'APP-2026-00004',
     school_year: '2025-2026',
     first_name: students[0]!.first_name ?? students[0]!.last_name,
     middle_name: students[0]!.middle_name,
@@ -2108,6 +2188,7 @@ export const DEMO_DATASET: DemoDataset = {
   program_courses,
   program_heads,
   course_prerequisites,
+  classrooms,
   offerings,
   teachers,
   students,

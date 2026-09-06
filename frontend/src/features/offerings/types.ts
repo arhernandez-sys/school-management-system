@@ -92,6 +92,8 @@ export interface MeetingsResult {
  * could not be resolved; anything created through the current UI always has both. The API
  * returns `teachers` and `meetings` ON the row so no column costs a follow-up request.
  */
+import type { ClassroomRef } from '@features/classrooms/types';
+
 export interface OfferingListItem {
   id: string;
   /** Server-computed "MATH1110-01 · Semester 1". The only label a screen should print. */
@@ -100,6 +102,13 @@ export interface OfferingListItem {
   semester: SemesterRef | null;
   section_code: string | null;
   capacity: number | null;
+  /**
+   * D44 — where this offering meets. Null = no room assigned.
+   *
+   * ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+   * places describe the same fact until the timetable moves onto this one.
+   */
+  classroom: ClassroomRef | null;
   enrolled_count: number;
   is_archived: boolean;
   teachers: TeacherRef[];
@@ -119,6 +128,13 @@ export interface OfferingDetail {
   academic_year: AcademicYearRef | null;
   section_code: string | null;
   capacity: number | null;
+  /**
+   * D44 — where this offering meets. Null = no room assigned.
+   *
+   * ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+   * places describe the same fact until the timetable moves onto this one.
+   */
+  classroom: ClassroomRef | null;
   enrolled_count: number;
   over_capacity: boolean;
   is_archived: boolean;
@@ -239,6 +255,11 @@ export interface OfferingCreateBody {
   semester_id?: string | null;
   section_code?: string | null;
   capacity?: number | null;
+  /**
+   * D44. Send `null` EXPLICITLY to unassign the room; omit to leave it alone. The
+   * server reads `model_fields_set`, so the two are distinguishable.
+   */
+  classroom_id?: string | null;
   teacher_ids?: string[];
   lead_teacher_id?: string | null;
   meetings?: OfferingMeetingInput[];
@@ -255,6 +276,11 @@ export interface OfferingCreateBody {
 export interface OfferingUpdateBody {
   section_code?: string | null;
   capacity?: number | null;
+  /**
+   * D44. Send `null` EXPLICITLY to unassign the room; omit to leave it alone. The
+   * server reads `model_fields_set`, so the two are distinguishable.
+   */
+  classroom_id?: string | null;
   is_archived?: boolean | null;
 }
 

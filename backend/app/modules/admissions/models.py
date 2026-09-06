@@ -43,6 +43,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.enums import (
+    DECIDED_APPLICATION_STATUSES,
     ApplicationDocumentType,
     ApplicationStatus,
     CreditTransferStatus,
@@ -71,6 +72,15 @@ class Application(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     __tablename__ = "applications"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    #: `APP-YYYY-NNNNN` (D44). Allocated by `numbering.allocate_application_number` inside
+    #: the transaction that creates the row, so a draft has one from birth — the Registrar
+    #: reads it back over the phone long before anyone decides anything.
+    #:
+    #: Nullable in the schema and effectively never NULL in practice: the column had to be
+    #: addable ahead of the backfill in `017_sims10_reconcile.sql` §4, and making it NOT
+    #: NULL would have made that migration order-dependent. The UNIQUE index is what
+    #: actually protects it.
+    application_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[ApplicationStatus] = mapped_column(
         enum_col(ApplicationStatus), nullable=False, server_default=text("'draft'")
     )
@@ -171,6 +181,10 @@ class Application(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     #: purpose: this block is a record of what the college wrote on the form, and it must
     #: still read correctly if the student is later soft-deleted.
     student_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: Conditions attached to an acceptance — "must pass the ATLIB exam by January"
+    #: (D44, from the client's `sims_10` dump). Free text; the college's own words, set
+    #: when the offer is made rather than being a vocabulary the system knows about.
+    conditions_of_admission: Mapped[str | None] = mapped_column(String(180), nullable=True)
     comments: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
     decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -197,6 +211,11 @@ class Application(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
         # Listings sort surname-first (§D10), the same rule as students.
         Index("ix_applications_lastname", "lastname", "firstname"),
         Index("ix_applications_status", "status"),
+        # D44. PLAIN unique, not the partial/generated-column dance
+        # `student_profiles.student_number` uses: a soft-deleted application KEEPS its
+        # number, because reissuing it to a different applicant would make two people
+        # share a reference that has already been read out over a phone.
+        Index("uq_applications_number", "application_number", unique=True),
     )
 
     @property
@@ -208,12 +227,14 @@ class Application(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
 
     @property
     def is_decided(self) -> bool:
-        """Whether a decision has been recorded and the form is closed to edits."""
-        return self.status in (
-            ApplicationStatus.ACCEPTED,
-            ApplicationStatus.DENIED,
-            ApplicationStatus.WITHDRAWN,
-        )
+        """Whether a decision has been recorded and the form is closed to edits.
+
+        D44 moved the membership test to `DECIDED_APPLICATION_STATUSES` so that the
+        duplicate guard cannot disagree with it: `OPEN_APPLICATION_STATUSES` is derived
+        from the same frozenset, so a status added to one appears in the other by
+        construction rather than by someone remembering both.
+        """
+        return self.status in DECIDED_APPLICATION_STATUSES
 
 
 class ApplicationEducation(Base, TimestampMixin):

@@ -5,6 +5,9 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { ROUTES } from '@shared/constants/routes';
 import { AttendanceRegisterScreen } from './screens/AttendanceRegisterScreen';
 import { AttendanceSummaryScreen } from './screens/AttendanceSummaryScreen';
+import { AttendanceAlertsScreen } from './screens/AttendanceAlertsScreen';
+import { AttendanceStudentDetailScreen } from './screens/AttendanceStudentDetailScreen';
+import { AttendanceOfferingDetailScreen } from './screens/AttendanceOfferingDetailScreen';
 import { MyAttendanceScreen } from './screens/MyAttendanceScreen';
 import { isLecturerRole } from '@shared/auth/permissions';
 
@@ -39,14 +42,21 @@ export function AttendancePage() {
 
   const tabs = useMemo<AttendanceTab[]>(() => {
     if (isStudent) return [{ label: 'My attendance', path: 'me' }];
+    // D44 — Alerts is offered to every staff role. The server scopes its contents the same
+    // way it scopes the offering picker, so a lecturer sees their own classes there and a
+    // Dean sees the school; the tab does not need to know which.
     if (isTeacher) {
       return [
         { label: 'Record', path: 'record' },
         { label: 'Summary', path: 'summary' },
+        { label: 'Alerts', path: 'alerts' },
       ];
     }
     // Principal / Secretary — view-all.
-    return [{ label: 'Summary', path: 'summary' }];
+    return [
+      { label: 'Summary', path: 'summary' },
+      { label: 'Alerts', path: 'alerts' },
+    ];
   }, [isStudent, isTeacher]);
 
   const defaultPath = isStudent ? 'me' : isTeacher ? 'record' : 'summary';
@@ -82,6 +92,20 @@ export function AttendancePage() {
           {isStudent && <Route path="me" element={<MyAttendanceScreen />} />}
           {isTeacher && <Route path="record" element={<AttendanceRegisterScreen />} />}
           {!isStudent && <Route path="summary" element={<AttendanceSummaryScreen />} />}
+          {/* D44 — the alert list, and the two drill-downs it links to. All three are
+              staff-only for the same reason the summary is: a student sees their own
+              record on `me` and has no business in anyone else's.
+
+              The drill-downs sit OUTSIDE the tab strip: they are places you arrive at from
+              a row, not sections you browse to, and `activeTab` resolves to `false` for
+              them rather than lighting up a tab that is not where you are. */}
+          {!isStudent && <Route path="alerts" element={<AttendanceAlertsScreen />} />}
+          {!isStudent && (
+            <Route path="student/:studentId" element={<AttendanceStudentDetailScreen />} />
+          )}
+          {!isStudent && (
+            <Route path="offering/:offeringId" element={<AttendanceOfferingDetailScreen />} />
+          )}
           {/* Unknown sub-path → the role's landing tab. */}
           <Route path="*" element={<Navigate to={defaultPath} replace />} />
         </Routes>

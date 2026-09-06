@@ -175,6 +175,25 @@ class CourseOffering(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     #: Parallel sections of one course in one term: "01", "02". NULL = the only section.
     section_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
     capacity: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
+    #: Where this offering meets (D44). NULL = no room assigned, which is the state all 19
+    #: existing offerings are in.
+    #:
+    #: ⚠️ `class_meetings.room` is free text and is still what the timetable RENDERS. This
+    #: column is the offering-level room and does not yet supersede it. Two columns can
+    #: describe the same fact for exactly as long as it takes to decide which one wins —
+    #: see `docs/d44-sims10-and-meeting3.md`.
+    #:
+    #: The client's dump declared this `DEFAULT uuid_v4()`, which would have pointed every
+    #: existing offering at a room that does not exist. Nullable with a real FK instead.
+    classroomid: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "classroom.classroomid",
+            ondelete="SET NULL",
+            name="fk_course_offerings_classroom",
+        ),
+        nullable=True,
+    )
     is_archived: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("false")
     )

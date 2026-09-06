@@ -7,6 +7,7 @@ Endpoints:
   GET /attendance            T/P/S     -> AttendanceRegister    (offering_id REQUIRED)
   PUT /attendance            Teacher   -> AttendanceUpsertResponse
   GET /attendance/summary    T/P/S     -> AttendanceSummaryResponse
+  GET /attendance/alerts     T/P/S     -> AttendanceAlertsResponse   (D44)
   GET /attendance/me         Student   -> MyAttendanceResponse
 
 Paths follow the finished frontend (`?offering_id=`), NOT api-spec §8's original
@@ -31,7 +32,9 @@ from app.common.enums import Role
 from app.common.schemas import ErrorResponse
 from app.core.deps import get_db, require_role, require_role_within_access_window
 from app.modules.attendance import service
+from app.modules.attendance.service import ATTENDANCE_ALERT_THRESHOLD
 from app.modules.attendance.schemas import (
+    AttendanceAlertsResponse,
     AttendanceRegister,
     AttendanceOfferingsResponse,
     AttendanceSummaryResponse,
@@ -69,6 +72,30 @@ def list_offerings(
     """Teacher → the offerings they are assigned to; P/S → all offerings of the
     year. `can_record` is true only for a teacher."""
     return service.list_offerings(db, actor=actor, academic_year_id=academic_year_id)
+
+
+@router.get(
+    "/alerts",
+    response_model=AttendanceAlertsResponse,
+    summary="Classes and students below the attendance floor (D44)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def get_alerts(
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    threshold: Annotated[float, Query(ge=0, le=100)] = ATTENDANCE_ALERT_THRESHOLD,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_staff),
+) -> AttendanceAlertsResponse:
+    """Defaults to the year currently active and the 80% floor.
+
+    Scoped exactly as `/offerings` is — a lecturer is alerted about their own classes and
+    no one else's — because it is built on the same call. `threshold` is a query parameter
+    rather than a constant so the Dean can ask "who is under 90?" without a deploy; the
+    default is the rule.
+    """
+    return service.get_alerts(
+        db, actor=actor, academic_year_id=academic_year_id, threshold=threshold
+    )
 
 
 @router.get(

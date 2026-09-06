@@ -232,7 +232,7 @@ class TestAdmissionOnly:
         _assert_envelope(r.json(), code="application_decided")
 
     def test_a_transfer_cannot_be_filed_on_a_denied_application(self, client, graph) -> None:
-        client.post(f"{A}/{graph.application_id}/deny", headers=graph.S, json={})
+        client.post(f"{A}/{graph.application_id}/reject", headers=graph.S, json={})
         assert graph.file_transfer().status_code == 409
 
     def test_a_pending_transfer_blocks_acceptance(self, client, graph) -> None:

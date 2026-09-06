@@ -12,13 +12,47 @@
  * itself before the user presses anything.
  */
 
+/**
+ * D44 — the client's ten-state vocabulary, from the `sims_10` dump. Four states are new
+ * and `denied` was RENAMED to `rejected`; there is no alias for the old spelling, in the
+ * enum or on the route.
+ *
+ * Ordered as the DB enum is, which is roughly the order an application moves through.
+ */
+import type { StatusKind } from '@shared/components';
+
 export type ApplicationStatus =
   | 'draft'
   | 'submitted'
   | 'under_review'
+  | 'documents_pending'
+  | 'eligible'
   | 'accepted'
-  | 'denied'
-  | 'withdrawn';
+  | 'rejected'
+  | 'deferred'
+  | 'withdrawn'
+  | 'enrolled';
+
+/**
+ * Statuses a decision has already been taken on. An application in one of these is a
+ * record, not a form: the server refuses edits and every transition button is hidden.
+ *
+ * `deferred` is here because the applicant re-applies for the intake they were deferred
+ * to rather than this row being reopened — which is also what lets them past the SSN
+ * duplicate guard. See `admissions/service._REVIEWABLE`.
+ */
+export const DECIDED_APPLICATION_STATUSES: ReadonlySet<ApplicationStatus> = new Set([
+  'accepted',
+  'rejected',
+  'deferred',
+  'withdrawn',
+  'enrolled',
+]);
+
+/** An application still working its way through admissions — the complement of the above. */
+export function isDecidedApplication(status: ApplicationStatus): boolean {
+  return DECIDED_APPLICATION_STATUSES.has(status);
+}
 
 /**
  * D33 — `District` and `EnrollmentLoad` now live in `@shared/types/enums`, because the
@@ -104,6 +138,8 @@ export interface CreditTransfer {
 
 export interface ApplicationListItem {
   id: string;
+  /** D44 — `APP-YYYY-NNNNN`. Null only on rows written before the backfill. */
+  application_number: string | null;
   status: ApplicationStatus;
   full_name: string;
   first_name: string;
@@ -149,6 +185,8 @@ export interface ApplicationDetail extends ApplicationListItem {
   guardian_signed_at: string | null;
   academic_year_id: string | null;
   enrolment_status: string | null;
+  /** D44 — conditions attached to the offer, e.g. "must pass the ATLIB exam by January". */
+  conditions_of_admission: string | null;
   comments: string | null;
   decided_by_user_id: string | null;
   decided_at: string | null;
@@ -261,13 +299,40 @@ export interface ApplicationsListParams {
 /** The ≥75% content-equivalency floor (brief §13). Mirrors the server constant. */
 export const MIN_EQUIVALENCY_PCT = 75;
 
+/**
+ * Status -> badge colour. D44 moved this here from the two screens that each carried a
+ * copy: adding four statuses meant editing both, and a `Record<ApplicationStatus, _>` is
+ * only a safety net if there is one of it.
+ *
+ * `eligible` is INFO, not success. The college has not offered anything yet, and colouring
+ * it green is how "eligible" starts being read as "in".
+ */
+export const APPLICATION_STATUS_KIND: Record<ApplicationStatus, StatusKind> = {
+  draft: 'neutral',
+  submitted: 'info',
+  under_review: 'warning',
+  documents_pending: 'warning',
+  eligible: 'info',
+  accepted: 'success',
+  rejected: 'error',
+  deferred: 'neutral',
+  withdrawn: 'neutral',
+  enrolled: 'success',
+};
+
 export const APPLICATION_STATUS_LABEL: Record<ApplicationStatus, string> = {
   draft: 'Draft',
   submitted: 'Submitted',
   under_review: 'Under review',
+  // D44. "Waiting on documents" rather than "Documents pending": it names who the ball is
+  // with, which is the only thing anyone scanning the queue wants to know.
+  documents_pending: 'Waiting on documents',
+  eligible: 'Eligible',
   accepted: 'Accepted',
-  denied: 'Denied',
+  rejected: 'Rejected',
+  deferred: 'Deferred',
   withdrawn: 'Withdrawn',
+  enrolled: 'Enrolled',
 };
 
 export { DISTRICTS } from '@shared/types/enums';

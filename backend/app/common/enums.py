@@ -110,11 +110,74 @@ class TermType(str, enum.Enum):
     This is the CALENDAR term's kind. A course's position in a programme PLAN is a
     different fact and lives on `program_courses.term_label` — "Semester 1" there means
     "the first semester of this plan", not any particular dated term (§D3).
+
+    D44 added `INDEPENDENT` (independent study) from the client's `sims_10` dump.
+
+    ⚠️ The dump spells that label `'Independent'`, capitalised, alone among the four.
+    It is stored LOWERCASE here and capitalised only in the frontend label map. That is
+    not tidiness: MariaDB returns an enum value as the column DECLARES it, and this class
+    maps by exact value, so a column declaring `'Independent'` would hand `TermType(...)`
+    a string no member matches and every read of an independent term would raise
+    `ValueError`. See `017_sims10_reconcile.sql` §5.
     """
 
     SUMMER = "summer"
     SEMESTER = "semester"
     SPRING = "spring"
+    INDEPENDENT = "independent"
+
+
+class SemesterStatus(str, enum.Enum):
+    """`semesters.semester_status` — D44, from the client's `sims_10` dump.
+
+    ⚠️ STORAGE ONLY. Nothing in the API reads or writes this today, and that is
+    deliberate rather than unfinished. It overlaps two facts the system already has an
+    answer for: `semesters.is_active` (exactly one term is current, enforced by a unique
+    index) and the parent year's `AcademicYearStatus.ARCHIVED`. Wiring it up without
+    first deciding which of the three wins would give "is this term running" a second,
+    quieter source of truth — and the freeze logic, the roster scoping and the report
+    snapshots all key off `is_active` today.
+
+    It exists so the client's own data loads. Giving it behaviour is a separate decision.
+
+    The dump spells the fourth value `'grade submission'`, with a space; it is
+    snake_cased here to match every other enum in this schema.
+    """
+
+    PLANNING = "planning"
+    REGISTRATION_OPEN = "registration_open"
+    ACTIVE = "active"
+    GRADE_SUBMISSION = "grade_submission"
+    CLOSED = "closed"
+    ARCHIVED = "archived"
+
+
+class ClassroomStatus(str, enum.Enum):
+    """`classroom.status` — D44, from the client's `sims_10` dump.
+
+    The client's own vocabulary, kept verbatim apart from spelling `Available` (the dump
+    has `'Availble'`). Note it mixes two axes: whether a room is in service at all
+    (`ACTIVE`/`INACTIVE`) and whether it is busy right now (`IN_USE`/`AVAILABLE`/
+    `OCCUPIED`).
+
+    **The API only ever writes the first pair.** Live occupancy is a function of the
+    timetable — `class_meetings` already knows which room is booked when — so a person
+    typing `Occupied` into a form would be recording a guess that goes stale within the
+    hour. The other three values are accepted on read so the client's data loads.
+    """
+
+    ACTIVE = "Active"
+    INACTIVE = "Inactive"
+    IN_USE = "In-Use"
+    AVAILABLE = "Available"
+    OCCUPIED = "Occupied"
+
+
+#: The only two a room may be SET to. See the note above: the rest describe occupancy,
+#: which the timetable derives and no one should be hand-entering.
+SETTABLE_CLASSROOM_STATUSES: frozenset[ClassroomStatus] = frozenset(
+    {ClassroomStatus.ACTIVE, ClassroomStatus.INACTIVE}
+)
 
 
 class CourseComponent(str, enum.Enum):
@@ -378,16 +441,62 @@ class ApplicationStatus(str, enum.Enum):
     section by section, so a half-entered application has to survive being interrupted
     — and only a `SUBMITTED` one is a decision waiting to be made.
 
-    `WITHDRAWN` is the applicant pulling out, as distinct from `DENIED`, the college
+    `WITHDRAWN` is the applicant pulling out, as distinct from `REJECTED`, the college
     saying no. Both are terminal and neither is a delete: an admissions record is kept.
+
+    D44 adopted the client's ten-state vocabulary from `sims_10`. Four states are new and
+    one is a RENAME — `denied` became `rejected`, migrated in `017_sims10_reconcile.sql`
+    §2. There is no `DENIED` member any more; it is not an alias, because an alias would
+    let the old label keep being written and the two would drift.
+
+    The four additions each name a real pause in BAJC's process that the six-state
+    version had to express as "still under review":
+
+      DOCUMENTS_PENDING  Returned to the applicant for missing paperwork. Reversible.
+      ELIGIBLE           Meets the requirements; the decision itself is still to come.
+                         Separating it from ACCEPTED is what lets the Registrar finish
+                         checking without committing the college to a place.
+      DEFERRED           The decision is held to a later intake. Terminal FOR THIS
+                         APPLICATION — the applicant re-applies rather than this row
+                         being reopened, which is why `_is_open_status` excludes it.
+      ENROLLED           Accepted AND registered. `accept_application` still creates the
+                         student record; this marks the application closed behind it.
     """
 
     DRAFT = "draft"
     SUBMITTED = "submitted"
     UNDER_REVIEW = "under_review"
+    DOCUMENTS_PENDING = "documents_pending"
+    ELIGIBLE = "eligible"
     ACCEPTED = "accepted"
-    DENIED = "denied"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
     WITHDRAWN = "withdrawn"
+    ENROLLED = "enrolled"
+
+
+#: Statuses a decision has already been made on. An application in one of these is a
+#: record, not a form: `_assert_editable` refuses edits and no transition leaves them.
+#: `DEFERRED` is here because the applicant re-applies for the next intake rather than
+#: this row being reopened — which is also what lets them past the D44 duplicate guard.
+DECIDED_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    {
+        ApplicationStatus.ACCEPTED,
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.DEFERRED,
+        ApplicationStatus.WITHDRAWN,
+        ApplicationStatus.ENROLLED,
+    }
+)
+
+#: The complement: an application still working its way through admissions. This is the
+#: set the D44 SSN duplicate guard refuses a second application against — see
+#: `admissions.service._assert_no_open_application`. Derived from the decided set rather
+#: than listed again, so a new status cannot be added to one without appearing in the
+#: other.
+OPEN_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    set(ApplicationStatus) - DECIDED_APPLICATION_STATUSES
+)
 
 
 class District(str, enum.Enum):

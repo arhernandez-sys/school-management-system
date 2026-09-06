@@ -14,6 +14,7 @@ import { readOnlyGuardHandlers } from './readOnlyGuard';
 import { authHandlers } from './auth';
 import { settingsHandlers } from './settings';
 import { coursesHandlers } from './courses';
+import { classroomsHandlers } from './classrooms';
 import { programsHandlers } from './programs';
 import { prerequisitesHandlers } from './prerequisites';
 import { studentsHandlers } from './students';
@@ -40,6 +41,7 @@ export const handlers = [
   ...settingsHandlers,
   ...coursesHandlers,
   ...programsHandlers,
+  ...classroomsHandlers,
   ...prerequisitesHandlers,
   ...studentsHandlers,
   ...admissionsHandlers,

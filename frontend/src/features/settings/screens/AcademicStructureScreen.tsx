@@ -47,6 +47,7 @@ import {
   useUpdateSemester,
 } from '../hooks/useSettings';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
+import { TERM_TYPE_OPTIONS, termTypeLabel } from '../termTypes';
 import { TermFormDialog, type TermFormValues } from '../components/TermFormDialog';
 import type {
   AcademicYearDetail,
@@ -64,12 +65,6 @@ interface DraftTerm {
   start_date: string;
   end_date: string;
 }
-
-const TERM_KINDS: { value: TermType; label: string }[] = [
-  { value: 'semester', label: 'Semester' },
-  { value: 'summer', label: 'Summer block' },
-  { value: 'spring', label: 'Spring block' },
-];
 
 /*
  * D42 §6 — this file's private date+time formatter is gone. It called
@@ -109,6 +104,52 @@ function blankTerm(sequence: number, name: string): DraftTerm {
  * These are CALENDAR terms. A course's position in a programme's plan is a different
  * fact and lives under Settings → Programmes (§D3).
  */
+/**
+ * D44 — what the session row says about its mid-session freeze.
+ *
+ * The old caption read `Mid-session frozen {start} → {end}` unconditionally, so a session
+ * whose window closed in March still announced itself as frozen in September, and one
+ * whose window opens in November announced it too. Three different facts, one sentence.
+ *
+ * The comparison is the SAME one the server enforces with — `grades/service.
+ * midterm_freeze_state` compares `utcnow()` against the two columns with BOTH bounds
+ * inclusive — so the Dean is never told entry is open while a lecturer is being refused.
+ *
+ * Returns null when the session has no window at all: nothing is frozen and there is
+ * nothing to announce.
+ */
+function midtermFreezeCaption(
+  // The generated wire types make these `string | null | undefined`; all three absences
+  // mean the same thing here, so the signature accepts all three rather than making every
+  // call site coalesce.
+  start: string | null | undefined,
+  end: string | null | undefined,
+  now: Date = new Date(),
+): { text: string; running: boolean } | null {
+  if (!start || !end) return null;
+  const from = new Date(start);
+  const to = new Date(end);
+  // Inclusive both ends, mirroring the server.
+  if (now >= from && now <= to) {
+    return {
+      running: true,
+      text:
+        `Grades are currently closed and will accept new grades after ` +
+        `${formatSchoolDateTime(end)}.`,
+    };
+  }
+  if (now < from) {
+    return {
+      running: false,
+      text: `Grades close ${formatSchoolDateTime(start)} → ${formatSchoolDateTime(end)}.`,
+    };
+  }
+  return {
+    running: false,
+    text: `Grades were closed ${formatSchoolDateTime(start)} → ${formatSchoolDateTime(end)}.`,
+  };
+}
+
 export function AcademicStructureScreen() {
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'settings') : false;
@@ -434,8 +475,12 @@ export function AcademicStructureScreen() {
                                 <Typography variant="caption" color="text.secondary">
                                   Session type
                                 </Typography>
-                                <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
-                                  {sem.term_type}
+                                {/* D44 — the LABEL, not the wire value. `capitalize` used
+                                    to do the work, which turned `independent` into
+                                    "Independent" rather than "Independent study" and would
+                                    print any future snake_case value verbatim. */}
+                                <Typography variant="body2">
+                                  {termTypeLabel(sem.term_type)}
                                 </Typography>
                               </Box>
                               <Box
@@ -506,26 +551,33 @@ export function AcademicStructureScreen() {
                         {year.semesters.map((sem) => (
                           <TableRow key={sem.id}>
                             <TableCell>{sem.name}</TableCell>
-                            <TableCell sx={{ textTransform: 'capitalize' }}>
-                              {sem.term_type}
-                            </TableCell>
+                            <TableCell>{termTypeLabel(sem.term_type)}</TableCell>
                             <TableCell>
                               {formatSchoolDate(sem.start_date)} → {formatSchoolDate(sem.end_date)}
                               {/* D33 — a running freeze is the reason a Lecturer cannot
                                   save, so it belongs on the session row rather than only
                                   inside the edit dialog. */}
-                              {sem.midterm_submission_start && sem.midterm_submission_end && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{ display: 'block' }}
-                                >
-                                  {/* D33 — it is a FREEZE, not a submission period. */}
-                                  Mid-session frozen{' '}
-                                  {formatSchoolDateTime(sem.midterm_submission_start)} →{' '}
-                                  {formatSchoolDateTime(sem.midterm_submission_end)}
-                                </Typography>
-                              )}
+                              {(() => {
+                                // D33 — it is a FREEZE, not a submission period.
+                                // D44 — and it is only frozen while it is actually running.
+                                const freeze = midtermFreezeCaption(
+                                  sem.midterm_submission_start,
+                                  sem.midterm_submission_end,
+                                );
+                                if (!freeze) return null;
+                                return (
+                                  <Typography
+                                    variant="caption"
+                                    color={freeze.running ? 'warning.main' : 'text.secondary'}
+                                    sx={{
+                                      display: 'block',
+                                      fontWeight: freeze.running ? 600 : undefined,
+                                    }}
+                                  >
+                                    {freeze.text}
+                                  </Typography>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell>
                               {sem.is_active ? (
@@ -676,7 +728,7 @@ export function AcademicStructureScreen() {
                     }
                     fullWidth
                   >
-                    {TERM_KINDS.map((k) => (
+                    {TERM_TYPE_OPTIONS.map((k) => (
                       <MenuItem key={k.value} value={k.value}>
                         {k.label}
                       </MenuItem>

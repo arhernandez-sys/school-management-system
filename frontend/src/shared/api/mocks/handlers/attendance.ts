@@ -41,6 +41,7 @@ import { errorResponse } from './_helpers';
  *  - GET  /attendance?offering_id=&date= → the daily register (roster + each status)
  *  - PUT  /attendance                → bulk upsert the register for one (offering, date)
  *  - GET  /attendance/summary?offering_id= → per-offering rate over the seeded window
+ *  - GET  /attendance/alerts         → classes + students below the floor (D44)
  *  - GET  /attendance/me             → the signed-in student's own summary + history
  *
  * **D31** — `section_id` became `offering_id` everywhere, and the picker's ref lost its four
@@ -323,6 +324,63 @@ export const attendanceHandlers: RequestHandler[] = [
       overall: summarize(rows),
       by_date,
       by_student,
+    });
+  }),
+
+  // ── Attendance alerts (D44) ────────────────────────────────────────────────────
+  // GET /attendance/alerts?academic_year_id=&threshold= — classes and students below the
+  // floor. Scoped through `offeringsForRole`, the SAME helper the picker uses, so a
+  // lecturer is alerted about their own classes here exactly as they are there.
+  http.get(`${API_BASE_URL}/attendance/alerts`, ({ request, cookies }) => {
+    const role = sessionRole(cookies);
+    const url = new URL(request.url);
+    const yearId = url.searchParams.get('academic_year_id') ?? getActiveYear()?.id ?? null;
+    const threshold = Number(url.searchParams.get('threshold') ?? 80);
+
+    const offerings = offeringsForRole(role, yearId);
+    const flaggedOfferings = [];
+    const flaggedStudents = [];
+
+    for (const offering of offerings) {
+      const rows = D.attendance_records.filter((r) => r.offering_id === offering.id);
+      // An unmarked register is not a class at 0% — it is a class nobody has marked, and
+      // reporting it would bury the classes genuinely in trouble.
+      if (rows.length === 0) continue;
+
+      const overall = summarize(rows);
+      if (overall.pct_present < threshold) {
+        flaggedOfferings.push({
+          offering: offeringRef(offering),
+          enrolled_count: rosterFor(offering.id).length,
+          sessions_recorded: rows.length,
+          ...overall,
+        });
+      }
+
+      for (const stu of rosterFor(offering.id)) {
+        const own = rows.filter((r) => r.student_id === stu.id);
+        if (own.length === 0) continue;
+        const counts = summarize(own);
+        if (counts.pct_present < threshold) {
+          flaggedStudents.push({
+            student: studentRef(stu),
+            offering: offeringRef(offering),
+            sessions_recorded: own.length,
+            ...counts,
+          });
+        }
+      }
+    }
+
+    // Worst first — the top of an alert list is the point of it.
+    flaggedOfferings.sort((a, b) => a.pct_present - b.pct_present);
+    flaggedStudents.sort((a, b) => a.pct_present - b.pct_present);
+
+    return HttpResponse.json({
+      threshold,
+      academic_year_id: yearId,
+      offerings: flaggedOfferings,
+      students: flaggedStudents,
     });
   }),
 

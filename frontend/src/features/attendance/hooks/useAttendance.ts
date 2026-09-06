@@ -8,6 +8,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  getAttendanceAlerts,
   getAttendanceRegister,
   getAttendanceOfferings,
   getAttendanceSummary,
@@ -22,6 +23,10 @@ export const attendanceKeys = {
   register: (offeringId: string, date: string) =>
     [...attendanceKeys.all, 'register', offeringId, date] as const,
   summary: (offeringId: string) => [...attendanceKeys.all, 'summary', offeringId] as const,
+  // D44 — keyed on the YEAR, so switching the year filter refetches and switching
+  // back is served from cache.
+  alerts: (academicYearId?: string | null) =>
+    [...attendanceKeys.all, 'alerts', academicYearId ?? null] as const,
   // Both period ids are in the key so the global switcher refetches rather than
   // re-serving the previous period.
   me: (academicYearId?: string | null, semesterId?: string | null) =>
@@ -65,6 +70,20 @@ export function useMyAttendance(academicYearId?: string, semesterId?: string) {
 }
 
 /** Save (bulk upsert) the register; invalidates that register + the offering summary. */
+/**
+ * D44 — classes and students below the attendance floor.
+ *
+ * Same `staleTime` as the offerings picker: an alert list is a standing summary, not a
+ * live feed, and refetching it on every focus change would be noise.
+ */
+export function useAttendanceAlerts(academicYearId?: string | null) {
+  return useQuery({
+    queryKey: attendanceKeys.alerts(academicYearId),
+    queryFn: ({ signal }) => getAttendanceAlerts(academicYearId ?? undefined, undefined, signal),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useSaveAttendance() {
   const qc = useQueryClient();
   return useMutation({

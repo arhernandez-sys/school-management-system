@@ -24,7 +24,6 @@ import {
   PageContainer,
   PageHeader,
   StatusBadge,
-  type StatusKind,
 } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useAuth } from '@features/auth/hooks/useAuth';
@@ -33,15 +32,20 @@ import { AcceptDialog } from '../components/AcceptDialog';
 import { CreditTransferPanel } from '../components/CreditTransferPanel';
 import {
   useApplication,
-  useDenyApplication,
+  useRejectApplication,
+  useRequestDocuments,
+  useMarkEligible,
+  useDeferApplication,
+  useMarkEnrolled,
   useReviewApplication,
   useSubmitApplication,
   useWithdrawApplication,
 } from '../hooks/useAdmissions';
 import {
   APPLICATION_STATUS_LABEL,
+  APPLICATION_STATUS_KIND,
+  isDecidedApplication,
   DOCUMENT_TYPES,
-  type ApplicationStatus,
 } from '../types';
 
 /**
@@ -53,14 +57,8 @@ import {
  * disabled Accept button by quoting them rather than re-deriving them and eventually
  * disagreeing.
  */
-const STATUS_KIND: Record<ApplicationStatus, StatusKind> = {
-  draft: 'neutral',
-  submitted: 'info',
-  under_review: 'warning',
-  accepted: 'success',
-  denied: 'error',
-  withdrawn: 'neutral',
-};
+/** D44 — the three transitions that take a note, so one dialog can serve all of them. */
+type NoteAction = 'reject' | 'defer' | 'documents';
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -95,12 +93,21 @@ export function ApplicationReviewScreen() {
   const query = useApplication(applicationId);
   const submitMut = useSubmitApplication();
   const reviewMut = useReviewApplication();
-  const denyMut = useDenyApplication();
+  const rejectMut = useRejectApplication();
+  const documentsMut = useRequestDocuments();
+  const eligibleMut = useMarkEligible();
+  const deferMut = useDeferApplication();
+  const enrolledMut = useMarkEnrolled();
   const withdrawMut = useWithdrawApplication();
 
   const [acceptOpen, setAcceptOpen] = useState(false);
-  const [denyOpen, setDenyOpen] = useState(false);
-  const [denyReason, setDenyReason] = useState('');
+  /**
+   * D44 — ONE dialog for the three transitions that carry a note (reject, defer, send
+   * back for documents), rather than three near-identical ones. `noteAction` says which is
+   * open and drives the copy; null means closed.
+   */
+  const [noteAction, setNoteAction] = useState<NoteAction | null>(null);
+  const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   if (query.isLoading) return <LoadingState variant="page" label="Loading application" />;
@@ -118,9 +125,65 @@ export function ApplicationReviewScreen() {
 
   const app = query.data;
   const isDraft = app.status === 'draft';
-  const isDecidable = app.status === 'submitted' || app.status === 'under_review';
-  const isDecided = ['accepted', 'denied', 'withdrawn'].includes(app.status);
+  /**
+   * D44 — `eligible` joins the decidable set. Refusing to decide from it would make
+   * marking someone eligible a step BACKWARDS. `documents_pending` is deliberately absent:
+   * a decision taken there is taken on a file the college knows it has not finished
+   * reading. Mirrors `admissions/service._DECIDABLE`.
+   */
+  const isDecidable =
+    app.status === 'submitted' || app.status === 'under_review' || app.status === 'eligible';
+  const isReviewable = app.status === 'submitted' || app.status === 'under_review';
+  const isDecided = isDecidedApplication(app.status);
   const canAccept = isDecidable && app.blocking_issues.length === 0;
+
+  /**
+   * D44 — THE EDIT AFFORDANCE. The server has always allowed a PATCH right up until a
+   * decision is recorded (`_assert_editable`); until now the only button that used it
+   * rendered on a draft, so an application under review was editable by the API and not by
+   * anyone using it.
+   *
+   * Gated on the two roles that own admissions rather than on the route alone: the Auditor
+   * reaches this page and every write it could make is refused centrally, so offering the
+   * button would be offering a dead end.
+   */
+  const canEdit = !isDecided && (user?.role === 'principal' || user?.role === 'secretary');
+
+  const noteCopy: Record<NoteAction, { title: string; submit: string; hint: string }> = {
+    reject: {
+      title: 'Reject this application',
+      submit: 'Reject',
+      hint: 'Recorded on the application. The applicant usually asks why.',
+    },
+    defer: {
+      title: 'Defer this application',
+      submit: 'Defer',
+      hint:
+        'The applicant re-applies for the intake you are deferring them to — this ' +
+        'application is closed, not paused. Say which intake.',
+    },
+    documents: {
+      title: 'Send back for documents',
+      submit: 'Send back',
+      hint: 'Say what is missing. The application returns to the queue once it arrives.',
+    },
+  };
+  const runNote = () => {
+    if (!noteAction) return;
+    const reason = note.trim() || null;
+    const mut =
+      noteAction === 'reject' ? rejectMut : noteAction === 'defer' ? deferMut : documentsMut;
+    mut.mutate(
+      { id: app.id, reason },
+      {
+        onSuccess: () => {
+          setNoteAction(null);
+          setNote('');
+        },
+        onError: (err) => setError(apiErrorMessage(err)),
+      },
+    );
+  };
 
   const grid = { display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' }, gap: 2 };
 
@@ -146,20 +209,29 @@ export function ApplicationReviewScreen() {
             .join(' · ') || undefined
         }
         primaryAction={
-          isDraft ? (
+          canEdit ? (
             <Button
               variant="contained"
               startIcon={<EditIcon />}
               onClick={() => navigate(`${ROUTES.applications}/${app.id}/edit`)}
             >
-              Continue filling in
+              {/* A draft is being FILLED IN; anything later is being CORRECTED, and the
+                  two are different enough acts to name differently. */}
+              {isDraft ? 'Continue filling in' : 'Edit application'}
             </Button>
           ) : undefined
         }
       />
 
       <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-        <StatusBadge label={APPLICATION_STATUS_LABEL[app.status]} kind={STATUS_KIND[app.status]} />
+        <StatusBadge label={APPLICATION_STATUS_LABEL[app.status]} kind={APPLICATION_STATUS_KIND[app.status]} />
+        {/* D44 — the reference the Registrar reads out on the phone. Monospaced so a
+            digit-by-digit read-back is not fighting a proportional font. */}
+        {app.application_number && (
+          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+            {app.application_number}
+          </Typography>
+        )}
         {app.school_year && (
           <Typography variant="body2" color="text.secondary">
             School year {app.school_year}
@@ -227,6 +299,34 @@ export function ApplicationReviewScreen() {
               Mark under review
             </Button>
           )}
+          {/* D44 — the return trip from `documents_pending`. Same endpoint as
+              "Mark under review", named for what it means here. */}
+          {app.status === 'documents_pending' && (
+            <Button
+              variant="contained"
+              disabled={reviewMut.isPending}
+              onClick={() =>
+                reviewMut.mutate(app.id, { onError: (err) => setError(apiErrorMessage(err)) })
+              }
+            >
+              Documents received
+            </Button>
+          )}
+          {isReviewable && (
+            <>
+              <Button
+                disabled={eligibleMut.isPending}
+                onClick={() =>
+                  eligibleMut.mutate(app.id, {
+                    onError: (err) => setError(apiErrorMessage(err)),
+                  })
+                }
+              >
+                Mark eligible
+              </Button>
+              <Button onClick={() => setNoteAction('documents')}>Request documents</Button>
+            </>
+          )}
           {isDecidable && (
             <>
               <Button
@@ -237,10 +337,25 @@ export function ApplicationReviewScreen() {
               >
                 Accept
               </Button>
-              <Button variant="outlined" color="error" onClick={() => setDenyOpen(true)}>
-                Deny
+              <Button onClick={() => setNoteAction('defer')}>Defer</Button>
+              <Button variant="outlined" color="error" onClick={() => setNoteAction('reject')}>
+                Reject
               </Button>
             </>
+          )}
+          {/* D44 — the last step: the student the acceptance created has registered. */}
+          {app.status === 'accepted' && app.student_id && (
+            <Button
+              variant="contained"
+              disabled={enrolledMut.isPending}
+              onClick={() =>
+                enrolledMut.mutate(app.id, {
+                  onError: (err) => setError(apiErrorMessage(err)),
+                })
+              }
+            >
+              Mark enrolled
+            </Button>
           )}
           {!isDecided && (
             <Button
@@ -253,10 +368,12 @@ export function ApplicationReviewScreen() {
               Applicant withdrew
             </Button>
           )}
-          {isDecided && (
+          {isDecided && app.status !== 'accepted' && (
             <Typography variant="body2" color="text.secondary">
-              This application is {app.status} and is now a record. Decisions are kept, not
-              reversed.
+              This application is {APPLICATION_STATUS_LABEL[app.status].toLowerCase()} and is
+              now a record. Decisions are kept, not reversed.
+              {app.status === 'deferred' &&
+                ' The applicant re-applies for the intake they were deferred to.'}
             </Typography>
           )}
         </Stack>
@@ -401,39 +518,48 @@ export function ApplicationReviewScreen() {
         onAccepted={() => void query.refetch()}
       />
 
+      {/* D44 — ONE dialog for reject / defer / request-documents. All three append a note
+          to the same field through the same body shape; three copies of it would have been
+          three places for the wording to drift. */}
       <FormDialog
-        open={denyOpen}
-        title="Deny this application"
-        submitLabel="Deny"
-        submitting={denyMut.isPending}
-        onClose={() => setDenyOpen(false)}
-        onSubmit={() =>
-          denyMut.mutate(
-            { id: app.id, reason: denyReason.trim() || null },
-            {
-              onSuccess: () => {
-                setDenyOpen(false);
-                setDenyReason('');
-              },
-              onError: (err) => setError(apiErrorMessage(err)),
-            },
-          )
-        }
+        open={noteAction !== null}
+        title={noteAction ? noteCopy[noteAction].title : ''}
+        submitLabel={noteAction ? noteCopy[noteAction].submit : ''}
+        submitting={rejectMut.isPending || deferMut.isPending || documentsMut.isPending}
+        onClose={() => {
+          setNoteAction(null);
+          setNote('');
+        }}
+        onSubmit={runNote}
       >
         <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="warning">
-            A denial is kept as part of the admissions record and is not reversible. Use
-            &ldquo;Applicant withdrew&rdquo; instead if they pulled out — the two are different
-            facts.
-          </Alert>
+          {noteAction === 'reject' && (
+            <Alert severity="warning">
+              A rejection is kept as part of the admissions record and is not reversible. Use
+              &ldquo;Applicant withdrew&rdquo; instead if they pulled out — the two are
+              different facts.
+            </Alert>
+          )}
+          {noteAction === 'defer' && (
+            <Alert severity="info">
+              Deferring CLOSES this application. The applicant files a new one for the intake
+              you are deferring them to, and the duplicate check will let them.
+            </Alert>
+          )}
+          {noteAction === 'documents' && (
+            <Alert severity="info">
+              The application leaves the decision queue until the paperwork arrives. Use
+              &ldquo;Documents received&rdquo; to bring it back.
+            </Alert>
+          )}
           <TextField
-            label="Reason"
-            value={denyReason}
-            onChange={(e) => setDenyReason(e.target.value)}
+            label={noteAction === 'documents' ? 'What is missing' : 'Reason'}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
             fullWidth
             multiline
             minRows={2}
-            helperText="Optional, but the applicant usually asks. Appended to the comments."
+            helperText={noteAction ? noteCopy[noteAction].hint : ''}
           />
         </Stack>
       </FormDialog>

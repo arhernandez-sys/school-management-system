@@ -55,6 +55,7 @@ from app.modules.admissions.router import (
     router as applications_router,
 )
 from app.modules.prerequisites.router import router as prerequisites_router
+from app.modules.classrooms.router import router as classrooms_router
 from app.modules.programs.router import router as programs_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
@@ -75,6 +76,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     settings_router,  # 7.2 — serves /api/v1/settings/* (api-spec §5 Module 11)
     courses_router,  # 7.2 — serves /api/v1/courses/* (api-spec §5 Module 5b)
     programs_router,  # D30 2B — serves /api/v1/programs/* (studies + curriculum, §D3)
+    classrooms_router,  # D44 — /api/v1/classrooms/* (physical rooms, from sims_10)
     prerequisites_router,  # D30 2C — /api/v1/courses/{id}/prerequisites (§D4)
     students_router,  # 7.3 — serves /api/v1/students/* (api-spec §5 Module 3)
     applications_router,  # D30 4 — /api/v1/applications/* (admissions, §D11)

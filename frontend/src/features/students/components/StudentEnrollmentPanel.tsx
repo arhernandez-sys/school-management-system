@@ -1,6 +1,6 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { formatSchoolDate } from '@shared/utils/schoolDate';
-import { Box, Chip, Link as MuiLink, Paper, Stack, Typography } from '@mui/material';
+import { Box, Chip, Link as MuiLink, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import ClassOutlinedIcon from '@mui/icons-material/ClassOutlined';
 import CalendarMonthOutlinedIcon from '@mui/icons-material/CalendarMonthOutlined';
@@ -68,8 +68,18 @@ export function StudentEnrollmentPanel({
           Course offerings
         </Typography>
         <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
-          {offerings.map((o) =>
-            linkOfferings ? (
+          {/* D44 — a lecturer now SEES the student's whole enrolment and can open only the
+              offerings they teach (or, for an HOD, those in the programme they head). The
+              server sends `can_open` per row; before D44 it filtered the list instead, so a
+              lecturer could not tell whether their advisee was taking three courses or
+              eight.
+
+              `can_open` is an AFFORDANCE, not the boundary — the offering page refuses on
+              its own authority. Rendering a plain Chip here is about not offering a link
+              that leads to a 404. */}
+          {offerings.map((o) => {
+            const openable = linkOfferings && o.can_open !== false;
+            return openable ? (
               <Chip
                 key={o.id}
                 component={RouterLink}
@@ -80,9 +90,18 @@ export function StudentEnrollmentPanel({
                 variant="outlined"
               />
             ) : (
-              <Chip key={o.id} label={o.label} size="small" variant="outlined" />
-            ),
-          )}
+              <Tooltip
+                key={o.id}
+                title={
+                  linkOfferings && o.can_open === false
+                    ? 'You do not teach this course, so its page is not open to you.'
+                    : ''
+                }
+              >
+                <Chip label={o.label} size="small" variant="outlined" />
+              </Tooltip>
+            );
+          })}
         </Stack>
       </Box>
 

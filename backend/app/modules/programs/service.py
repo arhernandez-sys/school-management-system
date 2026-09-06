@@ -272,6 +272,9 @@ def create_program(
         code=code,
         name=name,
         award=payload.award,
+        admission_requirements=payload.admission_requirements,
+        graduation_requirements=payload.graduation_requirements,
+        comments=payload.comments,
         total_credits=payload.total_credits,
         min_passing_grade_point=payload.min_passing_grade_point,
         is_active=True,
@@ -304,6 +307,16 @@ def update_program(
         program.name = payload.name.strip()
     if payload.award is not None:
         program.award = payload.award
+    # D44 — these three read `exclude_unset`, not `is not None`, because they are the
+    # first FREE-TEXT fields on this model and clearing one has to be expressible. The
+    # `is not None` idiom above cannot tell "leave it alone" from "empty it"; for `code`
+    # and `award` that is harmless, for a notes box it is a field you can fill and never
+    # empty again.
+    supplied = payload.model_dump(exclude_unset=True)
+    for name in ("admission_requirements", "graduation_requirements", "comments"):
+        if name in supplied:
+            value = supplied[name]
+            setattr(program, name, (value or "").strip() or None)
     if payload.total_credits is not None:
         program.total_credits = payload.total_credits
     if payload.min_passing_grade_point is not None:

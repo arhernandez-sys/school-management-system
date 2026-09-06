@@ -54,6 +54,14 @@ const StudentsPage = lazy(() => import('@features/students'));
 const AdmissionsPage = lazy(() => import('@features/admissions'));
 const TeachersPage = lazy(() => import('@features/teachers'));
 const OfferingsPage = lazy(() => import('@features/offerings'));
+// D44 — the catalog. Two named exports from one module, so Courses and Programmes
+// share a chunk: they are opened by the same people in the same sitting.
+const CoursesRoute = lazy(() =>
+  import('@features/catalog').then((m) => ({ default: m.CoursesRoute })),
+);
+const ProgramsRoute = lazy(() =>
+  import('@features/catalog').then((m) => ({ default: m.ProgramsRoute })),
+);
 const MyTimetablePage = lazy(() => import('@features/timetable/MyTimetablePage'));
 const AssessmentsPage = lazy(() => import('@features/assessments'));
 const GradesPage = lazy(() => import('@features/grades'));
@@ -145,6 +153,11 @@ export const router = createBrowserRouter([
         element: lazyGuarded('applications', AdmissionsPage),
       },
       { path: `${ROUTES.teachers}/*`, element: lazyGuarded('teachers', TeachersPage) },
+      // D44 — the catalog left Settings for the main menu. Gated on `courses`, NOT on
+      // `programs`: the permission matrix gives `programs` capability `view-all` to every
+      // role, so gating Programmes on its own module would open it to Students.
+      { path: `${ROUTES.courses}/*`, element: lazyGuarded('courses', CoursesRoute) },
+      { path: `${ROUTES.programs}/*`, element: lazyGuarded('courses', ProgramsRoute) },
       { path: `${ROUTES.offerings}/*`, element: lazyGuarded('offerings', OfferingsPage) },
       { path: ROUTES.timetable, element: lazyGuarded('timetable', MyTimetablePage) },
       { path: `${ROUTES.assessments}/*`, element: lazyGuarded('assessments', AssessmentsPage) },

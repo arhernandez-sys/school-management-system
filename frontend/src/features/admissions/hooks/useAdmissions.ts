@@ -100,13 +100,47 @@ export function useReviewApplication() {
   return useMutation({ mutationFn: (id: string) => api.reviewApplication(id), onSuccess: apply });
 }
 
-export function useDenyApplication() {
+export function useRejectApplication() {
   const apply = useApplyApplication();
   return useMutation({
     mutationFn: ({ id, reason }: { id: string; reason?: string | null }) =>
-      api.denyApplication(id, reason),
+      api.rejectApplication(id, reason),
     onSuccess: apply,
   });
+}
+
+/** D44 — the three transitions that carry an optional note share one body shape. */
+export function useRequestDocuments() {
+  const apply = useApplyApplication();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string | null }) =>
+      api.requestDocuments(id, reason),
+    onSuccess: apply,
+  });
+}
+
+export function useDeferApplication() {
+  const apply = useApplyApplication();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string | null }) =>
+      api.deferApplication(id, reason),
+    onSuccess: apply,
+  });
+}
+
+export function useMarkEligible() {
+  const apply = useApplyApplication();
+  return useMutation({ mutationFn: (id: string) => api.markEligible(id), onSuccess: apply });
+}
+
+/**
+ * Marking an application enrolled does not change the STUDENT record — that has its own
+ * lifecycle vocabulary — so unlike `useAcceptApplication` this does not need to invalidate
+ * the students caches.
+ */
+export function useMarkEnrolled() {
+  const apply = useApplyApplication();
+  return useMutation({ mutationFn: (id: string) => api.markEnrolled(id), onSuccess: apply });
 }
 
 export function useWithdrawApplication() {

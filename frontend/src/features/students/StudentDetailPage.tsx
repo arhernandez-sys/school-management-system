@@ -35,7 +35,7 @@ import {
   type DetailTab,
 } from '@shared/components';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { canWrite } from '@shared/auth/permissions';
+import { canWrite, isLecturerRole } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import {
@@ -104,7 +104,11 @@ export function StudentDetailPage() {
     // D32 (brief §4) — "grade information from the registration screens" is THIS tab, and
     // `GET /students/{id}/assessments` now 403s for the Registrar. Rendering it for them
     // would show an error panel where a tab used to be, which is worse than no tab.
-    const canSeeGrades = user?.role === 'principal' || user?.role === 'teacher';
+    // D44 — was `role === 'principal' || role === 'teacher'`, which omitted `hod` and so
+    // hid the Grades & Assessments tab from a Head of Department that
+    // `students/router.py` explicitly grants it to. `isLecturerRole` is the helper D43
+    // introduced to kill exactly this `role === 'teacher'` bug class.
+    const canSeeGrades = user?.role === 'principal' || isLecturerRole(user?.role);
     // D42 §4 — the Academic history tab is Dean/Registrar only. Its endpoint
     // (`GET /students/{id}/academic-history`) is already `require_role(PRINCIPAL,
     // SECRETARY)`, so a Lecturer opening this tab got a 403 error panel where content

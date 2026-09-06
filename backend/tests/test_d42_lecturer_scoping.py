@@ -87,31 +87,51 @@ class TestStudentDetailOfferings:
         ids = {o["id"] for o in body["current_offerings"]}
         assert ids == {str(graph.cs.id), str(graph.other_cs.id)}
 
-    def test_a_lecturer_sees_only_their_OWN_offering(
+    def test_a_lecturer_can_OPEN_only_their_OWN_offering(
         self, client, graph, shared_student
     ) -> None:
-        """THE RULE. The other offering is another lecturer's course with another
-        lecturer's roster; sharing one class with a student is not a reason to be shown
-        their whole timetable."""
+        """THE RULE, as D44 restated it.
+
+        D42 removed the other lecturer's offering from this list outright. The client
+        asked for the opposite shape: the lecturer should SEE that their advisee is taking
+        four courses, and be able to open only the one they teach. So the list is complete
+        and `can_open` carries the rule.
+
+        What has NOT changed is the reach behind it — the other offering's roster and
+        gradebook are still refused by `offerings/service` on its own authority.
+        `can_open` is an affordance; see `StudentOfferingRef`.
+        """
         student, _enr = shared_student
         resp = client.get(f"{STUDENTS}/{student.id}", headers=graph.H)
         assert resp.status_code == 200, resp.text
-        ids = {o["id"] for o in resp.json()["current_offerings"]}
-        assert ids == {str(graph.cs.id)}
+        offerings = {o["id"]: o for o in resp.json()["current_offerings"]}
+        assert set(offerings) == {str(graph.cs.id), str(graph.other_cs.id)}
+        assert offerings[str(graph.cs.id)]["can_open"] is True
+        assert offerings[str(graph.other_cs.id)]["can_open"] is False
 
-    def test_the_OTHER_lecturer_sees_only_theirs(
+    def test_the_OTHER_lecturer_can_open_only_theirs(
         self, client, graph, shared_student
     ) -> None:
-        """Symmetry, and it is not redundant: a filter accidentally written against the
+        """Symmetry, and it is not redundant: a rule accidentally written against the
         wrong side of the join would pass the test above and fail this one."""
         student, _enr = shared_student
-        ids = {
-            o["id"]
+        offerings = {
+            o["id"]: o
             for o in client.get(f"{STUDENTS}/{student.id}", headers=graph.OTHER).json()[
                 "current_offerings"
             ]
         }
-        assert ids == {str(graph.other_cs.id)}
+        assert set(offerings) == {str(graph.cs.id), str(graph.other_cs.id)}
+        assert offerings[str(graph.other_cs.id)]["can_open"] is True
+        assert offerings[str(graph.cs.id)]["can_open"] is False
+
+    def test_the_dean_may_open_everything(self, client, graph, shared_student) -> None:
+        """D44 — the roles that see everything get `can_open` left at its default rather
+        than being handed a computed set. Pinned so that "no narrowing" cannot silently
+        become "narrowed to nothing" for them."""
+        student, _enr = shared_student
+        body = client.get(f"{STUDENTS}/{student.id}", headers=graph.P).json()
+        assert [o["can_open"] for o in body["current_offerings"]] == [True, True]
 
     def test_reachability_is_unchanged(self, client, graph, db_session) -> None:
         """Filtering the CONTENT must not have changed who may open the page. A student
@@ -129,8 +149,11 @@ class TestStudentDetailOfferings:
         self, client, graph, shared_student
     ) -> None:
         """The "Courses" column on the directory is the same fact the profile's enrolment
-        list shows. Left global it printed 2 in the directory and 1 on the profile of the
-        same student for the same Lecturer — which reads as a bug, not as a rule."""
+        list shows, so the two must never disagree for the same viewer.
+
+        D44 flipped which side that agreement is reached on. D42 narrowed BOTH to the
+        lecturer's own offerings; D44 shows the full enrolment on the profile, so the
+        count is global again. The invariant is untouched — only the value is."""
         student, _enr = shared_student
 
         dean_row = next(
@@ -143,8 +166,10 @@ class TestStudentDetailOfferings:
             for r in client.get(STUDENTS, headers=graph.H).json()["items"]
             if r["id"] == str(student.id)
         )
+        # Both see 2 now: the lecturer's profile lists both offerings, one of them
+        # unopenable, so a count of 1 would be the thing that read as a bug.
         assert dean_row["offering_count"] == 2
-        assert lecturer_row["offering_count"] == 1
+        assert lecturer_row["offering_count"] == 2
 
         profile = client.get(f"{STUDENTS}/{student.id}", headers=graph.H).json()
         assert lecturer_row["offering_count"] == len(profile["current_offerings"])

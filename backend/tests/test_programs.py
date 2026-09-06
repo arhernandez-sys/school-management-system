@@ -116,6 +116,8 @@ class TestListPrograms:
             "id", "code", "name", "award", "total_credits",
             "min_passing_grade_point", "is_active",
             "course_count", "curriculum_credits",
+            # D44, from the client's sims_10 dump.
+            "admission_requirements", "graduation_requirements", "comments",
         } == set(item.keys())
 
     def test_requires_auth(self, client) -> None:

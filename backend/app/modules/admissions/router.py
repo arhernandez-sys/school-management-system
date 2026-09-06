@@ -15,7 +15,8 @@ that is what it is anchored to (brief §13). Same pattern as `assessment_grades_
 
 **THE PERMISSION SPLIT** (§D14, confirmed with the client):
 
-  Registrar + Dean   file, edit, submit, review, accept, deny, withdraw an application;
+  Registrar + Dean   file, edit, submit, review, accept, reject, defer, withdraw an
+                     application, send it back for documents, mark it eligible or enrolled;
                      Section B education rows; the Section F checklist; filing and editing
                      a credit transfer request
   Dean only          APPROVE or DENY a credit transfer (brief §13 — the Dean assesses it)
@@ -32,7 +33,11 @@ Endpoints:
   POST   /applications/{id}/submit                  P/S   -> ApplicationDetail
   POST   /applications/{id}/review                  P/S   -> ApplicationDetail
   POST   /applications/{id}/accept                  P/S   -> ApplicationAcceptResponse (201)
-  POST   /applications/{id}/deny                    P/S   -> ApplicationDetail
+  POST   /applications/{id}/reject                  P/S   -> ApplicationDetail
+  POST   /applications/{id}/request-documents       P/S   -> ApplicationDetail
+  POST   /applications/{id}/eligible                P/S   -> ApplicationDetail
+  POST   /applications/{id}/defer                   P/S   -> ApplicationDetail
+  POST   /applications/{id}/enrolled                P/S   -> ApplicationDetail
   POST   /applications/{id}/withdraw                P/S   -> ApplicationDetail
   PUT    /applications/{id}/education               P/S   -> ApplicationDetail
   PUT    /applications/{id}/documents               P/S   -> ApplicationDetail
@@ -75,7 +80,7 @@ from app.modules.admissions.schemas import (
     ApplicationAcceptRequest,
     ApplicationAcceptResponse,
     ApplicationCreateRequest,
-    ApplicationDenyRequest,
+    ApplicationDecisionNoteRequest,
     ApplicationDetail,
     ApplicationPage,
     ApplicationUpdateRequest,
@@ -262,21 +267,95 @@ def accept_application(
 
 
 @router.post(
-    "/{application_id}/deny",
+    "/{application_id}/reject",
     response_model=ApplicationDetail,
-    summary="Deny an application (Registrar + Dean)",
+    summary="Reject an application (Registrar + Dean)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
-def deny_application(
+def reject_application(
     application_id: uuid.UUID,
-    payload: ApplicationDenyRequest,
+    payload: ApplicationDecisionNoteRequest,
     db: Session = Depends(get_db),
     actor: User = Depends(_admissions),
 ) -> ApplicationDetail:
-    """Terminal, and not a delete: the college's refusal is part of the record."""
-    return service.deny_application(
+    """Terminal, and not a delete: the college's refusal is part of the record.
+
+    D44 renamed this from `/deny`. The old path is NOT kept as an alias — this API has one
+    consumer, shipped from this repo, and a permanent second spelling of a route is a
+    permanent second thing to keep working.
+    """
+    return service.reject_application(
         db, actor=actor, application_id=application_id, reason=payload.reason
     )
+
+
+@router.post(
+    "/{application_id}/request-documents",
+    response_model=ApplicationDetail,
+    summary="Send back to the applicant for missing paperwork (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def request_documents(
+    application_id: uuid.UUID,
+    payload: ApplicationDecisionNoteRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. The one reversible state: `/review` brings it back when the papers arrive."""
+    return service.request_documents(
+        db, actor=actor, application_id=application_id, reason=payload.reason
+    )
+
+
+@router.post(
+    "/{application_id}/eligible",
+    response_model=ApplicationDetail,
+    summary="Mark as meeting the requirements — NOT a decision (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def mark_eligible(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. Separates "this applicant qualifies" from "the college is offering a place",
+    which matters whenever there are more qualified applicants than seats."""
+    return service.mark_eligible(db, actor=actor, application_id=application_id)
+
+
+@router.post(
+    "/{application_id}/defer",
+    response_model=ApplicationDetail,
+    summary="Hold the decision to a later intake (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def defer_application(
+    application_id: uuid.UUID,
+    payload: ApplicationDecisionNoteRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. TERMINAL — the applicant re-applies for the intake they are deferred to,
+    which the SSN duplicate guard permits precisely because this is terminal."""
+    return service.defer_application(
+        db, actor=actor, application_id=application_id, reason=payload.reason
+    )
+
+
+@router.post(
+    "/{application_id}/enrolled",
+    response_model=ApplicationDetail,
+    summary="Mark an accepted application as enrolled (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def mark_enrolled(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. Closes the application behind a student who has actually registered. Does not
+    touch `student_profiles.status`, which is a different lifecycle."""
+    return service.mark_enrolled(db, actor=actor, application_id=application_id)
 
 
 @router.post(
@@ -290,7 +369,7 @@ def withdraw_application(
     db: Session = Depends(get_db),
     actor: User = Depends(_admissions),
 ) -> ApplicationDetail:
-    """Distinct from `deny` — one is the applicant's choice, the other the college's."""
+    """Distinct from `reject` — one is the applicant's choice, the other the college's."""
     return service.withdraw_application(db, actor=actor, application_id=application_id)
 
 

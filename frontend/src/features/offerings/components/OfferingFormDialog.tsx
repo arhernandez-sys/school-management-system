@@ -11,6 +11,7 @@ import {
   Typography,
 } from '@mui/material';
 import { FormDialog, SearchableSelect } from '@shared/components';
+import { useClassroomOptions } from '@features/classrooms/hooks/useClassrooms';
 import { useAcademicYears } from '@features/settings/hooks/useSettings';
 import { useCoursesList } from '@features/settings/hooks/useCourses';
 import { useTeachersList } from '@features/teachers/hooks/useTeachers';
@@ -129,9 +130,16 @@ export function OfferingFormDialog({
   const [semesterId, setSemesterId] = useState('');
   const [sectionCode, setSectionCode] = useState('');
   const [capacity, setCapacity] = useState('');
+  // D44 — the room this offering meets in. '' means none assigned, which is what all
+  // 19 pre-D44 offerings are.
+  const [classroomId, setClassroomId] = useState('');
   const [archived, setArchived] = useState(false);
   const [teacherIds, setTeacherIds] = useState<string[]>([]);
   const [meetings, setMeetings] = useState<OfferingMeetingInput[]>([]);
+  // Held until the dialog is actually on screen, so opening the offerings LIST does
+  // not fetch a room list nobody asked for.
+  const classroomsQuery = useClassroomOptions(open);
+  const classroomOptions = classroomsQuery.data?.items ?? [];
 
   useEffect(() => {
     if (!open) return;
@@ -143,9 +151,11 @@ export function OfferingFormDialog({
       setSemesterId(offering.semester?.id ?? '');
       setSectionCode(offering.section_code ?? '');
       setCapacity(offering.capacity == null ? '' : String(offering.capacity));
+      setClassroomId(offering.classroom?.id ?? '');
       setArchived(offering.is_archived);
       return;
     }
+    setClassroomId('');
     setCourseId('');
     setSemesterId(activeSemesterId);
     setSectionCode('');
@@ -187,6 +197,9 @@ export function OfferingFormDialog({
               // be computed wrongly.
               section_code: sectionCode.trim() || null,
               capacity: capacity.trim() ? Number(capacity) : null,
+              // D44 — an explicit null UNASSIGNS the room, which is a thing a
+              // Registrar does when a class moves. Sent unconditionally like the rest.
+              classroom_id: classroomId || null,
               is_archived: archived,
             })
           : onSubmit({
@@ -196,6 +209,7 @@ export function OfferingFormDialog({
               // string and would reject an empty section code outright.
               section_code: sectionCode.trim() || null,
               capacity: capacity.trim() ? Number(capacity) : null,
+              classroom_id: classroomId || null,
               teacher_ids: teacherIds,
               meetings: meetings.map((m) => ({ ...m, room: m.room?.trim() || null })),
             })
@@ -273,16 +287,48 @@ export function OfferingFormDialog({
           />
         </Stack>
 
-        <TextField
-          label="Capacity"
-          type="number"
-          value={capacity}
-          onChange={(e) => setCapacity(e.target.value)}
-          fullWidth
-          inputProps={{ min: 1 }}
-          error={Boolean(fieldErrors?.capacity)}
-          helperText={fieldErrors?.capacity?.join(' ') ?? 'Optional — leave blank for no limit.'}
-        />
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <TextField
+            label="Capacity"
+            type="number"
+            value={capacity}
+            onChange={(e) => setCapacity(e.target.value)}
+            fullWidth
+            inputProps={{ min: 1 }}
+            error={Boolean(fieldErrors?.capacity)}
+            helperText={
+              fieldErrors?.capacity?.join(' ') ?? 'Optional — leave blank for no limit.'
+            }
+          />
+          {/* D44 — the room. Only ACTIVE rooms are offered: one taken out of service
+              should not be bookable, and showing it greyed only invites the question.
+
+              ⚠️ This does NOT yet drive the timetable, which still renders the free-text
+              `room` on each meeting below. Two things describe the same fact until that
+              is resolved — see docs/d44-sims10-and-meeting3.md. */}
+          <TextField
+            select
+            label="Classroom"
+            value={classroomId}
+            onChange={(e) => setClassroomId(e.target.value)}
+            fullWidth
+            error={Boolean(fieldErrors?.classroom_id)}
+            helperText={
+              fieldErrors?.classroom_id?.join(' ') ??
+              (classroomsQuery.isLoading ? 'Loading rooms…' : 'Optional — leave unset if not decided.')
+            }
+          >
+            <MenuItem value="">
+              <em>No room assigned</em>
+            </MenuItem>
+            {classroomOptions.map((room) => (
+              <MenuItem key={room.id} value={room.id}>
+                {room.label}
+                {room.capacity > 0 ? ` · ${room.capacity} seats` : ''}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Stack>
 
         {/* The only write path to `is_archived` anywhere in the app. The list has printed
             an Active/Archived badge since D31 and nothing could set it, so an offering

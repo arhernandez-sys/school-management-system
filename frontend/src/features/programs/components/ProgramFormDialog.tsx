@@ -47,6 +47,10 @@ export function ProgramFormDialog({
   const [award, setAward] = useState('');
   const [totalCredits, setTotalCredits] = useState('');
   const [passMark, setPassMark] = useState('2.50');
+  // D44, from the client's `sims_10` dump.
+  const [admissionReq, setAdmissionReq] = useState('');
+  const [graduationReq, setGraduationReq] = useState('');
+  const [comments, setComments] = useState('');
 
   useEffect(() => {
     if (open) {
@@ -55,6 +59,9 @@ export function ProgramFormDialog({
       setAward(program?.award ?? '');
       setTotalCredits(program?.total_credits != null ? String(program.total_credits) : '');
       setPassMark(program?.min_passing_grade_point ?? '2.50');
+      setAdmissionReq(program?.admission_requirements ?? '');
+      setGraduationReq(program?.graduation_requirements ?? '');
+      setComments(program?.comments ?? '');
     }
   }, [open, program]);
 
@@ -80,6 +87,13 @@ export function ProgramFormDialog({
           code: code.trim(),
           name: name.trim(),
           award: award.trim() || null,
+          // D44 — `|| null` rather than omitting, so emptying a box CLEARS the field. The
+          // server reads these three through `exclude_unset`, so a sent null is a clear
+          // and an absent key is "leave alone"; sending them always makes this dialog's
+          // behaviour "what you see is what is saved".
+          admission_requirements: admissionReq.trim() || null,
+          graduation_requirements: graduationReq.trim() || null,
+          comments: comments.trim() || null,
           total_credits: creditsNumber,
           min_passing_grade_point: passNumber.toFixed(2),
         })
@@ -126,6 +140,34 @@ export function ProgramFormDialog({
             </MenuItem>
           ))}
         </TextField>
+        {/* D44 — prospectus prose, from the client's own columns. Deliberately free text
+            and deliberately NOT enforced: `program_courses` and `course_prerequisites`
+            already express the rules the system checks, and a second machine-readable
+            copy of them here would be a second thing to keep true. */}
+        <TextField
+          label="Admission requirements"
+          value={admissionReq}
+          onChange={(e) => setAdmissionReq(e.target.value)}
+          fullWidth
+          inputProps={{ maxLength: 100 }}
+          error={Boolean(fieldErrors?.admission_requirements)}
+          helperText={
+            fieldErrors?.admission_requirements?.join(' ') ??
+            'What an applicant needs to get in. Printed, not enforced.'
+          }
+        />
+        <TextField
+          label="Graduation requirements"
+          value={graduationReq}
+          onChange={(e) => setGraduationReq(e.target.value)}
+          fullWidth
+          inputProps={{ maxLength: 100 }}
+          error={Boolean(fieldErrors?.graduation_requirements)}
+          helperText={
+            fieldErrors?.graduation_requirements?.join(' ') ??
+            'What a student needs to finish. The credit total and pass mark below are what the system actually checks.'
+          }
+        />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
             label="Total credits"
@@ -154,6 +196,21 @@ export function ProgramFormDialog({
             }
           />
         </Stack>
+        {/* D44 — last, because it is the least structured thing on the form and putting a
+            free-text box above the numbers invites people to stop reading there. */}
+        <TextField
+          label="Notes"
+          value={comments}
+          onChange={(e) => setComments(e.target.value)}
+          fullWidth
+          multiline
+          minRows={2}
+          error={Boolean(fieldErrors?.comments)}
+          helperText={
+            fieldErrors?.comments?.join(' ') ??
+            'Internal notes on the programme. Not shown to students.'
+          }
+        />
       </Stack>
     </FormDialog>
   );

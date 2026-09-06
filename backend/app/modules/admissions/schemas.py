@@ -275,12 +275,18 @@ class ApplicationUpdateRequest(_ApplicationFields):
     """PATCH /applications/{id}. Only the keys PRESENT in the body are applied."""
 
 
-class ApplicationDenyRequest(BaseModel):
-    """POST /applications/{id}/deny."""
+class ApplicationDecisionNoteRequest(BaseModel):
+    """The body shared by every transition that can carry a note — `/reject`, `/defer`
+    and `/request-documents`.
+
+    D44 renamed this from `ApplicationDenyRequest` and widened it to the three. All three
+    append the same way, to the same `comments` field, and giving them one schema is what
+    stops the three from drifting into three slightly different `reason` fields.
+    """
 
     model_config = ConfigDict(extra="forbid")
-    #: Recorded in `comments`. Optional, because a college may decline without stating a
-    #: reason, but prompted for in the UI because the applicant usually asks.
+    #: Appended to `comments`, never overwriting. Optional, because a college may decline
+    #: without stating a reason, but prompted for in the UI because the applicant asks.
     reason: str | None = None
 
 
@@ -321,6 +327,9 @@ class ApplicationListItem(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    #: `APP-YYYY-NNNNN` (D44). Optional on the wire only because the column is nullable
+    #: for the migration's sake; every row the API creates has one.
+    application_number: str | None = None
     status: ApplicationStatus
     full_name: str
     first_name: str
@@ -380,6 +389,8 @@ class ApplicationDetail(ApplicationListItem):
     guardian_signed_at: date | None = None
     academic_year_id: UUID | None = None
     enrolment_status: str | None = None
+    #: D44 — conditions attached to the offer, e.g. "must pass the ATLIB exam by January".
+    conditions_of_admission: str | None = None
     comments: str | None = None
     decided_by_user_id: UUID | None = None
     decided_at: datetime | None = None

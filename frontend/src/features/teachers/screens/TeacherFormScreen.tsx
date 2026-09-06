@@ -521,7 +521,7 @@ export function TeacherFormScreen() {
               helperText={err('ssno') ?? 'Up to 9 characters.'}
             />
             <TextField
-              label="Teacher licence no. (optional)"
+              label="Lecturer licence no. (optional)"
               value={draft.licensenum}
               onChange={(e) => set('licensenum', e.target.value)}
               fullWidth

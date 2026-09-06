@@ -168,6 +168,29 @@ class StudentFilterOptions(BaseModel):
     civil_statuses: list[str] = Field(default_factory=list)
 
 
+class StudentOfferingRef(OfferingRef):
+    """A student's offering, plus whether the CURRENT VIEWER may open its page (D44).
+
+    WHY THIS IS NOT A FILTER. Until D44 a lecturer's `current_offerings` was narrowed to
+    the offerings they teach, so a colleague's course simply vanished from the student's
+    profile — and a lecturer looking at an advisee could not tell whether the student was
+    taking three courses or eight. The client asked for the full enrolment to be visible
+    with only their own courses clickable, which is what this flag expresses.
+
+    ⚠️ THIS IS A WIDENING, and it is deliberate. A lecturer now sees the NAMES of courses
+    they do not teach. That is a small amount of information about a student they are
+    already authorised to view — `_assert_teacher_can_see_student` has already run — and
+    the offering PAGE, with its roster and its gradebook, stays shut: `can_open` is a UI
+    affordance, and `offerings/service` still refuses the fetch on its own authority.
+    Never treat this flag as the boundary.
+    """
+
+    #: True when the viewer may open `/offerings/{id}`. Always true for the roles that see
+    #: everything (Dean, Registrar, Auditor) and for a student's own view; for a lecturer
+    #: it is ownership, and for an HOD it is their programme.
+    can_open: bool = True
+
+
 class StudentDetail(_AdmissionProfileFields):
     """GET /students/{id}, /students/me + POST/PATCH/status responses.
 
@@ -228,7 +251,11 @@ class StudentDetail(_AdmissionProfileFields):
     #: student's documents are 1:N, so one scalar cannot name them.
     doc_id: int | None = None
     #: Every subject class the student is actively enrolled in, name-ordered.
-    current_offerings: list[OfferingRef] = Field(default_factory=list)
+    #:
+    #: D44 — `StudentOfferingRef`, not the bare shared `OfferingRef`, so each row can say
+    #: whether THIS viewer may open it. See that class for why the list is no longer
+    #: filtered.
+    current_offerings: list[StudentOfferingRef] = Field(default_factory=list)
     audit: AuditStamp | None = None
 
 

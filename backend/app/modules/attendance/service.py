@@ -32,6 +32,9 @@ from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
 from app.core.timeutil import school_today, utcnow
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.schemas import (
+    AttendanceAlertOffering,
+    AttendanceAlertStudent,
+    AttendanceAlertsResponse,
     AttendanceCounts,
     AttendanceDatePoint,
     AttendanceEntry,
@@ -79,6 +82,15 @@ def _today() -> date_type:
     through.
     """
     return school_today()
+
+
+#: The attendance floor, as a percentage (D44). Below this, a class or a student is
+#: flagged.
+#:
+#: One constant, exported, and the API echoes it back on every alerts response — so the
+#: frontend states the rule it is showing instead of carrying a second copy of the number
+#: that can disagree with this one.
+ATTENDANCE_ALERT_THRESHOLD = 80.0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -572,4 +584,129 @@ def get_my_attendance(
             MyAttendanceHistoryItem(date=r.attendance_date, status=r.status)
             for r in records
         ],
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /attendance/alerts  (D44)
+# ──────────────────────────────────────────────────────────────────────────────
+def get_alerts(
+    db: Session,
+    *,
+    actor: User,
+    academic_year_id: uuid.UUID | None,
+    threshold: float = ATTENDANCE_ALERT_THRESHOLD,
+) -> AttendanceAlertsResponse:
+    """Every class and every student below `threshold`, for one academic year.
+
+    Built on `_summarize` — the SAME tally the summary screen, both dashboards and the
+    report card use. A second percentage implementation here would eventually disagree
+    with the one on the screen the alert links to, and the alert would be the one nobody
+    believed.
+
+    ⚠️ **READ THE DENOMINATOR BEFORE READING THE PERCENTAGE.** `_summarize` divides by the
+    number of records ACTUALLY WRITTEN, not by sessions scheduled or days enrolled. A
+    class whose lecturer has marked the register twice, with one absence, reads 50% — and
+    is not in trouble. That is why every alert carries `sessions_recorded` and every class
+    alert carries `enrolled_count`: the number is only meaningful next to what produced
+    it, and an alert that hides its denominator trains people to ignore alerts.
+
+    Fixing the denominator would mean knowing which sessions SHOULD have been held, which
+    is `class_meetings` plus a term calendar plus a holiday list — a real piece of work,
+    and one that would change the percentage on five other surfaces at once. Out of scope
+    here; stated rather than silently inherited.
+
+    SCOPING IS THE CALLER'S, NOT THIS FUNCTION'S. The offering set comes from
+    `list_offerings`, which already narrows a lecturer to the offerings they are assigned
+    to and leaves P/S/HOD/Auditor with the whole year. So a lecturer's alert list cannot
+    name a class they do not teach, without that rule being written twice.
+    """
+    offerings_resp = list_offerings(db, actor=actor, academic_year_id=academic_year_id)
+    year_id = academic_year_id
+    if year_id is None:
+        active = _active_year(db)
+        year_id = active.id if active is not None else None
+
+    offering_ids = [item.offering.id for item in offerings_resp.items]
+    if not offering_ids:
+        return AttendanceAlertsResponse(
+            threshold=threshold, academic_year_id=year_id, offerings=[], students=[]
+        )
+
+    # One query for every record in scope, then tallied in Python. The alternative — a
+    # GROUP BY per offering and per student — would be two more round trips and would
+    # still have to reproduce `_summarize`'s late-counts-as-present rule in SQL, where it
+    # could drift from the Python one.
+    records = list(
+        db.scalars(
+            select(AttendanceRecord).where(AttendanceRecord.offering_id.in_(offering_ids))
+        ).all()
+    )
+
+    by_offering: dict[uuid.UUID, list[AttendanceStatus]] = defaultdict(list)
+    by_pair: dict[tuple[uuid.UUID, uuid.UUID], list[AttendanceStatus]] = defaultdict(list)
+    for record in records:
+        by_offering[record.offering_id].append(record.status)
+        by_pair[(record.offering_id, record.student_id)].append(record.status)
+
+    students_by_id = {
+        student.id: student
+        for student in db.scalars(
+            select(StudentProfile).where(
+                StudentProfile.id.in_({sid for _, sid in by_pair})
+            )
+        ).all()
+    }
+    refs = {item.offering.id: item for item in offerings_resp.items}
+
+    flagged_offerings: list[AttendanceAlertOffering] = []
+    for offering_id, statuses in by_offering.items():
+        counts = _summarize(statuses)
+        # A class with NO records is not below the threshold — it is unmarked. Reporting
+        # it at 0% would bury the classes that genuinely are in trouble under every class
+        # whose register nobody has opened yet.
+        if not statuses or counts.pct_present >= threshold:
+            continue
+        item = refs[offering_id]
+        flagged_offerings.append(
+            AttendanceAlertOffering(
+                offering=AttendanceOfferingRef(
+                    offering=item.offering, teachers=item.teachers
+                ),
+                enrolled_count=item.enrolled_count,
+                sessions_recorded=len(statuses),
+                **counts.model_dump(),
+            )
+        )
+
+    flagged_students: list[AttendanceAlertStudent] = []
+    for (offering_id, student_id), statuses in by_pair.items():
+        counts = _summarize(statuses)
+        if not statuses or counts.pct_present >= threshold:
+            continue
+        student = students_by_id.get(student_id)
+        if student is None:  # soft-deleted since the record was written
+            continue
+        item = refs[offering_id]
+        flagged_students.append(
+            AttendanceAlertStudent(
+                student=_student_ref(student),
+                offering=AttendanceOfferingRef(
+                    offering=item.offering, teachers=item.teachers
+                ),
+                sessions_recorded=len(statuses),
+                **counts.model_dump(),
+            )
+        )
+
+    # Worst first — the top of an alert list is the whole point of it. Ties broken by
+    # name so the order is stable between two identical percentages.
+    flagged_offerings.sort(key=lambda a: (a.pct_present, a.offering.offering.label))
+    flagged_students.sort(key=lambda a: (a.pct_present, a.student.full_name))
+
+    return AttendanceAlertsResponse(
+        threshold=threshold,
+        academic_year_id=year_id,
+        offerings=flagged_offerings,
+        students=flagged_students,
     )

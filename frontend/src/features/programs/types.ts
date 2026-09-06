@@ -48,6 +48,15 @@ export interface ProgramListItem {
   code: string;
   name: string;
   award: string | null;
+  /**
+   * D44, from the client's `sims_10` dump. Prose, not rules — `program_courses` and
+   * `course_prerequisites` already express what the system can ENFORCE, and these are the
+   * prospectus text around them.
+   */
+  admission_requirements: string | null;
+  graduation_requirements: string | null;
+  /** D44. Registrar's free-text notes on the programme. */
+  comments: string | null;
   /** Total credits as PRINTED on the programme's course sequence (86–102). */
   total_credits: number | null;
   /**
@@ -71,6 +80,11 @@ export interface ProgramWritePayload {
   code: string;
   name: string;
   award?: string | null;
+  // D44. Sending `null` explicitly CLEARS these; omitting leaves them alone (the server
+  // reads `exclude_unset` for the three, unlike the older fields above).
+  admission_requirements?: string | null;
+  graduation_requirements?: string | null;
+  comments?: string | null;
   total_credits?: number | null;
   min_passing_grade_point?: string;
   is_active?: boolean;

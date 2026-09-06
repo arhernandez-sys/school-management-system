@@ -28,7 +28,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.common.enums import AcademicYearStatus, TermType
+from app.common.enums import AcademicYearStatus, SemesterStatus, TermType
 from app.db.base import AuditMixin, Base, TimestampMixin, uuid_pk
 from app.db.types import GUID, JSONType, enum_col
 
@@ -95,6 +95,18 @@ class Semester(Base, TimestampMixin):
     sequence: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
     start_date: Mapped[date] = mapped_column(Date(), nullable=False)
     end_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    #: D44, from the client's `sims_10` dump.
+    #:
+    #: ⚠️ **STORAGE ONLY — nothing reads or writes this, deliberately.** It is mapped so
+    #: the client's own data round-trips, and no further. `is_active` (exactly one term,
+    #: enforced by `uq_semesters_one_active`) is still what decides the current term, and
+    #: the year's `AcademicYearStatus` is still what decides archived. Wiring a third
+    #: answer to "is this term running" into the freeze logic, the roster scoping and the
+    #: report snapshots — all of which key off `is_active` — without first deciding which
+    #: of the three wins is how they start disagreeing. See `SemesterStatus`.
+    semester_status: Mapped[SemesterStatus] = mapped_column(
+        enum_col(SemesterStatus), nullable=False, server_default=text("'active'")
+    )
     #: Brief §18 / D30 §D6 — the Lecturer grade-entry cutoff, i.e. the **END-TERM**
     #: deadline (D32-1).
     #:

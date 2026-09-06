@@ -95,6 +95,9 @@ export const strings = {
     // D30 §D11 — the applicant side of the student lifecycle.
     admissions: 'Admissions',
     teachers: 'Lecturers',
+    // D44 — the catalog and the programmes left Settings for the menu.
+    courses: 'Courses',
+    programs: 'Programmes',
     // Staff see the offerings they schedule; a student sees `myCourses` below.
     offerings: 'Course Offerings',
     assessments: 'Assessments',

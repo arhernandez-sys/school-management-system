@@ -167,7 +167,8 @@ CREATE TABLE IF NOT EXISTS `application_education` (
 -- Dumping structure for table sims.applications
 CREATE TABLE IF NOT EXISTS `applications` (
   `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
-  `status` enum('draft','submitted','under_review','accepted','denied','withdrawn') NOT NULL DEFAULT 'draft',
+  `application_number` varchar(20) DEFAULT NULL COMMENT 'Human reference, APP-YYYY-NNNNN (D44). Allocated at create from number_sequences; NULL only mid-migration.',
+  `status` enum('draft','submitted','under_review','documents_pending','eligible','accepted','rejected','deferred','withdrawn','enrolled') NOT NULL DEFAULT 'draft' COMMENT 'D44, client vocabulary. draft/submitted/under_review unchanged. documents_pending = returned to the applicant for missing paperwork. eligible = meets the requirements, awaiting a decision. rejected was `denied` before D44. deferred = decision held to a later intake. enrolled = accepted AND registered. accepted/rejected/withdrawn/enrolled are terminal.',
   `school_year` varchar(20) DEFAULT NULL COMMENT 'Form header: School year',
   `firstname` varchar(50) NOT NULL,
   `middlename` varchar(50) DEFAULT NULL,
@@ -204,6 +205,7 @@ CREATE TABLE IF NOT EXISTS `applications` (
   `academic_year_id` uuid DEFAULT NULL COMMENT 'FK -> academic_years',
   `enrolment_status` varchar(50) DEFAULT NULL,
   `student_code` varchar(20) DEFAULT NULL COMMENT 'The YYYYMM### issued on acceptance',
+  `conditions_of_admission` varchar(180) DEFAULT NULL COMMENT 'Conditions attached to an acceptance (D44, from the client dump). Free text.',
   `comments` text DEFAULT NULL COMMENT 'Comments/Observations',
   `decided_by_user_id` uuid DEFAULT NULL COMMENT 'FK -> users (Dean or Registrar)',
   `decided_at` datetime DEFAULT NULL,
@@ -214,6 +216,8 @@ CREATE TABLE IF NOT EXISTS `applications` (
   `created_by` uuid DEFAULT NULL,
   `updated_by` uuid DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_applications_number` (`application_number`),
+  UNIQUE KEY `uq_applsimsications_number` (`application_number`),
   KEY `ix_applications_status` (`status`),
   KEY `ix_applications_lastname` (`lastname`,`firstname`),
   KEY `fk_applications_program` (`program_id`),
@@ -232,11 +236,11 @@ CREATE TABLE IF NOT EXISTS `applications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 -- Dumping data for table sims.applications: ~4 rows (approximately)
-INSERT INTO `applications` (`id`, `status`, `school_year`, `firstname`, `middlename`, `lastname`, `date_of_birth`, `ssno`, `gender`, `civil_status`, `religion`, `phone`, `email`, `has_health_condition`, `health_condition_note`, `street`, `city_town_village`, `district`, `mother_name`, `father_name`, `nok_name`, `nok_relationship`, `nok_phone`, `atlib_exam`, `num_csec`, `finance_name`, `finance_phone`, `finance_email`, `recommendation_received`, `program_id`, `year_of_study`, `enrollment_load`, `applicant_signed_at`, `guardian_signed_at`, `date_accepted`, `academic_year_id`, `enrolment_status`, `student_code`, `comments`, `decided_by_user_id`, `decided_at`, `student_id`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	('76467ba5-4b40-46d4-b14a-54563f31e69f', 'under_review', '2026-2027', 'Arturo', NULL, 'Hernandez', '2006-08-09', '097532112', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, '6229e7e2-7b97-4885-963c-b6c277229ae8', 'First', 'Part Time', '2026-09-26', '2026-09-24', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-09-03 04:42:16', '2026-09-03 04:42:23', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'denied', '2026-2027', 'Arturo', NULL, 'Hernandez', '2004-08-25', '000854433', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 5, NULL, NULL, NULL, 1, '22a02920-dc1e-4572-9da3-4ee738f8f42f', 'First', 'Full Time', '2026-08-26', '2026-08-20', NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-25 04:45:44', NULL, NULL, '2026-08-25 04:45:34', '2026-08-25 04:45:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('b582c1b2-2fe0-4346-b30d-af1ec5367f98', 'withdrawn', '2027-2028', 'Arturo', NULL, 'Hernandez', '2009-06-05', '086432221', 'female', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'First', 'Full Time', '2026-09-24', '2026-09-17', NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-09-03 04:41:22', NULL, NULL, '2026-09-03 04:40:40', '2026-09-03 04:41:22', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('afd18f01-6380-4541-ad61-ecb047cbaeeb', 'accepted', '2026-2027', 'Arturo', NULL, 'Hernandez', '2003-06-23', '000123456', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 20, 'Arturo Hernandez', '6118374', 'art.hdz25@gmail.com', 1, 'bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'First', 'Full Time', '2026-08-27', '2026-08-25', '2026-08-23', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Full Time', '202608006', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-23 15:10:54', '7c6e08c4-7100-428a-8f33-69498a45f4ed', NULL, '2026-08-23 15:03:29', '2026-08-23 14:02:41', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b');
+INSERT INTO `applications` (`id`, `application_number`, `status`, `school_year`, `firstname`, `middlename`, `lastname`, `date_of_birth`, `ssno`, `gender`, `civil_status`, `religion`, `phone`, `email`, `has_health_condition`, `health_condition_note`, `street`, `city_town_village`, `district`, `mother_name`, `father_name`, `nok_name`, `nok_relationship`, `nok_phone`, `atlib_exam`, `num_csec`, `finance_name`, `finance_phone`, `finance_email`, `recommendation_received`, `program_id`, `year_of_study`, `enrollment_load`, `applicant_signed_at`, `guardian_signed_at`, `date_accepted`, `academic_year_id`, `enrolment_status`, `student_code`, `conditions_of_admission`, `comments`, `decided_by_user_id`, `decided_at`, `student_id`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
+	('76467ba5-4b40-46d4-b14a-54563f31e69f', 'APP-2026-00004', 'under_review', '2026-2027', 'Arturo', NULL, 'Hernandez', '2006-08-09', '097532112', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, '6229e7e2-7b97-4885-963c-b6c277229ae8', 'First', 'Part Time', '2026-09-26', '2026-09-24', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-09-03 04:42:16', '2026-09-06 14:06:29', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('405e8c0b-f3eb-4e6c-a29b-88a92ac63e11', 'APP-2026-00002', 'rejected', '2026-2027', 'Arturo', NULL, 'Hernandez', '2004-08-25', '000854433', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 5, NULL, NULL, NULL, 1, '22a02920-dc1e-4572-9da3-4ee738f8f42f', 'First', 'Full Time', '2026-08-26', '2026-08-20', NULL, NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-25 04:45:44', NULL, NULL, '2026-08-25 04:45:34', '2026-09-06 14:06:29', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('b582c1b2-2fe0-4346-b30d-af1ec5367f98', 'APP-2026-00003', 'withdrawn', '2027-2028', 'Arturo', NULL, 'Hernandez', '2009-06-05', '086432221', 'female', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, 'aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'First', 'Full Time', '2026-09-24', '2026-09-17', NULL, NULL, NULL, NULL, NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-09-03 04:41:22', NULL, NULL, '2026-09-03 04:40:40', '2026-09-06 14:06:29', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('afd18f01-6380-4541-ad61-ecb047cbaeeb', 'APP-2026-00001', 'accepted', '2026-2027', 'Arturo', NULL, 'Hernandez', '2003-06-23', '000123456', 'male', 'Single', 'Catholic', '6118374', 'art.hdz25@gmail.com', 0, NULL, 'San Estevan', 'Orange Walk', NULL, NULL, NULL, NULL, NULL, NULL, 1, 20, 'Arturo Hernandez', '6118374', 'art.hdz25@gmail.com', 1, 'bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'First', 'Full Time', '2026-08-27', '2026-08-25', '2026-08-23', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Full Time', '202608006', NULL, NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b', '2026-08-23 15:10:54', '7c6e08c4-7100-428a-8f33-69498a45f4ed', NULL, '2026-08-23 15:03:29', '2026-09-06 14:06:29', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b');
 
 -- Dumping structure for table sims.assessment_categories
 CREATE TABLE IF NOT EXISTS `assessment_categories` (
@@ -5820,6 +5824,29 @@ INSERT INTO `class_teachers` (`id`, `offering_id`, `teacher_id`, `is_lead`, `ass
 	('9a2cdaf9-1c75-56ad-91d6-e3c8ece86ffe', '31da6b76-0e9d-583b-ae9a-4bb0614cb098', '7f9e0349-b8cc-5845-9184-063d003c3831', 1, '2026-08-20 08:24:23', '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('70b201d9-03e1-52e0-95ab-ea6771c85103', '4ab6614d-a4bf-5b97-9b9a-f4a7fa05d5fd', '7f9e0349-b8cc-5845-9184-063d003c3831', 1, '2026-08-20 08:24:23', '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL);
 
+-- Dumping structure for table sims.classroom
+CREATE TABLE IF NOT EXISTS `classroom` (
+  `classroomid` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
+  `roomcode` varchar(25) NOT NULL COMMENT 'e.g. A-101. Unique among live rooms.',
+  `Building` varchar(60) NOT NULL COMMENT 'Client column name, kept as dumped.',
+  `Capacity` int(9) NOT NULL DEFAULT 0 COMMENT 'Seats. 0 = not recorded.',
+  `room_type` varchar(150) DEFAULT NULL COMMENT 'e.g. Lecture / Lab / Computer lab. Free text.',
+  `status` enum('Active','Inactive','In-Use','Available','Occupied') NOT NULL DEFAULT 'Active' COMMENT 'Client vocabulary, dumped as-is apart from spelling Available. The API writes Active/Inactive only; the rest describe live occupancy, which the timetable knows and a person should not be typing.',
+  `created_by` uuid DEFAULT NULL,
+  `created_on` datetime NOT NULL DEFAULT current_timestamp(),
+  `edited_by` uuid DEFAULT NULL,
+  `edited_on` datetime DEFAULT NULL ON UPDATE current_timestamp(),
+  PRIMARY KEY (`classroomid`),
+  UNIQUE KEY `uq_classroom_roomcode` (`roomcode`),
+  KEY `fk_classroom_created_by` (`created_by`),
+  KEY `fk_classroom_edited_by` (`edited_by`),
+  CONSTRAINT `fk_classroom_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_classroom_edited_by` FOREIGN KEY (`edited_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `ck_classroom_capacity` CHECK (`Capacity` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='Physical rooms (D44, from the client dump sims_10).';
+
+-- Dumping data for table sims.classroom: ~0 rows (approximately)
+
 -- Dumping structure for table sims.course_offerings
 CREATE TABLE IF NOT EXISTS `course_offerings` (
   `id` uuid NOT NULL COMMENT 'PK',
@@ -5827,6 +5854,7 @@ CREATE TABLE IF NOT EXISTS `course_offerings` (
   `semester_id` uuid NOT NULL COMMENT 'FK -> semesters. WHEN it is taught. Replaces classes.academic_year_id (D31).',
   `section_code` varchar(10) DEFAULT NULL COMMENT 'Parallel sections of one course in one term: 01, 02. NULL = the only section.',
   `capacity` smallint(6) DEFAULT NULL COMMENT 'Seats. NULL = uncapped.',
+  `classroomid` uuid DEFAULT NULL COMMENT 'FK -> classroom. NULL = no room assigned. D44; the dump had DEFAULT uuid_v4(), which would point every existing offering at a room that does not exist.',
   `is_archived` tinyint(1) NOT NULL DEFAULT 0,
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
@@ -5839,6 +5867,8 @@ CREATE TABLE IF NOT EXISTS `course_offerings` (
   KEY `fk_course_offerings_semester` (`semester_id`),
   KEY `fk_course_offerings_created_by` (`created_by`),
   KEY `fk_course_offerings_updated_by` (`updated_by`),
+  KEY `fk_course_offerings_classroom` (`classroomid`),
+  CONSTRAINT `fk_course_offerings_classroom` FOREIGN KEY (`classroomid`) REFERENCES `classroom` (`classroomid`) ON DELETE SET NULL,
   CONSTRAINT `fk_course_offerings_course` FOREIGN KEY (`course_id`) REFERENCES `courses` (`id`) ON UPDATE NO ACTION,
   CONSTRAINT `fk_course_offerings_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_course_offerings_semester` FOREIGN KEY (`semester_id`) REFERENCES `semesters` (`id`) ON UPDATE NO ACTION,
@@ -5847,29 +5877,29 @@ CREATE TABLE IF NOT EXISTS `course_offerings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='One course, one semester, one section. Absorbs classes + class_subjects (D31).';
 
 -- Dumping data for table sims.course_offerings: ~22 rows (approximately)
-INSERT INTO `course_offerings` (`id`, `course_id`, `semester_id`, `section_code`, `capacity`, `is_archived`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	('59144c1c-361b-5de3-a4d1-0b03db82650b', '250c12f3-d3d6-4798-9fd7-730468a700af', '756892b2-e688-5568-9c56-329b21ba1007', '01', 18, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('cc4b9e10-fdf2-5e67-b1f8-10c31c21e5c2', '21bce533-e302-4aba-9987-b509fa38e691', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 32, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('cf8cfdc2-fae3-5985-9216-11bc6762ef8c', '9e421e06-7b1e-4b42-8cf4-058565a021df', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('a76c00d8-deaa-59d9-b77c-1dd2abb2664d', '21bce533-e302-4aba-9987-b509fa38e691', '756892b2-e688-5568-9c56-329b21ba1007', '01', 32, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('420c7e91-0cb6-5aea-9919-2f5e21d41a01', '250c12f3-d3d6-4798-9fd7-730468a700af', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 18, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('232c85d2-851f-5a36-8597-324653bf351e', '8821fa08-807d-4f1f-bde1-b9eab3b8f19d', '756892b2-e688-5568-9c56-329b21ba1007', '01', 22, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('31da6b76-0e9d-583b-ae9a-4bb0614cb098', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '02', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('855e8d6b-0355-5665-861d-5c2349465007', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-28 15:53:13', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('0a497482-6263-5c56-a5f5-5f29cf3e130e', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('a959c575-f28f-59f5-8eaf-9babed84501a', '8898ea08-fd1f-446a-90aa-99d6ad725609', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('251eb422-a75b-50c7-85cf-a5ed5e09e48a', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '03', 18, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('8059e7f5-264c-56e7-b3fe-ab1006f70f2d', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('d745b612-68b4-534a-872f-b6d7b22dbde6', '9e421e06-7b1e-4b42-8cf4-058565a021df', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('358094a7-ad6e-5066-86b4-bb347d035608', 'f84c4f15-dbe9-4497-9c63-cf893b7b086d', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 16, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('d26574b4-4a2f-5a0b-833e-c45d4be2992a', '54e299a1-deb1-4e7e-954e-957a6cfd50be', '756892b2-e688-5568-9c56-329b21ba1007', '01', 26, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('c501dbac-df61-5db5-9654-c6845ee8fdfa', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 26, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('1b72644a-d057-536c-80dc-c7681a1b2235', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '02', 20, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('36f2f98a-0c9e-52db-924f-ce36c6d4ad50', '8821fa08-807d-4f1f-bde1-b9eab3b8f19d', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 22, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('f9990494-9277-50a2-9389-d94c3ad1c7c3', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '03', 18, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('b0b61202-3e20-5247-b76b-daf16b8cf077', 'f84c4f15-dbe9-4497-9c63-cf893b7b086d', '756892b2-e688-5568-9c56-329b21ba1007', '01', 16, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('b3b24122-f350-5bfc-b828-e61a2ee0a8a5', '8898ea08-fd1f-446a-90aa-99d6ad725609', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('4ab6614d-a4bf-5b97-9b9a-f4a7fa05d5fd', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL);
+INSERT INTO `course_offerings` (`id`, `course_id`, `semester_id`, `section_code`, `capacity`, `classroomid`, `is_archived`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
+	('59144c1c-361b-5de3-a4d1-0b03db82650b', '250c12f3-d3d6-4798-9fd7-730468a700af', '756892b2-e688-5568-9c56-329b21ba1007', '01', 18, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('cc4b9e10-fdf2-5e67-b1f8-10c31c21e5c2', '21bce533-e302-4aba-9987-b509fa38e691', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 32, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('cf8cfdc2-fae3-5985-9216-11bc6762ef8c', '9e421e06-7b1e-4b42-8cf4-058565a021df', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('a76c00d8-deaa-59d9-b77c-1dd2abb2664d', '21bce533-e302-4aba-9987-b509fa38e691', '756892b2-e688-5568-9c56-329b21ba1007', '01', 32, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('420c7e91-0cb6-5aea-9919-2f5e21d41a01', '250c12f3-d3d6-4798-9fd7-730468a700af', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 18, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('232c85d2-851f-5a36-8597-324653bf351e', '8821fa08-807d-4f1f-bde1-b9eab3b8f19d', '756892b2-e688-5568-9c56-329b21ba1007', '01', 22, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('31da6b76-0e9d-583b-ae9a-4bb0614cb098', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '02', 20, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('855e8d6b-0355-5665-861d-5c2349465007', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-28 15:53:13', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('0a497482-6263-5c56-a5f5-5f29cf3e130e', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('a959c575-f28f-59f5-8eaf-9babed84501a', '8898ea08-fd1f-446a-90aa-99d6ad725609', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('251eb422-a75b-50c7-85cf-a5ed5e09e48a', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '03', 18, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('8059e7f5-264c-56e7-b3fe-ab1006f70f2d', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'c981827c-ed0c-5041-a989-f3c1105d4f18', '01', NULL, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('d745b612-68b4-534a-872f-b6d7b22dbde6', '9e421e06-7b1e-4b42-8cf4-058565a021df', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('358094a7-ad6e-5066-86b4-bb347d035608', 'f84c4f15-dbe9-4497-9c63-cf893b7b086d', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 16, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('d26574b4-4a2f-5a0b-833e-c45d4be2992a', '54e299a1-deb1-4e7e-954e-957a6cfd50be', '756892b2-e688-5568-9c56-329b21ba1007', '01', 26, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('c501dbac-df61-5db5-9654-c6845ee8fdfa', '54e299a1-deb1-4e7e-954e-957a6cfd50be', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 26, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('1b72644a-d057-536c-80dc-c7681a1b2235', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '02', 20, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('36f2f98a-0c9e-52db-924f-ce36c6d4ad50', '8821fa08-807d-4f1f-bde1-b9eab3b8f19d', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 22, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('f9990494-9277-50a2-9389-d94c3ad1c7c3', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '03', 18, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('b0b61202-3e20-5247-b76b-daf16b8cf077', 'f84c4f15-dbe9-4497-9c63-cf893b7b086d', '756892b2-e688-5568-9c56-329b21ba1007', '01', 16, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('b3b24122-f350-5bfc-b828-e61a2ee0a8a5', '8898ea08-fd1f-446a-90aa-99d6ad725609', 'ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', '01', 20, NULL, 1, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('4ab6614d-a4bf-5b97-9b9a-f4a7fa05d5fd', 'a08a0efd-8815-4d6b-8f23-1fc6643e98d9', '756892b2-e688-5568-9c56-329b21ba1007', '01', 20, NULL, 0, NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL);
 
 -- Dumping structure for table sims.course_prerequisites
 CREATE TABLE IF NOT EXISTS `course_prerequisites` (
@@ -6303,11 +6333,12 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
   CONSTRAINT `fk_login_attempts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.login_attempts: ~32 rows (approximately)
+-- Dumping data for table sims.login_attempts: ~36 rows (approximately)
 INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `ip_address`, `attempted_at`) VALUES
 	('5fc9eaa8-a8c2-47a3-be5b-16e4508b7fa5', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 14:38:59'),
 	('cf7e8288-2db5-43fa-9e44-1fb6ab1b08b6', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:45:07'),
 	('7e309cdd-a782-4394-a940-2af0dfb8bd77', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-25 04:15:04'),
+	('28452ccf-aea5-468b-b9d4-2dff393d30b7', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-04 03:07:24'),
 	('3f455c1e-a684-4e76-a317-3801de41d696', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:34:00'),
 	('71c811fb-a313-406e-8b21-4185e2c9b240', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 04:44:18'),
 	('ff045f38-3bbd-4139-9f38-4bc879eab440', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:13:07'),
@@ -6320,6 +6351,7 @@ INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `
 	('7b0405e7-15ed-4a93-aeb3-83c661038dc8', 'art.hdz25@gmail.com', '8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 0, '::ffff:127.0.0.1', '2026-08-23 19:50:55'),
 	('f23a177f-e954-439c-9080-8b6633a95b89', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 0, '::ffff:127.0.0.1', '2026-08-28 14:38:46'),
 	('a256f766-2655-4aed-a9e8-98b6a9a17251', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 15:50:46'),
+	('2b008398-0a21-4318-bf5f-9c14a2937d5c', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-04 03:08:05'),
 	('71aaed36-6f00-4ea9-a501-a2c3a8c82cac', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 15:32:03'),
 	('6b2ab4df-e4c9-4ab2-8843-b2a8b7767f1b', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 14:39:55'),
 	('1bdd79f3-27dc-40ac-b958-b789a2b548c1', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:29:38'),
@@ -6332,12 +6364,30 @@ INSERT INTO `login_attempts` (`id`, `email_attempted`, `user_id`, `succeeded`, `
 	('a29f1a91-6285-4d06-b6f6-cf938b232dcf', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-09-03 04:51:32'),
 	('9944ddb1-bfbe-43f7-b4a7-d278a60890a1', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-28 17:44:11'),
 	('28281990-f784-4f4c-891a-d6f57424cac8', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 03:57:12'),
+	('a0866c41-4f6f-42c1-a832-dbd1cc05038e', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-06 19:37:18'),
 	('c1dc7263-2cee-4669-bdd8-e839682a38c4', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 0, '::ffff:127.0.0.1', '2026-08-20 22:31:56'),
+	('30dcedad-0c58-4b93-be1c-ebde8e687550', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-04 03:09:15'),
 	('6e7bda08-3343-4aad-ade0-f2c2e976f72b', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-27 06:23:22'),
 	('7c356c86-9843-49ca-9496-f4cf4af39f54', 'principal@belmopancomp.edu.bz', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-08-23 14:57:32'),
 	('ad517bcb-0dde-4e3a-a587-f7a8b4ba620a', 'principal', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 1, '::ffff:127.0.0.1', '2026-09-03 04:50:58'),
 	('da8623f0-6e42-4eca-8511-f92d4439b5f5', 'maria.reyes', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 1, '::ffff:127.0.0.1', '2026-08-28 14:40:29'),
 	('40d9e349-c8f4-45df-a912-fd986fac2d7d', 'secretary@belmopancomp.edu.bz', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 1, NULL, '2026-08-21 03:15:06');
+
+-- Dumping structure for table sims.number_sequences
+CREATE TABLE IF NOT EXISTS `number_sequences` (
+  `scope` varchar(20) NOT NULL COMMENT 'What is being numbered: `student` | `application`. `student_ym` is the retired pre-D44 YYYYMM namespace, kept for provenance and never allocated from.',
+  `seq_key` varchar(10) NOT NULL COMMENT 'The bucket the counter resets in - `2026` for both live scopes. varchar because the retired scope keys are YYYYMM and a future scope may not be year-shaped.',
+  `last_seq` int(11) NOT NULL DEFAULT 0 COMMENT 'Highest sequence issued for this (scope, key).',
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`scope`,`seq_key`),
+  CONSTRAINT `ck_number_sequences_nonneg` CHECK (`last_seq` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci COMMENT='Row-locked counters behind the generated human IDs (D44). Replaces student_number_sequences.';
+
+-- Dumping data for table sims.number_sequences: ~2 rows (approximately)
+INSERT INTO `number_sequences` (`scope`, `seq_key`, `last_seq`, `created_at`, `updated_at`) VALUES
+	('application', '2026', 4, '2026-09-06 14:06:29', '2026-09-06 14:06:29'),
+	('student_ym', '202608', 6, '2026-08-18 04:07:44', '2026-08-23 15:10:54');
 
 -- Dumping structure for table sims.password_reset_tokens
 CREATE TABLE IF NOT EXISTS `password_reset_tokens` (
@@ -6659,9 +6709,12 @@ CREATE TABLE IF NOT EXISTS `programs` (
   `code` varchar(10) NOT NULL COMMENT 'e.g. BMAD - printed on the semester report',
   `name` varchar(250) NOT NULL COMMENT 'e.g. Business Management',
   `award` varchar(100) DEFAULT NULL COMMENT 'e.g. Associate of Social Science',
+  `admission_requirements` varchar(100) DEFAULT NULL COMMENT 'D44, from the client dump. What an applicant needs to enter this programme.',
+  `graduation_requirements` varchar(100) DEFAULT NULL COMMENT 'D44, from the client dump. What a student needs to complete it.',
   `total_credits` smallint(6) DEFAULT NULL COMMENT 'Total Programme Credits from the sequence PDF (86-102)',
   `min_passing_grade_point` decimal(3,2) NOT NULL DEFAULT 2.50 COMMENT 'Programme pass mark as a grade point. 2.50 = C+ (all programmes); Primary Education is set to 2.00 = C.',
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `comments` text DEFAULT NULL COMMENT 'D44, from the client dump. Free-text notes on the programme. Dump had varchar(500) NOT NULL DEFAULT ''1''; that default is a stray test value.',
   `deleted_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
@@ -6680,16 +6733,16 @@ CREATE TABLE IF NOT EXISTS `programs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 -- Dumping data for table sims.programs: ~9 rows (approximately)
-INSERT INTO `programs` (`id`, `code`, `name`, `award`, `total_credits`, `min_passing_grade_point`, `is_active`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	('bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'BIOL', 'Biology', 'Associate of Science', 88, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-24 22:31:33', NULL, NULL),
-	('0f7e8bdf-44bd-45bf-b56d-3ec386fa3cb4', 'GNST', 'General Studies', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('22a02920-dc1e-4572-9da3-4ee738f8f42f', 'EDUC', 'Primary Education', 'Associate of Arts', 102, 2.00, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('7983a1a7-d9cd-4d7f-a840-64351795ba54', 'ITEC', 'Information Technology', 'Associate of Science', 90, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'BMAD', 'Business Management', 'Associate of Social Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-25 05:22:42', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('72d40672-f70d-40ef-833d-9d49e44faeb1', 'RELG', 'Religion', 'Associate of Arts', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
-	('c36f18d9-581c-404c-9794-9fac31d36cbe', 'ICTS', 'Information Tech', NULL, 87, 2.50, 1, NULL, '2026-08-28 03:00:29', '2026-08-28 03:00:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('6229e7e2-7b97-4885-963c-b6c277229ae8', 'AGRI', 'Applied Agriculture', 'Associate of Science', 86, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-28 15:51:54', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
-	('c32f920e-1d87-4dcf-b916-d59afc647dee', 'MATH', 'Mathematics', 'Associate of Science', 87, 2.50, 1, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL);
+INSERT INTO `programs` (`id`, `code`, `name`, `award`, `admission_requirements`, `graduation_requirements`, `total_credits`, `min_passing_grade_point`, `is_active`, `comments`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
+	('bc3287e0-14cb-461d-9d8c-2dbb23592bb1', 'BIOL', 'Biology', 'Associate of Science', NULL, NULL, 88, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-24 22:31:33', NULL, NULL),
+	('0f7e8bdf-44bd-45bf-b56d-3ec386fa3cb4', 'GNST', 'General Studies', 'Associate of Social Science', NULL, NULL, 87, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('22a02920-dc1e-4572-9da3-4ee738f8f42f', 'EDUC', 'Primary Education', 'Associate of Arts', NULL, NULL, 102, 2.00, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('7983a1a7-d9cd-4d7f-a840-64351795ba54', 'ITEC', 'Information Technology', 'Associate of Science', NULL, NULL, 90, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('aa9d3b21-19b5-4938-9e43-9c7fbafa9eda', 'BMAD', 'Business Management', 'Associate of Social Science', NULL, NULL, 87, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-25 05:22:42', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('72d40672-f70d-40ef-833d-9d49e44faeb1', 'RELG', 'Religion', 'Associate of Arts', NULL, NULL, 86, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL),
+	('c36f18d9-581c-404c-9794-9fac31d36cbe', 'ICTS', 'Information Tech', NULL, NULL, NULL, 87, 2.50, 1, NULL, NULL, '2026-08-28 03:00:29', '2026-08-28 03:00:44', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('6229e7e2-7b97-4885-963c-b6c277229ae8', 'AGRI', 'Applied Agriculture', 'Associate of Science', NULL, NULL, 86, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-28 15:51:54', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('c32f920e-1d87-4dcf-b916-d59afc647dee', 'MATH', 'Mathematics', 'Associate of Science', NULL, NULL, 87, 2.50, 1, NULL, NULL, '2026-08-17 03:35:31', '2026-08-17 03:35:31', NULL, NULL);
 
 -- Dumping structure for table sims.refresh_sessions
 CREATE TABLE IF NOT EXISTS `refresh_sessions` (
@@ -6711,10 +6764,11 @@ CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   CONSTRAINT `fk_refresh_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
--- Dumping data for table sims.refresh_sessions: ~38 rows (approximately)
+-- Dumping data for table sims.refresh_sessions: ~43 rows (approximately)
 INSERT INTO `refresh_sessions` (`id`, `user_id`, `token_hash`, `issued_at`, `last_used_at`, `expires_at`, `is_revoked`, `revoked_at`, `user_agent`, `ip_address`, `created_at`, `updated_at`) VALUES
 	('66cae009-144c-41eb-b22b-0b0dbcd3bf5b', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'bd2ba70e5d9719e5e2689c15bd389872cda21be9fe4108d3fa581650494e26d6', '2026-08-28 02:59:12', '2026-08-28 02:59:12', '2026-09-04 02:59:12', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 02:59:12', NULL),
 	('340dab0f-1bbd-4baf-a36b-2382d097fe45', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0055eae446c7ab315a7682b792f27f5ef3cba685a00c065238f49ee8fe7e653d', '2026-08-23 19:51:05', '2026-08-23 19:51:05', '2026-08-30 19:51:05', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 19:51:05', '2026-08-23 19:51:05'),
+	('e9948365-0761-4b69-a2f0-33429ab0abe2', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '398b66e522f6936b47942c65f8d3a1b95510a3c04cf079bbfd0422d73ba9dac8', '2026-09-04 03:07:24', '2026-09-04 03:07:24', '2026-09-11 03:07:24', 1, '2026-09-04 03:07:50', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-04 03:07:24', '2026-09-04 03:07:50'),
 	('13eae27b-e3e0-4dd4-9c06-34f6f6c40a4c', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '0a53f122bc73fa6904226ddb3d4b17dbdbc6a0fcf404b6cb11bc4eac01b9b8b1', '2026-08-21 03:13:07', '2026-08-21 03:13:07', '2026-08-28 03:13:07', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:13:07', '2026-08-23 18:03:11'),
 	('109c1072-a98a-46be-b240-35e1487bf391', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '67a3c0c47cc9752e05ecaff91a983f4fe6920e32dcb8534dbfa7b3b2cfcc625c', '2026-08-23 14:57:32', '2026-08-23 14:57:32', '2026-08-30 14:57:32', 1, '2026-08-23 15:12:55', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 14:57:32', '2026-08-23 15:12:55'),
 	('f688d3f2-da40-460c-9b3a-36eace769c78', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '7ea07b18555a3f40476ea93eaa3ef137cddf4bd0c612bc7eb6fd9ba4bdaf23e8', '2026-09-03 04:45:07', '2026-09-03 04:45:07', '2026-09-10 04:45:07', 1, '2026-09-03 04:47:10', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:45:07', '2026-09-03 04:47:10'),
@@ -6724,11 +6778,13 @@ INSERT INTO `refresh_sessions` (`id`, `user_id`, `token_hash`, `issued_at`, `las
 	('71056b5d-1de3-41ab-811a-55e3dbaa49cd', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'b173b633835e96e73d6545327d1924a19bb5b54b97f2b374e25fb2b81f2a0da3', '2026-08-21 03:14:04', '2026-08-21 03:14:04', '2026-08-28 03:14:04', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:14:04', '2026-08-23 18:03:11'),
 	('6b9aca06-a3d9-4510-9d6d-59bfc0bbe36f', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'be4484ccbe8075c2e2f48bd1e9f4269adc255c8e29c4d5597891db3b09b21d5b', '2026-09-03 03:57:12', '2026-09-03 03:57:12', '2026-09-10 03:57:12', 1, '2026-09-03 03:57:31', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 03:57:12', '2026-09-03 03:57:31'),
 	('6a62784d-9891-46db-8541-5c22af00e8ed', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '2e0a390b02c71ca26771e9174b0c33df232fef78ea98b4fb839f534dbc38b4ae', '2026-08-28 14:40:29', '2026-08-28 14:40:29', '2026-09-04 14:40:29', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:40:29', NULL),
+	('688c88ab-5fe2-4644-b175-63e9d5f6349c', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'e70778e9f4c09fb2ba0bc82e52ad11ad004fd7a33d523540053609a4841637e7', '2026-09-06 19:37:18', '2026-09-06 19:37:18', '2026-09-13 19:37:18', 1, '2026-09-06 19:46:06', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-06 19:37:18', '2026-09-06 19:46:06'),
 	('2270e7ec-a8d0-491a-9675-77d54126c0c0', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', '364b217e7b112cc9ed9d63f0eaa35620255dda2c1099912ffb3669b3d02c5a61', '2026-08-21 03:15:06', '2026-08-21 03:15:06', '2026-08-28 03:15:06', 1, '2026-08-23 18:03:11', 'testclient', NULL, '2026-08-21 03:15:06', '2026-08-23 18:03:11'),
 	('6a6a5ee1-6389-44c9-bf4d-815a2e7aac96', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '06ff96f40bf696a4676d433b5018347564c5465a8ec32eb06e2420ef5b5829bb', '2026-08-28 17:44:11', '2026-08-28 17:44:11', '2026-09-04 17:44:11', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 17:44:11', NULL),
 	('ad97abbc-4ac6-4819-9f5c-8334aad52ad2', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '6a6fa3b40a3e2ad46491baa46af4817a8106b9a8c2c804833c0870198778683c', '2026-08-25 04:42:19', '2026-08-25 04:42:19', '2026-09-01 04:42:19', 1, '2026-08-25 04:59:43', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:42:19', '2026-08-25 04:59:43'),
 	('e0e4efb6-9394-40b8-842f-83d8f46953fd', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '879c8a8f1676a67454323107d2ff256159a757b201461e0ad31cbcb285afe12c', '2026-08-23 16:12:40', '2026-08-23 16:12:40', '2026-08-30 16:12:40', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 16:12:40', '2026-08-23 16:12:40'),
 	('ee189e31-ca17-40a2-9d9b-86c3f1bc0c0d', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'f96d5fef222d9472279157ba6d08647b99a567b79cf22dc64465bd2111f5960b', '2026-09-03 04:47:53', '2026-09-03 04:47:53', '2026-09-10 04:47:53', 1, '2026-09-03 04:48:01', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:47:53', '2026-09-03 04:48:01'),
+	('074cc112-3791-435b-89e4-8cf2204466a0', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '3cce5837bc8e01ab0552ccbc132e2f794fb2fa10bb67ffcfbf211529e113615b', '2026-09-04 03:08:05', '2026-09-04 03:08:05', '2026-09-11 03:08:05', 1, '2026-09-04 03:09:00', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-04 03:08:05', '2026-09-04 03:09:00'),
 	('b687fc84-4b35-4b52-8470-95b7351ce032', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '46eed42248b0ed5b0819fbaaa520fe1c894f6c37b0eb5f71d124993e7710ff57', '2026-08-25 04:39:16', '2026-08-25 04:39:16', '2026-09-01 04:39:16', 1, '2026-08-25 04:42:19', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:39:16', '2026-08-25 04:42:19'),
 	('f0f27417-522f-4c22-bc8e-95f5792b018e', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'b37fa01f189618ea5d90fc5519d0d20eca36ac6ba8a4c3def699b50b9c9bbf1d', '2026-09-03 04:47:24', '2026-09-03 04:47:24', '2026-09-10 04:47:24', 1, '2026-09-03 04:47:43', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:47:24', '2026-09-03 04:47:43'),
 	('9f37cb4a-5fe9-4a45-b0b5-a21b32a61588', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '32e3ef81d1dbb0cde4db4dac4eefb93781b654ecc1795f1c56006db528166826', '2026-09-03 04:44:18', '2026-09-03 04:44:18', '2026-09-10 04:44:18', 1, '2026-09-03 04:44:50', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:44:18', '2026-09-03 04:44:50'),
@@ -6746,8 +6802,10 @@ INSERT INTO `refresh_sessions` (`id`, `user_id`, `token_hash`, `issued_at`, `las
 	('64b21893-5328-4b68-94b2-d4c7bdbad7d9', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0e23bfc02a298df27f901642743fb7807e7dae7358f66a3cb9170ee07eba2d1b', '2026-08-28 14:39:55', '2026-08-28 14:39:55', '2026-09-04 14:39:55', 1, '2026-08-28 14:40:21', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:39:55', '2026-08-28 14:40:21'),
 	('9bd01363-3627-4b8e-adfc-e4878382f2c9', '9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'e5045e4ba12b2d4f69479256fbf85968107b623e1337e009472062fa66d6b2f5', '2026-08-23 18:02:52', '2026-08-23 18:02:52', '2026-08-30 18:02:52', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 18:02:52', '2026-08-23 18:02:52'),
 	('c5934e5f-6fb0-481e-8ebe-e4a43cd2a3e4', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'c8b4e148fca51db883d795622cfcead1cfc53205084d146fa72fecafe9354f7f', '2026-08-25 04:59:43', '2026-08-25 04:59:43', '2026-09-01 04:59:43', 1, '2026-08-25 05:22:35', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-25 04:59:43', '2026-08-25 05:22:35'),
+	('259539ef-097f-4286-9e4c-e9907e485df8', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'faf4a2e06539fafec8ac212c71d4efa14edee291274e2db1d3a0190e9459f25c', '2026-09-04 03:09:15', '2026-09-04 03:09:15', '2026-09-11 03:09:15', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-04 03:09:15', NULL),
 	('f870bd85-7871-4030-b6bb-f2a70c3b9258', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '18630e9d8e712db8fd2be1bc96d8f86a09d34308d66eb74f5bb627737c480a8d', '2026-09-03 04:51:32', '2026-09-03 04:51:32', '2026-09-10 04:51:32', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:51:32', NULL),
 	('e252ce56-411c-48e1-aca4-f6804c0dd75d', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'ecc9244ab5a355033edbd7c1310e7959fd91eadbda53532e5d24af82cda70290', '2026-09-03 04:43:28', '2026-09-03 04:43:28', '2026-09-10 04:43:28', 1, '2026-09-03 04:44:06', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 04:43:28', '2026-09-03 04:44:06'),
+	('08944ad5-6f73-41f1-a25f-f6f357443468', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '02e528051a3d71638dddd0a62843ee75381ec1e18559582b9847f54a4ba55ddf', '2026-09-06 19:46:06', '2026-09-06 19:46:06', '2026-09-13 19:46:06', 0, NULL, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-06 19:46:06', NULL),
 	('4ca3d2cd-0286-436e-8fb3-fb92a1235c3e', '0cb78bec-f840-5f54-bdeb-58593a417c0b', 'e0cb102f2aaaabba8343b89a1487c1637243f2a448b35476c4868619f48d141b', '2026-09-03 03:57:31', '2026-09-03 03:57:31', '2026-09-10 03:57:31', 1, '2026-09-03 04:14:17', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-09-03 03:57:31', '2026-09-03 04:14:17'),
 	('9a95a63f-6ea0-4637-b197-fc141c639b92', 'd87e12d7-7c17-56b1-9b31-b3afa9e57f26', '2758c0b04a6e691c67d877501431eea95f8f8704a431bb1e57b7e3477586eae3', '2026-08-28 14:38:59', '2026-08-28 14:38:59', '2026-09-04 14:38:59', 1, '2026-08-28 14:39:48', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-28 14:38:59', '2026-08-28 14:39:48'),
 	('01b65d1b-b15d-4981-b9ed-fe291a30d9f6', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '3b1f79b9d1bdadb054f956ec7ec06fc45ca0cdbde0172b419e9405c5ef88a073', '2026-08-23 15:28:10', '2026-08-23 15:28:10', '2026-08-30 15:28:10', 1, '2026-08-23 15:43:29', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36', '::ffff:127.0.0.1', '2026-08-23 15:28:10', '2026-08-23 15:43:29');
@@ -6865,10 +6923,11 @@ CREATE TABLE IF NOT EXISTS `semesters` (
   `id` uuid NOT NULL COMMENT 'PK',
   `academic_year_id` uuid NOT NULL COMMENT 'FK → academic_years',
   `name` varchar(200) NOT NULL COMMENT 'e.g. ''Fall'', ''Spring''',
-  `term_type` enum('summer','semester','spring') NOT NULL DEFAULT 'semester' COMMENT 'BAJC term kind. Curriculum position lives on program_courses.term_label, not here.',
+  `term_type` enum('summer','semester','spring','independent') NOT NULL DEFAULT 'semester' COMMENT 'BAJC term kind. Curriculum position lives on program_courses.term_label, not here. D44 appended `independent` (independent study).',
   `sequence` smallint(6) NOT NULL COMMENT 'Order within the academic year (1-based). No longer capped at 2 - D30.',
   `start_date` date NOT NULL,
   `end_date` date NOT NULL,
+  `semester_status` enum('planning','registration_open','active','grade_submission','closed','archived') NOT NULL DEFAULT 'active' COMMENT 'D44, from the client dump. STORAGE ONLY - no API reads or writes it; `is_active` is still what decides the current term. Dump had `grade submission` with a space; snake_cased to match every other enum here.',
   `grade_submission_deadline` datetime DEFAULT NULL COMMENT 'END-TERM grade-entry cutoff (D32-1; was the only cutoff before D32). Enforced as 409 grade_window_closed in grades/service.upsert_grades.',
   `midterm_submission_start` datetime DEFAULT NULL COMMENT 'D32: mid-term grading period opens. NULL = this term has no mid-term period.',
   `midterm_submission_end` datetime DEFAULT NULL COMMENT 'D32: mid-term grading period closes. Revisions unlock and the mid-term report card can be frozen once this has passed.',
@@ -6885,11 +6944,11 @@ CREATE TABLE IF NOT EXISTS `semesters` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 -- Dumping data for table sims.semesters: ~4 rows (approximately)
-INSERT INTO `semesters` (`id`, `academic_year_id`, `name`, `term_type`, `sequence`, `start_date`, `end_date`, `grade_submission_deadline`, `midterm_submission_start`, `midterm_submission_end`, `is_active`, `created_at`, `updated_at`) VALUES
-	('756892b2-e688-5568-9c56-329b21ba1007', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Semester 1', 'semester', 1, '2025-09-01', '2026-01-16', '2026-01-24 17:59:00', '2026-08-10 03:15:00', '2026-08-22 03:15:00', 1, '2026-08-20 08:24:23', '2026-08-23 15:17:31'),
-	('ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', 'dfd8d391-6f34-5e13-9268-1bc69d57ceea', 'Semester 1', 'semester', 1, '2024-09-02', '2025-01-17', NULL, NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23'),
-	('dc66ddd5-0896-58c9-8417-93695ea22627', 'dfd8d391-6f34-5e13-9268-1bc69d57ceea', 'Semester 2', 'semester', 2, '2025-01-20', '2025-06-27', NULL, NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23'),
-	('c981827c-ed0c-5041-a989-f3c1105d4f18', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Semester 2', 'semester', 2, '2026-01-19', '2026-06-26', '2026-07-03 23:59:00', NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23');
+INSERT INTO `semesters` (`id`, `academic_year_id`, `name`, `term_type`, `sequence`, `start_date`, `end_date`, `semester_status`, `grade_submission_deadline`, `midterm_submission_start`, `midterm_submission_end`, `is_active`, `created_at`, `updated_at`) VALUES
+	('756892b2-e688-5568-9c56-329b21ba1007', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Semester 1', 'semester', 1, '2025-09-01', '2026-01-16', 'active', '2026-01-24 17:59:00', '2026-08-10 03:15:00', '2026-08-22 03:15:00', 1, '2026-08-20 08:24:23', '2026-08-23 15:17:31'),
+	('ff9f23cd-fab8-54cb-a9e3-6b84471fc6ce', 'dfd8d391-6f34-5e13-9268-1bc69d57ceea', 'Semester 1', 'semester', 1, '2024-09-02', '2025-01-17', 'active', NULL, NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23'),
+	('dc66ddd5-0896-58c9-8417-93695ea22627', 'dfd8d391-6f34-5e13-9268-1bc69d57ceea', 'Semester 2', 'semester', 2, '2025-01-20', '2025-06-27', 'active', NULL, NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23'),
+	('c981827c-ed0c-5041-a989-f3c1105d4f18', 'f254f39d-9503-537d-9a6c-b526d6a44252', 'Semester 2', 'semester', 2, '2026-01-19', '2026-06-26', 'active', '2026-07-03 23:59:00', NULL, NULL, 0, '2026-08-20 08:24:23', '2026-08-20 08:24:23');
 
 -- Dumping structure for table sims.student_documents
 CREATE TABLE IF NOT EXISTS `student_documents` (
@@ -7319,7 +7378,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` varchar(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'Login identifier; case-insensitive unique',
   `username` varchar(100) DEFAULT NULL COMMENT 'Optional alternate login',
   `password_hash` text NOT NULL COMMENT 'Argon2id hash only; never plaintext',
-  `role` enum('principal','secretary','teacher','student','hod','auditor') NOT NULL COMMENT 'principal / secretary / teacher / student / hod / auditor',
+  `role` enum('principal','secretary','teacher','student','hod','auditor','sysadmin') NOT NULL COMMENT 'principal / secretary / teacher / student / hod / auditor / sysadmin. D44 appended sysadmin as STORAGE ONLY - app.common.enums.Role has no member for it and no route accepts it.',
   `full_name` varchar(200) NOT NULL COMMENT 'Display name',
   `is_active` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Disabled accounts cannot log in',
   `must_change_password` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Forces change on first login / admin reset',
@@ -7352,14 +7411,14 @@ INSERT INTO `users` (`id`, `email`, `username`, `password_hash`, `role`, `full_n
 	('9167ab7e-9fa6-5f2d-914b-318f6733b3d6', 'egbert.grinage@belmopancomp.edu.bz', 'egbert.grinage', '$argon2id$v=19$m=65536,t=3,p=4$MqV7KlSmxWEABLBToeZOCQ$iPlubPuGclVA7YyQ/v1t35z5QDhvCrVENjtmgXVA1Ek', 'teacher', 'Egbert Grinage', 1, 1, 0, NULL, '2025-10-15 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('4d257b0f-37b8-54d0-97c9-3395d4f36635', 's-25002@student.belmopancomp.edu.bz', 's-25002', '$argon2id$v=19$m=65536,t=3,p=4$KUfjccVwlSOIx60AYpcy2g$RP2pkbH7w3PmArjEur6FoYLp6Le1jpfpcX2W7FicZUw', 'student', 'John Garcia', 1, 1, 0, NULL, '2025-10-08 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('57eb7c25-18b2-5789-a329-39a99e277c9a', 'alicia.cano@belmopancomp.edu.bz', 'alicia.cano', '$argon2id$v=19$m=65536,t=3,p=4$fP6f/MmEx2KA5Wee52ytTg$uA8G/+R6Aqb70HsZ6H0sXReoLWKTT8JtU8WVVZqGqX8', 'teacher', 'Alicia Cano', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-09-03 04:50:58', NULL, '2026-08-20 08:24:23', '2026-09-03 04:50:58', NULL, NULL),
+	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-09-06 19:37:18', NULL, '2026-08-20 08:24:23', '2026-09-06 19:37:18', NULL, NULL),
 	('7f80de88-8724-590b-a2be-5b94dc0b72af', 'kayla.waight@belmopancomp.edu.bz', 'kayla.waight', '$argon2id$v=19$m=65536,t=3,p=4$p9tc+xIxD/oOVguRDMWgBw$lkh3vtr/nRZEFZJedEiBvUUhnTRJ3O3Z9kpbEQnQj/s', 'teacher', 'Kayla Waight', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('e485d3ff-0e08-5ebc-b2f4-62a1a9b3031a', 's-25006@student.belmopancomp.edu.bz', 's-25006', '$argon2id$v=19$m=65536,t=3,p=4$+6vZgd4IqdaGSW9wS0DsjA$4mq2pTFQA0uhKORL9U+O+Mgmo6T8HBhNIvfVu5cXq54', 'student', 'Marco Cacho', 1, 1, 0, NULL, '2025-10-13 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('8c6aa9c1-cdbf-40ba-8e3b-7a0d753cfca7', 'art.hdz25@gmail.com', NULL, '$argon2id$v=19$m=65536,t=3,p=4$7D2fZT1Eab2riyMzTJBjBQ$dH0JeEbDzIfGcNEzv4eJtkW2X/dgkbn53rXrDHj7bXM', 'student', 'Arturo Hernandez', 1, 1, 2, NULL, NULL, NULL, '2026-08-23 15:10:54', '2026-08-23 19:50:55', '0cb78bec-f840-5f54-bdeb-58593a417c0b', '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('7159eeb6-f02d-5379-86d6-82fe757f5f20', 's-25001@student.belmopancomp.edu.bz', 's-25001', '$argon2id$v=19$m=65536,t=3,p=4$51CdGN53bq0rGqg6P5cmEA$vyCIQ/81hUWREABpnq90ScPNo2HSOnKyWurMpETLxkQ', 'student', 'Freddy Lopez', 1, 1, 0, NULL, '2025-10-09 15:00:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('ead1c01b-c10d-514c-92d4-88045472a984', 'marlon.pou@belmopancomp.edu.bz', 'marlon.pou', '$argon2id$v=19$m=65536,t=3,p=4$1TKacUQm2e1/gDkXT/9dlA$iJmRz/NWNDXnjZTQ/d/K4DtHbOcir6EryENJ/g89OQ0', 'teacher', 'Marlon Pou', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('c9661cb4-d005-52c5-9f7e-8ad3fcdb1bbc', 'carlos.mendez@belmopancomp.edu.bz', 'carlos.mendez', '$argon2id$v=19$m=65536,t=3,p=4$N8gdp+RpZhHjQlTu11pg4A$0aU+VNjiVF80ViUBFwUbQUj1jU0ITG/CL7WVwSHbfRo', 'teacher', 'Carlos Mendez', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('d87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'maria.reyes@belmopancomp.edu.bz', 'maria.reyes', '$argon2id$v=19$m=65536,t=3,p=4$dR8KBf26wUnbqByL3IyqYQ$X+g573C1GA3Z4FM+1EuR0nWZphMmIStSwBHoP+HU8AE', 'auditor', 'Maria Reyes', 1, 0, 0, NULL, '2026-09-03 04:51:32', NULL, '2026-08-20 08:24:23', '2026-09-03 04:51:32', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
+	('d87e12d7-7c17-56b1-9b31-b3afa9e57f26', 'maria.reyes@belmopancomp.edu.bz', 'maria.reyes', '$argon2id$v=19$m=65536,t=3,p=4$dR8KBf26wUnbqByL3IyqYQ$X+g573C1GA3Z4FM+1EuR0nWZphMmIStSwBHoP+HU8AE', 'auditor', 'Maria Reyes', 1, 0, 0, NULL, '2026-09-04 03:08:05', NULL, '2026-08-20 08:24:23', '2026-09-04 03:08:05', NULL, '0cb78bec-f840-5f54-bdeb-58593a417c0b'),
 	('9b3e3ff5-1282-55b7-888f-cd4ff7e9d4b5', 'secretary@belmopancomp.edu.bz', 'secretary', '$argon2id$v=19$m=65536,t=3,p=4$ovrIjZ25Cn0NWrfleqjMQg$Wdk7JAOZXx75qjHr2DOLdU4hCmJlKGTHV/RF9wX74wo', 'secretary', 'Sofia Castillo', 1, 0, 0, NULL, '2026-08-23 18:02:51', NULL, '2026-08-20 08:24:23', '2026-08-23 18:03:11', NULL, NULL),
 	('bf5e8b60-8758-594e-be41-d6ce2b325038', 'sonia.choc@belmopancomp.edu.bz', 'sonia.choc', '$argon2id$v=19$m=65536,t=3,p=4$eK674/2U1CTPKXMmc76adw$bk0qPltLrHyfoDk3F2sxGjthsijBlsEoBUkaH3+vk9M', 'teacher', 'Sonia Choc', 1, 1, 0, NULL, '2025-10-11 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
 	('3f90c656-a26c-529d-a168-f4e93a71fa0e', 'nadia.rhaburn@belmopancomp.edu.bz', 'nadia.rhaburn', '$argon2id$v=19$m=65536,t=3,p=4$/Qsuk0ttXCUxl3G2bbMAlA$UND3pWANlKkeprgW2zGkWLpJMwdXPPdBU17aXXpsugQ', 'teacher', 'Nadia Rhaburn', 1, 1, 0, NULL, '2025-10-12 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),

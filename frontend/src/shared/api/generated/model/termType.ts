@@ -24,4 +24,8 @@ export const TermType = {
   summer: 'summer',
   semester: 'semester',
   spring: 'spring',
+  // D44 — hand-added, like `Role.hod`/`Role.auditor` in D43. `npm run generate:api` is not
+  // runnable in this repo (the checked-in openapi.json is stale), so the generated models
+  // are maintained by hand. LOWERCASE on the wire; see features/settings/termTypes.ts.
+  independent: 'independent',
 } as const;

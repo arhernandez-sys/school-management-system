@@ -49,6 +49,19 @@ const nextId = (prefix: string): string => {
   return `${prefix}-demo-${idCounter}`;
 };
 
+/**
+ * D44 — `APP-YYYY-NNNNN`, the demo's stand-in for the server's row-locked counter.
+ *
+ * Seeded past the four numbers in `demo/data.ts` rather than starting at 1, so a demo
+ * session that files an application does not hand it a reference another row already
+ * carries. The real allocator steps over collisions; this one only has to avoid them.
+ */
+let applicationSeq = 4;
+const nextApplicationNumber = (): string => {
+  applicationSeq += 1;
+  return `APP-${DEMO_TODAY.slice(0, 4)}-${String(applicationSeq).padStart(5, '0')}`;
+};
+
 /** Registrar + Dean. Admission is administration (§D14). */
 function assertAdmissions(cookies: Record<string, string>) {
   const role = sessionRole(cookies);
@@ -66,8 +79,15 @@ function assertDean(cookies: Record<string, string>) {
   return null;
 }
 
+// D44 — mirrors `enums.DECIDED_APPLICATION_STATUSES`. `deferred` is decided: the
+// applicant re-applies rather than this row reopening.
 const isDecided = (app: DemoApplication) =>
-  app.status === 'accepted' || app.status === 'denied' || app.status === 'withdrawn';
+  ['accepted', 'rejected', 'deferred', 'withdrawn', 'enrolled'].includes(app.status);
+
+// D44 — mirrors `admissions/service._DECIDABLE`. `eligible` is in it (refusing to decide
+// from it would make marking someone eligible a step backwards); `documents_pending` is
+// not (the file is knowingly incomplete).
+const DECIDABLE: string[] = ['submitted', 'under_review', 'eligible'];
 
 const fullName = (app: DemoApplication) =>
   [app.first_name, app.middle_name, app.last_name].filter(Boolean).join(' ');
@@ -126,8 +146,11 @@ function submissionIssues(app: DemoApplication): string[] {
 /** Mirrors `admissions.service.acceptance_issues`. */
 function acceptanceIssues(app: DemoApplication): string[] {
   if (app.status === 'accepted') return ['This application has already been accepted.'];
-  if (app.status === 'denied' || app.status === 'withdrawn') {
+  if (['rejected', 'withdrawn', 'deferred', 'enrolled'].includes(app.status)) {
     return [`This application is ${app.status}.`];
+  }
+  if (app.status === 'documents_pending') {
+    return ['This application is waiting on documents from the applicant.'];
   }
   const issues = submissionIssues(app);
   if (app.status === 'draft') {
@@ -381,6 +404,9 @@ export const admissionsHandlers = [
 
     const app: DemoApplication = {
       id: nextId('app'),
+      // D44 — allocated at CREATE, drafts included: the number is what the Registrar
+      // quotes on the phone, long before anybody decides anything.
+      application_number: nextApplicationNumber(),
       status: 'draft',
       school_year: null,
       first_name: first,
@@ -533,18 +559,78 @@ export const admissionsHandlers = [
     if (denied) return denied;
     const app = find(String(params.applicationId));
     if (!app) return errorResponse(404, 'not_found', 'Application not found.');
-    if (app.status !== 'submitted') {
+    // D44 — also the RETURN path from `documents_pending`.
+    if (app.status !== 'submitted' && app.status !== 'documents_pending') {
       return errorResponse(
         409,
         'application_not_submitted',
-        `Only a submitted application can be moved under review (this one is ${app.status}).`,
+        `Only a submitted application, or one waiting on documents, can be moved under ` +
+          `review (this one is ${app.status}).`,
       );
     }
     app.status = 'under_review';
     return HttpResponse.json(detail(app));
   }),
 
-  http.post(`${API_BASE_URL}/applications/:applicationId/deny`, async ({ params, request, cookies }) => {
+  // D44 — `/reject`, renamed from `/deny`, plus `/defer`. Both are terminal decisions
+  // that take an optional note, so they share one handler factory rather than two copies
+  // of the same twenty lines.
+  ...(['reject', 'defer'] as const).map((verb) =>
+    http.post(
+      `${API_BASE_URL}/applications/:applicationId/${verb}`,
+      async ({ params, request, cookies }) => {
+        const denied = assertAdmissions(cookies);
+        if (denied) return denied;
+        const app = find(String(params.applicationId));
+        if (!app) return errorResponse(404, 'not_found', 'Application not found.');
+        if (!DECIDABLE.includes(app.status)) {
+          return errorResponse(
+            409,
+            'application_not_decidable',
+            `Only a submitted, under-review or eligible application can be ${verb}ed ` +
+              `(this one is ${app.status}).`,
+          );
+        }
+        const body = (await request.json().catch(() => ({}))) as { reason?: string | null };
+        app.status = verb === 'reject' ? 'rejected' : 'deferred';
+        app.decided_by_user_id = DEMO_IDS.principalUserId;
+        app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
+        if (body.reason) {
+          // Appended, never overwritten — earlier notes are part of the record.
+          app.comments = app.comments ? `${app.comments}\n${body.reason}` : body.reason;
+        }
+        return HttpResponse.json(detail(app));
+      },
+    ),
+  ),
+
+  // D44 — back to the applicant. The one REVERSIBLE move; `/review` brings it back.
+  http.post(
+    `${API_BASE_URL}/applications/:applicationId/request-documents`,
+    async ({ params, request, cookies }) => {
+      const denied = assertAdmissions(cookies);
+      if (denied) return denied;
+      const app = find(String(params.applicationId));
+      if (!app) return errorResponse(404, 'not_found', 'Application not found.');
+      if (app.status !== 'submitted' && app.status !== 'under_review') {
+        return errorResponse(
+          409,
+          'application_not_reviewable',
+          `Only a submitted or under-review application can be sent back for documents ` +
+            `(this one is ${app.status}).`,
+        );
+      }
+      const body = (await request.json().catch(() => ({}))) as { reason?: string | null };
+      app.status = 'documents_pending';
+      if (body.reason) {
+        app.comments = app.comments ? `${app.comments}\n${body.reason}` : body.reason;
+      }
+      return HttpResponse.json(detail(app));
+    },
+  ),
+
+  // D44 — meets the requirements. NOT a decision: `decided_at` stays null.
+  http.post(`${API_BASE_URL}/applications/:applicationId/eligible`, ({ params, cookies }) => {
     const denied = assertAdmissions(cookies);
     if (denied) return denied;
     const app = find(String(params.applicationId));
@@ -552,18 +638,47 @@ export const admissionsHandlers = [
     if (app.status !== 'submitted' && app.status !== 'under_review') {
       return errorResponse(
         409,
-        'application_not_decidable',
-        `Only a submitted or under-review application can be denied (this one is ${app.status}).`,
+        'application_not_reviewable',
+        `Only a submitted or under-review application can be marked eligible ` +
+          `(this one is ${app.status}).`,
       );
     }
-    const body = (await request.json().catch(() => ({}))) as { reason?: string | null };
-    app.status = 'denied';
-    app.decided_by_user_id = DEMO_IDS.principalUserId;
-    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
-    if (body.reason) {
-      // Appended, never overwritten — earlier notes are part of the record.
-      app.comments = app.comments ? `${app.comments}\n${body.reason}` : body.reason;
+    // `submissionIssues`, NOT `acceptanceIssues` — the latter adds "an email is required
+    // to issue a login", which is a provisioning prerequisite rather than an academic
+    // finding. Mirrors `service.mark_eligible`; see its docstring.
+    const issues = submissionIssues(app);
+    if (issues.length) {
+      return errorResponse(
+        422,
+        'application_incomplete',
+        'This application does not yet meet the requirements.',
+      );
     }
+    app.status = 'eligible';
+    return HttpResponse.json(detail(app));
+  }),
+
+  // D44 — accepted AND registered. Closes the application behind the student record.
+  http.post(`${API_BASE_URL}/applications/:applicationId/enrolled`, ({ params, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const app = find(String(params.applicationId));
+    if (!app) return errorResponse(404, 'not_found', 'Application not found.');
+    if (app.status !== 'accepted') {
+      return errorResponse(
+        409,
+        'application_not_accepted',
+        `Only an accepted application can be marked enrolled (this one is ${app.status}).`,
+      );
+    }
+    if (!app.student_id) {
+      return errorResponse(
+        409,
+        'application_no_student',
+        'This application has no student record, so it cannot be marked enrolled.',
+      );
+    }
+    app.status = 'enrolled';
     return HttpResponse.json(detail(app));
   }),
 
@@ -1355,6 +1470,9 @@ export const pendingApplicationsHandlers = [
     const app: DemoApplication = {
       ...(row as unknown as DemoApplication),
       id: appId,
+      // D44 — the pending row never had a number; this is the moment a real application
+      // exists, so this is where one is issued.
+      application_number: nextApplicationNumber(),
       status: 'submitted',
       date_accepted: null,
       student_code: null,

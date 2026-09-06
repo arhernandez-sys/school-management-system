@@ -158,6 +158,21 @@ export interface StudentAdmissionFields {
 }
 
 /** GET /students/{id}, /me, POST, PATCH, POST /status. */
+/**
+ * A student's offering, plus whether the CURRENT VIEWER may open its page (D44).
+ *
+ * Mirrors the server's `students.schemas.StudentOfferingRef`. It is a students-local
+ * widening of the shared `OfferingRef` rather than a field on the shared ref itself:
+ * five modules send that ref and only this one has a viewer to answer the question for.
+ *
+ * ⚠️ `can_open` is an AFFORDANCE, never the boundary — the offering endpoints refuse on
+ * their own authority. It exists so the UI does not offer a link that leads to a 404.
+ */
+export interface StudentOfferingRef extends OfferingRef {
+  /** Absent on older payloads; treat only an explicit `false` as "closed". */
+  can_open?: boolean;
+}
+
 export interface StudentDetail extends StudentNameParts, StudentAdmissionFields {
   id: string;
   student_number: string;
@@ -184,7 +199,7 @@ export interface StudentDetail extends StudentNameParts, StudentAdmissionFields 
    * `current_offerings`** and gave it the shared `OfferingRef`. Empty when they are not
    * enrolled anywhere, which is a normal state for a newly registered student.
    */
-  current_offerings: OfferingRef[];
+  current_offerings: StudentOfferingRef[];
   /** The programme the student is CURRENTLY registered on (D30 §D12). */
   program: StudentProgramRefLite | null;
   /** The application admitted from, when there is one. Null for a paper registration. */

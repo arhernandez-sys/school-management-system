@@ -1,12 +1,10 @@
 import { useMemo } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Box, Tab, Tabs } from '@mui/material';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canAccessModule, canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
-import { CoursesPage } from './CoursesPage';
-import { ProgramsScreen } from '@features/programs/ProgramsScreen';
-import { ProgramCurriculumScreen } from '@features/programs/ProgramCurriculumScreen';
+import { ClassroomsScreen } from '@features/classrooms/ClassroomsScreen';
 import { SchoolProfileScreen } from './screens/SchoolProfileScreen';
 import { AcademicStructureScreen } from './screens/AcademicStructureScreen';
 import { GradingScaleScreen } from './screens/GradingScaleScreen';
@@ -33,6 +31,17 @@ interface SettingsTab {
   path: string;
 }
 
+/**
+ * D44 — `/settings/programs/:programId` → `/programs/:programId`, keeping the id.
+ *
+ * A plain `<Navigate>` cannot: the target depends on a route param, and dropping it would
+ * send someone who bookmarked one programme's curriculum to the list of all of them.
+ */
+function RedirectToProgramCurriculum() {
+  const { programId } = useParams();
+  return <Navigate to={`${ROUTES.programs}/${programId}`} replace />;
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -48,14 +57,12 @@ export function SettingsPage() {
    * business in Settings at all — but an Auditor is supposed to see the catalog and the
    * audit trail, and an HOD the catalog, and neither can write a thing.
    *
-   * `canReadCatalog` keys on the **`courses`** module rather than `programs`, which
-   * looks arbitrary and is not: `programs` is `'view-all'` for EVERY role (a student may
-   * read their own prospectus) and nothing has ever surfaced it, so using it here would
-   * put a Programmes tab in front of Lecturers and Students for the first time as a side
-   * effect of this change. `courses` is `'none'` for exactly those two roles, which is
-   * the line we actually want.
+   * D44 moved the catalog out of here entirely, so the `canReadCatalog` gate went with
+   * it — but the REASONING behind it did not, and now lives in `navConfig`: the catalog is
+   * keyed on the **`courses`** module rather than `programs`, because `programs` is
+   * `'view-all'` for EVERY role and keying on it would put Programmes in front of
+   * Lecturers and Students. Same trap, new location.
    */
-  const canReadCatalog = user ? canAccessModule(user.role, 'courses') : false;
   const canReadAudit = user ? canAccessModule(user.role, 'audit') : false;
 
   const tabs = useMemo<SettingsTab[]>(() => {
@@ -66,14 +73,13 @@ export function SettingsPage() {
         { label: 'Academic structure', path: 'academic' },
       );
     }
-    if (canReadCatalog) {
-      list.push({ label: 'Courses', path: 'courses' });
-      // D30 §D3 — the studies and the course sequence each one requires. Sits
-      // next to Courses because a programme is built OUT of catalog courses.
-      list.push({ label: 'Programmes', path: 'programs' });
-    }
+    // D44 — Courses and Programmes left this tab strip for the main menu. The ROUTES
+    // below survive as redirects, so old bookmarks and links still land somewhere.
     if (canManage) {
       list.push(
+        // D44 — the rooms courses are scheduled into. Estate administration, so it sits
+        // with School and Academic structure rather than in the main menu.
+        { label: 'Classrooms', path: 'classrooms' },
         { label: 'Grading scale', path: 'grading' },
         { label: 'Assessment policy', path: 'policy' },
         { label: 'Users', path: 'users' },
@@ -82,7 +88,7 @@ export function SettingsPage() {
     if (canReadAudit) list.push({ label: 'Audit log', path: 'audit' });
     list.push({ label: 'My account', path: 'account' });
     return list;
-  }, [canManage, canReadCatalog, canReadAudit]);
+  }, [canManage, canReadAudit]);
 
   //: Land on the first tab the caller actually has, never on one they cannot open.
   const defaultPath = tabs[0]?.path ?? 'account';
@@ -111,19 +117,17 @@ export function SettingsPage() {
         <Routes>
           <Route index element={<Navigate to={defaultPath} replace />} />
           <Route path="account" element={<AccountScreen />} />
-          {canReadCatalog && (
-            <>
-              {/* Both screens already hide their own write controls behind
-                  `canWrite(role, 'courses' | 'programs')`, so a read-only caller gets
-                  the list and the prerequisites view with no Add/Edit/Retire. */}
-              <Route path="courses" element={<CoursesPage />} />
-              <Route path="programs" element={<ProgramsScreen />} />
-              {/* The curriculum builder is a nested route rather than a dialog: a
-                  programme's plan is a page-sized thing, and a Dean part-way through
-                  entering an 87-credit sequence needs a URL they can come back to. */}
-              <Route path="programs/:programId" element={<ProgramCurriculumScreen />} />
-            </>
-          )}
+          {/* D44 — the catalog moved to `/courses` and `/programs`. These three redirects
+              are kept because a route path is user-visible: bookmarks, shared links and
+              the address bar all carry the old ones, and a 404 is a poor reward for
+              having saved a link. `replace` so Back does not bounce off the redirect. */}
+          <Route path="courses" element={<Navigate to={ROUTES.courses} replace />} />
+          <Route path="programs" element={<Navigate to={ROUTES.programs} replace />} />
+          <Route
+            path="programs/:programId"
+            element={<RedirectToProgramCurriculum />}
+          />
+          {canManage && <Route path="classrooms" element={<ClassroomsScreen />} />}
           {canReadAudit && <Route path="audit" element={<AuditLogScreen />} />}
           {canManage && (
             <>

@@ -96,6 +96,50 @@ export interface AttendanceSummaryResponse {
   by_student: PerStudentAttendance[];
 }
 
+/**
+ * The attendance floor, as a percentage (D44). Mirrors
+ * `attendance/service.ATTENDANCE_ALERT_THRESHOLD`.
+ *
+ * Used only as the DEFAULT for the request. Everything rendered reads
+ * `AttendanceAlertsResponse.threshold`, which the server echoes back — so the screen
+ * states the rule the server applied rather than a second copy of the number that can
+ * disagree with it.
+ */
+export const ATTENDANCE_ALERT_THRESHOLD = 80;
+
+/**
+ * One class below the floor.
+ *
+ * ⚠️ `sessions_recorded` is the DENOMINATOR the percentage came from, and it is not
+ * optional decoration. The server counts records WRITTEN, not sessions scheduled: a class
+ * whose register has been marked twice, with one absence, reads 50% and is not in trouble.
+ * Every surface that shows the percentage must show this next to it.
+ */
+export type AttendanceAlertOffering = {
+  offering: AttendanceOfferingRef;
+  enrolled_count: number;
+  sessions_recorded: number;
+} & AttendanceCounts;
+
+/** One student below the floor, IN ONE CLASS — not averaged across their courses. */
+export type AttendanceAlertStudent = {
+  student: AttendanceStudentRef;
+  offering: AttendanceOfferingRef;
+  sessions_recorded: number;
+} & AttendanceCounts;
+
+/** GET /attendance/alerts — everything below the floor for one academic year. */
+export interface AttendanceAlertsResponse {
+  /** Echoed back by the server; render this, not the constant. */
+  threshold: number;
+  /** Null when the school has no active year — both lists are then empty for that reason. */
+  academic_year_id: string | null;
+  /** Worst first. */
+  offerings: AttendanceAlertOffering[];
+  /** Worst first. */
+  students: AttendanceAlertStudent[];
+}
+
 /** GET /attendance/me — a student's own attendance. */
 export interface MyAttendanceResponse {
   summary: AttendanceCounts;

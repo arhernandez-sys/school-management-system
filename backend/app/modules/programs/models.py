@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     SmallInteger,
     String,
+    Text,
     func,
     text,
 )
@@ -50,6 +51,15 @@ class Program(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     code: Mapped[str] = mapped_column(String(10), nullable=False)
     name: Mapped[str] = mapped_column(String(250), nullable=False)
     award: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: D44, from the client's `sims_10` dump. What an applicant needs to get in, and what
+    #: a student needs to finish — both free text, both printed on the prospectus.
+    #:
+    #: Deliberately NOT machine-readable, and that is the client's call rather than a
+    #: shortcut: `course_prerequisites` and `program_courses` already express the rules
+    #: the system can actually enforce. These two are the prose around them, and pretending
+    #: otherwise would mean two places disagreeing about what a requirement is.
+    admission_requirements: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    graduation_requirements: Mapped[str | None] = mapped_column(String(100), nullable=True)
     total_credits: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
     min_passing_grade_point: Mapped[float] = mapped_column(
         Numeric(3, 2), nullable=False, server_default=text("2.50")
@@ -57,6 +67,13 @@ class Program(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     is_active: Mapped[bool] = mapped_column(
         Boolean(), nullable=False, server_default=text("true")
     )
+    #: D44, from the client's dump. Registrar's free-text notes on the programme.
+    #:
+    #: `Text`/nullable here against the dump's `varchar(500) NOT NULL DEFAULT '1'` — that
+    #: default is a stray value left over from however the column was created in HeidiSQL,
+    #: and adopting it would put a literal `1` in the notes box of all seven programmes.
+    #: Matches `student_profiles.comments`, which is the same idea on a different row.
+    comments: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
     __table_args__ = (
         Index(

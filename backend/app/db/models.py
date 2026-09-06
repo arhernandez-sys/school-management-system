@@ -5,6 +5,9 @@ individual model modules) anywhere the complete metadata is required.
 
 from __future__ import annotations
 
+# Cross-module (D44) — owned by no single module; see app/common/models.py.
+from app.common.models import NumberSequence  # noqa: F401
+
 # Identity / RBAC
 from app.modules.users.models import User, UserPreferences  # noqa: F401
 from app.modules.auth.models import (  # noqa: F401
@@ -62,5 +65,18 @@ from app.modules.reports.models import ReportCardSnapshot  # noqa: F401
 
 # Calendar (Module 12 — scope addition, 2026-07)
 from app.modules.events.models import Event  # noqa: F401
+
+# D44 — part of the sweep D43's note above asked for. Admissions was one of the modules
+# missing from `Base.metadata` entirely, which is why `applications` never appeared in an
+# autogenerate diff. `Classroom` is registered from the start rather than becoming the
+# next omission.
+from app.modules.admissions.models import (  # noqa: F401
+    Application,
+    ApplicationDocument,
+    ApplicationEducation,
+    ApplicationTemp,
+    CreditTransferRequest,
+)
+from app.modules.classrooms.models import Classroom  # noqa: F401
 
 from app.db.base import Base  # noqa: F401  (re-export for convenience)
