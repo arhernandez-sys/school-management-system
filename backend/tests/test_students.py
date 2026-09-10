@@ -89,7 +89,7 @@ def _make_student(
     *,
     student_number=None,
     full_name="Test Student",
-    status=StudentStatus.REGISTERED,
+    status=StudentStatus.ACTIVE,
     user_id=None,
     date_of_birth=None,
     enrollment_date=None,
@@ -365,13 +365,13 @@ class TestListStudents:
         grad = _make_student(db_session, full_name=f"Grad {tag}", status=StudentStatus.GRADUATED)
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.get(
-            STUDENTS, params={"status": "graduated", "page_size": 200},
+            STUDENTS, params={"status": "Graduated", "page_size": 200},
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
         )
         assert resp.status_code == 200, resp.text
         items = resp.json()["items"]
         assert str(grad.id) in {i["id"] for i in items}
-        assert all(i["status"] == "graduated" for i in items)
+        assert all(i["status"] == "Graduated" for i in items)
 
     def test_list_search_by_number(self, client, make_user, auth_headers, db_session) -> None:
         num = f"SRCH{uuid.uuid4().hex[:8]}"
@@ -574,7 +574,7 @@ class TestCreateStudent:
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert body["status"] == "Registered"
+        assert body["status"] == "Active"
         assert body["current_offerings"] == []  # no class_ids given
         n_audit = db_session.scalar(
             select(func.count()).select_from(AuditLog).where(
@@ -671,10 +671,10 @@ class TestCreateStudent:
         resp = client.post(
             STUDENTS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json=self._payload(status="Unregistered"),
+            json=self._payload(status="Inactive"),
         )
         assert resp.status_code == 201, resp.text
-        assert resp.json()["status"] == "Unregistered"
+        assert resp.json()["status"] == "Inactive"
 
     def test_create_with_enroll_into_section_201(
         self, client, make_user, auth_headers, db_session
@@ -795,7 +795,7 @@ class TestUpdateStudent:
         resp = client.patch(
             _student_path(student.id),
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"status": "graduated"},
+            json={"status": "Graduated"},
         )
         assert resp.status_code == 422, resp.text
 
@@ -858,15 +858,29 @@ class TestUpdateStudent:
 # POST /students/{id}/status — the FR-STU-04 transition matrix (FLAGGED CASE 1)
 # ════════════════════════════════════════════════════════════════════════════
 class TestStudentStatusMatrix:
-    """The implemented matrix (service._ALLOWED_STATUS_TRANSITIONS):
-      active     -> {inactive, transferred, graduated, withdrawn}
-      inactive   -> {active, transferred, graduated, withdrawn}
-      transferred-> {active, inactive}
-      graduated  -> {active, inactive}
-      withdrawn  -> {active, inactive}
-    Terminal->terminal is blocked (422 invalid_transition). Same->same is a no-op
-    (allowed). These tests assert the IMPLEMENTED matrix; the module report flags
-    it against product intent (FR-STU-04 does not enumerate transitions)."""
+    """The implemented matrix (service._ALLOWED_STATUS_TRANSITIONS).
+
+    **D45 §7.5 redrew this.** The blueprint added a BEFORE (Applicant, Accepted) and an
+    AFTER (Completed, Graduated, Alumni) to what had been a star around two live states,
+    so the graph is now a lifecycle with two ends. `Transferred` is an eleventh value kept
+    by client decision because the blueprint's ten have no equivalent for it.
+
+      Applicant  -> {Accepted, Withdrawn}
+      Accepted   -> {Active, Applicant, Withdrawn}
+      Active     -> {Inactive, Suspended, Completed, Transferred, Withdrawn, Dropout}
+      Inactive   -> {Active, Suspended, Transferred, Withdrawn, Dropout}
+      Suspended  -> {Active, Inactive, Withdrawn, Dropout}
+      Completed  -> {Graduated, Active}
+      Graduated  -> {Alumni, Completed, Active}
+      Alumni     -> {Active, Graduated}
+      Transferred / Withdrawn / Dropout -> {Active, Inactive}
+
+    Terminal->terminal is still blocked (422 invalid_transition) — the D34 principle
+    survives. `Completed -> Graduated` and `Graduated -> Alumni` are NOT exceptions to it:
+    those are sanctioned progressions along the blueprint's own §4 lifecycle, and
+    Completed is a waypoint rather than an end.
+
+    Same->same is a no-op (allowed). These tests assert the IMPLEMENTED matrix."""
 
     def _set_status(self, client, auth_headers, principal, student_id, new_status):
         return client.post(
@@ -876,16 +890,16 @@ class TestStudentStatusMatrix:
         )
 
     @pytest.mark.parametrize("start,target", [
-        (StudentStatus.REGISTERED, "Unregistered"),
-        (StudentStatus.REGISTERED, "transferred"),
-        (StudentStatus.REGISTERED, "graduated"),
-        (StudentStatus.REGISTERED, "withdrawn"),
-        (StudentStatus.UNREGISTERED, "Registered"),
-        (StudentStatus.UNREGISTERED, "graduated"),
-        (StudentStatus.TRANSFERRED, "Registered"),
-        (StudentStatus.TRANSFERRED, "Unregistered"),
-        (StudentStatus.GRADUATED, "Registered"),
-        (StudentStatus.WITHDRAWN, "Unregistered"),
+        (StudentStatus.ACTIVE, "Inactive"),
+        (StudentStatus.ACTIVE, "Transferred"),
+        (StudentStatus.ACTIVE, "Completed"),
+        (StudentStatus.ACTIVE, "Withdrawn"),
+        (StudentStatus.INACTIVE, "Active"),
+        (StudentStatus.INACTIVE, "Withdrawn"),
+        (StudentStatus.TRANSFERRED, "Active"),
+        (StudentStatus.TRANSFERRED, "Inactive"),
+        (StudentStatus.GRADUATED, "Active"),
+        (StudentStatus.WITHDRAWN, "Inactive"),
     ])
     def test_allowed_transitions_200(
         self, client, make_user, auth_headers, db_session, start, target
@@ -897,12 +911,12 @@ class TestStudentStatusMatrix:
         assert resp.json()["status"] == target
 
     @pytest.mark.parametrize("start,target", [
-        (StudentStatus.GRADUATED, "withdrawn"),
-        (StudentStatus.GRADUATED, "transferred"),
-        (StudentStatus.WITHDRAWN, "graduated"),
-        (StudentStatus.WITHDRAWN, "transferred"),
-        (StudentStatus.TRANSFERRED, "graduated"),
-        (StudentStatus.TRANSFERRED, "withdrawn"),
+        (StudentStatus.GRADUATED, "Withdrawn"),
+        (StudentStatus.GRADUATED, "Transferred"),
+        (StudentStatus.WITHDRAWN, "Graduated"),
+        (StudentStatus.WITHDRAWN, "Transferred"),
+        (StudentStatus.TRANSFERRED, "Graduated"),
+        (StudentStatus.TRANSFERRED, "Withdrawn"),
     ])
     def test_terminal_to_terminal_blocked_422(
         self, client, make_user, auth_headers, db_session, start, target
@@ -917,16 +931,19 @@ class TestStudentStatusMatrix:
         """before == after short-circuits the matrix check → allowed no-op."""
         student = _make_student(db_session, status=StudentStatus.GRADUATED)
         principal = make_user(role=Role.PRINCIPAL)
-        resp = self._set_status(client, auth_headers, principal, student.id, "graduated")
+        resp = self._set_status(client, auth_headers, principal, student.id, "Graduated")
         assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "graduated"
+        assert resp.json()["status"] == "Graduated"
 
     def test_status_change_audits_before_after(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        student = _make_student(db_session, status=StudentStatus.REGISTERED)
+        # D45 — `Active -> Graduated` is no longer a legal single step: the blueprint
+        # puts `Completed` between them (coursework done, award not yet conferred), and
+        # the graph enforces it. `Completed` is what an Active student can actually reach.
+        student = _make_student(db_session, status=StudentStatus.ACTIVE)
         principal = make_user(role=Role.PRINCIPAL)
-        resp = self._set_status(client, auth_headers, principal, student.id, "graduated")
+        resp = self._set_status(client, auth_headers, principal, student.id, "Completed")
         assert resp.status_code == 200, resp.text
         row = db_session.scalar(
             select(AuditLog).where(
@@ -935,12 +952,12 @@ class TestStudentStatusMatrix:
             )
         )
         assert row is not None
-        assert row.summary["before"] == "Registered"
-        assert row.summary["after"] == "graduated"
+        assert row.summary["before"] == "Active"
+        assert row.summary["after"] == "Completed"
 
     def test_status_unknown_student_404(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)
-        resp = self._set_status(client, auth_headers, principal, uuid.uuid4(), "Unregistered")
+        resp = self._set_status(client, auth_headers, principal, uuid.uuid4(), "Inactive")
         assert resp.status_code == 404
         _assert_envelope(resp.json(), code="not_found")
 

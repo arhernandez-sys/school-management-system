@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Box, Tab, Tabs } from '@mui/material';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { canAccessModule, canWrite } from '@shared/auth/permissions';
+import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
 import { ClassroomsScreen } from '@features/classrooms/ClassroomsScreen';
 import { SchoolProfileScreen } from './screens/SchoolProfileScreen';
@@ -11,7 +11,6 @@ import { GradingScaleScreen } from './screens/GradingScaleScreen';
 import { AssessmentPolicyScreen } from './screens/AssessmentPolicyScreen';
 import { UsersScreen } from './screens/UsersScreen';
 import { AccountScreen } from './screens/AccountScreen';
-import { AuditLogScreen } from './screens/AuditLogScreen';
 
 /**
  * Settings module (Phase 7.2) — a tabbed, nested-routed container mounted at
@@ -63,7 +62,19 @@ export function SettingsPage() {
    * `'view-all'` for EVERY role and keying on it would put Programmes in front of
    * Lecturers and Students. Same trap, new location.
    */
-  const canReadAudit = user ? canAccessModule(user.role, 'audit') : false;
+  /**
+   * ⚠️ THE "AUDIT LOG" TAB IS GONE (Sep 2026), merged into Insights → Audit trail.
+   *
+   * There were two screens onto one table: this one showed `audit_log` raw — the dotted
+   * action key, the entity type, the entity UUID, the summary as JSON — and the Audit
+   * trail (D45 Phase 7) shows the same rows as sentences with the module, the IP and the
+   * before/after §46 asks for. The client asked for one screen with the detail on it, so
+   * the two pieces this one had that the other lacked (what KIND of record, and a handle
+   * for the row) moved across as `record` and `reference`.
+   *
+   * `canAccessModule(role, 'audit')` still exists and still gates the surviving screen
+   * from `navConfig`; it is simply no longer consulted here.
+   */
 
   const tabs = useMemo<SettingsTab[]>(() => {
     const list: SettingsTab[] = [];
@@ -85,10 +96,9 @@ export function SettingsPage() {
         { label: 'Users', path: 'users' },
       );
     }
-    if (canReadAudit) list.push({ label: 'Audit log', path: 'audit' });
     list.push({ label: 'My account', path: 'account' });
     return list;
-  }, [canManage, canReadAudit]);
+  }, [canManage]);
 
   //: Land on the first tab the caller actually has, never on one they cannot open.
   const defaultPath = tabs[0]?.path ?? 'account';
@@ -128,7 +138,6 @@ export function SettingsPage() {
             element={<RedirectToProgramCurriculum />}
           />
           {canManage && <Route path="classrooms" element={<ClassroomsScreen />} />}
-          {canReadAudit && <Route path="audit" element={<AuditLogScreen />} />}
           {canManage && (
             <>
               <Route path="school" element={<SchoolProfileScreen />} />

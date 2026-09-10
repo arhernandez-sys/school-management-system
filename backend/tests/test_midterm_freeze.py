@@ -377,6 +377,142 @@ class TestInteractionWithRevisions:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+class TestTheClosedWindowLock:
+    """D45 — the half of the freeze D33 stated in prose and never enforced.
+
+    `midterm_freeze_state`'s own docstring promised that after `end`, *"CHANGING one that
+    was entered before `start` needs the Dean to approve a revision"*. It did not. Until
+    2026-09-08 a Lecturer could move a mid-term mark 11.0 -> 19.0 through the ordinary save
+    path, and the same write reset `graded_at`, which destroyed the revision eligibility
+    that would have exposed it.
+
+    The suite above was green throughout: `test_after_the_window_closes_entry_reopens`
+    only ever covered a NEW grade, which must keep working.
+    """
+
+    @staticmethod
+    def _settled(graph, db_session):
+        """A mark that WAS part of the mid-term submission, on a window now closed."""
+        _window(db_session, graph, opens=-30, closes=-1)
+        a = graph.assessment(max_score="100", weight="1")
+        student, enrollment = graph.student()
+        grade = graph.grade(a, student, enrollment, score="60")
+        backdate(graph, assessment=a, grade=grade)
+        return a, student, grade
+
+    def test_a_pre_window_mark_cannot_be_edited_directly(
+        self, client, graph, db_session
+    ) -> None:
+        """THE DEFECT. The client's words: "if the assessment was entered before the
+        freeze date then they cant modify those and a revision appears beside the grade"
+        — the revision appeared, nothing forced its use."""
+        a, student, _grade = self._settled(graph, db_session)
+
+        r = _save(client, graph, a, student, score="95")
+        assert r.status_code == 409, r.text
+        err = _assert_envelope(r.json(), code="midterm_revision_required")
+        assert str(student.id) in err["student_id"]
+
+        # And the mark is untouched — not half-saved.
+        assert _cell(client, graph, a, student)["score"] == 60.0
+
+    def test_the_refusal_leaves_the_revision_path_open(
+        self, client, graph, db_session
+    ) -> None:
+        """The point of the lock: it does not strand the Lecturer, it redirects them.
+        The refused edit must leave `graded_at` alone, or the block would destroy the
+        very eligibility it is protecting — which is exactly what the direct edit used
+        to do."""
+        a, student, _grade = self._settled(graph, db_session)
+        assert _save(client, graph, a, student, score="95").status_code == 409
+
+        cell = _cell(client, graph, a, student)
+        assert cell["can_request_revision"] is True
+        assert cell["revision_blocked_reason"] is None
+        assert _request(client, graph, a, student).status_code == 201
+
+    def test_an_unchanged_row_is_not_an_edit(self, client, graph, db_session) -> None:
+        """The gradebook saves whole rows, so touching one cell re-sends the forty that
+        did not move. Refusing those would make the screen unusable and teach everyone to
+        route real corrections around the rule."""
+        a, student, _grade = self._settled(graph, db_session)
+        assert _save(client, graph, a, student, score="60").status_code == 200
+
+    def test_a_NEW_mark_on_the_same_assessment_still_goes_in(
+        self, client, graph, db_session
+    ) -> None:
+        """A student who was never graded during the mid-term is post-window work, even
+        on an assessment that predates the window. The lock is per-RESULT, not
+        per-assessment."""
+        a, _student, _grade = self._settled(graph, db_session)
+        latecomer, _enr = graph.student()
+        assert _save(client, graph, a, latecomer, score="72").status_code == 200
+
+    def test_a_post_window_assessment_is_untouched(
+        self, client, graph, db_session
+    ) -> None:
+        """Rule 2. Work set after the window is graded and re-graded normally."""
+        _window(db_session, graph, opens=-30, closes=-1)
+        a = graph.assessment(max_score="100", weight="1")  # created now, after `end`
+        student, _enr = graph.student()
+        assert _save(client, graph, a, student, score="60").status_code == 200
+        assert _save(client, graph, a, student, score="70").status_code == 200
+
+    def test_a_term_with_no_window_is_never_locked(
+        self, client, graph, db_session
+    ) -> None:
+        """Every semester created before D32. An invented window would lock a live term
+        out of grading entirely — the same safe default `midterm_freeze_state` takes."""
+        _window(db_session, graph, opens=None, closes=None)
+        a = graph.assessment(max_score="100", weight="1")
+        student, enrollment = graph.student()
+        grade = graph.grade(a, student, enrollment, score="60")
+        backdate(graph, assessment=a, grade=grade)
+        assert _save(client, graph, a, student, score="95").status_code == 200
+
+    def test_inside_the_window_the_FREEZE_still_owns_the_refusal(
+        self, client, graph, db_session
+    ) -> None:
+        """The two rules must partition, not overlap: inside `[start, end]` the caller
+        still gets `midterm_frozen`, which names a reopen date, rather than the lock's
+        "file a revision" — which would be wrong advice, since revisions are refused
+        while the window runs."""
+        _window(db_session, graph, opens=-30, closes=+1)
+        a = graph.assessment(max_score="100", weight="1")
+        student, enrollment = graph.student()
+        grade = graph.grade(a, student, enrollment, score="60")
+        backdate(graph, assessment=a, grade=grade)
+
+        r = _save(client, graph, a, student, score="95")
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="midterm_frozen")
+
+    def test_the_lock_holds_on_a_CLOSED_term(self, client, graph, db_session) -> None:
+        """Revision eligibility rule 4 (`semester.is_active`) is deliberately NOT
+        mirrored into the lock. Mirroring it would let a settled term be edited freely —
+        the one case that matters most."""
+        a, student, _grade = self._settled(graph, db_session)
+        graph.sem.is_active = False
+        db_session.flush()
+        assert _save(client, graph, a, student, score="95").status_code == 409
+
+    def test_the_409_names_both_dates_and_the_students(
+        self, client, graph, db_session
+    ) -> None:
+        """Same argument as `test_the_409_names_both_dates`: a refusal the Lecturer
+        cannot act on is a dead end. WHICH students blocked the batch is the other half —
+        the gradebook sends forty rows and needs to highlight the offending cells."""
+        a, student, _grade = self._settled(graph, db_session)
+        err = _assert_envelope(
+            _save(client, graph, a, student, score="95").json(),
+            code="midterm_revision_required",
+        )
+        assert err["midterm_submission_start"] is not None
+        assert err["midterm_submission_end"] is not None
+        assert err["student_id"] == [str(student.id)]
+
+
+# ════════════════════════════════════════════════════════════════════════════
 class TestDeanBypass:
     def test_the_dean_arm_skips_the_freeze(self, graph, db_session) -> None:
         """The Dean is exempt, matching `_assert_grade_window_open` — asserted at the

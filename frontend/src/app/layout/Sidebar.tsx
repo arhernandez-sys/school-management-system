@@ -1,9 +1,7 @@
-import { useState } from 'react';
 import {
   Box,
   Collapse,
   Drawer,
-  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
@@ -12,8 +10,6 @@ import {
   Toolbar,
   Tooltip,
 } from '@mui/material';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { NavLink, useLocation } from 'react-router-dom';
 import { navSectionsForRole, type NavItem } from './navConfig';
 import type { Role } from '@shared/types/enums';
@@ -52,14 +48,11 @@ export function Sidebar({
   const location = useLocation();
   const sections = navSectionsForRole(role, { studentsCanViewGrades });
   /**
-   * D44 — which groups the user has opened, keyed by the parent's path.
-   *
-   * Deliberately NOT persisted, and deliberately allowed to be empty: a group whose child
-   * route is active defaults to OPEN (see `renderItem`), so arriving at Course Offerings
-   * from a link shows you where you are without anyone having expanded anything. The state
-   * only records a deviation from that.
+   * ⚠️ THERE IS NO EXPANSION STATE ANY MORE (Sep 2026). D44 kept a `Record<path, boolean>`
+   * of which groups the user had opened with the chevron; the chevron is gone, so an
+   * open group is now purely a function of the current route (`renderItem`). Nothing to
+   * persist, nothing to get out of step with the URL.
    */
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const width = collapsed ? DRAWER_WIDTH_MINI : DRAWER_WIDTH;
 
   /** Exact match, or a child route beneath it. The rule the sidebar has always used. */
@@ -81,7 +74,24 @@ export function Sidebar({
     const childActive = (item.children ?? []).some((c) => matches(c.path));
     const selected = matches(item.path) || childActive;
     const hasChildren = Boolean(item.children?.length) && !collapsed;
-    const open = expanded[item.path] ?? childActive;
+    /**
+     * ⚠️ NO SEPARATE TOGGLE ANY MORE (Sep 2026, client request). Being ON the parent —
+     * or on any of its children — is what opens the group.
+     *
+     * There used to be a chevron beside the parent, on the argument that clicking the
+     * LABEL must still navigate and folding the two together would turn a real
+     * destination into a toggle. That argument was sound and the conclusion was still
+     * wrong for this nav, because Courses has exactly ONE child: the arrow existed to
+     * reveal a single row that the click was about to make relevant anyway, so it was a
+     * control whose only job was to be pressed immediately after the one next to it.
+     *
+     * Clicking Courses now navigates to /courses AND reveals Course offerings beneath
+     * it — which is what was asked for, and what the group already did when you arrived
+     * from a bookmark. The cost is that the group cannot be collapsed while you are
+     * inside it; that is not a state anybody wanted, and there is nothing to collapse
+     * but one line.
+     */
+    const open = matches(item.path) || childActive;
 
     const button = (
       <ListItemButton
@@ -91,6 +101,11 @@ export function Sidebar({
         selected={depth === 0 ? selected : matches(item.path)}
         onClick={onMobileClose}
         aria-current={matches(item.path) ? 'page' : undefined}
+        // The link IS the disclosure now, so it carries the disclosure semantics. A
+        // group with no children announces nothing, rather than announcing "collapsed"
+        // about an empty set.
+        aria-expanded={hasChildren ? open : undefined}
+        aria-controls={hasChildren ? `nav-group-${item.path}` : undefined}
         sx={{
           minHeight: 44, // >=44px touch target (a11y §9.7)
           justifyContent: collapsed ? 'center' : 'flex-start',
@@ -133,21 +148,7 @@ export function Sidebar({
 
     return (
       <Box key={item.path}>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Box sx={{ flexGrow: 1, minWidth: 0 }}>{button}</Box>
-          {/* A separate control, so clicking the LABEL still navigates. Folding the two
-              together would turn a real destination into a toggle. */}
-          <IconButton
-            size="small"
-            onClick={() => setExpanded((prev) => ({ ...prev, [item.path]: !open }))}
-            aria-label={`${open ? 'Collapse' : 'Expand'} ${item.label}`}
-            aria-expanded={open}
-            aria-controls={`nav-group-${item.path}`}
-            sx={{ mr: 1 }}
-          >
-            {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-          </IconButton>
-        </Box>
+        {button}
         <Collapse in={open} timeout="auto" unmountOnExit>
           <List component="div" disablePadding id={`nav-group-${item.path}`}>
             {item.children!.map((child) => renderItem(child, depth + 1))}

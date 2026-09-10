@@ -78,7 +78,8 @@ Capability legend: **Full** = create/read/update/delete/configure · **Create-Ed
 | Attendance | View-all | View-all | **Create-Edit (own classes)** | View-own (own attendance) | Create-Edit (own) · View-all (programme) | View-all |
 | Announcements | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) | Create-Edit (own classes) | View-all (never authors) |
 | Reports | View-all (+ any transcript) | View-all (+ any transcript) | View-own (their gradebooks; **no transcript**) | View-own (own report card; **no transcript**) | View-all (programme gradebooks; **no transcript**) | View-all (+ any transcript) |
-| Settings | Full (school + academic config) | Create-Edit (limited config) | View-own (account only) | View-own (account only) | View-own (account) + catalog | View-all + **Audit log** |
+| Settings | Full (school + academic config) | Create-Edit (limited config) | View-own (account only) | View-own (account only) | View-own (account) + catalog | View-all |
+| Audit trail (Insights) | View-all | ✗ | ✗ | ✗ | ✗ | View-all |
 
 **One-line role summaries**
 - **Principal** — the administrator. Sees everything school-wide, owns Settings (year/term, grading scale, users). Doesn't routinely enter grades/attendance but can view all of it.

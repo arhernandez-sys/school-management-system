@@ -55,6 +55,13 @@ function list(courseId: string) {
     // Documentation only — the gate reads `items`. The demo courses carry none.
     prerequisites_text: (course as { prerequisites_text?: string } | undefined)
       ?.prerequisites_text ?? null,
+    // D45 §3b P3 — the reverse edge: courses that require THIS one.
+    required_by: D.course_prerequisites
+      .filter((p) => p.prerequisite_course_id === courseId)
+      .map((p) => D.courses.find((c) => c.id === p.course_id))
+      .filter((c): c is NonNullable<typeof c> => Boolean(c))
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .map((c) => ({ id: c.id, code: c.code, name: c.name })),
   };
 }
 

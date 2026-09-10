@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -13,7 +13,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   DataTable,
   PageContainer,
@@ -36,13 +36,27 @@ import {
 /**
  * Admissions list (D30 §D11) — Registrar + Dean.
  *
- * `?status=submitted` is the decision queue, so the filter defaults to **Submitted**
- * rather than to everything: the question this screen exists to answer is "what is waiting
- * on us?", and an unfiltered list of drafts and past decisions buries it.
+ * The filter defaults to **Submitted** rather than to everything: the question this screen
+ * exists to answer is "what is waiting on us?", and an unfiltered list of drafts and past
+ * decisions buries it.
+ *
+ * **`?status=` is READ FROM THE URL** so the screen can be aimed at one queue from
+ * elsewhere — the Dean dashboard's "Applicants waiting" and "Accepted, not enrolled"
+ * tiles both land here, at different statuses.
+ *
+ * ⚠️ This docstring claimed `?status=submitted` from D30 onward and **the code never read
+ * the URL** — the default came from `useState('submitted')`, which looks identical on
+ * arrival and cannot be pointed anywhere. A comment describing a query parameter is not a
+ * query parameter.
  *
  * The `pending_credit_transfers` count is on the ROW, so the Dean can see where the work
  * is without opening each application (brief §13 — they decide every transfer).
  */
+/** Whether a URL-supplied `?status=` is one this screen can actually filter on. */
+function isKnownStatus(value: string | null): value is ApplicationStatus | 'all' {
+  return Boolean(value) && STATUS_OPTIONS.some((o) => o.value === value);
+}
+
 const STATUS_OPTIONS: { value: ApplicationStatus | 'all'; label: string }[] = [
   { value: 'submitted', label: 'Submitted' },
   { value: 'under_review', label: 'Under review' },
@@ -67,7 +81,23 @@ export function ApplicationsListScreen() {
   // D44 — the two roles that own admissions. The Auditor reaches this list and every
   // write it could reach is refused centrally, so it is not offered an Edit button.
   const canEdit = user?.role === 'principal' || user?.role === 'secretary';
-  const [status, setStatus] = useState<ApplicationStatus | 'all'>('submitted');
+  const [searchParams] = useSearchParams();
+  const urlStatus = searchParams.get('status');
+  const [status, setStatus] = useState<ApplicationStatus | 'all'>(
+    // An unrecognised value falls back to the default rather than filtering on nothing:
+    // a hand-typed `?status=pending` must not answer an empty list that reads as "no
+    // applications".
+    () => (isKnownStatus(urlStatus) ? urlStatus : 'submitted'),
+  );
+  // Re-seed when the parameter CHANGES, not only on mount: arriving from the dashboard
+  // twice at two different statuses does not remount this screen, so a mount-only read
+  // would silently ignore the second link.
+  useEffect(() => {
+    if (isKnownStatus(urlStatus)) {
+      setStatus(urlStatus);
+      setPage(0);
+    }
+  }, [urlStatus]);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);

@@ -156,28 +156,59 @@ export interface OfferingDetail {
  * the transcript prints `AU` / `W/P` / `W/F` against them. That last part is the point —
  * a permanent record that omits the course a student withdrew from is not a transcript.
  */
-export type EnrollmentStatus = 'enrolled' | 'audit' | 'withdraw_passing' | 'withdraw_failing';
+export type EnrollmentStatus =
+  | 'pre_registered'
+  | 'registered'
+  | 'added'
+  | 'dropped'
+  | 'withdrawn'
+  | 'completed'
+  | 'failed'
+  | 'audit';
 
 export const ENROLLMENT_STATUS_LABEL: Record<EnrollmentStatus, string> = {
-  enrolled: 'Enrolled',
+  pre_registered: 'Pre-registered',
+  registered: 'Active',
+  added: 'Added',
+  dropped: 'Dropped',
+  withdrawn: 'Withdrawn',
+  completed: 'Completed',
+  failed: 'Failed',
   audit: 'Audit',
-  withdraw_passing: 'Withdrew passing',
-  withdraw_failing: 'Withdrew failing',
 };
 
-/** The short form the transcript prints. */
+/**
+ * The short form the transcript prints.
+ *
+ * ⚠️ D45 — `W/P` and `W/F` are GONE, replaced by a single `W`. Blueprint §19 lists one
+ * flat "Withdrawn" and the client reaffirmed it on 2026-09-08, so the record can no
+ * longer tell a withdrawal-passing from a withdrawal-failing. A transcript must not print
+ * a distinction the data cannot support.
+ *
+ * `dropped` prints NOTHING, deliberately: a drop happens inside add/drop and leaves no
+ * transcript trace at all — that is exactly what separates it from a withdrawal. So do
+ * `completed` and `failed`, which reach the transcript as an ordinary grade.
+ */
 export const ENROLLMENT_STATUS_NOTATION: Record<EnrollmentStatus, string | null> = {
-  enrolled: null,
+  pre_registered: null,
+  registered: null,
+  added: null,
+  dropped: null,
+  withdrawn: 'W',
+  completed: null,
+  failed: null,
   audit: 'AU',
-  withdraw_passing: 'W/P',
-  withdraw_failing: 'W/F',
 };
 
 export const ENROLLMENT_STATUS_OPTIONS: EnrollmentStatus[] = [
-  'enrolled',
+  'pre_registered',
+  'registered',
+  'added',
+  'dropped',
+  'withdrawn',
+  'completed',
+  'failed',
   'audit',
-  'withdraw_passing',
-  'withdraw_failing',
 ];
 
 /** Row in GET /offerings/{id}/roster. */

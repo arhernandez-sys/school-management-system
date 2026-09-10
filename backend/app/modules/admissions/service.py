@@ -1129,7 +1129,7 @@ def accept_application(
         # `<select>` renders blank and the profile card shows the wrong label.
         gender=normalise_gender(row.gender),
         enrollment_date=accepted_on,
-        status=StudentStatus.REGISTERED,
+        status=StudentStatus.ACTIVE,
         phone=row.phone,
         ssno=row.ssno,
         religion=row.religion,

@@ -42,6 +42,9 @@ export function SchoolProfileScreen() {
   // empty means "never expires", and a numeric state would have to pick some number to
   // stand for that. `0` is a real, different value — access ends on graduation day.
   const [gradAccessDays, setGradAccessDays] = useState('');
+  // D45 §23 — the attendance warning floor. Blueprint §57: institutional rules belong in
+  // configuration, not in source. It was a constant in the backend until now.
+  const [attendanceFloor, setAttendanceFloor] = useState('80');
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saved, setSaved] = useState(false);
@@ -57,6 +60,7 @@ export function SchoolProfileScreen() {
           ? ''
           : String(query.data.post_graduation_access_days),
       );
+      setAttendanceFloor(String(query.data.attendance_alert_threshold ?? 80));
     }
   }, [query.data]);
 
@@ -78,6 +82,12 @@ export function SchoolProfileScreen() {
           // checked before the conversion rather than relying on it.
           post_graduation_access_days:
             gradAccessDays.trim() === '' ? null : Number(gradAccessDays),
+          // D45 §23. NOT nullable, unlike the days above: a college with no threshold
+          // does not want an alerts screen that flags nobody, it wants the number it has
+          // always used. A blank box falls back to the blueprint's own example of 80
+          // rather than to 0, which would flag every student who ever missed a class.
+          attendance_alert_threshold:
+            attendanceFloor.trim() === '' ? 80 : Number(attendanceFloor),
         },
       },
       {
@@ -192,6 +202,23 @@ export function SchoolProfileScreen() {
                 fieldErrors.post_graduation_access_days?.join(' ') ??
                 'How long a graduate keeps their grades and attendance after graduating. ' +
                   'Leave blank for no expiry; 90 is three months. Staff are never affected.'
+              }
+            />
+            {/* D45 §23 — "Configurable alerts should allow the college to define
+                thresholds. Example: Attendance below 80% = Warning." */}
+            <TextField
+              label="Attendance warning threshold (%)"
+              type="number"
+              value={attendanceFloor}
+              onChange={(e) => setAttendanceFloor(e.target.value)}
+              fullWidth
+              disabled={!canEdit}
+              slotProps={{ htmlInput: { min: 0, max: 100, step: 1 } }}
+              error={Boolean(fieldErrors.attendance_alert_threshold)}
+              helperText={
+                fieldErrors.attendance_alert_threshold?.join(' ') ??
+                'A student or class at or below this attendance percentage is flagged on ' +
+                  'the alerts screen and the Dean dashboard. BAJC policy; 80 is the default.'
               }
             />
             {canEdit && (

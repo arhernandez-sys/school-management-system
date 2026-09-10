@@ -275,6 +275,12 @@ def create_program(
         admission_requirements=payload.admission_requirements,
         graduation_requirements=payload.graduation_requirements,
         comments=payload.comments,
+        # D45 §8 — Department Management fields. Listed HERE as well as in the update
+        # loop below: D40 proved that a field added to the schema and forgotten in the
+        # service is a SILENT drop on create, where the 422 that `extra="forbid"` gives
+        # you on a typo never fires.
+        head_of_department=payload.head_of_department,
+        office_information=payload.office_information,
         total_credits=payload.total_credits,
         min_passing_grade_point=payload.min_passing_grade_point,
         is_active=True,
@@ -313,7 +319,14 @@ def update_program(
     # and `award` that is harmless, for a notes box it is a field you can fill and never
     # empty again.
     supplied = payload.model_dump(exclude_unset=True)
-    for name in ("admission_requirements", "graduation_requirements", "comments"):
+    for name in (
+        "admission_requirements",
+        "graduation_requirements",
+        "comments",
+        # D45 §8 — free text, so they take the same explicit-null-clears rule.
+        "head_of_department",
+        "office_information",
+    ):
         if name in supplied:
             value = supplied[name]
             setattr(program, name, (value or "").strip() or None)

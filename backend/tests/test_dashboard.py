@@ -142,7 +142,7 @@ class _Graph:
             **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=enrollment_date or date(2025, 9, 15),
-            status="Registered",
+            status="Active",
         )
         if with_login:
             user = self._make_user(role=Role.STUDENT, full_name=s.full_name)
@@ -258,6 +258,8 @@ class TestPrincipalVariant:
             "role", "user_full_name", "academic_year_name", "semester_name", "stats",
             "enrollment_by_programme", "grade_distribution", "enrollment_trend",
             "recent_teachers", "recent_students", "recent_announcements",
+            # D45 Phase 8 — §42 "course failure rates", per COURSE not per offering.
+            "course_failure_rates",
         }
 
     def test_stats_keys(self, client, graph) -> None:
@@ -265,6 +267,16 @@ class TestPrincipalVariant:
         assert set(stats.keys()) == {
             "active_students", "active_teachers", "total_sections", "attendance_rate",
             "unread_announcements", "new_students_term", "total_courses", "student_capacity",
+            # D45 §42 / §59 — the four tiles the revised blueprint highlighted on the
+            # Dean Dashboard.
+            "new_applicants", "accepted_applicants", "active_programmes",
+            "students_at_risk",
+            # D45 Phase 8 — the rest of §42's KPI set that this project can answer.
+            # "students on probation" and "graduation candidates" are deliberately NOT
+            # here: they need Academic Standing (C1) and the Graduation Audit (C2), and a
+            # tile reading 0 for a feature that does not exist is a number the Dean would
+            # believe. This assertion is what keeps them out until those modules land.
+            "graduates", "outstanding_grade_submissions", "failure_rate",
         }
 
     def test_total_sections_and_capacity(self, client, graph) -> None:
@@ -828,3 +840,218 @@ class TestAnnouncementIntegration:
         ).json()["unread_count"]
         assert p_dash == endpoint
         assert dash["role"] == "student"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestDeanKpiSet:
+    """D45 Phase 8 — the rest of §42's KPI set, and the two it deliberately omits.
+
+    §42 named eight indicators the Dean dashboard was missing. Five are now served.
+    **Two are NOT, and the omission is asserted rather than assumed:** "students on
+    probation" needs Academic Standing (deferred with C1) and "graduation candidates"
+    needs the Graduation Audit (deferred with C2). A tile reading 0 for a feature that
+    does not exist is worse than no tile — it is a number the Dean would believe — so
+    the shape test above is what keeps them out until those modules land.
+    """
+
+    def _stats(self, client, graph) -> dict:
+        return client.get(DB, headers=graph.P).json()["stats"]
+
+    # ── the defect this phase found ──────────────────────────────────────────
+    def test_total_courses_counts_the_CATALOG_not_the_offerings(
+        self, client, graph, db_session
+    ) -> None:
+        """⚠️ It counted `course_offerings`, with `deleted_at IS NULL` written three
+        times over — the tell-tale of a copy-paste. So "Courses" showed the number of
+        offerings while the tile's own helper text said "Across N sections" from the same
+        table: two tiles, one fact, and neither of them the catalog.
+
+        `graph` creates ONE course and TWO offerings of it, which is exactly the shape
+        that tells the two readings apart."""
+        from sqlalchemy import func, select
+
+        from app.modules.offerings.models import Course as _Course
+
+        catalog = db_session.scalar(
+            select(func.count())
+            .select_from(_Course)
+            .where(_Course.deleted_at.is_(None), _Course.is_active.is_(True))
+        )
+        stats = self._stats(client, graph)
+        assert stats["total_courses"] == catalog
+        # And it is no longer the offering count, which is what it used to be.
+        assert stats["total_sections"] == 2
+
+    # ── §42 "graduates" ──────────────────────────────────────────────────────
+    def test_graduates_counts_the_graduated_status(
+        self, client, graph, db_session
+    ) -> None:
+        before = self._stats(client, graph)["graduates"]
+        s, _enr = graph.add_student(name="Gone Ahead", enroll=False)
+        s.status = "Graduated"
+        db_session.flush()
+        assert self._stats(client, graph)["graduates"] == before + 1
+
+    def test_graduates_is_cumulative_because_there_is_no_date_to_scope_by(
+        self, client, graph, db_session
+    ) -> None:
+        """`graduation_date` is NULL on every graduated row in the live register, so
+        scoping the count to the active year would report 0 for a college that HAS
+        graduated people. The tile says "to date" instead of inventing a scope."""
+        s, _enr = graph.add_student(name="Long Gone", enroll=False)
+        s.status = "Graduated"
+        s.graduation_date = None
+        db_session.flush()
+        assert self._stats(client, graph)["graduates"] >= 1
+
+    # ── §42 "outstanding grade submissions" ──────────────────────────────────
+    def test_outstanding_grade_submissions_counts_work_still_being_marked(
+        self, client, graph
+    ) -> None:
+        before = self._stats(client, graph)["outstanding_grade_submissions"]
+        graph.assessment(status="published")
+        graph.assessment(status="grading")
+        graph.assessment(status="graded")   # finished — not outstanding
+        graph.assessment(status="draft")    # not yet issued — not outstanding either
+        assert self._stats(client, graph)["outstanding_grade_submissions"] == before + 2
+
+    def test_it_is_the_same_figure_the_lecturers_own_tile_shows(
+        self, client, graph
+    ) -> None:
+        """**The predicate is shared on purpose.** A Dean asking "how far behind is
+        marking" must not get a total that disagrees with the tiles of the people it is
+        about. `graph` gives each lecturer one offering, so the Dean's total is the sum
+        of the two lecturers' own counts."""
+        graph.assessment(status="published", cs_id=graph.cs.id)
+        graph.assessment(status="grading", cs_id=graph.cs.id)
+        graph.assessment(status="published", cs_id=graph.other_cs.id)
+
+        dean = self._stats(client, graph)["outstanding_grade_submissions"]
+        mine = client.get(DB, headers=graph.T).json()["stats"]["ungraded_items"]
+        theirs = client.get(DB, headers=graph.T2).json()["stats"]["ungraded_items"]
+        assert (mine, theirs) == (2, 1)
+        assert dean == mine + theirs
+
+    # ── §42 "course failure rates" ───────────────────────────────────────────
+    def _fail_setup(self, graph, *, failing: int, passing: int, cs=None):
+        """One graded, released assessment; `failing` students score 40 and `passing`
+        score 80 on it. F is `is_passing=False` in the test scale."""
+        a = graph.assessment(status="graded", is_released=True, cs_id=(cs or graph.cs).id)
+        made = []
+        for i in range(failing + passing):
+            s, enr = graph.add_student(name=f"Fail{i} {graph.tag}", section=(cs or graph.cs))
+            graph.grade(a, s, enr, score="40" if i < failing else "80")
+            made.append(s)
+        return made
+
+    def test_the_headline_rate_uses_the_bands_own_is_passing(
+        self, client, graph
+    ) -> None:
+        """Never a hardcoded mark. BAJC runs two scales whose `D` disagrees about
+        passing, so the year's own scale is the only authority on which is in force."""
+        self._fail_setup(graph, failing=3, passing=7)
+        assert self._stats(client, graph)["failure_rate"] == 30.0
+
+    def test_the_denominator_is_resolved_grades_not_enrolments(
+        self, client, graph
+    ) -> None:
+        """⚠️ THE NUMBER MOST LIKELY TO BE WRONG. A course three weeks into the session
+        has almost no resolved grades; dividing its failures by its ROSTER would report a
+        catastrophic failure rate for a class nobody has assessed yet — which is the
+        figure a Dean would act on first.
+
+        Here: 2 of 4 graded students failed, and six more are enrolled with no grade at
+        all. On enrolments that reads 20%; on resolved grades it is 50%."""
+        self._fail_setup(graph, failing=2, passing=2)
+        for i in range(6):
+            graph.add_student(name=f"Ungraded{i} {graph.tag}")
+        assert self._stats(client, graph)["failure_rate"] == 50.0
+
+    def test_rates_are_per_COURSE_not_per_offering(self, client, graph) -> None:
+        """Three sections of MATH1110 are one teaching problem, and splitting them makes
+        each numerator too small to read. `graph`'s two offerings share one course, so
+        they must combine into a single row."""
+        self._fail_setup(graph, failing=3, passing=2, cs=graph.cs)
+        self._fail_setup(graph, failing=1, passing=4, cs=graph.other_cs)
+        rows = client.get(DB, headers=graph.P).json()["course_failure_rates"]
+        mine = [r for r in rows if r["course_code"] == graph.tag.upper()]
+        assert len(mine) == 1, rows
+        assert (mine[0]["results"], mine[0]["failing"]) == (10, 4)
+        assert mine[0]["failure_rate"] == 40.0
+
+    def test_a_course_with_too_few_results_is_not_ranked(
+        self, client, graph
+    ) -> None:
+        """One graded student at 40% is not a 100% failure rate, it is one student — and
+        a list sorted by percentage would put it above a course with thirty students and
+        a real problem. It still counts in the college-wide figure; it is only kept out
+        of the RANKING."""
+        self._fail_setup(graph, failing=1, passing=0)
+        body = client.get(DB, headers=graph.P).json()
+        assert graph.tag.upper() not in {
+            r["course_code"] for r in body["course_failure_rates"]
+        }
+        assert body["stats"]["failure_rate"] == 100.0
+
+    def test_the_worst_course_is_first(self, client, graph, db_session) -> None:
+        from app.modules.offerings.models import Course as _Course
+
+        better = _Course(name=f"Better {graph.tag}", code=f"OK{graph.tag}".upper()[:10])
+        db_session.add(better)
+        db_session.flush()
+        better_cs = CourseOffering(
+            course_id=better.id,
+            semester_id=graph.sem.id,
+            section_code=uuid.uuid4().hex[:6],
+        )
+        db_session.add(better_cs)
+        db_session.flush()
+
+        self._fail_setup(graph, failing=4, passing=1, cs=graph.cs)      # 80%
+        self._fail_setup(graph, failing=1, passing=4, cs=better_cs)     # 20%
+        rows = client.get(DB, headers=graph.P).json()["course_failure_rates"]
+        codes = [r["course_code"] for r in rows]
+        assert codes.index(graph.tag.upper()) < codes.index(f"OK{graph.tag}".upper()[:10])
+
+    def test_a_session_with_no_resolved_grades_reports_zero_not_a_crash(
+        self, client, graph
+    ) -> None:
+        """The state every session starts in."""
+        stats = self._stats(client, graph)
+        assert stats["failure_rate"] == 0.0
+        assert client.get(DB, headers=graph.P).json()["course_failure_rates"] == []
+
+    def test_the_histogram_and_the_failure_rate_agree(self, client, graph) -> None:
+        """They are two readings of ONE term-grade pass (`_term_grades_for_year`), and
+        this is the assertion that keeps them that way: a second copy of that assembly
+        would eventually resolve a letter differently from the histogram beside it."""
+        self._fail_setup(graph, failing=3, passing=7)
+        body = client.get(DB, headers=graph.P).json()
+        histogram = {d["letter"]: d["count"] for d in body["grade_distribution"]}
+        resolved = sum(histogram.values())
+        assert histogram.get("F") == 3
+        assert body["stats"]["failure_rate"] == round(3 / resolved * 1000) / 10
+
+    # ── the two that are deliberately absent ─────────────────────────────────
+    def test_probation_and_graduation_candidates_are_absent(
+        self, client, graph
+    ) -> None:
+        """Not "absent because nobody got round to it" — absent because Academic
+        Standing (C1) and the Graduation Audit (C2) are deferred, and a tile is a claim.
+        If either module lands, this test is the thing that says to add the tile."""
+        stats = self._stats(client, graph)
+        for absent in ("students_on_probation", "probation", "graduation_candidates"):
+            assert absent not in stats
+
+    def test_the_auditor_sees_the_same_kpi_set(self, client, make_user, auth_headers, graph) -> None:
+        """The Auditor payload is the Dean's, read-only (D43). A KPI added to one and not
+        the other is how the two drift."""
+        auditor = make_user(role=Role.AUDITOR)
+        body = client.get(
+            DB, headers=auth_headers(user_id=auditor.id, role=Role.AUDITOR)
+        ).json()
+        assert body["role"] == "auditor"
+        assert {"graduates", "outstanding_grade_submissions", "failure_rate"} <= set(
+            body["stats"]
+        )
+        assert "course_failure_rates" in body

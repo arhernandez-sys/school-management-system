@@ -113,7 +113,7 @@ class _Department:
             **split_name(f"{label} Student"),
             date_of_birth=date(2005, 1, 1),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
             program_id=self.program.id,
         )
         db.add(self.student)
@@ -602,6 +602,19 @@ class TestProgramHeadsEndpoint:
 
 
 class TestAuditLogEndpoint:
+    """⚠️ THESE MOVED FROM `/settings/audit-log` TO `/audit` (Sep 2026).
+
+    D43 added `GET /settings/audit-log`, a raw view of `audit_log`; D45 Phase 7 added
+    `GET /audit`, a rendered one. Two doors onto one table, and the client asked for one.
+    `/settings/audit-log` is deleted — the reasoning is in `settings/router.py`, and it
+    is about the AUDIENCE, not tidiness. The assertions D43 cared about are the same
+    three, so they are kept, pointed at the surviving door.
+
+    The old row-shape assertion (`{"action", "entity_type", ...}`) is deliberately NOT
+    carried over and inverted instead: those keys are exactly what must never reach an
+    auditor. `test_d45_phase7_audit_trail.py::TestNoTechnicalDetail` owns that now.
+    """
+
     def test_auditor_can_read_the_trail(self, client, dept, make_user, auth_headers) -> None:
         auditor = make_user(role=Role.AUDITOR)
         # Generate a real audited action first, so this is not asserting on an empty page.
@@ -611,13 +624,13 @@ class TestAuditLogEndpoint:
             headers=dept.P,
         )
         resp = client.get(
-            "/api/v1/settings/audit-log?page_size=25",
+            "/api/v1/audit?page_size=25",
             headers=auth_headers(user_id=auditor.id, role=Role.AUDITOR),
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["total"] >= 1
-        assert {"action", "entity_type", "created_at", "actor_name"} <= set(
+        assert {"description", "who", "date", "module", "reference"} <= set(
             body["items"][0]
         )
 
@@ -627,10 +640,20 @@ class TestAuditLogEndpoint:
         """The log records what the Registrar did; they are not one of its readers."""
         sec = make_user(role=Role.SECRETARY)
         resp = client.get(
-            "/api/v1/settings/audit-log",
+            "/api/v1/audit",
             headers=auth_headers(user_id=sec.id, role=Role.SECRETARY),
         )
         assert resp.status_code == 403, resp.text
+
+    def test_the_old_second_door_is_gone(self, client, make_user, auth_headers) -> None:
+        """A deleted route must 404, not 403 — a 403 would mean it still exists and the
+        next person to widen a role tuple reopens it."""
+        auditor = make_user(role=Role.AUDITOR)
+        resp = client.get(
+            "/api/v1/settings/audit-log",
+            headers=auth_headers(user_id=auditor.id, role=Role.AUDITOR),
+        )
+        assert resp.status_code == 404, resp.text
 
     def test_the_auditor_cannot_write_to_the_trail(
         self, client, make_user, auth_headers
@@ -639,7 +662,7 @@ class TestAuditLogEndpoint:
         into something that exists."""
         auditor = make_user(role=Role.AUDITOR)
         resp = client.post(
-            "/api/v1/settings/audit-log",
+            "/api/v1/audit",
             json={"action": "forged"},
             headers=auth_headers(user_id=auditor.id, role=Role.AUDITOR),
         )

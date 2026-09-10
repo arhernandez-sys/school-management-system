@@ -31,6 +31,7 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import (
+    POST_AWARD_STATUSES,
     AcademicYearStatus,
     Role,
     StudentStatus,
@@ -93,38 +94,97 @@ _STUDENT_SORT_FIELDS: dict[str, tuple] = {
     "created_at": (StudentProfile.created_at,),
 }
 
-# Lifecycle transitions (FR-STU-04). A terminal state (graduated / withdrawn /
-# transferred / DropOut) may be reactivated to `Registered` (re-admission or a
-# correction), but terminal→terminal jumps are disallowed as ambiguous — go via
-# `Registered` first. `Unregistered` is the soft pause, reachable from and to any
-# non-terminal state.
+# Lifecycle transitions (FR-STU-04) — the blueprint's §7.5 states (D45, decision C5).
 #
-# **D34 renamed the vocabulary and added one state.** `active`→`Registered` and
-# `inactive`→`Unregistered` are pure renames and the shape of the graph is unchanged for
-# them. `DROPOUT` is genuinely new and is a TERMINAL state: a student who left
-# mid-programme has stopped, which is what distinguishes it from `Unregistered` — the
-# client's own comment defines that one as "completed the last semester but is not
-# continuing", i.e. not a failure. So DropOut sits beside `withdrawn`, reachable from
-# either live state and reversible only back to them.
+# **D45 went from six states to eleven, so this graph was REDRAWN rather than extended.**
+# D34's shape was: two live states (Registered / Unregistered) that could reach any
+# terminal state, and terminal states that could only come back to a live one.
+# Terminal→terminal was disallowed as ambiguous — go via a live state first. That
+# principle survives; what changed is that the blueprint adds a BEFORE (Applicant,
+# Accepted) and an AFTER (Completed, Graduated, Alumni), so the graph is now a lifecycle
+# with two ends rather than a star around two live states.
+#
+# The states, and why each edge exists:
+#
+#   APPLICANT -> ACCEPTED      the admission decision.
+#             -> WITHDRAWN     they withdrew the application.
+#   ACCEPTED  -> ACTIVE        they turned up and registered. The normal path.
+#             -> APPLICANT     a correction; the decision was recorded in error.
+#             -> WITHDRAWN     admitted and did not come.
+#   ACTIVE    -> INACTIVE      the soft pause the student chose.
+#             -> SUSPENDED     the pause the COLLEGE imposed. Two different facts.
+#             -> COMPLETED     coursework done, award not yet conferred.
+#             -> WITHDRAWN / DROPOUT / TRANSFERRED   the three ways of leaving.
+#   INACTIVE  -> ACTIVE and the three ways of leaving. NOT -> COMPLETED: finishing
+#                              coursework is something you do while attending.
+#   SUSPENDED -> ACTIVE        reinstated.
+#             -> INACTIVE      the suspension ends and they still do not return.
+#             -> WITHDRAWN / DROPOUT   a suspension that became a departure.
+#   COMPLETED -> GRADUATED     the award is conferred. A SANCTIONED PROGRESSION, not a
+#                              terminal→terminal jump: COMPLETED is a waypoint, and this
+#                              is the one edge the blueprint's own §4 lifecycle draws.
+#             -> ACTIVE        a correction — more coursework turned out to be owed.
+#   GRADUATED -> ALUMNI        life after the award.
+#             -> COMPLETED     a correction; the conferral was recorded early.
+#             -> ACTIVE        re-admission, typically onto another programme. The
+#                              blueprint's §6 is explicit that the Student ID survives it.
+#   ALUMNI    -> ACTIVE        they came back.
+#             -> GRADUATED     a correction.
+#   WITHDRAWN / DROPOUT / TRANSFERRED -> ACTIVE | INACTIVE, unchanged from D34.
+#
+# ⚠️ ONE EDGE IS DELIBERATELY ABSENT: nothing reaches APPLICANT except a correction from
+# ACCEPTED. `admissions.convert_applicant_to_student` still creates a student directly as
+# ACTIVE, exactly as it did before D45 — wiring the applicant→accepted→active chain into
+# admissions would change when a converted student starts counting as enrolled, and that
+# is a Phase 3 decision about the admissions flow, not a vocabulary change. Until then
+# APPLICANT and ACCEPTED are reachable only by an explicit status change.
 _ALLOWED_STATUS_TRANSITIONS: dict[StudentStatus, set[StudentStatus]] = {
-    StudentStatus.REGISTERED: {
-        StudentStatus.UNREGISTERED,
+    StudentStatus.APPLICANT: {
+        StudentStatus.ACCEPTED,
+        StudentStatus.WITHDRAWN,
+    },
+    StudentStatus.ACCEPTED: {
+        StudentStatus.ACTIVE,
+        StudentStatus.APPLICANT,
+        StudentStatus.WITHDRAWN,
+    },
+    StudentStatus.ACTIVE: {
+        StudentStatus.INACTIVE,
+        StudentStatus.SUSPENDED,
+        StudentStatus.COMPLETED,
         StudentStatus.TRANSFERRED,
-        StudentStatus.GRADUATED,
         StudentStatus.WITHDRAWN,
         StudentStatus.DROPOUT,
     },
-    StudentStatus.UNREGISTERED: {
-        StudentStatus.REGISTERED,
+    StudentStatus.INACTIVE: {
+        StudentStatus.ACTIVE,
+        StudentStatus.SUSPENDED,
         StudentStatus.TRANSFERRED,
-        StudentStatus.GRADUATED,
         StudentStatus.WITHDRAWN,
         StudentStatus.DROPOUT,
     },
-    StudentStatus.TRANSFERRED: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
-    StudentStatus.GRADUATED: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
-    StudentStatus.WITHDRAWN: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
-    StudentStatus.DROPOUT: {StudentStatus.REGISTERED, StudentStatus.UNREGISTERED},
+    StudentStatus.SUSPENDED: {
+        StudentStatus.ACTIVE,
+        StudentStatus.INACTIVE,
+        StudentStatus.WITHDRAWN,
+        StudentStatus.DROPOUT,
+    },
+    StudentStatus.COMPLETED: {
+        StudentStatus.GRADUATED,
+        StudentStatus.ACTIVE,
+    },
+    StudentStatus.GRADUATED: {
+        StudentStatus.ALUMNI,
+        StudentStatus.COMPLETED,
+        StudentStatus.ACTIVE,
+    },
+    StudentStatus.ALUMNI: {
+        StudentStatus.ACTIVE,
+        StudentStatus.GRADUATED,
+    },
+    StudentStatus.TRANSFERRED: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
+    StudentStatus.WITHDRAWN: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
+    StudentStatus.DROPOUT: {StudentStatus.ACTIVE, StudentStatus.INACTIVE},
 }
 
 
@@ -565,11 +625,35 @@ def list_students(
         # name in full still matches. The individual parts are matched too, because
         # the register is surname-first and a Registrar searching "Perez Ana" would
         # otherwise get nothing.
+        # D45 §55 adds Programme and Email to the searchable set. The blueprint lists
+        # Student ID, first name, last name, Programme, Email and Application number; the
+        # first three were already here.
+        #
+        # Programme is matched through a correlated EXISTS on `programs` rather than a
+        # join, so a student still appears once and the clause composes with the explicit
+        # `program_id` filter below without either fighting the other. Both the code and
+        # the name are matched — "ASIT" is what staff say out loud, "Information
+        # Technology" is what they read on the screen.
+        #
+        # `email` is the student's own address. `guardian_email` and `finance_email` are
+        # deliberately NOT searched: they belong to a different person, and finding a
+        # student by typing their parent's address is a directory of guardians that
+        # nobody asked for.
+        program_match = (
+            select(Program.id)
+            .where(
+                Program.id == StudentProfile.program_id,
+                Program.code.ilike(like) | Program.name.ilike(like),
+            )
+            .exists()
+        )
         stmt = stmt.where(
             StudentProfile.full_name.ilike(like)
             | StudentProfile.first_name.ilike(like)
             | StudentProfile.last_name.ilike(like)
             | StudentProfile.student_number.ilike(like)
+            | StudentProfile.email.ilike(like)
+            | program_match
         )
 
     if year_of_study is not None:
@@ -1139,6 +1223,21 @@ def _enroll_into_section(
     from app.modules.offerings import service as offerings_service
     from app.modules.prerequisites import service as prereq_service
 
+    # D45 §20 (Phase 4) — the STATUS rule, for the same reason and through the same door.
+    # A rule enforced at one entrance only is not enforced. There is deliberately no
+    # override here: a waiver is a Dean action with a stated reason, and it belongs on
+    # `POST /offerings/{id}/enrollments` where that reason can be captured and logged.
+    # This path is student creation/edit, where a non-enrollable status means the caller
+    # should fix the status first.
+    status_block = offerings_service._status_block(student)
+    if status_block is not None:
+        raise Conflict(
+            f"{student.full_name} is not in a status that can be registered "
+            f"({status_block}). A Dean can override this when enrolling from the "
+            f"offering's own roster.",
+            code="student_not_enrollable",
+        )
+
     course_id = offerings_service.course_id_for_offering(db, section.id)
     if course_id is not None:
         prereq_service.assert_eligible(
@@ -1267,7 +1366,14 @@ def change_student_status(
         # by hand does not have it overwritten by a later status shuffle; and only on the
         # transition INTO the state, so re-registering a graduate keeps the graduation on
         # file rather than erasing it.
-        if after == StudentStatus.GRADUATED and student.graduation_date is None:
+        #
+        # D45: `GRADUATED` is no longer the only post-award state. A student may be moved
+        # straight to `ALUMNI` (from GRADUATED, which already stamped it — but also by a
+        # Registrar correcting a record that never passed through GRADUATED at all), and
+        # `graduation_date` is what the post-graduation ACCESS WINDOW reads. An Alumni row
+        # with a NULL date falls through that check and keeps access forever, which is the
+        # same hole `POST_AWARD_STATUSES` closes at the other end.
+        if after in POST_AWARD_STATUSES and student.graduation_date is None:
             student.graduation_date = school_today()
         if after == StudentStatus.DROPOUT and student.dropout_date is None:
             student.dropout_date = _now()

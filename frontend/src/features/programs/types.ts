@@ -57,6 +57,17 @@ export interface ProgramListItem {
   graduation_requirements: string | null;
   /** D44. Registrar's free-text notes on the programme. */
   comments: string | null;
+  /**
+   * D45 §8 — Department Management. BAJC has no departments table and a PROGRAMME is the
+   * unit it organises by, so the blueprint's two departmental fields live here.
+   *
+   * `head_of_department` is a DISPLAYED name only. The authoritative link is
+   * `program_heads` on the server, which is what the HOD role's scoping reads — a
+   * programme can have a named head on the prospectus before that person has a login.
+   */
+  head_of_department: string | null;
+  /** D45 §8 — office location / hours / contact. Free text (client, 2026-09-08). */
+  office_information: string | null;
   /** Total credits as PRINTED on the programme's course sequence (86–102). */
   total_credits: number | null;
   /**
@@ -85,6 +96,9 @@ export interface ProgramWritePayload {
   admission_requirements?: string | null;
   graduation_requirements?: string | null;
   comments?: string | null;
+  // D45 §8. Same rule: explicit `null` clears, omitting leaves alone.
+  head_of_department?: string | null;
+  office_information?: string | null;
   total_credits?: number | null;
   min_passing_grade_point?: string;
   is_active?: boolean;

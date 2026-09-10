@@ -22,16 +22,22 @@ export interface CourseStatusDialogProps {
 
 /** What each value actually does, in the Registrar's terms. */
 const EXPLAINER: Record<EnrollmentStatus, string> = {
-  enrolled: 'Taking the course for credit, as normal.',
+  pre_registered: 'Intends to take the course. The place is not held yet.',
+  registered: 'Taking the course for credit, as normal.',
+  added: 'Joined after registration closed, during the add/drop window.',
+  dropped:
+    'Left during add/drop. No credit, no effect on the GPA, and NOTHING on the transcript — that is what separates a drop from a withdrawal.',
+  // D45 §19 — one flat "Withdrawn". BAJC chose the blueprint's vocabulary over D35's
+  // W/P + W/F pair on 2026-09-08, so the copy can no longer promise a distinction the
+  // record does not keep.
+  withdrawn:
+    'Left the course after add/drop. No credit, and no effect on the GPA — the transcript prints W.',
+  completed: 'Sat the course through to a final grade.',
+  failed: 'Sat the course and did not pass. Counts in the GPA as a fail.',
   audit:
     'Sitting the course without reading it for credit. Earns no credit and does not affect the GPA.',
-  withdraw_passing:
-    'Left the course while passing. No credit, and no effect on the GPA — the transcript prints W/P.',
-  // BAJC, 2026-08-23: a W/F is a fail. This is the only status that COSTS the student GPA,
-  // so the copy says so plainly rather than leaving it to be discovered.
-  withdraw_failing:
-    'Left the course while failing. No credit, and it COUNTS AS A FAIL in the GPA — the transcript prints W/F.',
 };
+
 
 /**
  * Set one student's COURSE STATUS on one offering (D35 — the client's `coursestatus`).
@@ -55,7 +61,7 @@ export function CourseStatusDialog({
   onSaved,
 }: CourseStatusDialogProps) {
   const mutation = useSetEnrollmentStatus(offeringId);
-  const [status, setStatus] = useState<EnrollmentStatus>('enrolled');
+  const [status, setStatus] = useState<EnrollmentStatus>('registered');
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -123,7 +129,7 @@ export function CourseStatusDialog({
           ))}
         </TextField>
 
-        <Alert severity={status === 'enrolled' ? 'info' : 'warning'} variant="outlined">
+        <Alert severity={status === 'registered' ? 'info' : 'warning'} variant="outlined">
           {EXPLAINER[status]}
           {notation ? ` The transcript will show ${notation} instead of a grade.` : ''}
         </Alert>

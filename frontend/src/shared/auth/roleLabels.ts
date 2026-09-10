@@ -24,6 +24,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   student: strings.roles.student,
   hod: strings.roles.hod,
   auditor: strings.roles.auditor,
+  sysadmin: strings.roles.sysadmin,
 };
 
 /** Display name for a role, e.g. `roleLabel('principal') === 'Dean'`. */
@@ -45,6 +46,9 @@ export const ROLE_OPTIONS: ReadonlyArray<{ value: Role; label: string }> = [
   { value: 'teacher', label: ROLE_LABEL.teacher },
   { value: 'student', label: ROLE_LABEL.student },
   { value: 'auditor', label: ROLE_LABEL.auditor },
+  // D45 §2 — last, and deliberately after the Auditor: this account administers the
+  // system and reaches no academic data at all (blueprint §48).
+  { value: 'sysadmin', label: ROLE_LABEL.sysadmin },
 ];
 
 export default ROLE_LABEL;

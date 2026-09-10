@@ -56,9 +56,9 @@ function LabelBlock({ data }: { data: ReportCard }) {
     ['Student ID', data.student.student_number],
     ['Student Name', data.student.full_name],
     ['Program', data.program_code ?? '—'],
-    // The sample leaves `Semester` blank and carries the term in `Period`. Both are
-    // printed: the semester name is genuinely useful and costs nothing.
-    ['Semester', data.semester.name],
+    // The sample leaves `Session` blank and carries the period in `Period`. Both are
+    // printed: the session name is genuinely useful and costs nothing.
+    ['Session', data.semester.name],
     ['Period', data.period ?? '—'],
     ['Block', data.block ?? '-'],
   ];

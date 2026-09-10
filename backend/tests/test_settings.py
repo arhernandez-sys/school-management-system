@@ -122,6 +122,9 @@ class TestSchool:
             # D39 (Meeting #2 item 6) — operator-set policy, not identity, but it rides
             # on the same singleton and the Settings screen edits it here.
             "post_graduation_access_days",
+            # D45 §23 — the attendance warning floor became configuration rather than a
+            # constant in `attendance/service.py` (blueprint §57).
+            "attendance_alert_threshold",
         }
 
     def test_get_school_unauthenticated_401(self, client) -> None:

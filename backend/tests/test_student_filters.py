@@ -60,7 +60,7 @@ def _student(
     gender: str | None = None,
     religion: str | None = None,
     program=None,
-    status=StudentStatus.REGISTERED,
+    status=StudentStatus.ACTIVE,
 ) -> StudentProfile:
     s = StudentProfile(
         student_number=f"S{uuid.uuid4().hex[:10]}",
@@ -169,7 +169,7 @@ class TestCombinations:
         assert str(cohort["ben"].id) not in got  # right gender, wrong religion and programme
 
     def test_they_compose_with_status(self, client, staff_headers, cohort) -> None:
-        got = _ids(client, staff_headers, gender="female", status="graduated")
+        got = _ids(client, staff_headers, gender="female", status="Graduated")
         assert str(cohort["gone"].id) in got
         assert str(cohort["ana"].id) not in got
 

@@ -10,6 +10,7 @@ import {
   attendanceRateForStudent,
   computeTermGrade,
   currentOfferingsFor,
+  getActiveGradingScale,
   getActiveSemester,
   getActiveYear,
   getCourse,
@@ -22,6 +23,7 @@ import {
   letterFor,
   offeringLabel,
   offeringsForStudent,
+  offeringsForYear,
   offeringsOwnedByTeacher,
   rosterFor,
   schoolAttendanceRate,
@@ -116,7 +118,7 @@ function termHeader() {
 
 // ── Admin (principal) — school-wide ─────────────────────────────────────────────
 function adminPayload(user: DemoUser) {
-  const activeStudents = D.students.filter((s) => s.status === 'Registered');
+  const activeStudents = D.students.filter((s) => s.status === 'Active');
   const liveOfferings = D.offerings.filter((o) => !o.is_archived);
   const active_students = activeStudents.length;
 
@@ -129,8 +131,118 @@ function adminPayload(user: DemoUser) {
   // than from a homeroom's grade level. Reconciles with the First-year figure elsewhere.
   const new_students_term = activeStudents.filter((s) => s.year_of_study === 'First').length;
 
-  // Live course offerings.
-  const total_courses = liveOfferings.length;
+  /**
+   * ⚠️ THE CATALOG, not the offerings (D45 Phase 8). This said `liveOfferings.length`,
+   * mirroring the server's own defect: the "Courses" tile showed the offering count
+   * while its helper text said "Across N sections" from the same array. Two readings of
+   * one fact and neither of them the catalog. §42 asks for total courses.
+   */
+  const total_courses = D.courses.filter((c) => c.is_active).length;
+
+  // ── §42 / §59 — the Dean's full KPI set ───────────────────────────────────────
+  //
+  // ⚠️ SEVEN OF THESE WERE MISSING FROM THIS PAYLOAD. Four (`new_applicants`,
+  // `accepted_applicants`, `active_programmes`, `students_at_risk`) had been computed by
+  // the SERVER for a phase already, and the demo not sending them is one of the two
+  // reasons nobody noticed the screen was not rendering them.
+  //
+  // "Students on probation" and "graduation candidates" are deliberately absent: they
+  // need Academic Standing (C1) and the Graduation Audit (C2), both deferred, and a tile
+  // reading 0 for a feature that does not exist is a number the Dean would believe.
+
+  /** Submitted and not yet decided — a WORK QUEUE. `draft` is not waiting on the college. */
+  const PENDING_APPLICATION_STATES = [
+    'submitted',
+    'under_review',
+    'documents_pending',
+    'eligible',
+    'deferred',
+  ];
+  const new_applicants = D.applications.filter((a) =>
+    PENDING_APPLICATION_STATES.includes(a.status),
+  ).length;
+  const accepted_applicants = D.applications.filter((a) => a.status === 'accepted').length;
+  const active_programmes = D.programs.filter((pr) => pr.is_active).length;
+
+  /**
+   * Distinct STUDENTS under the attendance floor, not alert rows: a student failing
+   * three classes is one student at risk. Mirrors `_students_at_risk` on the server,
+   * which counts `{item.student.id for item in alerts.students}` for the same reason.
+   * A student with no register taken is UNMARKED, not at risk.
+   */
+  const attendanceFloor = 80;
+  const students_at_risk = activeStudents.filter((st) => {
+    const marked = D.attendance_records.some((r) => r.student_id === st.id);
+    return marked && attendanceRateForStudent(st.id) < attendanceFloor;
+  }).length;
+
+  /** §42 "graduates" — CUMULATIVE; `graduation_date` is unrecorded, so there is no
+   *  year to scope by. The tile says "to date". */
+  const graduates = D.students.filter((st) => st.status === 'Graduated').length;
+
+  /** §42 — the same predicate as the lecturer's own `ungraded_items` tile. */
+  const activeSemesterId = getActiveSemester()?.id;
+  const outstanding_grade_submissions = D.assessments.filter(
+    (a) =>
+      a.semester_id === activeSemesterId &&
+      (a.status === 'published' || a.status === 'grading'),
+  ).length;
+
+  /**
+   * §42 "course failure rates". One pass over the same `computeTermGrade` the histogram
+   * uses, read twice — the college figure and the per-COURSE ranking.
+   *
+   * The DENOMINATOR IS RESOLVED GRADES, never enrolments: a course three weeks into the
+   * session has almost no resolved grades, and dividing by its roster would report a
+   * catastrophic failure rate for a class nobody has assessed yet.
+   */
+  const failureScale = getActiveGradingScale();
+  const passingByLetter = new Map<string, boolean>(
+    (failureScale?.bands ?? []).map((b): [string, boolean] => [b.letter, b.is_passing]),
+  );
+  const perCourse = new Map<string, { results: number; failing: number }>();
+  let resolvedTotal = 0;
+  let failingTotal = 0;
+  for (const off of offeringsForYear(DEMO_IDS.activeYearId)) {
+    for (const stu of rosterFor(off.id)) {
+      const { letter } = computeTermGrade(stu.id, off.id);
+      if (!letter) continue; // not a result, and not a failure
+      resolvedTotal += 1;
+      // An unknown letter counts as PASSING: inventing a failure for a student on the
+      // strength of a missing configuration row is the one error here with a person on
+      // the end of it.
+      const isFail = passingByLetter.get(letter) === false;
+      if (isFail) failingTotal += 1;
+      const held = perCourse.get(off.course_id) ?? { results: 0, failing: 0 };
+      held.results += 1;
+      held.failing += isFail ? 1 : 0;
+      perCourse.set(off.course_id, held);
+    }
+  }
+  const failure_rate =
+    resolvedTotal === 0 ? 0 : Math.round((failingTotal / resolvedTotal) * 1000) / 10;
+  /** A course needs this many resolved grades before it is RANKED — one graded student
+   *  at 40% is not a 100% failure rate, it is one student. Mirrors the server. */
+  const MIN_FAILURE_RATE_RESULTS = 5;
+  const course_failure_rates = [...perCourse.entries()]
+    .filter(([, v]) => v.results >= MIN_FAILURE_RATE_RESULTS)
+    .map(([course_id, v]) => {
+      const course = getCourse(course_id);
+      return {
+        course_code: course?.code ?? '?',
+        course_name: course?.name ?? 'Unknown course',
+        results: v.results,
+        failing: v.failing,
+        failure_rate: Math.round((v.failing / v.results) * 1000) / 10,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.failure_rate - a.failure_rate ||
+        b.results - a.results ||
+        a.course_code.localeCompare(b.course_code),
+    )
+    .slice(0, 8);
 
   // Enrollment trend (demo series): six terms of believable growth, anchored so the
   // final point equals the LIVE active_students count and reconciles with the KPI card.
@@ -176,7 +288,15 @@ function adminPayload(user: DemoUser) {
       new_students_term,
       total_courses,
       student_capacity,
+      new_applicants,
+      accepted_applicants,
+      active_programmes,
+      students_at_risk,
+      graduates,
+      outstanding_grade_submissions,
+      failure_rate,
     },
+    course_failure_rates,
     /**
      * Bucketed by PROGRAMME (D31), not by Form. `classes.grade_level` was a homeroom column
      * and a K-12 axis a junior college does not have; the SAME breakdown backs the
@@ -242,7 +362,7 @@ function secretaryPayload(user: DemoUser) {
     user_full_name: user.full_name,
     ...termHeader(),
     stats: {
-      active_students: D.students.filter((s) => s.status === 'Registered').length,
+      active_students: D.students.filter((s) => s.status === 'Active').length,
       active_teachers: D.teachers.filter((t) => t.status === 'active').length,
       total_sections: offerings.length,
       unstaffed_subjects,

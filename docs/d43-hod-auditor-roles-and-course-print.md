@@ -162,7 +162,7 @@ Two behaviours worth recording because they were decisions, not defaults:
 ## Phase 4 — New endpoints
 
 - [x] `GET /programs/{id}/heads` (any authenticated) and `PUT /programs/{id}/heads` (`require_role(PRINCIPAL)`) — set the programme's heads as a list. `programs/router.py` already has `_dean_only`.
-- [x] `GET /settings/audit-log` — paginated, read-only, Dean + Auditor. The `audit_log` table exists (`settings/models.py`) and is appended to by sensitive actions, but has **no endpoint and no UI today**. Filters: actor, action, date range.
+- [x] ~~`GET /settings/audit-log`~~ — **SUPERSEDED AND DELETED, 10 Sep 2026.** It was paginated, read-only, Dean + Auditor, and it was the right call at the time: the `audit_log` table had been appended to since day one with no endpoint and no UI. D45 Phase 7 then built `GET /audit`, which reads the same rows and renders them into sentences with the module, the IP and a before/after — so there were two doors onto one table, and D45 Phase 1 had widened THIS one to include the System Administrator, whom Phase 7 deliberately refused on the other. The client asked which screen was which; the answer was "same table, and the older one is wider". Deleted, and it now answers 404. See `docs/d45-meeting4-yellow-plan.md` §4b.
 - [x] Regenerate `backend/openapi.json` (it has gone stale before) and mirror to `frontend/openapi.json`.
 
 ---

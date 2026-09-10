@@ -48,7 +48,6 @@ from app.core.pagination import PageParams, page_params
 from app.modules.settings import service
 from app.modules.settings.schemas import (
     AccountUpdateRequest,
-    AuditLogItem,
     ActiveTerm,
     AcademicYearCreateRequest,
     AcademicYearDetail,
@@ -86,44 +85,30 @@ _principal = require_role(Role.PRINCIPAL)
 _principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
 
 
-# ── Audit log (D43) ─────────────────────────────────────────────────────────────
-#: Dean + Auditor. NOT the Registrar: the trail records what the Registrar did, and a
-#: records clerk reading their own audit history is a different decision from letting
-#: them keep records. Deliberately its own gate rather than reusing
-#: `_principal_or_secretary`.
-_audit_readers = require_role(Role.PRINCIPAL, Role.AUDITOR)
+# ── Audit log ───────────────────────────────────────────────────────────────────
+# `GET /settings/audit-log` LIVED HERE AND IS GONE (Sep 2026). It was the second door
+# onto `audit_log`, showing the same rows raw — dotted action key, `entity_type`, the
+# `entity_id` UUID, `summary` as JSON — while `GET /audit` shows them as sentences with
+# the module, the IP and the before/after §46 asks for.
+#
+# Two screens onto one table is a maintenance problem. What made it a CORRECTNESS problem
+# is the audience: this gate was `(PRINCIPAL, AUDITOR, SYSADMIN)`. D45 Phase 7 refused the
+# System Administrator on `/audit` deliberately and at length — that trail is mostly
+# academic records, and §48 is explicit that being an employee is not a reason to see
+# them — and this route handed them the same rows unrendered. `/settings` is on the
+# sysadmin's technical allowlist, so the central guard passed it: the guard was right and
+# the route predated the decision.
+#
+# `GET /audit` is the one door. Do not add a second.
 
 
-@router.get(
-    "/audit-log",
-    response_model=Page[AuditLogItem],
-    summary="Sensitive-action audit trail, newest first (Dean + Auditor; D43)",
-    responses={401: _ERR, 403: _ERR, 422: _ERR},
-)
-def list_audit_log(
-    params: PageParams = Depends(page_params),
-    action: Annotated[str | None, Query(max_length=120)] = None,
-    entity_type: Annotated[str | None, Query(max_length=60)] = None,
-    actor_user_id: Annotated[uuid.UUID | None, Query()] = None,
-    date_from: Annotated[date | None, Query()] = None,
-    date_to: Annotated[date | None, Query()] = None,
-    db: Session = Depends(get_db),
-    _user: User = Depends(_audit_readers),
-) -> Page[AuditLogItem]:
-    """The log every module has written to since day one and nothing has ever read.
-
-    Read-only by construction — there is no companion write endpoint, and adding one
-    would defeat the point of an append-only trail. `date_to` is inclusive of that day.
-    """
-    return service.list_audit_log(
-        db,
-        params=params,
-        action=action,
-        entity_type=entity_type,
-        actor_user_id=actor_user_id,
-        date_from=date_from,
-        date_to=date_to,
-    )
+#: D45 §2 — account and role management. The Sysadmin joins the Dean and Registrar here
+#: because this IS the technical administrator's job (blueprint §2: "user accounts,
+#: permissions, backups, configuration"). The privileged-role guard inside
+#: `service.create_user` / `update_user` is unchanged and still Principal-only, so a
+#: Sysadmin can mint a lecturer login but cannot promote anyone to Dean — creating
+#: accounts and deciding who runs the college are different powers.
+_user_admins = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.SYSADMIN)
 
 
 # ── School profile / branding ───────────────────────────────────────────────────
@@ -474,7 +459,7 @@ def list_users(
     is_active: Annotated[bool | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(_user_admins),
 ) -> Page[UserListItem]:
     return service.list_users(
         db, params=params, role=role, is_active=is_active, search=search
@@ -491,7 +476,7 @@ def list_users(
 def create_user(
     payload: UserCreateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_user_admins),
 ) -> UserCreateResponse:
     """P/S may create teacher/student logins; assigning principal/secretary is
     Principal-only (403 role_change_forbidden). 409 duplicate_email. New users get
@@ -513,7 +498,7 @@ def update_user(
     user_id: uuid.UUID,
     payload: UserUpdateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_user_admins),
 ) -> UserListItem:
     """role/is_active are Principal-only; a Secretary cannot edit a Principal (403).
     Audited on role/active changes."""

@@ -373,7 +373,7 @@ class StudentCreateRequest(_AdmissionProfileFields):
     gender: str | None = Field(default=None, max_length=40)
     year_of_study: str | None = Field(default=None, max_length=50)
     enrollment_date: date
-    status: StudentStatus = StudentStatus.REGISTERED
+    status: StudentStatus = StudentStatus.ACTIVE
     guardian_name: str | None = Field(default=None, max_length=160)
     guardian_phone: str | None = Field(default=None, max_length=40)
     guardian_email: str | None = Field(default=None, max_length=255)
@@ -512,9 +512,14 @@ class AcademicHistoryCourse(BaseModel):
       * `audited`      — D35, the client's `coursestatus`: sitting it without reading it
                          for credit. No credit, and out of the GPA on BOTH sides of the
                          fraction — its credits are not in the denominator either.
-      * `withdrawn`    — D35: sat it and left (`withdraw_passing` / `withdraw_failing`).
-                         No credit, out of the GPA; the transcript still prints the
-                         notation, which is the point of recording it at all.
+      * `withdrawn`    — D35: sat it and left. D45 §19 flattened the old
+                         `withdraw_passing` / `withdraw_failing` pair into one `withdrawn`
+                         and `dropped` maps here too. No credit, out of the GPA; the
+                         transcript still prints the notation, which is the point of
+                         recording it at all.
+      * `failed`       — sat it and did not pass, EITHER by grade or by a D45 `failed`
+                         course status. Credits in the denominator, zero quality points —
+                         where D35's W/F rule went.
     """
 
     course_id: UUID

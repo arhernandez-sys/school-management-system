@@ -113,7 +113,7 @@ class _TwoYears:
             **split_name(f"YS Student {tag}"),
             date_of_birth=date(2011, 5, 4),
             enrollment_date=date(2024, 9, 1),
-            status="Registered",
+            status="Active",
         )
         db_session.add_all([self.teacher, self.student])
         db_session.flush()
@@ -150,7 +150,7 @@ class _TwoYears:
             **split_name(f"YS CurOnly {tag}"),
             date_of_birth=date(2011, 7, 8),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
         )
         db_session.add(self.cur_only_student)
         db_session.flush()

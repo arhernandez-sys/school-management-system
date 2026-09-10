@@ -63,9 +63,9 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
 | 19 | Lecturer Portal | ✅ | offerings / roster / attendance / gradebook, ownership-scoped |
 | 20 | HOD Portal | ✅ | `program_heads`, D43 |
 | 21 | Registrar Portal | 🟡 | everything except graduation, transcript workflow, holds |
-| 22 | Dean Dashboard | 🟡 | KPIs exist; several §42 indicators missing |
-| 23 | Reporting and Analytics | 🟡 | 7 reports of the ~40 named in §53 |
-| 24 | Audit Trail | ✅ | `audit_log` + `GET /settings/audit-log` (D43) |
+| 22 | Dean Dashboard | ✅ | the full §42 KPI set except the two blocked by C1/C2 (D45 Phase 8) |
+| 23 | Reporting and Analytics | 🟡 | 15 reports of the ~40 named in §53 (D45 Phases 7 + 9) |
+| 24 | Audit Trail | ✅ | `audit_log` + `GET /audit` — the ONE door (D45 Phase 7; `/settings/audit-log` deleted 10 Sep 2026) |
 | 25 | System Configuration | 🟡 | `school_profile`, grading scale, assessment policy — no number-format or threshold config |
 
 ---
@@ -250,12 +250,22 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
 - [x] **§41 Registrar Portal** — 🟡 admissions, student records, academic structure, years,
   semesters, sections, enrolment, grades, academic history, transfer credits, reports — all
   present. 🔴 Student holds, graduation, transcript workflow.
-- [x] **§42 Dean Dashboard** — 🟡 institution-wide. **Present:** active students, active
-  lecturers, total sections, total courses, attendance rate, new students this term, enrolment
-  by programme, grade distribution, enrolment trend, capacity. 🔴 **Missing:** new applicants,
-  students accepted, students below attendance threshold, course failure rates, students on
-  probation, graduation candidates, graduates, outstanding grade submissions. Filtering by
-  academic year works; by department / programme / course / level does not.
+- [x] **§42 Dean Dashboard** — ✅ **institution-wide, and the KPI set is complete except for
+  the two indicators whose modules are deferred** (D45 Phase 8). Grouped into three bands:
+  *the college* (active students with seats-filled progress, new intake, **courses — now the
+  CATALOG**, lecturers, programmes, attendance rate), *needs attention* (new applicants,
+  students accepted but not enrolled, students below the attendance floor, outstanding grade
+  submissions — every one a work queue linking to the screen that clears it), and *outcomes*
+  (graduates to date, session failure rate, and a worst-courses table). Plus enrolment by
+  programme, grade distribution and enrolment trend.
+  ⏸️ **Deliberately absent, not missing:** *students on probation* needs Academic Standing
+  (deferred with C1) and *graduation candidates* needs the Graduation Audit (C2). Neither is
+  faked with a zero, and a test pins their absence.
+  ⚠️ **Two defects found building it.** Four of these KPIs had been computed by the server
+  since Phase 1 and the frontend type could not express them, so the screen silently dropped
+  them. And `total_courses` was counting `course_offerings` — 12 where the catalog holds 125 —
+  with `deleted_at IS NULL` written three times over.
+  🟡 Filtering by academic year works; by department / programme / course / level does not.
 - [x] **§43 Auditor Role** — ✅ D43. Read-everything, write-nothing, enforced **centrally in
   `get_current_user`** — the one dependency every authenticated route passes through — so an
   endpoint written next year is read-only for an Auditor without its author knowing the role
@@ -271,10 +281,17 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
 
 ### Security, audit, operations
 
-- [x] **§46 Audit Trail** — ✅ `audit_log` records actor, action, entity type, entity id, summary
-  and timestamp, and is surfaced at `GET /settings/audit-log` (D43 — the table had been written
-  to since day one and read by nothing). 🟡 **Missing from the row:** IP address, and an explicit
-  previous-value / new-value pair. ✅ Audit records are not editable through the application.
+- [x] **§46 Audit Trail** — ✅ `audit_log` records actor, action, entity type, entity id, summary,
+  timestamp, **module, IP address and an explicit previous/new value pair** (D45 Phase 7,
+  migration `020`), and is surfaced at **`GET /audit`** — rendered server-side into sentences,
+  named people and Belize-local timestamps, with no id, table name or JSON reaching the client.
+  §53's four audit reports sit on the same endpoint.
+  ⚠️ **`GET /settings/audit-log` (D43) is DELETED** (10 Sep 2026). It was a second door onto the
+  same table, showing the rows raw — and its gate had grown to include the System Administrator,
+  whom Phase 7 deliberately refused on `/audit` because the trail is mostly academic records
+  (§48). One table, one reader. See `docs/d45-meeting4-yellow-plan.md` §4b.
+  🟡 **Still open:** retention (§7 item 12), and whether the Registrar should read it (item 13).
+  ✅ Audit records are not editable through the application, and there is no write endpoint.
 - [x] **§47 Login and Security** — ✅ Argon2id hashing (tuned time/memory/parallelism, with a
   production floor asserted at boot), account lockout (5 failures → 423, then 429 rate-limit),
   30-minute idle session timeout, refresh-session rotation with revocation, forced password
@@ -299,12 +316,15 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
   `transcripts`, `transcript_issuance_log`, `departments`.
 - [x] **§51 / §52 Entity relationships** — ✅ every relationship §52 lists is implemented and
   enforced with foreign keys, **except** the two that depend on curricula.
-- [x] **§53 Reports** — 🟡 **7 built of the ~40 named.** Built: report card (+ own), transcript,
-  student list/directory, enrolment, attendance, offering grades, audit log. 🔴 Not built: all
-  admissions reports, students-not-registered, over-capacity list, credit load, department
-  attendance, grade distribution as a *report*, pass/fail rates, Dean's List, probation list,
-  incomplete/outstanding grades, every graduation report, every transcript report, and the
-  grade-change / registration-override / record-change audit reports.
+- [x] **§53 Reports** — 🟡 **15 built of the ~40 named.** Built: report card (+ own), transcript,
+  student list/directory, enrolment, attendance, offering grades, audit log, the four **audit
+  reports** (grade changes, student record changes, registration overrides, system activity —
+  D45 Phase 7), and the four **institutional reports** (new versus returning, over-capacity
+  classes, credit load, per-programme attendance — D45 Phase 9). 🔴 Not built: all admissions
+  reports, students-not-registered, grade distribution as a *report*, pass/fail rates,
+  incomplete/outstanding grades. ⏸️ Deferred with their modules: Dean's List and probation list
+  (C1, Academic Standing), every graduation report and every transcript report (C2), and §53's
+  "transcript issuance" audit report with them.
 - [x] **§54 Notifications** — 🟡 in-system **announcements** exist (audience all / students /
   lecturers / one class, read tracking, unread count) plus a calendar of events. 🔴 **No
   event-driven notifications at all** — nothing fires on application received, admission
@@ -466,8 +486,11 @@ the single biggest thing this build got right relative to the plan.
 - [ ] **Event-driven notifications** (§54) — the ten triggers named in §54, in-system first.
 - [ ] **Missing Dean dashboard indicators** (§42) — applicants, accepted, below-threshold,
       failure rates, probation, graduation candidates, outstanding grade submissions.
-- [ ] **The institutional report set** (§53) — start with students-not-registered, outstanding
-      grades, over-capacity classes and the grade-change audit report.
+- [x] **The institutional report set** (§53) — 🟡 **partly done.** Over-capacity classes, the
+      grade-change audit report, new-versus-returning, credit load and per-programme
+      attendance all landed in D45 Phases 7 and 9. **Still open: students-not-registered and
+      outstanding/incomplete grades** — both are "who is MISSING something" reports, which is
+      a different query shape from the five above and was deliberately out of Phase 9's scope.
 
 ### P3 — Nice to have, or explicitly deferred by the blueprint
 

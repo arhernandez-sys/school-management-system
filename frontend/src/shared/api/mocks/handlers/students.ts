@@ -439,7 +439,7 @@ interface StudentWriteBody {
 // D34 vocabulary. `DropOut` is NOT live: a student who left mid-programme is gone,
 // which is what separates it from `Unregistered` ("completed the last semester but
 // is not continuing").
-const LIVE_STATUSES: DemoStudent['status'][] = ['Registered', 'Unregistered', 'transferred'];
+const LIVE_STATUSES: DemoStudent['status'][] = ['Active', 'Inactive', 'Transferred'];
 function isDuplicateNumber(num: string, exceptId?: string): boolean {
   const q = num.trim().toLowerCase();
   return D.students.some(
@@ -480,7 +480,7 @@ function enrollStudent(student: DemoStudent, offeringId: string): void {
     unenrolled_at: null,
     // D35 — registering a student enrols them ordinarily; a course status is set
     // afterwards from the offering roster.
-    enrollment_status: 'enrolled',
+    enrollment_status: 'registered',
   };
   D.enrollments.push(enrollment);
 }
@@ -661,7 +661,7 @@ export const studentsHandlers = [
       // the fields it collects. The D32 note here said the opposite, and it was true then.
       religion: body.religion ?? null,
       enrollment_date: body.enrollment_date,
-      status: body.status ?? 'Registered',
+      status: body.status ?? 'Active',
       guardian_name: body.guardian_name ?? '',
       guardian_phone: body.guardian_phone ?? '',
       guardian_email: body.guardian_email ?? '',
@@ -716,7 +716,7 @@ export const studentsHandlers = [
         program_id: created.program_id,
         started_at: created.enrollment_date,
         ended_at: null,
-        reason: 'Registered',
+        reason: 'Active',
       });
     }
     for (const offeringId of body.offering_ids ?? []) enrollStudent(created, offeringId);
@@ -819,12 +819,18 @@ export const studentsHandlers = [
     const body = (await request.json()) as { status?: DemoStudent['status'] };
     const next = body.status;
     const allowed: DemoStudent['status'][] = [
-      'Registered',
-      'Unregistered',
-      'DropOut',
-      'transferred',
-      'graduated',
-      'withdrawn',
+      'Active',
+      'Inactive',
+      'Dropout',
+      'Transferred',
+      'Graduated',
+      'Withdrawn',
+      // D45 §7.5 — the four states the blueprint added.
+      'Applicant',
+      'Accepted',
+      'Suspended',
+      'Completed',
+      'Alumni',
     ];
     if (!next || !allowed.includes(next)) {
       return errorResponse(422, 'invalid_transition', 'That status change is not allowed.');
@@ -833,10 +839,12 @@ export const studentsHandlers = [
     // `students/service.change_student_status`. Only when EMPTY, so a corrected date is
     // not overwritten by a later status shuffle, and only on the transition INTO the
     // state, so re-registering a graduate keeps the graduation on file.
-    if (next === 'graduated' && !student.graduation_date) {
+    // D45 — Alumni is a post-award state too, and `graduation_date` is what the
+    // post-graduation access window reads. An Alumni row with a NULL date never expires.
+    if ((next === 'Graduated' || next === 'Alumni') && !student.graduation_date) {
       student.graduation_date = DEMO_TODAY;
     }
-    if (next === 'DropOut' && !student.dropout_date) {
+    if (next === 'Dropout' && !student.dropout_date) {
       student.dropout_date = `${DEMO_TODAY}T00:00:00Z`;
     }
     student.status = next;
@@ -966,16 +974,22 @@ export const studentsHandlers = [
         // No credit, and deliberately NOT in `gpaEntries` — its credits leave the
         // denominator too, so auditing cannot depress a GPA.
         status = 'audited';
-      } else if (how === 'withdraw_passing') {
-        // Passing when they left. Scoring it anything would be inventing a grade, so it
-        // leaves the fraction entirely — same as an audit.
+      } else if (how === 'withdrawn' || how === 'dropped') {
+        // D45 §19 — ONE withdrawal, where D35 had two.
+        //
+        // The W/P + W/F pair is gone (client decision, 2026-09-08), so nothing can tell a
+        // student who was passing when they left from one who was failing. The surviving
+        // treatment is "leave the fraction entirely", the same as an audit, because the
+        // other direction would invent a failing grade for someone who was passing.
+        // ⚠️ Phase 5 (blueprint §29) makes this configurable; until then it is an
+        // assumption, and it mirrors `enums.GPA_EXCLUDED_STATUSES` on the server.
         status = 'withdrawn';
-      } else if (how === 'withdraw_failing') {
-        // BAJC, 2026-08-23: "w/f is a f because its like a student dropout while failing".
-        // So it KEEPS its credits in the denominator and scores zero quality points, which
-        // `letter: null` produces. Note this ignores any mark already in the gradebook —
-        // the status outranks the result, as the precedence above establishes.
-        status = 'withdrawn';
+      } else if (how === 'failed') {
+        // Sat it and did not pass: KEEPS its credits in the denominator and scores zero
+        // quality points, which `letter: null` produces. This is where D35's W/F rule
+        // went. Note it ignores any mark in the gradebook — the status outranks the
+        // result, as the precedence above establishes.
+        status = 'failed';
         gpaEntries.push({ credits, letter: null });
       } else if (numeric != null) {
         // Judged against the PROGRAMME's pass mark. Where the scale carries no grade

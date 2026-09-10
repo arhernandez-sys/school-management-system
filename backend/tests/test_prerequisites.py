@@ -108,7 +108,7 @@ def _student(db_session, *, program_id=None) -> StudentProfile:
         **split_name(f"Stu {uuid.uuid4().hex[:5]}"),
         date_of_birth=date(2007, 5, 1),
         enrollment_date=date(2025, 9, 1),
-        status=StudentStatus.REGISTERED,
+        status=StudentStatus.ACTIVE,
         program_id=program_id,
     )
     db_session.add(s)

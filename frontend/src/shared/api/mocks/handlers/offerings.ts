@@ -88,6 +88,19 @@ function teacherRef(teacherId: string) {
   };
 }
 
+/**
+ * Why this student may not be registered, or `null` — mirrors
+ * `offerings/service.ENROLLABLE_STATUSES` + `_status_block` (D45 §20).
+ *
+ * ONE status registers: `Active`. Everything else — Applicant, Accepted, Inactive,
+ * Suspended, Withdrawn, Dropout, Completed, Graduated, Alumni, Transferred — is a
+ * refusal the Dean can waive with a reason. The message wording is the server's, so a
+ * screen certified against the demo is certified against the sentence the API sends.
+ */
+function statusBlock(student: DemoStudent): string | null {
+  return student.status === 'Active' ? null : `status is ${student.status}`;
+}
+
 function studentRef(student: DemoStudent) {
   return {
     id: student.id,
@@ -189,7 +202,7 @@ function rosterEntry(offering: DemoOffering, student: DemoStudent) {
     unenrolled_at: enr?.unenrolled_at ?? null,
     // D35 — the client's `coursestatus`. `enrolled` when there is no row to read it from,
     // which is the same default the column carries server-side.
-    enrollment_status: enr?.enrollment_status ?? 'enrolled',
+    enrollment_status: enr?.enrollment_status ?? 'registered',
   };
 }
 
@@ -662,16 +675,39 @@ export const offeringsHandlers = [
   }),
 
   // ── GET /offerings/{id}/enrollable-students — picker for the enrol dialog ───────
-  // Offerings-owned convenience read (the Students module owns /students). Returns active
-  // students NOT already on this offering's roster, name-sorted.
+  // Offerings-owned convenience read (the Students module owns /students). Students NOT
+  // already on this offering's roster, name-sorted, each one carrying whether the enrol
+  // gate will ACCEPT them and which rule bars them if not.
   http.get(`${API_BASE_URL}/offerings/:offeringId/enrollable-students`, ({ params, request }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
     const onRoster = new Set(rosterFor(offering.id).map((s) => s.id));
     const url = new URL(request.url);
     const search = (url.searchParams.get('search') ?? '').toLowerCase();
+    const includeIneligible = url.searchParams.get('include_ineligible') === 'true';
+    /**
+     * ⚠️ DEFECT FIXED HERE (Sep 2026, reported by the client: *"why can I add students to
+     * a course offering if they haven't taken the class it requires before"*).
+     *
+     * These three fields were HARDCODED — `eligible: true`, both reasons `null` — on the
+     * reasoning that "the demo has no grade history to judge against, so the FIELDS are
+     * what matter". The fields did render; the ANSWER was always yes. So in demo mode
+     * every student looked addable to every class, including a class they had failed the
+     * prerequisite for, and the only thing standing between the user and a completed
+     * registration was a 409 on submit.
+     *
+     * The premise was also wrong: the demo has `assessment_grades` and a grading scale,
+     * so `unmetPrerequisites` can and does judge. It was already being called on the POST
+     * below — the picker simply never asked it.
+     *
+     * Fifth recorded case of the demo certifying behaviour the backend does not have.
+     * Mirrors `offerings/service.enrollable_students`, including the ORDER: the status
+     * objection is reported first and alone, because "this person is not a current
+     * student" is a more basic answer than "they have not passed MATH1110", and both at
+     * once tells the Dean to waive two rules where one is the real one.
+     */
     const rows = D.students
-      .filter((s) => s.status === 'Registered' && !onRoster.has(s.id))
+      .filter((s) => !onRoster.has(s.id))
       .filter(
         (s) =>
           !search ||
@@ -680,7 +716,35 @@ export const offeringsHandlers = [
       )
       .slice()
       .sort((a, b) => a.full_name.localeCompare(b.full_name))
-      .map(studentRef);
+      .map((s) => {
+        const statusReason = statusBlock(s);
+        if (statusReason) {
+          return {
+            ...studentRef(s),
+            eligible: false,
+            ineligible_reason: statusReason,
+            ineligible_rule: 'student_status' as const,
+          };
+        }
+        const unmet = unmetPrerequisites(s.id, offering.course_id, offering.semester_id);
+        if (unmet.length > 0) {
+          return {
+            ...studentRef(s),
+            eligible: false,
+            ineligible_reason: unmet.map((u) => `${u.code} (${u.reason})`).join('; '),
+            ineligible_rule: 'prerequisites' as const,
+          };
+        }
+        return {
+          ...studentRef(s),
+          eligible: true,
+          ineligible_reason: null,
+          ineligible_rule: null,
+        };
+      })
+      // The server lists only enrollable statuses unless the Dean asks for the rest
+      // (`include_ineligible`), so a waiver is reachable from the UI at all. Same here.
+      .filter((r) => includeIneligible || r.ineligible_rule !== 'student_status');
     return HttpResponse.json({ items: rows });
   }),
 
@@ -690,7 +754,7 @@ export const offeringsHandlers = [
   // the semester and report it as a `transfer` — correct when a student had one homeroom,
   // and data loss the moment they legitimately take Algebra AND Biology. Both the transfer
   // and the `transferred` field are gone; `schedule_conflicts` replaces them.
-  http.post(`${API_BASE_URL}/offerings/:offeringId/enrollments`, async ({ params, request }) => {
+  http.post(`${API_BASE_URL}/offerings/:offeringId/enrollments`, async ({ params, request, cookies }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
     if (notWritable(offering)) {
@@ -701,6 +765,8 @@ export const offeringsHandlers = [
       semester_id?: string;
       // D35 — the client's `coursestatus`, applied to the whole batch.
       enrollment_status?: EnrollmentStatus;
+      // D45 §12/§20 — the Dean's waiver, with a required reason.
+      override?: { prerequisites?: boolean; student_status?: boolean; reason?: string };
     };
     const ids = body.student_ids ?? [];
     // The term is the OFFERING's, not the caller's choice. A `semester_id` that disagrees is
@@ -722,18 +788,82 @@ export const offeringsHandlers = [
       scheduleConflictsForStudent(studentId, offering),
     );
 
-    // D30 §D4 — the prerequisite gate, checked for EVERY student BEFORE anything is
-    // written. Mirrors the server exactly, including the all-or-nothing behaviour: a
-    // failure part-way through the list would leave the batch half-enrolled.
-    for (const studentId of ids) {
-      const unmet = unmetPrerequisites(studentId, offering.course_id, semesterId);
-      if (unmet.length > 0) {
-        const student = getStudent(studentId);
-        const detail = unmet.map((u) => `${u.code} (${u.reason})`).join('; ');
+    /**
+     * D45 §12/§20 — THE OVERRIDE IS HONOURED HERE NOW (Sep 2026).
+     *
+     * The demo used to ignore `override` entirely, so it refused a Dean's waiver that
+     * the server accepts — the same class of parity bug as the picker above, inverted.
+     * Dean only, matching `_assert_override_permitted`: waiving an academic rule is an
+     * academic-structure decision, and the Registrar reaches this endpoint without
+     * reaching that decision.
+     */
+    const role = sessionRole(cookies);
+    const override = body.override;
+    if (override && (override.prerequisites || override.student_status)) {
+      if (role !== 'principal') {
+        return errorResponse(
+          403,
+          'override_not_permitted',
+          'Only the Dean may override a registration restriction.',
+        );
+      }
+      if (!override.reason || !override.reason.trim()) {
+        return errorResponse(422, 'validation_error', 'An override needs a reason.');
+      }
+    }
+
+    /**
+     * D45 §20 — the STATUS rule, checked before the prerequisite one because "this
+     * person is not a current student" is a more basic objection than "they have not
+     * passed MATH1110". It was absent from the demo altogether.
+     */
+    if (!override?.student_status) {
+      const barred = ids
+        .map((id) => getStudent(id))
+        .filter((s): s is DemoStudent => Boolean(s))
+        .map((s) => ({ s, reason: statusBlock(s) }))
+        .filter((x): x is { s: DemoStudent; reason: string } => x.reason !== null);
+      if (barred.length > 0) {
+        return errorResponse(
+          409,
+          'student_not_enrollable',
+          `${barred.map((b) => `${b.s.full_name} (${b.reason})`).join('; ')} — so none were registered.`,
+        );
+      }
+    }
+
+    /**
+     * D30 §D4 — the prerequisite gate, checked for EVERY student BEFORE anything is
+     * written, all-or-nothing: a failure part-way through the list would leave the batch
+     * half-enrolled.
+     *
+     * ⚠️ It used to `return` on the FIRST blocked student, so a Dean adding twelve
+     * students learned about them one failed submission at a time — the same defect D45
+     * §3b P2 fixed on the server. Every blocked student is named, and the message says
+     * that none were registered.
+     */
+    if (!override?.prerequisites) {
+      const blocked = ids
+        .map((studentId) => ({
+          student: getStudent(studentId),
+          unmet: unmetPrerequisites(studentId, offering.course_id, semesterId),
+        }))
+        .filter((x) => x.unmet.length > 0);
+      if (blocked.length > 0) {
+        const named = blocked
+          .map(
+            (b) =>
+              `${b.student?.full_name ?? 'This student'} — ${b.unmet
+                .map((u) => `${u.code} (${u.reason})`)
+                .join('; ')}`,
+          )
+          .join('; ');
         return errorResponse(
           409,
           'prerequisite_not_met',
-          `${student?.full_name ?? 'This student'} has not met the prerequisites: ${detail}.`,
+          blocked.length === 1
+            ? `${named}.`
+            : `${blocked.length} students have not met the prerequisites, so none were registered: ${named}.`,
         );
       }
     }
@@ -759,7 +889,7 @@ export const offeringsHandlers = [
           unenrolled_at: null,
           // D35 — the client's `coursestatus`, applied to the whole batch,
           // mirroring `offerings/service.enroll_students`.
-          enrollment_status: body.enrollment_status ?? 'enrolled',
+          enrollment_status: body.enrollment_status ?? 'registered',
         });
       }
       enrolled.push(rosterEntry(offering, student));
@@ -820,10 +950,10 @@ export const offeringsHandlers = [
       const body = (await request.json()) as { enrollment_status?: EnrollmentStatus };
       const next = body.enrollment_status;
       const allowed: EnrollmentStatus[] = [
-        'enrolled',
+        'registered',
         'audit',
-        'withdraw_passing',
-        'withdraw_failing',
+        'withdrawn',
+        'withdrawn',
       ];
       if (!next || !allowed.includes(next)) {
         return errorResponse(422, 'validation_error', 'Unknown course status.', {

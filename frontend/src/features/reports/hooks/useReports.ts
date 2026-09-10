@@ -5,7 +5,11 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   fetchActiveTerm,
+  fetchCreditLoad,
   fetchMyReportCard,
+  fetchNewVsReturning,
+  fetchOvercapacity,
+  fetchProgrammeAttendance,
   fetchReportCard,
   fetchReportStudents,
   fetchSemesters,
@@ -76,5 +80,54 @@ export function useTranscript(studentId: string | null) {
     queryKey: ['reports', 'transcript', studentId],
     queryFn: () => fetchTranscript(studentId as string),
     enabled: Boolean(studentId),
+  });
+}
+
+// ── D45 Phase 9 — the four institutional reports of §53 ───────────────────────
+// One hook each, all read-only. `enabled` lets the screen hold the request until the
+// report is actually the one on screen: four reports behind four tabs would otherwise
+// fire four college-wide queries every time the tab bar renders.
+//
+// No `staleTime`. These are the numbers somebody is about to act on — seat a student,
+// call a programme about its attendance — and a cached figure that is five minutes
+// behind the registration just made is worse than a spinner.
+
+export function useNewVsReturning(academicYearId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['reports', 'new-vs-returning', academicYearId ?? null],
+    queryFn: () => fetchNewVsReturning(academicYearId),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useOvercapacity(semesterId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['reports', 'overcapacity', semesterId ?? null],
+    queryFn: () => fetchOvercapacity(semesterId),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useCreditLoad(semesterId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['reports', 'credit-load', semesterId ?? null],
+    queryFn: () => fetchCreditLoad(semesterId),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useProgrammeAttendance(
+  semesterId?: string,
+  programId?: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ['reports', 'programme-attendance', semesterId ?? null, programId ?? null],
+    queryFn: () => fetchProgrammeAttendance(semesterId, programId),
+    enabled,
+    placeholderData: keepPreviousData,
   });
 }

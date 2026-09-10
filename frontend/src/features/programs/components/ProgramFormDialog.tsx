@@ -51,6 +51,9 @@ export function ProgramFormDialog({
   const [admissionReq, setAdmissionReq] = useState('');
   const [graduationReq, setGraduationReq] = useState('');
   const [comments, setComments] = useState('');
+  // D45 §8 — Department Management, on the programme (client decision C4).
+  const [headOfDept, setHeadOfDept] = useState('');
+  const [officeInfo, setOfficeInfo] = useState('');
 
   useEffect(() => {
     if (open) {
@@ -62,6 +65,8 @@ export function ProgramFormDialog({
       setAdmissionReq(program?.admission_requirements ?? '');
       setGraduationReq(program?.graduation_requirements ?? '');
       setComments(program?.comments ?? '');
+      setHeadOfDept(program?.head_of_department ?? '');
+      setOfficeInfo(program?.office_information ?? '');
     }
   }, [open, program]);
 
@@ -94,6 +99,9 @@ export function ProgramFormDialog({
           admission_requirements: admissionReq.trim() || null,
           graduation_requirements: graduationReq.trim() || null,
           comments: comments.trim() || null,
+          // D45 §8 — same `|| null` rule: emptying the box CLEARS the field.
+          head_of_department: headOfDept.trim() || null,
+          office_information: officeInfo.trim() || null,
           total_credits: creditsNumber,
           min_passing_grade_point: passNumber.toFixed(2),
         })
@@ -149,7 +157,11 @@ export function ProgramFormDialog({
           value={admissionReq}
           onChange={(e) => setAdmissionReq(e.target.value)}
           fullWidth
-          inputProps={{ maxLength: 100 }}
+          multiline
+          minRows={2}
+          // D45 §9 — the 100-character cap is GONE. The column was varchar(100) and is
+          // now TEXT; keeping the input cap would have left the field unable to hold the
+          // paragraph it is named for, with the truncation happening silently in the box.
           error={Boolean(fieldErrors?.admission_requirements)}
           helperText={
             fieldErrors?.admission_requirements?.join(' ') ??
@@ -161,11 +173,41 @@ export function ProgramFormDialog({
           value={graduationReq}
           onChange={(e) => setGraduationReq(e.target.value)}
           fullWidth
-          inputProps={{ maxLength: 100 }}
+          multiline
+          minRows={2}
           error={Boolean(fieldErrors?.graduation_requirements)}
           helperText={
             fieldErrors?.graduation_requirements?.join(' ') ??
             'What a student needs to finish. The credit total and pass mark below are what the system actually checks.'
+          }
+        />
+        {/* D45 §8 (Department Management). The blueprint assumes a Departments table;
+            BAJC has none and organises by PROGRAMME, so its two departmental fields land
+            here — the client chose this over re-parenting every programme and course to a
+            new table. */}
+        <TextField
+          label="Head of department"
+          value={headOfDept}
+          onChange={(e) => setHeadOfDept(e.target.value)}
+          fullWidth
+          inputProps={{ maxLength: 150 }}
+          error={Boolean(fieldErrors?.head_of_department)}
+          helperText={
+            fieldErrors?.head_of_department?.join(' ') ??
+            'Displayed on the programme. Who a head can SEE is set by appointing them in Settings, not by this box.'
+          }
+        />
+        <TextField
+          label="Office information"
+          value={officeInfo}
+          onChange={(e) => setOfficeInfo(e.target.value)}
+          fullWidth
+          multiline
+          minRows={2}
+          error={Boolean(fieldErrors?.office_information)}
+          helperText={
+            fieldErrors?.office_information?.join(' ') ??
+            'Location, hours and contact for the programme office.'
           }
         />
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>

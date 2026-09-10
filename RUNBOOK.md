@@ -109,7 +109,16 @@ fresh clone's demo mode looks broken, run the `msw init` line before investigati
 else. `.env.demo` is gitignored for the same reason and has the same effect — §4 has its
 contents.
 
-> ⚠️ **`npm run build` and `npm run dev` cannot run on this machine** — esbuild's binary is
+> ⚠️ **CORRECTED 10 Sep 2026: THEY CAN.** Verified by running them — the esbuild binary
+> executes (0.21.5), `node node_modules/vite/bin/vite.js build --mode demo` completes in
+> 12.6s, and `vite dev` serves HTTP 200 (on **IPv6 localhost** — use
+> `http://localhost:<port>`, not `127.0.0.1`). The warning below was inherited from a note
+> about a different project on the same machine and was never tested here; it cost three
+> phases their hand-verification step. Use `npm run build` / `npm run dev` normally. The
+> paragraph is kept because the *fallbacks* it names are still useful, and because a
+> future install could re-break the binary.
+>
+> ~~**`npm run build` and `npm run dev` cannot run on this machine**~~ — esbuild's binary is
 > blocked by policy, and Vite needs it. `npm run demo` is affected the same way. What DOES
 > work: `npx tsc -b --force` (typecheck), `npx eslint .` (lint), and the plain-Node probes
 > in `frontend/scratchpad/`. See §7.

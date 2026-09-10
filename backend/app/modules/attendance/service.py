@@ -55,7 +55,7 @@ from app.modules.attendance.schemas import (
 from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.models import ClassEnrollment, ClassTeacher, Course, CourseOffering
-from app.modules.settings.models import AcademicYear, AuditLog, Semester
+from app.modules.settings.models import AcademicYear, AuditLog, SchoolProfile, Semester
 from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
@@ -84,13 +84,37 @@ def _today() -> date_type:
     return school_today()
 
 
-#: The attendance floor, as a percentage (D44). Below this, a class or a student is
-#: flagged.
+#: The attendance floor, as a percentage. Below this, a class or a student is flagged.
 #:
-#: One constant, exported, and the API echoes it back on every alerts response — so the
-#: frontend states the rule it is showing instead of carrying a second copy of the number
-#: that can disagree with this one.
+#: D45 §23 MADE THIS CONFIGURABLE and demoted this constant to a FALLBACK. It is no
+#: longer the rule — `school_profile.attendance_alert_threshold` is, because §57 says
+#: institutional rules belong in configuration rather than in source. This value is what
+#: `resolve_attendance_threshold` returns when there is no profile row at all, which is
+#: a fresh database and nothing else.
+#:
+#: Still exported, and the API still echoes the resolved number back on every alerts
+#: response — so the frontend states the rule it is showing instead of carrying a second
+#: copy that can disagree.
 ATTENDANCE_ALERT_THRESHOLD = 80.0
+
+
+def resolve_attendance_threshold(db: Session, override: float | None = None) -> float:
+    """The attendance floor in force: an explicit `override`, else the college's setting.
+
+    `override` is the alerts endpoint's query parameter, which exists so the Dean can ask
+    "who is under 90?" without changing the policy. It wins when supplied precisely
+    because it is a question, not a rule.
+
+    Read here rather than defaulted in the router signature: a default in a function
+    signature is evaluated at IMPORT time, so the old
+    `threshold: float = ATTENDANCE_ALERT_THRESHOLD` could never have seen a configured
+    value however the column was filled in. That is the whole reason the constant
+    survived D44 unchanged.
+    """
+    if override is not None:
+        return override
+    configured = db.scalar(select(SchoolProfile.attendance_alert_threshold))
+    return ATTENDANCE_ALERT_THRESHOLD if configured is None else float(configured)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -595,9 +619,12 @@ def get_alerts(
     *,
     actor: User,
     academic_year_id: uuid.UUID | None,
-    threshold: float = ATTENDANCE_ALERT_THRESHOLD,
+    threshold: float | None = None,
 ) -> AttendanceAlertsResponse:
-    """Every class and every student below `threshold`, for one academic year.
+    """Every class and every student below the attendance floor, for one academic year.
+
+    `threshold=None` means "use the college's configured floor" (D45 §23). An explicit
+    value is the caller asking a one-off question and wins.
 
     Built on `_summarize` — the SAME tally the summary screen, both dashboards and the
     report card use. A second percentage implementation here would eventually disagree
@@ -621,6 +648,7 @@ def get_alerts(
     to and leaves P/S/HOD/Auditor with the whole year. So a lecturer's alert list cannot
     name a class they do not teach, without that rule being written twice.
     """
+    threshold = resolve_attendance_threshold(db, threshold)
     offerings_resp = list_offerings(db, actor=actor, academic_year_id=academic_year_id)
     year_id = academic_year_id
     if year_id is None:

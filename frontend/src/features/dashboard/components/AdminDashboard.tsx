@@ -1,8 +1,16 @@
-import { Grid } from '@mui/material';
+import { Card, CardContent, Grid, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
 import GroupsIcon from '@mui/icons-material/Groups';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import ClassIcon from '@mui/icons-material/Class';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
+import AssignmentIndIcon from '@mui/icons-material/AssignmentInd';
+import HowToRegIcon from '@mui/icons-material/HowToReg';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import PendingActionsIcon from '@mui/icons-material/PendingActions';
+import SchoolIcon from '@mui/icons-material/School';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import TrendingDownIcon from '@mui/icons-material/TrendingDown';
+import CoPresentIcon from '@mui/icons-material/CoPresent';
 import { StatCard, ChartWithTable } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
 import type {
@@ -18,19 +26,36 @@ export interface AdminDashboardProps {
 }
 
 /**
- * Principal dashboard (design-system §7.2 — school-wide analytics). Three responsive
- * bands, all real academic data (no finance — this app is academic-only):
+ * Dean dashboard (design-system §7.2 — school-wide analytics), and §42's KPI set.
  *
- *  1. KPI row (4-up lg → 2-up sm → 1-up xs): students (with seats-filled progress),
- *     new intake this term, active courses, and attendance rate (progress-backed).
- *  2. Analytics row (3-up lg → 1-up): enrollment-by-grade + grade-distribution bars and
- *     an enrollment-trend line — each an accessible ChartWithTable.
- *  3. Lists row (3-up lg → 2-up md → 1-up): a Teachers list, a Students list and the
- *     recent school-wide announcements.
+ * **D45 Phase 8 — THE TILES ARE NOW GROUPED, and the grouping is the design.** §42 names
+ * a dozen indicators. Twelve equal tiles in one undifferentiated grid is a wall of
+ * numbers nobody reads, so they are three labelled bands that answer three different
+ * questions:
  *
- * New fields (new_students_term, total_courses, student_capacity, enrollment_trend,
- * recent_teachers, recent_students) are optional on the type and defaulted here, so the
- * real-backend path stays safe if the server hasn't shipped them yet.
+ *  1. **The college** — how big is it, and is it turning up? Students (with seats-filled
+ *     progress), new intake, courses, lecturers, programmes, attendance rate.
+ *  2. **Needs attention** — what should the Dean DO today? Applicants waiting, accepted
+ *     students not yet enrolled, students below the attendance floor, marking
+ *     outstanding. Every one of these is a work queue, and each links to the screen that
+ *     clears it: a KPI you cannot act from is decoration.
+ *  3. **Outcomes** — graduates to date and the session's failure rate, with a
+ *     worst-courses table beside the charts.
+ *
+ * **⚠️ FOUR OF THESE TILES WERE ALREADY BEING COMPUTED BY THE SERVER and this component
+ * never rendered them** (`new_applicants`, `accepted_applicants`, `active_programmes`,
+ * `students_at_risk`) — the frontend type could not even express them, so nothing failed
+ * to say so. That is the reason the type now declares them as REQUIRED rather than
+ * optional.
+ *
+ * **What §42 asks for and is NOT here:** "students on probation" needs Academic Standing
+ * (deferred, C1) and "graduation candidates" needs the Graduation Audit (C2). Neither is
+ * faked with a zero — a tile is a claim, and 0 for a feature that does not exist is a
+ * number the Dean would believe.
+ *
+ * The older optional fields (new_students_term, total_courses, student_capacity,
+ * enrollment_trend, recent_teachers, recent_students) stay defaulted here, so the
+ * real-backend path is safe if a server has not shipped them yet.
  */
 export function AdminDashboard({ data }: AdminDashboardProps) {
   const { stats } = data;
@@ -52,9 +77,17 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
   const teachers = data.recent_teachers ?? [];
   const students = data.recent_students ?? [];
 
+  const failureRate = stats.failure_rate ?? 0;
+  const worstCourses = data.course_failure_rates ?? [];
+
   return (
     <Grid container spacing={3}>
-      {/* KPI row */}
+      {/* ── Band 1: the college ─────────────────────────────────────────────── */}
+      <Grid item xs={12}>
+        <Typography variant="overline" color="text.secondary">
+          The college
+        </Typography>
+      </Grid>
       <Grid item xs={12} sm={6} lg={3}>
         <StatCard
           label="Total students"
@@ -90,13 +123,117 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
         <StatCard
+          label="Lecturers"
+          value={stats.active_teachers}
+          icon={<CoPresentIcon />}
+          color="secondary"
+          helperText="Active teaching staff"
+          to={ROUTES.teachers}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Programmes"
+          value={stats.active_programmes}
+          icon={<AccountTreeIcon />}
+          color="primary"
+          helperText="Currently offered"
+          to={ROUTES.programs}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
           label="Attendance rate"
           value={`${stats.attendance_rate}%`}
           icon={<EventAvailableIcon />}
           color="success"
           progress={stats.attendance_rate}
-          progressLabel="School-wide, current session"
+          progressLabel="College-wide, current session"
           to={ROUTES.attendance}
+        />
+      </Grid>
+
+      {/* ── Band 2: needs attention ─────────────────────────────────────────────
+          Every tile here is a WORK QUEUE and every one links to the screen that
+          clears it. A KPI you cannot act from is decoration. */}
+      <Grid item xs={12}>
+        <Typography variant="overline" color="text.secondary">
+          Needs attention
+        </Typography>
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Applicants waiting"
+          value={stats.new_applicants}
+          icon={<AssignmentIndIcon />}
+          color={stats.new_applicants > 0 ? 'warning' : 'success'}
+          // Not a running total of everyone who ever applied — that would only ever go
+          // up and would tell the Dean nothing to act on.
+          helperText="Submitted, not yet decided"
+          to={ROUTES.applications}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Accepted, not enrolled"
+          value={stats.accepted_applicants}
+          icon={<HowToRegIcon />}
+          color={stats.accepted_applicants > 0 ? 'info' : 'success'}
+          helperText="Registration still outstanding"
+          to={ROUTES.applications}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Students at risk"
+          value={stats.students_at_risk}
+          icon={<WarningAmberIcon />}
+          color={stats.students_at_risk > 0 ? 'error' : 'success'}
+          // Distinct students, not alert rows: someone failing three classes is one
+          // student at risk, and the server counts them that way.
+          helperText="Below the attendance floor"
+          to={ROUTES.attendance}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Marking outstanding"
+          value={stats.outstanding_grade_submissions}
+          icon={<PendingActionsIcon />}
+          color={stats.outstanding_grade_submissions > 0 ? 'warning' : 'success'}
+          helperText="Assessments still being marked"
+          to={ROUTES.grades}
+        />
+      </Grid>
+
+      {/* ── Band 3: outcomes ─────────────────────────────────────────────────── */}
+      <Grid item xs={12}>
+        <Typography variant="overline" color="text.secondary">
+          Outcomes
+        </Typography>
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Graduates"
+          value={stats.graduates}
+          icon={<SchoolIcon />}
+          color="success"
+          // "To date", not "this year": `graduation_date` is unrecorded across the
+          // register, so there is no year to scope by and the label must not imply one.
+          helperText="To date"
+          to={ROUTES.students}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        <StatCard
+          label="Failure rate"
+          value={`${failureRate}%`}
+          icon={<TrendingDownIcon />}
+          color={failureRate > 0 ? 'error' : 'success'}
+          progress={failureRate}
+          // The denominator matters enough to print: on enrolments this figure would be
+          // meaningless three weeks into a session.
+          progressLabel="Of grades resolved this session"
         />
       </Grid>
 
@@ -128,6 +265,57 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
           valueLabel="Students"
         />
       </Grid>
+
+      {/* §42 "course failure rates". A TABLE, not a chart: the number beside the course
+          is what the Dean acts on, and a bar chart of eight course codes makes the
+          reader estimate the figure they were given exactly. Only courses with enough
+          resolved grades to mean anything appear — the server drops the rest, because a
+          list sorted by percentage would otherwise put a course with one graded student
+          above a course with thirty and a real problem. */}
+      {worstCourses.length > 0 && (
+        <Grid item xs={12}>
+          <Card variant="outlined">
+            <CardContent>
+              <Typography variant="subtitle1" gutterBottom>
+                Courses by failure rate
+              </Typography>
+              <Typography variant="caption" color="text.secondary" component="div" sx={{ mb: 1 }}>
+                This session, over grades that have resolved to a letter. Courses with
+                only a handful of results are not ranked.
+              </Typography>
+              <TableContainer sx={{ overflowX: 'auto' }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Course</TableCell>
+                      <TableCell>Title</TableCell>
+                      <TableCell align="right">Results</TableCell>
+                      <TableCell align="right">Failing</TableCell>
+                      <TableCell align="right">Rate</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {worstCourses.map((c) => (
+                      <TableRow key={c.course_code}>
+                        <TableCell>{c.course_code}</TableCell>
+                        <TableCell>{c.course_name}</TableCell>
+                        <TableCell align="right">{c.results}</TableCell>
+                        <TableCell align="right">{c.failing}</TableCell>
+                        <TableCell
+                          align="right"
+                          sx={{ fontWeight: 600, color: c.failure_rate > 0 ? 'error.main' : 'text.primary' }}
+                        >
+                          {c.failure_rate}%
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </CardContent>
+          </Card>
+        </Grid>
+      )}
 
       {/* Lists row */}
       <Grid item xs={12} md={6} lg={4}>

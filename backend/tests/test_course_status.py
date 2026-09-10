@@ -12,18 +12,31 @@ This suite is what makes it real. Three claims, in order of how badly they would
 wrong:
 
   1. **It is settable**, on enrol and afterwards, and a withdrawal is NOT an un-enrolment.
-  2. **It changes the arithmetic**, and the three values are NOT scored alike. None earns
-     credit, but:
-       * `audit` and `withdraw_passing` leave the GPA **entirely** — numerator and
-         denominator. Scoring either would be inventing a grade (the student was never
-         reading it for credit, or was passing when they left).
-       * `withdraw_failing` **counts as a fail** — credits in the denominator, zero quality
-         points. BAJC's ruling, 2026-08-23: *"w/f is a f because its like a student dropout
-         while failing"*.
-     Before D35 all three filed as `in_progress` forever and sat in the denominator with no
-     quality points — a silently depressed GPA that no screen could explain.
-  3. **The transcript prints the notation** (`AU` / `W/P` / `W/F`). A permanent record that
-     omits the course a student withdrew from is not a transcript.
+  2. **It changes the arithmetic**, and the values are NOT scored alike. Neither
+     `audit`, `withdrawn` nor `dropped` earns credit, and all three leave the GPA
+     **entirely** — numerator and denominator. Scoring any of them would be inventing a
+     grade. `failed` is the opposite: credits in the denominator, zero quality points.
+     Before D35 all of them filed as `in_progress` forever and sat in the denominator with
+     no quality points — a silently depressed GPA that no screen could explain.
+  3. **The transcript prints the notation** (`AU` / `W`). A permanent record that omits
+     the course a student withdrew from is not a transcript.
+
+⚠️ **D45 §19 REPLACED THE VOCABULARY AND ONE RULE DIED WITH IT.**
+
+D35 established with BAJC (2026-08-23) that a withdrawal-PASSING leaves the GPA alone
+while a withdrawal-FAILING counts as a fail — *"w/f is a f because its like a student
+dropout while failing"*. The revised blueprint's §19 lists a single flat "Withdrawn", and
+the client reaffirmed that on 2026-09-08 after being shown this exact consequence.
+
+So `test_W_P_and_W_F_are_scored_DIFFERENTLY` is GONE: it pinned a distinction the record
+can no longer make. What replaced it is `test_a_withdrawal_and_a_FAIL_are_scored_
+DIFFERENTLY` — the fail treatment survived, under the name `failed`, and the contrast is
+still worth a test because it is still the thing most easily got wrong.
+
+The surviving withdrawal treatment is "leaves the GPA", not "counts as a fail", because
+the other direction would silently re-score every student who was passing when they left.
+⚠️ Blueprint §29 makes withdrawal treatment configurable in Phase 5; until then this suite
+pins an assumption, not BAJC policy.
 
 Reuses `test_program_change.py::_Graph` — a student on a programme with three courses in a
 live term, which is exactly the shape these assertions need. Hermetic + rolled back.
@@ -92,16 +105,21 @@ def _roster(client, graph, course, headers=None) -> list[dict]:
 # 1 · It is settable
 # ════════════════════════════════════════════════════════════════════════════
 class TestSettingIt:
-    def test_the_default_is_enrolled(self, client, graph) -> None:
-        """Every pre-D35 caller is unchanged: omitting it means an ordinary registration."""
+    def test_the_default_is_registered(self, client, graph) -> None:
+        """Every pre-D35 caller is unchanged: omitting it means an ordinary registration.
+        D45 renamed the value `enrolled` -> `registered`; the behaviour is identical."""
         entry = next(
             e for e in _roster(client, graph, graph.shared)
             if e["student"]["id"] == str(graph.student.id)
         )
-        assert entry["enrollment_status"] == "enrolled"
+        assert entry["enrollment_status"] == "registered"
 
     @pytest.mark.parametrize(
-        "status", ["audit", "withdraw_passing", "withdraw_failing", "enrolled"]
+        "status",
+        [
+            "pre_registered", "registered", "added", "dropped",
+            "withdrawn", "completed", "failed", "audit",
+        ],
     )
     def test_every_value_can_be_set(self, client, graph, status) -> None:
         resp = _set_status(client, graph, graph.shared, status)
@@ -118,7 +136,7 @@ class TestSettingIt:
         assert entry["enrollment_status"] == "audit"
 
     def test_an_unknown_value_is_422(self, client, graph) -> None:
-        assert _set_status(client, graph, graph.shared, "Withdraw Passing").status_code == 422
+        assert _set_status(client, graph, graph.shared, "Withdrawn").status_code == 422
 
     def test_a_lecturer_cannot_set_it(self, client, graph) -> None:
         """Dean/Registrar only — it is a registry decision, not a grading one."""
@@ -144,15 +162,15 @@ class TestSettingIt:
         from app.modules.settings.models import AuditLog
 
         _set_status(
-            client, graph, graph.shared, "withdraw_failing",
+            client, graph, graph.shared, "withdrawn",
             reason="Stopped attending after the second week.",
         )
         row = db_session.scalar(
             select(AuditLog).where(AuditLog.action == "offering.enrollment_status")
         )
         assert row is not None
-        assert row.summary["before"] == "enrolled"
-        assert row.summary["after"] == "withdraw_failing"
+        assert row.summary["before"] == "registered"
+        assert row.summary["after"] == "withdrawn"
         assert "second week" in row.summary["reason"]
 
 
@@ -165,15 +183,15 @@ class TestItIsNotAnUnenrolment:
         mistake and takes them off; a withdrawal says they sat it and left, and the
         transcript has to print `W/F` against it. Dropping the row would erase exactly the
         fact being recorded."""
-        _set_status(client, graph, graph.shared, "withdraw_failing")
+        _set_status(client, graph, graph.shared, "withdrawn")
         ids = [e["student"]["id"] for e in _roster(client, graph, graph.shared)]
         assert str(graph.student.id) in ids
 
     def test_the_row_is_not_closed(self, client, graph, db_session) -> None:
-        _set_status(client, graph, graph.shared, "withdraw_passing")
+        _set_status(client, graph, graph.shared, "withdrawn")
         db_session.expire(graph.enrollment)
         assert graph.enrollment.unenrolled_at is None
-        assert graph.enrollment.enrollment_status is EnrollmentStatus.WITHDRAW_PASSING
+        assert graph.enrollment.enrollment_status is EnrollmentStatus.WITHDRAWN
 
     def test_setting_it_on_an_UNENROLLED_row_is_409(self, client, graph) -> None:
         """Nothing to describe: they are not sitting the offering at all."""
@@ -203,7 +221,9 @@ class TestAcademicHistory:
         _set_status(client, graph, graph.shared, "audit")
         assert _row(_history(client, graph), graph.shared)["status"] == "audited"
 
-    @pytest.mark.parametrize("status", ["withdraw_passing", "withdraw_failing"])
+    # D45 §19 — one withdrawal where D35 had two. `dropped` joins it: both mean "left",
+    # and the history bucket does not distinguish when they left.
+    @pytest.mark.parametrize("status", ["withdrawn", "dropped"])
     def test_a_withdrawal_is_its_own_bucket(self, client, graph, status) -> None:
         _set_status(client, graph, graph.shared, status)
         assert _row(_history(client, graph), graph.shared)["status"] == "withdrawn"
@@ -222,8 +242,8 @@ class TestAcademicHistory:
         _set_status(client, graph, graph.shared, "audit")
         assert _history(client, graph)["credits_earned"] == before
 
-    @pytest.mark.parametrize("status", ["audit", "withdraw_passing"])
-    def test_audit_and_W_P_leave_the_GPA_DENOMINATOR(self, client, graph, status) -> None:
+    @pytest.mark.parametrize("status", ["audit", "withdrawn", "dropped"])
+    def test_audit_and_withdrawals_leave_the_GPA_DENOMINATOR(self, client, graph, status) -> None:
         """Out of the GPA on BOTH sides of the fraction — asserted on the denominator,
         which is where it is unambiguous.
 
@@ -237,8 +257,8 @@ class TestAcademicHistory:
         first cut of this test: removing dead weight from the denominator legitimately
         RAISES the GPA. `test_withdrawing_RAISES_a_dragged_down_GPA` states that directly.
 
-        **`withdraw_failing` is deliberately NOT in this list** — it keeps its credits. See
-        the next test.
+        **`failed` is deliberately NOT in this list** — it keeps its credits. See the next
+        test. Before D45 that role was played by `withdraw_failing`, which §19 removed.
         """
         graph.grade(graph.shared, "95")
         _set_status(client, graph, graph.only_a, status)
@@ -251,37 +271,38 @@ class TestAcademicHistory:
         # And with nothing else diluting it, the one graded course's own grade point stands.
         assert history["gpa"] is not None and history["gpa"] > 0
 
-    def test_W_F_COUNTS_AS_A_FAIL(self, client, graph) -> None:
-        """BAJC, 2026-08-23: *"w/f is a f because its like a student dropout while
-        failing"*.
+    def test_a_FAIL_keeps_its_credits(self, client, graph) -> None:
+        """The rule BAJC gave on 2026-08-23 — *"w/f is a f because its like a student
+        dropout while failing"* — survived D45 under a different name.
 
-        So unlike the two above, a W/F KEEPS its credits in the denominator and scores zero
-        quality points — which is precisely what a fail does. The observable difference is
-        the denominator: audit/W-P shrink it, W/F does not.
+        §19 removed `withdraw_failing`, but it added `failed`, which is the same treatment
+        said plainly: KEEPS its credits in the denominator and scores zero quality points,
+        which is precisely what a fail does. The observable difference is the denominator:
+        audit and withdrawals shrink it, a fail does not.
         """
         graph.grade(graph.shared, "95")
-        _set_status(client, graph, graph.only_a, "withdraw_failing")
-        _set_status(client, graph, graph.only_b, "withdraw_failing")
+        _set_status(client, graph, graph.only_a, "failed")
+        _set_status(client, graph, graph.only_b, "failed")
 
         history = _history(client, graph)
         expected = graph.shared.credits + graph.only_a.credits + graph.only_b.credits
         assert history["gpa_total_credits"] == expected, (
-            "a W/F must keep its credits in the GPA denominator — it is a fail"
+            "a fail must keep its credits in the GPA denominator"
         )
         # It still earns nothing, and it still drags: one A across three courses' worth of
         # credits cannot come out at the A's own grade point.
         assert history["credits_earned"] == graph.shared.credits
         assert history["gpa"] is not None and history["gpa"] < 4.0
 
-    def test_W_F_scores_ZERO_even_when_a_mark_exists(self, client, graph) -> None:
+    def test_a_FAIL_scores_ZERO_even_when_a_mark_exists(self, client, graph) -> None:
         """The status outranks the result here too.
 
-        A student can be marked and THEN withdraw failing — a withdrawal recorded after
-        grades went in is ordinary. The withdrawal is what counts, so a passing mark left in
-        the gradebook must not rescue the GPA.
+        A student can be marked and THEN recorded as failing — a status set after grades
+        went in is ordinary. The status is what counts, so a passing mark left in the
+        gradebook must not rescue the GPA.
         """
-        graph.grade(graph.only_a, "95")  # a strong pass, on the course about to be W/F'd
-        _set_status(client, graph, graph.only_a, "withdraw_failing")
+        graph.grade(graph.only_a, "95")  # a strong pass, on the course about to be failed
+        _set_status(client, graph, graph.only_a, "failed")
         # Everything else out of the way, so only_a decides the answer.
         _set_status(client, graph, graph.shared, "audit")
         _set_status(client, graph, graph.only_b, "audit")
@@ -291,22 +312,29 @@ class TestAcademicHistory:
         assert history["gpa"] == 0.0, "the stale passing mark leaked into the GPA"
         assert history["credits_earned"] == 0
 
-    def test_W_P_and_W_F_are_scored_DIFFERENTLY(self, client, graph) -> None:
-        """The contrast, in one test, because the two differ by one word in the enum and
-        the whole point of BAJC's ruling is that they are not the same thing."""
+    def test_a_withdrawal_and_a_FAIL_are_scored_DIFFERENTLY(self, client, graph) -> None:
+        """The contrast, in one test.
+
+        **This REPLACES `test_W_P_and_W_F_are_scored_DIFFERENTLY`**, which pinned the
+        distinction between a withdrawal-passing and a withdrawal-failing. D45 §19 removed
+        that pair, so the record can no longer tell them apart and no test can assert it.
+
+        The contrast that survives is between LEAVING and FAILING, and it is still the
+        thing most easily got wrong: both earn no credit, and only one of them costs the
+        student GPA."""
         graph.grade(graph.shared, "95")
 
-        _set_status(client, graph, graph.only_a, "withdraw_passing")
-        passing = _history(client, graph)
+        _set_status(client, graph, graph.only_a, "withdrawn")
+        withdrew = _history(client, graph)
 
-        _set_status(client, graph, graph.only_a, "withdraw_failing")
-        failing = _history(client, graph)
+        _set_status(client, graph, graph.only_a, "failed")
+        failed = _history(client, graph)
 
-        assert failing["gpa_total_credits"] > passing["gpa_total_credits"], (
-            "W/F should keep its credits in the denominator and W/P should not"
+        assert failed["gpa_total_credits"] > withdrew["gpa_total_credits"], (
+            "a fail should keep its credits in the denominator and a withdrawal should not"
         )
-        assert failing["gpa"] is not None and passing["gpa"] is not None
-        assert failing["gpa"] < passing["gpa"], "a W/F must cost the student GPA"
+        assert failed["gpa"] is not None and withdrew["gpa"] is not None
+        assert failed["gpa"] < withdrew["gpa"], "a fail must cost the student GPA"
 
     def test_withdrawing_RAISES_a_dragged_down_GPA(self, client, graph) -> None:
         """The same fact stated the way it will actually be noticed.
@@ -319,8 +347,8 @@ class TestAcademicHistory:
         graph.grade(graph.shared, "95")
         dragged = _history(client, graph)["gpa"]
 
-        _set_status(client, graph, graph.only_a, "withdraw_passing")
-        _set_status(client, graph, graph.only_b, "withdraw_passing")
+        _set_status(client, graph, graph.only_a, "withdrawn")
+        _set_status(client, graph, graph.only_b, "withdrawn")
         after = _history(client, graph)["gpa"]
 
         assert after is not None and dragged is not None
@@ -329,9 +357,9 @@ class TestAcademicHistory:
     def test_re_enrolling_restores_the_ordinary_treatment(self, client, graph) -> None:
         """The status is not a one-way door — a withdrawal recorded by mistake is
         correctable, and the arithmetic must follow it back."""
-        _set_status(client, graph, graph.shared, "withdraw_failing")
+        _set_status(client, graph, graph.shared, "withdrawn")
         assert _row(_history(client, graph), graph.shared)["status"] == "withdrawn"
-        _set_status(client, graph, graph.shared, "enrolled")
+        _set_status(client, graph, graph.shared, "registered")
         assert _row(_history(client, graph), graph.shared)["status"] == "in_progress"
 
 
@@ -350,9 +378,10 @@ class TestTheTranscript:
             for row in sem["subjects"]
         ]
 
+    # D45 §19 — `W/P` and `W/F` collapsed into a single `W`. A transcript must not print
+    # a distinction the record no longer keeps.
     @pytest.mark.parametrize(
-        "status,notation",
-        [("audit", "AU"), ("withdraw_passing", "W/P"), ("withdraw_failing", "W/F")],
+        "status,notation", [("audit", "AU"), ("withdrawn", "W")]
     )
     def test_the_notation_is_printed(self, client, graph, status, notation) -> None:
         """An audit and a withdrawal produce NO grade, so before D35 the transcript's

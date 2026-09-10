@@ -316,7 +316,7 @@ class TestTheLazyFallback:
             **split_name("No Enrolment"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
             year_of_study="First",
         )
         db_session.add(outsider)

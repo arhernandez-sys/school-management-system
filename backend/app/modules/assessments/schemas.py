@@ -60,7 +60,37 @@ class CategoryDetail(BaseModel):
 
 
 class CategoryList(BaseModel):
+    """The offering's categories, plus the D45 §24 weighting verdict.
+
+    Blueprint §24 shows the intended shape — Assignments 20, Quizzes 15, Midterm 25,
+    Final 30, Participation 10 — and asks: "The system should verify that assessment
+    weighting totals 100%."
+
+    **This VERIFIES; it does not enforce.** `create_category` and `update_category` still
+    accept any weight, because a gradebook is built one category at a time and the total
+    is wrong at every step until the last one. Refusing the save would make the screen
+    unusable and teach lecturers to enter fake weights to get past it. The verdict is
+    reported so the screen can say so.
+
+    **The maths is unchanged either way.** `grades/calc` divides by the weight that
+    actually participated and never renormalises to 100, so categories summing to 90
+    already produce a correct 0-100 result. This flags a data-entry mistake, not an
+    arithmetic one.
+    """
+
     items: list[CategoryDetail] = Field(default_factory=list)
+    #: Sum of the category weights, to two places.
+    weight_total: float = 0.0
+    #: Whether `weight_total` is exactly 100 AND nothing is sitting outside a category.
+    weight_total_ok: bool = False
+    #: Assessments on this offering with no `category_id` (D45 §24).
+    #:
+    #: Load-bearing, not decoration. `calc` weights the synthetic uncategorised bucket by
+    #: the SUM OF ITS OWN ASSESSMENT WEIGHTS so that it competes on equal footing with the
+    #: explicit categories — which means that while any assessment is uncategorised, the
+    #: categories do NOT account for 100% of the grade even when their weights add to 100.
+    #: Reporting the total without this number would be reporting a reassuring lie.
+    uncategorized_assessment_count: int = 0
 
 
 class OfferingPickerList(BaseModel):

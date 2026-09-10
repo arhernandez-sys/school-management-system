@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.common.enums import (
     AcademicYearStatus,
+    ApplicationStatus,
     AssessmentStatus,
     GradeStatus,
     Role,
@@ -37,9 +38,11 @@ from app.core.rbac import teacher_offering_ids
 from app.core.timeutil import school_today
 from app.modules.announcements import service as announcements_service
 from app.modules.announcements.models import Announcement, AnnouncementRead
+from app.modules.admissions.models import Application
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.assessments.release_nudge import graded_unreleased_clause
 from app.modules.attendance.models import AttendanceRecord
+from app.modules.attendance import service as attendance_service
 from app.modules.attendance.service import _summarize
 from app.modules.offerings.labels import OFFERING_ORDER, offering_label, offering_ref
 from app.modules.offerings.queries import offerings_in_year
@@ -54,6 +57,7 @@ from app.modules.dashboard.schemas import (
     AdminDashboard,
     AuditorDashboard,
     AdminStats,
+    CourseFailureRateItem,
     DashboardAnnouncement,
     DashboardPerson,
     DashboardResponse,
@@ -217,6 +221,137 @@ def _enrollment_by_programme(
     ]
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# D45 §42 / §59 — the Dean Dashboard's admissions and risk counters
+# ──────────────────────────────────────────────────────────────────────────────
+#: Application states that mean "waiting on the college" (D45 §42, "New Applicants").
+#:
+#: `DRAFT` is excluded: an application the applicant has not submitted is not waiting on
+#: anybody here. `ACCEPTED` is excluded too and counted separately — an accepted applicant
+#: is waiting on ENROLMENT, which is different work by a different person.
+#:
+#: `REJECTED`, `WITHDRAWN` and `ENROLLED` are finished states and belong in a report, not
+#: on a queue tile.
+_PENDING_APPLICATION_STATES = (
+    ApplicationStatus.SUBMITTED,
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.DOCUMENTS_PENDING,
+    ApplicationStatus.ELIGIBLE,
+    ApplicationStatus.DEFERRED,
+)
+
+
+def _application_counts(db: Session) -> tuple[int, int]:
+    """`(new_applicants, accepted_applicants)` — the §42 pair.
+
+    Deliberately NOT scoped to the active academic year. An application carries the year
+    it is FOR, and the queue the Dean has to clear includes next year's intake, which is
+    the whole point of looking at it in September. Scoping to the current year would show
+    zero during exactly the months admissions is busiest.
+    """
+    pending = db.scalar(
+        select(func.count())
+        .select_from(Application)
+        .where(
+            Application.deleted_at.is_(None),
+            Application.status.in_(_PENDING_APPLICATION_STATES),
+        )
+    ) or 0
+    accepted = db.scalar(
+        select(func.count())
+        .select_from(Application)
+        .where(
+            Application.deleted_at.is_(None),
+            Application.status == ApplicationStatus.ACCEPTED,
+        )
+    ) or 0
+    return int(pending), int(accepted)
+
+
+def _active_programme_count(db: Session) -> int:
+    """§59 "Active Programmes"."""
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(Program)
+            .where(Program.deleted_at.is_(None), Program.is_active.is_(True))
+        )
+        or 0
+    )
+
+
+def _students_at_risk(db: Session, actor: User, year: AcademicYear) -> int:
+    """§59 "Students At Risk" — distinct students under the configured attendance floor.
+
+    Built on `attendance.get_alerts`, which is built on `_summarize` — the SAME tally the
+    attendance screen, the report card and the alerts list use. A second percentage
+    implementation here would eventually disagree with the screen this tile links to, and
+    the tile would be the one nobody believed.
+
+    DISTINCT students, not alert rows: `get_alerts` reports one row per student PER CLASS,
+    so a student failing three classes would otherwise read as three at-risk students.
+    """
+    alerts = attendance_service.get_alerts(
+        db, actor=actor, academic_year_id=year.id, threshold=None
+    )
+    return len({item.student.id for item in alerts.students})
+
+
+def _graduates(db: Session) -> int:
+    """§42 "graduates" — students whose lifecycle status is `Graduated`.
+
+    ⚠️ CUMULATIVE, and forced by the data rather than chosen: `graduation_date` is NULL
+    on every graduated row in the live register, so there is no date to scope a year by.
+    Filtering on the column anyway would report 0 for a college that has graduated
+    people — the worse of the two wrong answers — so the count is all-time and the tile
+    says "to date". If BAJC starts recording graduation dates this becomes a one-line
+    change to a year-scoped count.
+    """
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(StudentProfile)
+            .where(
+                StudentProfile.deleted_at.is_(None),
+                StudentProfile.status == StudentStatus.GRADUATED,
+            )
+        )
+        or 0
+    )
+
+
+def _outstanding_grade_submissions(
+    db: Session, year: AcademicYear, semester: Semester
+) -> int:
+    """§42 "outstanding grade submissions" — assessments still being MARKED, college-wide.
+
+    **The same predicate as the Lecturer's own `ungraded_items` tile** (lifecycle
+    `published` or `grading`), summed over every offering in the session instead of one
+    lecturer's. That is deliberate: a Dean asking "how far behind is marking" must not
+    get a total that disagrees with the tiles of the people it is about.
+
+    Scoped to the offering's own session, not just the semester id, so an assessment
+    attached to an offering outside the active year cannot inflate it.
+    """
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(Assessment)
+            .join(CourseOffering, CourseOffering.id == Assessment.offering_id)
+            .where(
+                Assessment.semester_id == semester.id,
+                Assessment.deleted_at.is_(None),
+                Assessment.status.in_(
+                    (AssessmentStatus.PUBLISHED, AssessmentStatus.GRADING)
+                ),
+                offerings_in_year(year.id),
+                CourseOffering.deleted_at.is_(None),
+            )
+        )
+        or 0
+    )
+
+
 def _new_students_term(db: Session, year: AcademicYear) -> int:
     """Students whose enrollment date falls inside this academic year.
 
@@ -269,30 +404,50 @@ def _enrollment_trend(db: Session, year: AcademicYear) -> list[EnrollmentTrendIt
     ]
 
 
-def _grade_distribution(
-    db: Session, year: AcademicYear, semester: Semester
-) -> list[GradeDistributionItem]:
-    """Letter-grade histogram across the whole active term.
+#: A course needs at least this many RESOLVED term grades before its failure rate is
+#: reported (§42). One graded student at 40% is not a 100% failure rate, it is one
+#: student — and a list sorted by percentage would put that course at the top, above a
+#: course with 30 students and a genuine problem. Small courses are still counted in the
+#: college-wide `failure_rate`; they are only kept out of the per-course RANKING.
+_MIN_FAILURE_RATE_RESULTS = 5
 
-    This is the one figure that could become O(students × subjects). It loads every
-    assessment, category and grade for the term in **three** queries, then computes
-    entirely in memory via `compute_term_grades_bulk`.
+#: How many courses the failure-rate card lists. A dashboard card is a prompt to look,
+#: not the report — §53's own reports are where the whole list belongs.
+_FAILURE_RATE_LIMIT = 8
+
+
+def _term_grades_for_year(
+    db: Session, year: AcademicYear, semester: Semester
+) -> tuple[dict[tuple, object], dict[uuid.UUID, uuid.UUID], dict[str, bool]]:
+    """Every (student, offering) term grade in the active session, computed once.
+
+    Returns `(computed, course_id_by_offering, passing_by_letter)`.
+
+    **Extracted from `_grade_distribution` (D45 Phase 8) so the letter histogram and
+    §42's course failure rates share ONE pass.** They are two readings of the same
+    computation, and this is the one figure on the dashboard that could become
+    O(students × subjects): it loads every assessment, category and grade for the term
+    in three queries and computes in memory via `compute_term_grades_bulk`. Doing that
+    twice would double the most expensive query on the Dean's screen to answer a second
+    question about the same numbers — and, worse, a second copy of this assembly would
+    eventually resolve a letter differently from the histogram beside it.
     """
     bands, _pass_mark = _bands(db, year)
     if not bands:
-        return []
+        return {}, {}, {}
+    passing_by_letter = {b.letter: b.is_passing for b in bands}
 
     offerings = db.execute(
-        select(CourseOffering.id, CourseOffering.id)
+        select(CourseOffering.id, CourseOffering.course_id)
         .where(
             offerings_in_year(year.id),
-            CourseOffering.deleted_at.is_(None),
             CourseOffering.deleted_at.is_(None),
         )
     ).all()
     if not offerings:
-        return []
+        return {}, {}, passing_by_letter
     cs_ids = [cs_id for cs_id, _ in offerings]
+    course_by_offering = {cs_id: course_id for cs_id, course_id in offerings}
 
     assessments = list(
         db.scalars(
@@ -304,7 +459,7 @@ def _grade_distribution(
         ).all()
     )
     if not assessments:
-        return []
+        return {}, course_by_offering, passing_by_letter
     by_cs: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in assessments:
         by_cs[a.offering_id].append(a)
@@ -378,6 +533,30 @@ def _grade_distribution(
         )
 
     computed = calc.compute_term_grades_bulk(requests)
+    # The band ORDER is needed by the histogram and nowhere else, so it is recomputed
+    # there rather than widening this function's return.
+    return computed, course_by_offering, passing_by_letter
+
+
+def _grade_distribution(
+    db: Session,
+    year: AcademicYear,
+    semester: Semester,
+    *,
+    computed=None,  # noqa: ANN001 — the shared pass, if the caller already made it
+) -> list[GradeDistributionItem]:
+    """Letter-grade histogram across the whole active session.
+
+    A thin reading of `_term_grades_for_year`, and still the ONE definition of this
+    histogram — `_admin_payload` hands in the pass it already made rather than tallying
+    a second copy inline, which would have left this function dead beside a duplicate of
+    its own body. Output is unchanged from before the Phase 8 split.
+    """
+    bands, _pass_mark = _bands(db, year)
+    if not bands:
+        return []
+    if computed is None:
+        computed, _courses, _passing = _term_grades_for_year(db, year, semester)
     tally: dict[str, int] = defaultdict(int)
     for term in computed.values():
         if term.letter is not None:
@@ -388,6 +567,82 @@ def _grade_distribution(
         GradeDistributionItem(letter=letter, count=count)
         for letter, count in sorted(tally.items(), key=lambda kv: order.get(kv[0], 99))
     ]
+
+
+def _failure_rates(
+    db: Session,
+    year: AcademicYear,
+    semester: Semester,
+    *,
+    computed=None,  # noqa: ANN001 — the shared pass, if the caller already made it
+    course_by_offering: dict[uuid.UUID, uuid.UUID] | None = None,
+    passing_by_letter: dict[str, bool] | None = None,
+) -> tuple[float, list[CourseFailureRateItem]]:
+    """§42 "course failure rates" — the college figure, and the worst courses.
+
+    `(failure_rate, per_course)`. The second reading of `_term_grades_for_year`; the
+    caller passes the pass in so the Dean's payload computes it once.
+
+    **The denominator is RESOLVED term grades, never enrolments.** A course three weeks
+    into the session has almost no resolved grades, and dividing its failures by its
+    roster would report a catastrophic failure rate for a class nobody has assessed yet —
+    which is the number a Dean would act on first and the one most likely to be wrong.
+
+    A letter is FAILING when its band says so (`grading_scale_bands.is_passing`), never
+    by comparing to a hardcoded mark: BAJC runs two scales whose `D` disagrees about
+    passing, and the year's own scale is the only authority on which is in force.
+    """
+    if computed is None:
+        computed, course_by_offering, passing_by_letter = _term_grades_for_year(
+            db, year, semester
+        )
+    course_by_offering = course_by_offering or {}
+    passing_by_letter = passing_by_letter or {}
+
+    total = failing = 0
+    per_course: dict[uuid.UUID, list[int]] = defaultdict(lambda: [0, 0])
+    for (_student_id, offering_id), term in computed.items():
+        if term.letter is None:
+            continue  # not a result, and not a failure — see `completed_course_results`
+        total += 1
+        # An UNKNOWN letter is treated as passing rather than failing. It can only happen
+        # if a band is deleted after a grade resolved against it, and inventing a failure
+        # for a student on the strength of a missing configuration row is the one error
+        # here with a person on the end of it.
+        is_fail = passing_by_letter.get(term.letter, True) is False
+        failing += int(is_fail)
+        course_id = course_by_offering.get(offering_id)
+        if course_id is None:
+            continue
+        bucket = per_course[course_id]
+        bucket[0] += 1
+        bucket[1] += int(is_fail)
+
+    overall = 0.0 if total == 0 else round(failing / total * 1000) / 10
+
+    if not per_course:
+        return overall, []
+    names = {
+        cid: (code, name)
+        for cid, code, name in db.execute(
+            select(Course.id, Course.code, Course.name).where(
+                Course.id.in_(list(per_course))
+            )
+        ).all()
+    }
+    rows = [
+        CourseFailureRateItem(
+            course_code=names.get(cid, ("?", "Unknown course"))[0],
+            course_name=names.get(cid, ("?", "Unknown course"))[1],
+            results=results,
+            failing=fails,
+            failure_rate=round(fails / results * 1000) / 10,
+        )
+        for cid, (results, fails) in per_course.items()
+        if results >= _MIN_FAILURE_RATE_RESULTS
+    ]
+    rows.sort(key=lambda r: (-r.failure_rate, -r.results, r.course_code))
+    return overall, rows[:_FAILURE_RATE_LIMIT]
 
 
 def _school_attendance_rate(db: Session, year: AcademicYear) -> float:
@@ -407,7 +662,7 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.REGISTERED,
+            StudentProfile.status == StudentStatus.ACTIVE,
         )
     ) or 0
     active_teachers = db.scalar(
@@ -428,15 +683,17 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         )
         .order_by(*OFFERING_ORDER)
     ).all()
+    # ⚠️ DEFECT FIXED (D45 Phase 8): this counted `course_offerings`, not courses.
+    #
+    # The clause was `deleted_at IS NULL` written three times over `CourseOffering` — the
+    # tell-tale of a copy-paste — so the Dean's "Courses" tile showed the number of
+    # OFFERINGS in the year while the tile beneath it showed "Across N sections" from the
+    # same table. Two tiles, one fact, and neither of them the catalog. §42 asks for total
+    # courses, which is the catalog: on live `sims` that is 125, against 22 offerings.
     total_courses = db.scalar(
         select(func.count())
-        .select_from(CourseOffering)
-        .where(
-            offerings_in_year(year.id),
-            CourseOffering.deleted_at.is_(None),
-            CourseOffering.deleted_at.is_(None),
-            CourseOffering.deleted_at.is_(None),
-        )
+        .select_from(Course)
+        .where(Course.deleted_at.is_(None), Course.is_active.is_(True))
     ) or 0
 
     recent_teachers = [
@@ -478,12 +735,28 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             )
             .where(
                 StudentProfile.deleted_at.is_(None),
-                StudentProfile.status == StudentStatus.REGISTERED,
+                StudentProfile.status == StudentStatus.ACTIVE,
             )
             .order_by(*STUDENT_NAME_ORDER)
             .limit(_CARD_LIMIT)
         ).all()
     ]
+
+    # D45 §42 — one query pair, unpacked here rather than called twice inline.
+    _new_applicants, _accepted_applicants = _application_counts(db)
+
+    # D45 Phase 8 — the letter histogram and the failure rates are two readings of ONE
+    # term-grade pass, which is the most expensive computation on this screen. Computed
+    # here and handed to both, so the Dean's payload pays for it once.
+    _computed, _course_by_offering, _passing = _term_grades_for_year(db, year, semester)
+    _failure_rate, _failure_rows = _failure_rates(
+        db,
+        year,
+        semester,
+        computed=_computed,
+        course_by_offering=_course_by_offering,
+        passing_by_letter=_passing,
+    )
 
     return AdminDashboard(
         user_full_name=actor.full_name,
@@ -498,9 +771,24 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
             new_students_term=_new_students_term(db, year),
             total_courses=total_courses,
             student_capacity=sum(s.capacity or 0 for s, _c in sections),
+            # D45 §42 / §59 — the four tiles the revised blueprint highlighted.
+            new_applicants=_new_applicants,
+            accepted_applicants=_accepted_applicants,
+            active_programmes=_active_programme_count(db),
+            students_at_risk=_students_at_risk(db, actor, year),
+            # D45 Phase 8 — the rest of §42's KPI set. "Students on probation" and
+            # "graduation candidates" are absent on purpose: they need Academic Standing
+            # and the Graduation Audit, deferred with C1 and C2. A tile reading 0 for a
+            # feature that does not exist is a number the Dean would believe.
+            graduates=_graduates(db),
+            outstanding_grade_submissions=_outstanding_grade_submissions(
+                db, year, semester
+            ),
+            failure_rate=_failure_rate,
         ),
         enrollment_by_programme=_enrollment_by_programme(db, year),
-        grade_distribution=_grade_distribution(db, year, semester),
+        grade_distribution=_grade_distribution(db, year, semester, computed=_computed),
+        course_failure_rates=_failure_rows,
         enrollment_trend=_enrollment_trend(db, year),
         recent_teachers=recent_teachers,
         recent_students=recent_students,
@@ -587,7 +875,7 @@ def _secretary_payload(
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.REGISTERED,
+            StudentProfile.status == StudentStatus.ACTIVE,
         )
     ) or 0
     active_teachers = db.scalar(

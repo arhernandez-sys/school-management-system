@@ -68,7 +68,7 @@ export type ModuleKey =
   | 'calendar'
   | 'reports'
   | 'settings'
-  // D43 — the sensitive-action trail (`GET /settings/audit-log`). Its own key rather
+  // D43 — the sensitive-action trail. Its own key rather
   // than a corner of `settings`, because its readers are not the settings writers: the
   // Registrar administers the school and is one of the people the log is ABOUT.
   | 'audit'
@@ -281,6 +281,53 @@ export const PERMISSION_MATRIX: Record<Role, Record<ModuleKey, Capability>> = {
     settings: 'view-all', // read-only, and the way to the Audit Log
     audit: 'view-all', // the reason the role exists
     profile: 'none', // no student or lecturer profile to own
+  },
+  /**
+   * D45 §2 — the System Administrator. The MIRROR IMAGE of the Auditor above.
+   *
+   * The Auditor reads every academic module and writes nothing. This account writes
+   * configuration and reads no academic module at all: blueprint §2 gives it "user
+   * accounts, permissions, backups, configuration and technical maintenance", and §48
+   * says sensitive information must not be accessible "simply because the user is an
+   * employee" — which makes the sysadmin the employee with the least academic reason to
+   * read a transcript.
+   *
+   * ⚠️ THIS MAP IS NAVIGATION, NOT SECURITY. The enforcement is
+   * `_is_out_of_technical_scope` in `core/deps.py`, a central ALLOWLIST every
+   * authenticated route passes through, so a module added next year is refused to this
+   * role by default rather than open until someone remembers it. This row exists to stop
+   * the shell rendering links that would 403, and it must stay in step with that
+   * allowlist — if the two ever disagree, the server is right.
+   */
+  sysadmin: {
+    dashboard: 'none', // the dashboards are enrolment, grades and attendance
+    students: 'none',
+    teachers: 'none',
+    offerings: 'none',
+    courses: 'none',
+    programs: 'none',
+    applications: 'none',
+    timetable: 'none',
+    assessments: 'none',
+    grades: 'none',
+    attendance: 'none',
+    announcements: 'none',
+    calendar: 'none',
+    reports: 'none',
+    // Accounts, roles and institutional configuration — the job itself.
+    settings: 'full',
+    // D45 Phase 7 — 'none', NOT 'view-all', and the attempt to make it 'view-all' is
+    // what settled it. The audit trail is mostly ACADEMIC records: grade changes with
+    // student names and marks, registrations, status changes. §48 keeps this role out of
+    // exactly those, and the server enforces it centrally as `technical_role_scope` — it
+    // refused the route while this said 'view-all'. Leaving it would render a nav item
+    // that always 403s, which is the trap the auditor row above warns about.
+    //
+    // ⚠️ A "System activity only" view for this role is a reasonable future ask, but it
+    // needs a scoped endpoint that filters BEFORE academic rows are loaded — not this
+    // flag flipped back.
+    audit: 'none',
+    profile: 'none',
   },
 };
 

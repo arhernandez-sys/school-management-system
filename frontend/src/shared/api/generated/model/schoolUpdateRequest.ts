@@ -37,4 +37,15 @@ export interface SchoolUpdateRequest {
    * @maximum 3650
    */
   post_graduation_access_days?: number | null;
+  /**
+   * D45 §23 — the attendance warning floor, as a percentage.
+   *
+   * NOT nullable, unlike the days above. Nullable there means "no policy = never
+   * expires", a real and safe state; there is no equivalent here, because a college with
+   * no threshold does not want an alerts screen that flags nobody. Defaulted server-side
+   * to 80 — the blueprint's own example, and the value the retired constant carried.
+   * @minimum 0
+   * @maximum 100
+   */
+  attendance_alert_threshold?: number;
 }

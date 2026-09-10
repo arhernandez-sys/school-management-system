@@ -21,6 +21,7 @@ import EventAvailableIcon from '@mui/icons-material/EventAvailableOutlined';
 import CampaignIcon from '@mui/icons-material/CampaignOutlined';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import AssessmentIcon from '@mui/icons-material/AssessmentOutlined';
+import HistoryIcon from '@mui/icons-material/HistoryOutlined';
 import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import PersonIcon from '@mui/icons-material/PersonOutline';
 
@@ -188,6 +189,10 @@ function buildSections(role: Role): NavSection[] {
       heading: navGroups.insights,
       items: [
         { module: 'reports', label: nav.reports, path: ROUTES.reports, icon: <AssessmentIcon /> },
+        // D45 §46/§53. Sits under Insights rather than Settings: an auditor reads it as a
+        // report, not as configuration, and it is the only screen the Auditor role exists
+        // for. `module: 'audit'` keeps it off every nav that cannot reach it.
+        { module: 'audit', label: nav.audit, path: ROUTES.audit, icon: <HistoryIcon /> },
       ],
     },
     {

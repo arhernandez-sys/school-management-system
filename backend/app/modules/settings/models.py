@@ -13,6 +13,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
+    event,
     Boolean,
     CheckConstraint,
     Date,
@@ -288,6 +289,23 @@ class SchoolProfile(Base, TimestampMixin, AuditMixin):
     post_graduation_access_days: Mapped[int | None] = mapped_column(
         SmallInteger(), nullable=True, server_default=text("90")
     )
+    #: The attendance floor as a percentage (D45 §23). At or below it, a class or a
+    #: student is flagged.
+    #:
+    #: Blueprint §23: "Configurable alerts should allow the college to define
+    #: thresholds. Example: Attendance below 80% = Warning." It was a constant in
+    #: `attendance/service.py` until D45 — which is exactly what §57 says not to do:
+    #: "important institutional rules should be configurable rather than placed directly
+    #: in programming code."
+    #:
+    #: NOT NULL with an 80 default, unlike `post_graduation_access_days` above. The
+    #: nullable spelling there means "no policy = never expires", a real and safe state.
+    #: There is no equivalent here: a school with no threshold does not want an alerts
+    #: screen that flags nobody, it wants the number it has always used. 80 is the
+    #: client's own example and the value the constant carried.
+    attendance_alert_threshold: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, server_default=text("80.00")
+    )
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_school_profile_singleton"),
@@ -336,7 +354,22 @@ class Religion(Base):
 
 
 class AuditLog(Base):
-    """Append-only sensitive-action log. bigint identity PK (the §1.2 exception)."""
+    """Append-only sensitive-action log. bigint identity PK (the §1.2 exception).
+
+    **D45 §46 (Phase 7) added `module`, `ip_address`, `previous_value`, `new_value`.**
+
+    `module` and `ip_address` are filled by the `before_insert` listener below rather
+    than by the 83 call sites that write this table. That is not a shortcut — it is the
+    only way the columns can be trusted. A field every caller must remember to set is a
+    field that is right in most rows and silently absent in the ones nobody thought
+    about, and an audit trail with holes in it is worse than one without the column,
+    because the holes are invisible.
+
+    `previous_value` / `new_value` are the opposite case and ARE set per call site: only
+    the writer knows what the value was before it changed, and only for the actions where
+    a before/after is meaningful. §46's worked example — a final grade going C+ to B — is
+    the reason they exist.
+    """
 
     __tablename__ = "audit_log"
 
@@ -352,6 +385,32 @@ class AuditLog(Base):
     entity_type: Mapped[str] = mapped_column(Text(), nullable=False)
     entity_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     summary: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
+    #: D45 §46 — the FUNCTIONAL area. Distinct from `entity_type`, which names a table.
+    module: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: D45 §46, "where appropriate". NULL when there was no HTTP request (seeds, tests,
+    #: migrations) — an honest blank, not a fabricated 127.0.0.1.
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    #: D45 §46 — JSON object. NULL on a creation, and on every row written before Phase 7.
+    previous_value: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
+    #: D45 §46 — JSON object. NULL on a deletion.
+    new_value: Mapped[dict | None] = mapped_column(JSONType(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
+
+
+@event.listens_for(AuditLog, "before_insert")
+def _fill_audit_context(_mapper, _connection, target: AuditLog) -> None:  # noqa: ANN001
+    """Derive `module` from the action and take `ip_address` from the request (D45 §46).
+
+    Runs for every `AuditLog` insert in the system, so all 83 audit actions gained both
+    columns without touching a single one of them. An explicit value set by a caller is
+    respected — nothing here overwrites a deliberate choice.
+    """
+    from app.common.audit_modules import module_for
+    from app.core.audit_context import get_client_ip
+
+    if target.module is None and target.action:
+        target.module = module_for(target.action)
+    if target.ip_address is None:
+        target.ip_address = get_client_ip()

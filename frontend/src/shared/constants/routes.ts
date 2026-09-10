@@ -40,6 +40,8 @@ export const ROUTES = {
   announcements: '/announcements',
   calendar: '/calendar',
   reports: '/reports',
+  /** D45 §46/§53 — the audit trail. Dean / Auditor / System Administrator. */
+  audit: '/audit',
   settings: '/settings',
   myProfile: '/me',
   /** Single teacher profile reachable by teacher (own) / student (subject teacher). */

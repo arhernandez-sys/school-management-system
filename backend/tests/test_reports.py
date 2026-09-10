@@ -132,7 +132,7 @@ class _Graph:
             **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 3, 4),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
             # D29: the level lives on the student, not on a homeroom, and the report
             # card header reads it from here.
             year_of_study="First",
@@ -295,7 +295,7 @@ class TestStudentPicker:
         assert any(i["id"] == str(graph.student.id) for i in body["items"])
 
     def test_status_filter(self, client, graph, db_session) -> None:
-        graph.student.status = "graduated"
+        graph.student.status = "Graduated"
         db_session.flush()
         body = client.get(f"{R}/students?status=graduated", headers=graph.P).json()
         assert any(i["id"] == str(graph.student.id) for i in body["items"])
@@ -979,7 +979,7 @@ class TestTranscript:
     def test_student_with_no_enrollments_gets_an_empty_transcript(self, client, graph, db_session) -> None:
         loner = StudentProfile(
             student_number=f"L-{graph.tag}", **split_name("No Classes"),
-            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="Registered",
+            date_of_birth=date(2012, 1, 1), enrollment_date=date(2025, 9, 1), status="Active",
         )
         db_session.add(loner)
         db_session.flush()

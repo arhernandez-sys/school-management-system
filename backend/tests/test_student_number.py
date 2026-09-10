@@ -94,7 +94,7 @@ def _occupy(db_session, number: str) -> None:
         last_name="Holder",
         date_of_birth=date(2007, 1, 1),
         enrollment_date=date(2025, 9, 1),
-        status=StudentStatus.REGISTERED,
+        status=StudentStatus.ACTIVE,
     )
     db_session.add(student)
     db_session.flush()

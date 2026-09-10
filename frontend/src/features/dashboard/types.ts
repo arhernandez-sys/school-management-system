@@ -81,6 +81,16 @@ interface DashboardBase {
 }
 
 // ── Dean / principal (school-wide analytics) ─────────────────────────────────────
+/** One course's failure rate this session (§42). Per COURSE, not per offering. */
+export interface CourseFailureRateItem {
+  course_code: string;
+  course_name: string;
+  /** Term grades that resolved to a letter — the denominator. */
+  results: number;
+  failing: number;
+  failure_rate: number;
+}
+
 export interface AdminDashboard extends DashboardBase {
   role: 'principal';
   stats: {
@@ -91,7 +101,13 @@ export interface AdminDashboard extends DashboardBase {
     unread_announcements: number;
     /** New intake for the current term (first-year cohort). Optional: backend may omit. */
     new_students_term?: number;
-    /** Total live course offerings. Optional. */
+    /**
+     * Courses in the CATALOG (`courses`), not offerings.
+     *
+     * ⚠️ It used to be the offering count — the server was counting `course_offerings`
+     * — so this tile and its own "Across N sections" helper text were two readings of
+     * one table and neither was the catalog. Fixed server-side in D45 Phase 8.
+     */
     total_courses?: number;
     /**
      * Sum of offering capacities — the denominator for the "seats filled" progress bar.
@@ -99,9 +115,42 @@ export interface AdminDashboard extends DashboardBase {
      * offerings that actually declare a limit.
      */
     student_capacity?: number;
+
+    /**
+     * ── §42 / §59, the Dean's full KPI set ─────────────────────────────────────
+     *
+     * ⚠️ THE FIRST FOUR WERE COMPUTED BY THE SERVER AND MISSING FROM THIS TYPE, so the
+     * screen could not render them and nobody noticed for a phase. They are not optional
+     * because the backend has always sent them; typing them as required is what would
+     * have caught it.
+     */
+    /** Applications submitted and not yet decided — a WORK QUEUE, not a running total. */
+    new_applicants: number;
+    /** Accepted but not yet converted to a student record. */
+    accepted_applicants: number;
+    active_programmes: number;
+    /** Distinct students below the college's configured attendance floor. */
+    students_at_risk: number;
+    /** §42 "graduates" — CUMULATIVE. `graduation_date` is NULL across the register, so
+     *  there is no date to scope a year by; the tile says "to date". */
+    graduates: number;
+    /** §42 — assessments in this session still being marked, college-wide. The same
+     *  figure the lecturers' own `ungraded_items` tiles sum to. */
+    outstanding_grade_submissions: number;
+    /** §42 — share of term grades that RESOLVED to a failing letter this session.
+     *  The denominator is resolved grades, never enrolments. */
+    failure_rate: number;
+    /**
+     * NOT PRESENT, and deliberately: `students_on_probation` needs Academic Standing
+     * (deferred, C1) and `graduation_candidates` needs the Graduation Audit (C2). A tile
+     * reading 0 for a feature that does not exist is a number the Dean would believe.
+     */
   };
   enrollment_by_programme: EnrollmentByProgrammeItem[];
   grade_distribution: GradeDistributionItem[];
+  /** §42 "course failure rates" — per COURSE, worst first, only courses with enough
+   *  resolved grades to mean anything. Optional: guard with `?? []`. */
+  course_failure_rates?: CourseFailureRateItem[];
   /** Enrollment-over-time series for the trend line chart. Optional (guard with `?? []`). */
   enrollment_trend?: EnrollmentTrendItem[];
   /** A short list of teaching staff for the Lecturers card. Optional (guard with `?? []`). */

@@ -58,8 +58,27 @@ class Program(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     #: shortcut: `course_prerequisites` and `program_courses` already express the rules
     #: the system can actually enforce. These two are the prose around them, and pretending
     #: otherwise would mean two places disagreeing about what a requirement is.
-    admission_requirements: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    graduation_requirements: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #:
+    #: D45 widened both from `varchar(100)` to `Text`. 100 characters is a sentence
+    #: fragment; "what an applicant needs to get in" is a paragraph on every prospectus
+    #: BAJC prints. The column was never large enough to hold the thing it names.
+    admission_requirements: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    graduation_requirements: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    #: D45 §8 (Department Management). BAJC has no `departments` table and a PROGRAMME is
+    #: the unit it actually organises by, so the blueprint's two departmental fields land
+    #: here — confirmed by the client 2026-09-08 over the alternative of building a
+    #: `departments` table and re-parenting every programme and course to it.
+    #:
+    #: `head_of_department` is the DISPLAYED name and nothing more. The authoritative link
+    #: stays `program_heads` (a real FK to a teacher, which is what the HOD role's scoping
+    #: reads); this column exists because a programme can have a named head on the
+    #: prospectus before anyone has been given a login to attach. Two fields, two
+    #: different questions — do not let this one start driving access.
+    head_of_department: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    #: D45 §8 — "Office information (comments)". Free text for now, per the client:
+    #: location, hours and contact all in one box. Structured fields are a later decision
+    #: and splitting prose apart afterwards is easier than guessing the shape now.
+    office_information: Mapped[str | None] = mapped_column(Text(), nullable=True)
     total_credits: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
     min_passing_grade_point: Mapped[float] = mapped_column(
         Numeric(3, 2), nullable=False, server_default=text("2.50")

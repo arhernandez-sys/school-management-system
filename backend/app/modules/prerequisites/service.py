@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import CreditTransferStatus, PrerequisiteType
@@ -118,6 +118,19 @@ def list_prerequisites(db: Session, *, course_id: uuid.UUID) -> PrerequisiteList
         else {}
     )
 
+    # D45 §3b P3 — the reverse edge. One query on `ix_course_prereq_course`'s sibling
+    # column; the graph is a few hundred rows, so no caching is warranted.
+    required_by = db.scalars(
+        select(Course)
+        .join(CoursePrerequisite, CoursePrerequisite.course_id == Course.id)
+        .where(
+            CoursePrerequisite.prerequisite_course_id == course.id,
+            Course.deleted_at.is_(None),
+        )
+        .order_by(Course.code.asc())
+        .distinct()
+    ).all()
+
     return PrerequisiteList(
         items=[
             _item(
@@ -128,6 +141,7 @@ def list_prerequisites(db: Session, *, course_id: uuid.UUID) -> PrerequisiteList
             for r in rows
         ],
         prerequisites_text=course.prerequisites_text,
+        required_by=[PrerequisiteCourseRef.model_validate(c) for c in required_by],
     )
 
 
@@ -283,8 +297,51 @@ def remove_prerequisite(
     if row is None:
         raise NotFound("Prerequisite not found.", code="not_found")
 
+    # Captured BEFORE the delete — after it, `row` is detached and these are gone.
+    removed_prerequisite_course_id = row.prerequisite_course_id
+    removed_program_id = row.program_id
+    removed_requirement_type = row.requirement_type.value
+
     db.delete(row)
-    _audit(db, actor=actor, action="course_prerequisite.remove", entity_id=course.id)
+    db.flush()  # so the count below cannot still see the row we just deleted
+
+    # D45 §3b P1 — when the LAST structured requirement goes, the legacy free text goes
+    # with it. `courses.prerequisites_text` is prose seeded from the BAJC PDF
+    # (`db/bajc_catalog.py`); it is never read by the gate, but it IS rendered next to
+    # the list, so leaving it behind made a successful delete look like a no-op.
+    #
+    # The old value is written into the audit row rather than only dropped: this is the
+    # one destructive step in the whole module, and §46 wants the previous value anyway.
+    cleared_text: str | None = None
+    remaining = db.scalar(
+        select(func.count())
+        .select_from(CoursePrerequisite)
+        .where(CoursePrerequisite.course_id == course.id)
+    )
+    if not remaining and course.prerequisites_text:
+        cleared_text = course.prerequisites_text
+        course.prerequisites_text = None
+
+    # The summary names the PAIR, not just the course. Two things depend on it:
+    # `seed_bajc` reads it to avoid re-creating a requirement the Dean deleted on
+    # purpose (D45 §3b P4), and §46 wants the previous value of anything destroyed.
+    summary: dict = {
+        "prerequisite_course_id": str(removed_prerequisite_course_id)
+        if removed_prerequisite_course_id
+        else None,
+        "program_id": str(removed_program_id) if removed_program_id else None,
+        "requirement_type": removed_requirement_type,
+    }
+    if cleared_text:
+        summary["cleared_prerequisites_text"] = cleared_text
+
+    _audit(
+        db,
+        actor=actor,
+        action="course_prerequisite.remove",
+        entity_id=course.id,
+        summary=summary,
+    )
     db.commit()
     return list_prerequisites(db, course_id=course.id)
 

@@ -315,10 +315,10 @@ export function GradeRevisionsScreen() {
             </Typography>
             {decide.approve ? (
               <Alert severity="info">
-                The revised mark is applied and the student&apos;s term grade, letter and GPA
+                The revised mark is applied and the student&apos;s session grade, letter and GPA
                 move with it. <strong>The original score is kept</strong> — it stays on the
                 grade record and in the audit trail alongside the change. This applies even if
-                the term&apos;s grade-submission deadline has passed.
+                the session&apos;s grade-submission deadline has passed.
               </Alert>
             ) : (
               <Alert severity="warning">

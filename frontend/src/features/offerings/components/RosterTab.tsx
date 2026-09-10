@@ -94,7 +94,7 @@ export function RosterTab({ offeringId, offeringLabel, canManage }: RosterTabPro
       // server 409s on that), so showing one would be a contradiction.
       render: (r) => {
         if (r.unenrolled_at) return <StatusBadge label="Removed" kind="neutral" />;
-        if (r.enrollment_status === 'enrolled') {
+        if (r.enrollment_status === 'registered') {
           return <StatusBadge label="Enrolled" kind="success" />;
         }
         return (

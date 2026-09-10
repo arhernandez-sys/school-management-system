@@ -43,7 +43,7 @@ def staff_headers(make_user, auth_headers):
     return auth_headers(user_id=user.id, role=Role.PRINCIPAL)
 
 
-def _student(db_session, *, name: str, civil_status: str | None, status=StudentStatus.REGISTERED):
+def _student(db_session, *, name: str, civil_status: str | None, status=StudentStatus.ACTIVE):
     s = StudentProfile(
         student_number=f"S{uuid.uuid4().hex[:10]}",
         **split_name(name),
@@ -185,7 +185,7 @@ class TestDirectoryFilter:
         assert got == {str(cohort["legacy"].id)}
 
     def test_combines_with_another_filter(self, client, staff_headers, cohort) -> None:
-        got = _ids(client, staff_headers, civil_status="Single", status="graduated")
+        got = _ids(client, staff_headers, civil_status="Single", status="Graduated")
         assert str(cohort["gone"].id) in got
         assert str(cohort["single"].id) not in got
 

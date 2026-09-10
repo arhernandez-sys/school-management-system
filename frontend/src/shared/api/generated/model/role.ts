@@ -4,7 +4,8 @@
  * Student Management Information System API
  * OpenAPI spec version: 1.0.0
  *
- * ⚠️ HAND-EDITED (D43) — `hod` and `auditor` were added here by hand, because
+ * ⚠️ HAND-EDITED (D43, again D45) — `hod`, `auditor` and `sysadmin` were added here
+ * by hand, because
  * `npm run generate:api` is forbidden in this repo (see `schoolProfileRead.ts`).
  * `backend/openapi.json` and `frontend/openapi.json` both carry the six-value enum,
  * so a future regeneration would produce exactly this file.
@@ -20,4 +21,5 @@ export const Role = {
   student: 'student',
   hod: 'hod',
   auditor: 'auditor',
+  sysadmin: 'sysadmin',
 } as const;

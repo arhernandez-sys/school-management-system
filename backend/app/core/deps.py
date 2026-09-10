@@ -23,7 +23,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.common.enums import READ_ONLY_ROLES, Role, StudentStatus
+from app.common.enums import (
+    POST_AWARD_STATUSES,
+    READ_ONLY_ROLES,
+    TECHNICAL_ROLES,
+    Role,
+)
 from app.core.errors import (
     AccountInactive,
     Forbidden,
@@ -129,6 +134,50 @@ def _is_read_only_refusal(request: Request, user: User) -> bool:
     return not _matches(request, _READ_ONLY_EXEMPT)
 
 
+#: Path prefixes a TECHNICAL role may reach at all (D45 §2, blueprint §48).
+#:
+#: An ALLOWLIST, deliberately. The obvious shape is a denylist of the academic routers —
+#: and it is wrong, because it is default-ALLOW: `/api/v1/transcripts` added next year
+#: would be open to the sysadmin until somebody remembered to add it, and nothing would
+#: fail in the meantime to say so. The allowlist fails the other way: a new router is
+#: closed to the sysadmin until a person decides otherwise. For a least-privilege role
+#: that is the only acceptable direction.
+#:
+#: `/settings` carries the whole of the sysadmin's job — `/settings/users` is account and
+#: role management, `/settings/audit-log` is the technical trail, `/settings/school` is
+#: institutional configuration, `/settings/account` is their own. `/auth` is their own
+#: session. Nothing else is technical work.
+#:
+#: NOT granted, and this is a judgement worth seeing: the academic-structure routes that
+#: also live under `/settings` — academic years, semesters, grading scale, assessment
+#: policy. Blueprint §57 calls those "configuration", but setting a grading scale is an
+#: academic policy act that belongs to the Dean and Registrar, not to whoever administers
+#: the server. They are reachable by prefix and refused by their own `require_role`
+#: tuples, which is the correct division: the prefix gate says "this is technical
+#: territory", the role tuple says "this particular decision is not yours".
+_TECHNICAL_ALLOWED_PREFIXES: tuple[str, ...] = ("/auth", "/settings")
+
+
+def _is_out_of_technical_scope(request: Request, user: User) -> bool:
+    """Whether this request must be refused because the caller's role is technical-only.
+
+    Same choke-point argument as `_is_read_only_refusal`: expressing this through
+    `require_role` would mean editing 121 dependency tuples and never missing one, where
+    a single miss hands student transcripts to the account administrator.
+    """
+    if user.role not in TECHNICAL_ROLES:
+        return False
+    path = request.url.path
+    for version_prefix in ("/api/v1",):
+        if path.startswith(version_prefix):
+            path = path[len(version_prefix) :] or "/"
+            break
+    return not any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in _TECHNICAL_ALLOWED_PREFIXES
+    )
+
+
 def get_db() -> Iterator[Session]:
     db = SessionLocal()
     try:
@@ -171,6 +220,13 @@ def get_current_user(
         raise Forbidden(
             "This account has read-only access and cannot make changes.",
             code="read_only_role",
+        )
+    if _is_out_of_technical_scope(request, user):
+        # D45 — the sysadmin reaches accounts, configuration and the audit trail. Not
+        # one row of academic data (blueprint §48).
+        raise Forbidden(
+            "This account administers the system and has no access to academic records.",
+            code="technical_role_scope",
         )
 
     # For structured request logging (logging.py reads request.state.user_id).
@@ -235,7 +291,14 @@ def assert_student_access_window(db: Session, user: User) -> None:
             StudentProfile.user_id == user.id, StudentProfile.deleted_at.is_(None)
         )
     )
-    if student is None or student.status != StudentStatus.GRADUATED:
+    # D45 §7.5 — `POST_AWARD_STATUSES`, not `== GRADUATED`.
+    #
+    # This read `status != GRADUATED -> return` until D45 added ALUMNI as a separate
+    # state. A graduate moved on to Alumni would then have fallen straight through this
+    # guard and kept online access FOREVER — the exact opposite of the D39 policy,
+    # arrived at by adding an enum value rather than by anyone deciding it. Both states
+    # are post-award and both are inside the window.
+    if student is None or student.status not in POST_AWARD_STATUSES:
         return
     if student.graduation_date is None:
         return

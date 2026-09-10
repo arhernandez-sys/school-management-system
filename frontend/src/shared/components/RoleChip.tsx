@@ -23,6 +23,11 @@ const ROLE_COLOR: Record<Role, ChipProps['color']> = {
   // everything conspicuous.
   hod: 'success',
   auditor: 'warning',
+  // D45 §2 — 'error' (red). The strongest chip in the set, for the same reason the
+  // Auditor is 'warning': this account administers logins and permissions, and an
+  // unexpected one in a user list is the single most important thing to notice. It is
+  // not a rank; it is a flag.
+  sysadmin: 'error',
 };
 
 export interface RoleChipProps {

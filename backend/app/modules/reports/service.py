@@ -25,6 +25,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import (
+    GPA_EXCLUDED_STATUSES,
     EnrollmentStatus,
     AcademicYearStatus,
     AssessmentStatus,
@@ -151,18 +152,37 @@ def _semester_ref(db: Session, semester: Semester) -> ReportSemesterRef:
 #: `if r.numeric is None: continue` filter dropped them entirely. A permanent record that
 #: silently omits the course a student withdrew from is not a transcript — the notation IS
 #: the information.
+#:
+#: D45 §19 flattened `withdraw_passing` / `withdraw_failing` into one `withdrawn`, so the
+#: transcript prints a single **W** where it used to print W/P or W/F. The distinction is
+#: gone from the vocabulary by client decision (C6, 2026-09-08), and a transcript must not
+#: claim one the record can no longer support.
+#:
+#: `DROPPED` is deliberately ABSENT. A drop happens inside add/drop and leaves NO
+#: transcript trace at all — that is precisely what separates it from a withdrawal, and
+#: printing a notation for it would put a course on a permanent record that the student
+#: is entitled to have never appear there.
 TRANSCRIPT_NOTATION: dict[EnrollmentStatus, str] = {
     EnrollmentStatus.AUDIT: "AU",
-    EnrollmentStatus.WITHDRAW_PASSING: "W/P",
-    EnrollmentStatus.WITHDRAW_FAILING: "W/F",
+    EnrollmentStatus.WITHDRAWN: "W",
 }
 
 #: Statuses whose credits leave the term GPA **entirely** — see
 #: `students/academics.py::_GPA_DROPPED`, which this mirrors.
 #:
-#: `withdraw_failing` is absent on purpose: BAJC decided (2026-08-23) that a W/F counts as
-#: a fail, so it keeps its credits in the denominator and scores zero quality points.
-GPA_DROPPED = frozenset({EnrollmentStatus.AUDIT, EnrollmentStatus.WITHDRAW_PASSING})
+#: **D45 — this used to hold a SPLIT that no longer exists.** BAJC decided on 2026-08-23
+#: that a W/F counts as a fail, so `withdraw_failing` kept its credits in the denominator
+#: at zero quality points while `withdraw_passing` left the fraction entirely. §19
+#: replaced both with one flat `withdrawn` (client reaffirmed 2026-09-08), so there is
+#: nothing left to branch on and every withdrawal now takes ONE treatment.
+#:
+#: That treatment is "leave the GPA", because it is the only one of the two that cannot
+#: silently invent a failing grade for a student who was passing when they left. The
+#: opposite default would quietly re-score real transcripts on the day it shipped.
+#: ⚠️ Blueprint §29 makes withdrawal treatment configurable in Phase 5; until then this is
+#: a documented assumption, not BAJC policy. Sourced from `enums.GPA_EXCLUDED_STATUSES` so
+#: the two modules cannot drift.
+GPA_DROPPED = GPA_EXCLUDED_STATUSES
 
 
 def _enrollment_status_map(
@@ -938,16 +958,20 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
                 # shrink the denominator and let a student solve for the hidden mark. That
                 # is "scored as ungraded", which is:
                 #
-                #   * exactly right for `withdraw_failing` — a W/F counts as a fail (BAJC,
-                #     2026-08-23), so its credits belong in the denominator at zero;
-                #   * exactly WRONG for `audit` / `withdraw_passing`, whose credits must
-                #     leave the fraction altogether. Those have to be filtered OUT of the
-                #     list, not passed as an exclusion.
+                #   * exactly right for a status that counts as a FAIL — its credits
+                #     belong in the denominator at zero quality points;
+                #   * exactly WRONG for `audit` / `withdrawn` / `dropped`, whose credits
+                #     must leave the fraction altogether. Those have to be filtered OUT of
+                #     the list, not passed as an exclusion.
+                #
+                # D45: `scored_zero` is now driven by `FAILED` alone. It used to hold
+                # `withdraw_failing`, which §19 removed — see `GPA_DROPPED` above for what
+                # that cost and why the surviving treatment is the safe one.
                 dropped = {r.cs_id for r in results if how.get(r.cs_id) in GPA_DROPPED}
                 scored_zero = {
                     r.cs_id
                     for r in results
-                    if how.get(r.cs_id) is EnrollmentStatus.WITHDRAW_FAILING
+                    if how.get(r.cs_id) is EnrollmentStatus.FAILED
                 }
                 term_gpa_entries = _gpa_entries(
                     [r for r in results if r.cs_id not in dropped],
@@ -1247,7 +1271,7 @@ def get_enrollment_report(db: Session, *, actor: User) -> EnrollmentReport:
         .select_from(StudentProfile)
         .where(
             StudentProfile.deleted_at.is_(None),
-            StudentProfile.status == StudentStatus.REGISTERED,
+            StudentProfile.status == StudentStatus.ACTIVE,
         )
     ) or 0
 

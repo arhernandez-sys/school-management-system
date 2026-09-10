@@ -118,6 +118,10 @@ class TestListPrograms:
             "course_count", "curriculum_credits",
             # D44, from the client's sims_10 dump.
             "admission_requirements", "graduation_requirements", "comments",
+            # D45 §8 — Department Management lands on the programme, because BAJC has no
+            # departments table and a programme is the unit it organises by (client
+            # decision C4, 2026-09-08).
+            "head_of_department", "office_information",
         } == set(item.keys())
 
     def test_requires_auth(self, client) -> None:
@@ -430,7 +434,7 @@ class TestUpdateAndDeleteProgram:
                 **split_name("Enrolled Student"),
                 date_of_birth=date(2007, 1, 1),
                 enrollment_date=date(2025, 9, 1),
-                status="Registered",
+                status="Active",
                 program_id=program.id,
             )
         )

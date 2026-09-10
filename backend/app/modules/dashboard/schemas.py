@@ -94,12 +94,85 @@ class AdminStats(BaseModel):
     new_students_term: int = 0
     total_courses: int = 0
     student_capacity: int = 0
+    #: D45 §42 / §59 — the Dean Dashboard's admissions pair.
+    #:
+    #: "New Applicants" is the count of applications SUBMITTED but not yet decided —
+    #: draft, submitted, under review, documents pending, eligible, deferred. It is a
+    #: WORK QUEUE, which is the only reading that makes it a dashboard number: "how many
+    #: people are waiting on us". A cumulative count of everyone who ever applied would
+    #: only ever go up and would tell the Dean nothing to act on.
+    #:
+    #: `draft` is deliberately EXCLUDED — an application the applicant has not sent is
+    #: not waiting on the college.
+    new_applicants: int = 0
+    #: "Students Accepted" (§59) — accepted but not yet converted to a student record.
+    #: The gap between this and `active_students` is the enrolment work still outstanding.
+    accepted_applicants: int = 0
+    #: §59 "Active Programmes".
+    active_programmes: int = 0
+    #: §59 "Students At Risk" — below the college's configured attendance floor
+    #: (D45 §23, `school_profile.attendance_alert_threshold`).
+    students_at_risk: int = 0
+
+    # ── D45 Phase 8 — the rest of §42's KPI set, so far as this project can answer it ──
+    #
+    # §42 names eight indicators the Dean dashboard was missing. Five are built here and
+    # in `_admin_payload`; THREE ARE NOT, and the reason is recorded rather than left to
+    # be rediscovered:
+    #
+    #   * "students on probation"    — needs Academic Standing, DEFERRED with C1.
+    #   * "graduation candidates"    — needs the Graduation Audit, DEFERRED with C2.
+    #
+    # A tile reading 0 for a feature that does not exist is worse than no tile: it is a
+    # number the Dean would believe. Neither is faked.
+
+    #: §42 "graduates". Students whose lifecycle status is `Graduated`.
+    #:
+    #: ⚠️ CUMULATIVE, not this year's, and that is forced by the data rather than chosen:
+    #: `student_profiles.graduation_date` is NULL on every graduated row in the live
+    #: register, so there is nothing to scope a year by. Scoping on the column anyway
+    #: would render 0 for a college that has graduated people, which is the worse of the
+    #: two wrong answers. The tile says "to date" so the number is not misread.
+    graduates: int = 0
+    #: §42 "outstanding grade submissions" — assessments in the active session still
+    #: being MARKED (lifecycle `published` or `grading`), college-wide.
+    #:
+    #: The SAME predicate as the Lecturer's own `ungraded_items` tile, deliberately: this
+    #: is that figure summed over every lecturer, and a Dean asking "who is behind on
+    #: marking" must not get a total that disagrees with the people it is about.
+    outstanding_grade_submissions: int = 0
+    #: §42 "course failure rates", as one headline percentage: of every term grade that
+    #: RESOLVED to a letter this session, the share whose band is not passing.
+    #:
+    #: The denominator is resolved grades, NOT enrolments. A course three weeks into the
+    #: session has almost no resolved grades, and dividing by its roster would report a
+    #: catastrophic failure rate for a class that has simply not been assessed yet.
+    failure_rate: float = 0.0
+
+
+class CourseFailureRateItem(BaseModel):
+    """One course's failure rate this session (§42 "course failure rates").
+
+    Per COURSE, not per offering: three sections of MATH1110 are one teaching problem,
+    and splitting them makes each section's numerator too small to read.
+    """
+
+    course_code: str
+    course_name: str
+    #: Term grades that resolved to a letter. The denominator — see `AdminStats.failure_rate`.
+    results: int = 0
+    failing: int = 0
+    failure_rate: float = 0.0
 
 
 class AdminDashboard(_Base):
     role: Literal["principal"] = "principal"
     stats: AdminStats
     enrollment_by_programme: list[EnrollmentByProgrammeItem] = Field(default_factory=list)
+    #: §42 — worst first, and only courses with enough resolved grades to mean anything
+    #: (see `_MIN_FAILURE_RATE_RESULTS`). A course with one graded student at 40% is not
+    #: a 100% failure rate, it is one student.
+    course_failure_rates: list[CourseFailureRateItem] = Field(default_factory=list)
     grade_distribution: list[GradeDistributionItem] = Field(default_factory=list)
     enrollment_trend: list[EnrollmentTrendItem] = Field(default_factory=list)
     recent_teachers: list[DashboardPerson] = Field(default_factory=list)

@@ -47,6 +47,7 @@ from app.db.session import SessionLocal
 from app.modules.offerings.models import Course
 from app.modules.prerequisites.models import CoursePrerequisite
 from app.modules.programs.models import Program, ProgramCourse
+from app.modules.settings.models import AuditLog
 
 # Every table here carries AuditMixin, whose `created_by`/`updated_by` FKs are declared
 # as the STRING "users.id" and resolved against the metadata at flush time. Without
@@ -226,6 +227,37 @@ def _seed_prerequisites(
             is not None
         )
 
+    def deliberately_removed(course_id, prereq_id, program_id) -> bool:  # noqa: ANN001
+        """Did a Dean delete this exact requirement through the API?
+
+        D45 §3b P4. This seeder is idempotent on the (course, prerequisite, programme)
+        tuple, which means it RE-CREATES anything absent — including a requirement a
+        Dean deleted deliberately. The deletion is silently undone by the next catalog
+        re-seed, with nothing on screen to say it happened.
+
+        `course_prerequisite.remove` audit rows carry the pair since D45 Phase 3A, so a
+        removal is durable evidence of intent and this can honour it. Rows written
+        BEFORE Phase 3A have no `prerequisite_course_id` in their summary and are
+        (correctly) not matched here — there is nothing in them to match on.
+        """
+        rows = db.scalars(
+            select(AuditLog.summary).where(
+                AuditLog.action == "course_prerequisite.remove",
+                AuditLog.entity_id == course_id,
+            )
+        ).all()
+        target_prereq = str(prereq_id) if prereq_id else None
+        target_program = str(program_id) if program_id else None
+        for summary in rows:
+            if not isinstance(summary, dict):
+                continue
+            if (
+                summary.get("prerequisite_course_id") == target_prereq
+                and summary.get("program_id") == target_program
+            ):
+                return True
+        return False
+
     for course_code, required_code in COURSE_PREREQUISITES:
         course = courses.get(course_code.upper())
         required = courses.get(required_code.upper())
@@ -235,6 +267,13 @@ def _seed_prerequisites(
             )
             continue
         if exists(course.id, required.id, None):
+            report.bump(report.unchanged, "prerequisites")
+            continue
+        if deliberately_removed(course.id, required.id, None):
+            report.notes.append(
+                f"prerequisite NOT restored — removed by the Dean: "
+                f"{course_code} <- {required_code}"
+            )
             report.bump(report.unchanged, "prerequisites")
             continue
         db.add(
@@ -251,6 +290,13 @@ def _seed_prerequisites(
         course = courses[course_code.upper()]
         program = programs[program_code.upper()]
         if exists(course.id, None, program.id):
+            report.bump(report.unchanged, "ALL-COURSES gates")
+            continue
+        if deliberately_removed(course.id, None, program.id):
+            report.notes.append(
+                f"ALL-COURSES gate NOT restored — removed by the Dean: "
+                f"{course_code} ({program_code})"
+            )
             report.bump(report.unchanged, "ALL-COURSES gates")
             continue
         db.add(

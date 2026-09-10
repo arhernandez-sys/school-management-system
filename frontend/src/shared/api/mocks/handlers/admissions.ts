@@ -772,7 +772,7 @@ export const admissionsHandlers = [
       // `admissions/service.py:263`. This is the only path that ever populates it.
       religion: app.religion ?? null,
       enrollment_date: acceptedOn,
-      status: 'Registered',
+      status: 'Active',
       // The declared year IS the level — the application and the profile now speak the same
       // `enum('First','Second')`, so this is a straight carry rather than a coercion.
       year_of_study: app.year_of_study ?? 'First',

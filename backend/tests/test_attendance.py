@@ -135,7 +135,7 @@ class _Graph:
             **split_name(name or f"Stu {uuid.uuid4().hex[:4]}"),
             date_of_birth=date(2012, 1, 1),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
         )
         if with_login:
             user = self._make_user(role=Role.STUDENT, full_name=s.full_name)

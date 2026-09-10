@@ -34,6 +34,24 @@ class Role(str, enum.Enum):
                role, is what limits that - and additionally READS everything in the
                programme(s) they head. The link is `program_heads`; there is no
                `departments` table and a programme is the unit BAJC actually has.
+
+    D45 added the last one:
+
+      SYSADMIN The technical administrator (blueprint §2). Accounts, permissions,
+               configuration, backups - and NO academic data at all. The blueprint's §48
+               is explicit that "sensitive information should not be accessible simply
+               because the user is an employee", and a sysadmin is the employee with the
+               least academic reason to read a transcript.
+
+               The DB enum has carried `'sysadmin'` since D44 as STORAGE ONLY; this is the
+               member that makes it reachable.
+
+               Enforced as an ALLOWLIST of path prefixes, not a denylist, and centrally in
+               `get_current_user` for the same reason the auditor's rule lives there: a
+               denylist is default-ALLOW, so an academic router added next year would be
+               readable by the sysadmin until someone remembered to list it. The allowlist
+               inverts that - a new router is closed to the sysadmin until someone decides
+               otherwise, which is the direction a least-privilege role has to fail in.
     """
 
     PRINCIPAL = "principal"
@@ -42,11 +60,16 @@ class Role(str, enum.Enum):
     STUDENT = "student"
     HOD = "hod"
     AUDITOR = "auditor"
+    SYSADMIN = "sysadmin"
 
 
 #: Roles that may never write, whatever route they reach. Enforced centrally in
 #: `app.core.deps.get_current_user` - see `Role.AUDITOR` above.
 READ_ONLY_ROLES: frozenset[Role] = frozenset({Role.AUDITOR})
+
+#: Roles confined to an ALLOWLIST of path prefixes, enforced centrally in
+#: `app.core.deps.get_current_user` (D45 §2). See `Role.SYSADMIN`.
+TECHNICAL_ROLES: frozenset[Role] = frozenset({Role.SYSADMIN})
 
 #: Roles that carry a `teacher_profiles` row and can therefore own an offering.
 #: Anywhere that resolves a lecturer profile from the principal must accept both, or an
@@ -55,38 +78,76 @@ LECTURER_ROLES: frozenset[Role] = frozenset({Role.TEACHER, Role.HOD})
 
 
 class StudentStatus(str, enum.Enum):
-    """Student lifecycle, in the CLIENT'S vocabulary (D34).
+    """Student lifecycle — the blueprint's §7.5 vocabulary (D45 §7.5, decision C5).
 
-    Adopted verbatim from the client's own `student_profiles` dump, including its comment
-    on what each state means:
+    **D45 REPLACED the D34 vocabulary.** D34 adopted the client's own six-value dump
+    verbatim; the revised blueprint (8 Sep 2026) lists ten states, and BAJC confirmed on
+    2026-09-08 that the ten are what they want. The D34 six map onto them cleanly:
 
-      REGISTERED    "instead of active" - enrolled and attending.
-      UNREGISTERED  "when student do not continue further semesters, but has successfully
-                    completed the last semester". NOT a failure state, which is why
-                    "inactive" was the wrong word for it.
-      DROPOUT       left mid-programme. Pairs with `dropout_date` / `dropout_reason`.
-      GRADUATED     "Dean/Registrar are the only ones with access to change to this
-                    status" - already true, since POST /students/{id}/status is
-                    require_role(PRINCIPAL, SECRETARY).
-      TRANSFERRED / WITHDRAWN  unchanged.
+        Registered   -> ACTIVE        Unregistered -> INACTIVE
+        DropOut      -> DROPOUT       graduated    -> GRADUATED
+        withdrawn    -> WITHDRAWN     transferred  -> TRANSFERRED (kept, see below)
 
-    **The mixed case is deliberate.** Three values are TitleCase and three are lowercase
-    because that is exactly how the client's enum reads, and their dump is the authority
-    for this column - normalising it would put the database out of step with their own
-    tooling for a cosmetic gain. MariaDB's `utf8mb4_uca1400_ai_ci` is case-insensitive, so
-    comparison is unaffected; the case matters only for what is stored and echoed.
+    **TRANSFERRED is an ELEVENTH value and is NOT in the blueprint.** The ten have no
+    "transferred", and it is a real state BAJC records — one live row carries it today.
+    Mapping it onto `Withdrawn` would have rewritten that student's history to say
+    something untrue about why they left, so the client chose (2026-09-08) to keep it.
 
-    The MEMBER names track the values (`REGISTERED`, not `ACTIVE`) so a reader of
-    `StudentStatus.REGISTERED` sees the word the registry actually uses. That rename is
-    why D34 touches ~20 call sites it otherwise would not have.
+    **The case was normalised to TitleCase**, unlike D34, which preserved the client
+    dump's mixed `Registered` / `graduated` spelling. The blueprint writes all ten in
+    TitleCase and it is now the authority for this column, so the inconsistency no longer
+    buys anything. ⚠️ MariaDB's `utf8mb4_uca1400_ai_ci` is case-INSENSITIVE, which means
+    the re-spelling is invisible to `=` and to `GROUP BY`: `019_d45_status_vocabularies.sql`
+    verifies it with `HEX()`, and a plain equality check would have reported success
+    whether or not the bytes ever changed.
+
+    What each state means:
+
+      APPLICANT   Applied; no student record yet. Reachable only as a correction today —
+                  `admissions` still converts an accepted applicant straight to ACTIVE.
+      ACCEPTED    Admitted, not yet enrolled in anything.
+      ACTIVE      Enrolled and attending. The D34 `Registered`, and what every
+                  "how many students" count in this system means.
+      INACTIVE    The soft pause. The client's D34 comment still defines it: "completed
+                  the last semester but is not continuing" — NOT a failure state.
+      SUSPENDED   A pause IMPOSED rather than chosen. New in D45; distinct from INACTIVE
+                  precisely because the college, not the student, caused it.
+      WITHDRAWN   Left voluntarily.
+      DROPOUT     Left mid-programme without notice. Pairs with `dropout_date` /
+                  `dropout_reason`.
+      COMPLETED   Coursework finished, award not yet conferred. A waypoint, not an end.
+      GRADUATED   Award conferred. Pairs with `graduation_date`, and starts the
+                  post-graduation access window (D39, item 6).
+      ALUMNI      Life after the award. ⚠️ Also inside the access window — see
+                  `POST_AWARD_STATUSES`.
+      TRANSFERRED Moved to another institution. The eleventh; see above.
     """
 
-    REGISTERED = "Registered"
-    UNREGISTERED = "Unregistered"
-    DROPOUT = "DropOut"
-    TRANSFERRED = "transferred"
-    GRADUATED = "graduated"
-    WITHDRAWN = "withdrawn"
+    APPLICANT = "Applicant"
+    ACCEPTED = "Accepted"
+    ACTIVE = "Active"
+    INACTIVE = "Inactive"
+    SUSPENDED = "Suspended"
+    WITHDRAWN = "Withdrawn"
+    DROPOUT = "Dropout"
+    COMPLETED = "Completed"
+    GRADUATED = "Graduated"
+    ALUMNI = "Alumni"
+    #: Not in the blueprint's ten. Kept by client decision — see the class docstring.
+    TRANSFERRED = "Transferred"
+
+
+#: Statuses that mean "the award has been conferred" (D45 §7.5).
+#:
+#: EXISTS BECAUSE `ALUMNI` WOULD OTHERWISE BE A HOLE. The post-graduation access window
+#: (D39, item 6) closes a graduate's online access N days after `graduation_date`, and it
+#: was written as `status != GRADUATED -> return`. Adding ALUMNI as a separate state means
+#: a graduate moved on to it would have escaped the window entirely and kept access
+#: forever — the exact opposite of the policy, arrived at by adding a value rather than by
+#: anyone deciding it. Both states are post-award and both are inside the window.
+POST_AWARD_STATUSES: frozenset[StudentStatus] = frozenset(
+    {StudentStatus.GRADUATED, StudentStatus.ALUMNI}
+)
 
 
 class TeacherStatus(str, enum.Enum):
@@ -360,18 +421,85 @@ def normalise_civil_status(value: str | None) -> str | None:
 
 
 class EnrollmentStatus(str, enum.Enum):
-    """How a student is sitting one course offering (D30 §D2 step 4).
+    """How a student is sitting one course offering — blueprint §19 (D45, decision C6).
 
-    `sims_bk.sql` carried this as `courses.coursestatus` — an ENROLMENT fact parked
-    on the CATALOG, where it would have applied to every student taking the course at
-    once. `005_tertiary.sql` §8 moved it to `class_enrollments` and added `enrolled`,
-    which the original enum lacked entirely despite being the normal case.
+    `sims_bk.sql` carried this as `courses.coursestatus` — an ENROLMENT fact parked on the
+    CATALOG, where it would have applied to every student taking the course at once.
+    `005_tertiary.sql` §8 moved it to `class_enrollments` and added `enrolled`, which the
+    original enum lacked entirely despite being the normal case.
+
+    **D45 REPLACED the four values with the blueprint's eight**, and two of those changes
+    are not renames:
+
+      `enrolled` -> `registered`   A pure rename. The blueprint says Registered and so
+                                   does every person in the building; 393 rows migrated.
+
+      `withdraw_passing` +         ⚠️ **FLATTENED INTO ONE `withdrawn`, AND THAT COSTS A
+      `withdraw_failing`               RULE.** D35 established with BAJC that a
+              -> `withdrawn`           withdrawal-PASSING leaves the GPA alone while a
+                                       withdrawal-FAILING counts as a fail. §19 lists a
+                                       single flat "Withdrawn", the client reaffirmed it
+                                       on 2026-09-08 after being shown this consequence,
+                                       and so the distinction is gone from the vocabulary.
+
+    **What that means in practice, so nobody rediscovers it in six months.** No data was
+    lost — both values had zero rows. What went is the CAPABILITY: `reports/service.py`
+    and `students/academics.py` can no longer tell the two apart, so every withdrawal now
+    takes ONE treatment. D45 makes that treatment "drop from the GPA", which is the D35
+    `withdraw_passing` behaviour, because it is the choice that cannot silently invent a
+    failing grade for a student who was passing. **Whether that is BAJC's policy is a
+    PHASE 5 question** — blueprint §29 puts withdrawal treatment in configuration
+    ("Rules for repeats, withdrawals, incompletes ... should be configurable according to
+    BAJC policy"), and until that lands this is an assumption, not a ruling.
+
+    The four new states are storage today and nothing branches on them yet:
+
+      PRE_REGISTERED  Intends to take it; the seat is not held.
+      ADDED           Joined after registration closed, during add/drop.
+      DROPPED         Left during add/drop. Leaves no transcript trace, which is what
+                      distinguishes it from WITHDRAWN.
+      COMPLETED       Sat it through to a final grade.
+      FAILED          Sat it and did not pass.
     """
 
-    ENROLLED = "enrolled"
+    PRE_REGISTERED = "pre_registered"
+    REGISTERED = "registered"
+    ADDED = "added"
+    DROPPED = "dropped"
+    WITHDRAWN = "withdrawn"
+    COMPLETED = "completed"
+    FAILED = "failed"
     AUDIT = "audit"
-    WITHDRAW_PASSING = "withdraw_passing"
-    WITHDRAW_FAILING = "withdraw_failing"
+
+
+#: ⚠️ SEAT OCCUPANCY IS **NOT** DECIDED BY THIS ENUM, AND D45 CHECKED (2026-09-08).
+#:
+#: The obvious worry on going from four states to eight is that `uq_enroll_active` and
+#: `class_enrollments.enroll_active_flag` would silently change meaning — that a
+#: `pre_registered` or `dropped` row would start or stop holding a seat by accident.
+#: They do not: the generated column is `if(unenrolled_at is null, 1, NULL)`, and all 33
+#: roster reads in this codebase filter on `unenrolled_at IS NULL`. Not one of them looks
+#: at `enrollment_status`.
+#:
+#: So the four NEW states are storage today and nothing branches on them. A
+#: `ROSTER_OCCUPYING_STATUSES` set was written here and deleted again: it would have been
+#: a constant with no callers, asserting a capacity rule nobody had asked for. When §20's
+#: capacity check ("Class has available space") is built, that is the moment to decide
+#: whether a pre-registration holds a seat — and to decide it deliberately.
+
+#: Enrolment states whose credits leave the GPA entirely (D45 §19; was D35's pairing).
+#:
+#: `AUDIT` was never graded. `WITHDRAWN` is here because the flattening above removed the
+#: W-P / W-F distinction and this is the treatment that cannot invent a failing grade for
+#: a student who was passing when they left. `DROPPED` never reached a grade at all.
+#: ⚠️ Phase 5 (§29) makes this configurable; until then it is an assumption.
+GPA_EXCLUDED_STATUSES: frozenset[EnrollmentStatus] = frozenset(
+    {
+        EnrollmentStatus.AUDIT,
+        EnrollmentStatus.WITHDRAWN,
+        EnrollmentStatus.DROPPED,
+    }
+)
 
 
 class AssessmentType(str, enum.Enum):

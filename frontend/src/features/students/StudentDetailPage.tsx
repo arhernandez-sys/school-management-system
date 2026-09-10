@@ -474,7 +474,7 @@ function StudentActions({ student }: { student: StudentDetail }) {
     undefined,
   );
   const [statusOpen, setStatusOpen] = useState(false);
-  const [nextStatus, setNextStatus] = useState<StudentStatus>('Registered');
+  const [nextStatus, setNextStatus] = useState<StudentStatus>('Active');
   const [statusError, setStatusError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -549,7 +549,7 @@ function StudentActions({ student }: { student: StudentDetail }) {
           onClick={() => {
             setStatusError(null);
             // D34 vocabulary: the toggle flips between the two LIVE states.
-            setNextStatus(student.status === 'Registered' ? 'Unregistered' : 'Registered');
+            setNextStatus(student.status === 'Active' ? 'Inactive' : 'Active');
             setStatusOpen(true);
           }}
         >

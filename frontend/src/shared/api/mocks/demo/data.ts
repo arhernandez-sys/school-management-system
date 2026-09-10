@@ -711,17 +711,23 @@ for (let i = 0; i < 45; i += 1) {
   const dob = `${birthYear}-${String(randInt(rngStu, 1, 12)).padStart(2, '0')}-${String(
     randInt(rngStu, 1, 28),
   ).padStart(2, '0')}`;
-  // Mostly Registered; a few of every other state for realism. The two scenario
-  // students are always Registered — the demo depends on their timetables rendering.
-  // D34 renamed the vocabulary (active→Registered, inactive→Unregistered) and added
-  // DropOut, which is seeded here so the register has one to show.
-  let status: DemoStudent['status'] = 'Registered';
+  // Mostly Active; a few of every other state for realism. The two scenario students are
+  // always Active — the demo depends on their timetables rendering.
+  //
+  // D45 replaced the vocabulary again (Registered→Active, Unregistered→Inactive,
+  // DropOut→Dropout, and the lowercase three became TitleCase). Two of the new states are
+  // seeded so the register has one of each to show: `Suspended`, which is the only status
+  // that renders as a warning, and `Alumni`, which is the one that must still fall inside
+  // the post-graduation access window.
+  let status: DemoStudent['status'] = 'Active';
   if (!scenario) {
-    if (i === 7) status = 'Unregistered';
-    else if (i === 20) status = 'withdrawn';
-    else if (i === 33) status = 'transferred';
-    else if (i === 41) status = 'graduated';
-    else if (i === 28) status = 'DropOut';
+    if (i === 7) status = 'Inactive';
+    else if (i === 20) status = 'Withdrawn';
+    else if (i === 33) status = 'Transferred';
+    else if (i === 41) status = 'Graduated';
+    else if (i === 28) status = 'Dropout';
+    else if (i === 15) status = 'Suspended';
+    else if (i === 37) status = 'Alumni';
   }
   // D30 §D10: the parts are primary; `full_name` is derived from them, never the
   // other way round. Scenario students carry a fixed display name, so it is split
@@ -731,9 +737,10 @@ for (let i = 0; i < 45; i += 1) {
   const middleName = restName.slice(0, -1).join(' ') || null;
   const full_name = [firstName, middleName, lastName].filter(Boolean).join(' ');
 
-  // Graduated / withdrawn students hold no active enrollment.
+  // Students who have left hold no active enrollment. D45 added Alumni to the set — it is
+  // a post-award state, so a timetable would be as wrong there as it is for a graduate.
   const load =
-    status === 'graduated' || status === 'withdrawn'
+    status === 'Graduated' || status === 'Withdrawn' || status === 'Alumni'
       ? []
       : (scenario?.offerings ??
         (yearOfStudy === 'Second'
@@ -803,10 +810,12 @@ for (let i = 0; i < 45; i += 1) {
     // never exercise the profile card's empty-section handling.
     student_id_original: i % 5 === 0 ? 20000 + i : null,
     email: `${first.toLowerCase()}.${last.toLowerCase()}@student.bajc.edu.bz`,
-    transferred_from: status === 'transferred' ? 'Belize High School' : null,
-    graduation_date: status === 'graduated' ? '2026-06-19' : null,
-    dropout_date: status === 'DropOut' ? '2026-03-02T00:00:00Z' : null,
-    dropout_reason: status === 'DropOut' ? 'Relocated abroad mid-semester.' : null,
+    transferred_from: status === 'Transferred' ? 'Belize High School' : null,
+    // D45 — Alumni carries one too: the access window reads this column, and an Alumni
+    // row with a NULL date would never expire.
+    graduation_date: status === 'Graduated' || status === 'Alumni' ? '2026-06-19' : null,
+    dropout_date: status === 'Dropout' ? '2026-03-02T00:00:00Z' : null,
+    dropout_reason: status === 'Dropout' ? 'Relocated abroad mid-semester.' : null,
     comments: i % 9 === 4 ? 'Fee plan agreed with the bursar.' : null,
     origin: i < 6 ? 'admissions' : 'import-2025',
     // No FK and no consumer — mirrored only so the demo shape matches the wire.
@@ -833,7 +842,7 @@ function enrol(studentId: string, offering: DemoOffering, unenrolledAt: string |
     unenrolled_at: unenrolledAt,
     // D35 — ordinary by default. `seedCourseStatuses()` below marks a few afterwards, so
     // the register has an audit and a withdrawal to show without every row being unusual.
-    enrollment_status: 'enrolled',
+    enrollment_status: 'registered',
   });
 }
 
@@ -865,7 +874,7 @@ for (const stu of students) {
 // One student switched Algebra sections mid-term: a closed row on -01 plus an active row on
 // -02. This is a genuine SWITCH of one offering, not the old whole-student "transfer" — and
 // it exercises the "grade rows ∪ active roster" path in Module 3.
-const switchStudent = students.find((s) => s.status === 'transferred');
+const switchStudent = students.find((s) => s.status === 'Transferred');
 if (switchStudent) {
   enrol(switchStudent.id, offeringByKey('MATH1110-01'), '2025-09-25T08:00:00Z');
 }
@@ -1381,7 +1390,7 @@ for (const s of students) {
     username: s.student_number.toLowerCase(),
     full_name: s.full_name,
     role: 'student',
-    is_active: s.status === 'Registered',
+    is_active: s.status === 'Active',
     must_change_password: false,
     last_login_at: addDays(DEMO_TODAY, -randInt(makeRng(s.id.length + 9), 0, 7)) + 'T15:00:00Z',
   });
@@ -1472,7 +1481,7 @@ for (const stu of students) {
       enrolled_at: '2024-09-02T08:00:00Z',
       unenrolled_at: null,
       // D35 — last year's rows are ordinary registrations.
-      enrollment_status: 'enrolled',
+      enrollment_status: 'registered',
     });
     histEnrollmentId.set(`${stu.id}:${twin.id}`, enrId);
   }
@@ -2173,8 +2182,8 @@ const grade_revision_requests: DemoGradeRevisionRequest[] = revisableGrade
   // One of each, so every branch of the roster badge, the academic-history bucket and the
   // transcript notation has a row behind it.
   mark(3, 'audit');
-  mark(11, 'withdraw_passing');
-  mark(19, 'withdraw_failing');
+  mark(11, 'withdrawn');
+  mark(19, 'withdrawn');
   mark(27, 'audit');
 })();
 

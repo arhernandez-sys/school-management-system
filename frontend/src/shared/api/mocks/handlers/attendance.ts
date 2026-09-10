@@ -75,7 +75,7 @@ function actingTeacherId(): string {
 
 /** The student the demo acts as for `/attendance/me` (canonical: stu-1 = Freddy Lopez). */
 function actingStudentId(): string {
-  return getStudent('stu-1')?.id ?? D.students.find((s) => s.status === 'Registered')!.id;
+  return getStudent('stu-1')?.id ?? D.students.find((s) => s.status === 'Active')!.id;
 }
 
 /**

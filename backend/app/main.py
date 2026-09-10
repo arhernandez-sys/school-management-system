@@ -43,6 +43,7 @@ from app.modules.assessments.router import router as assessments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.announcements.router import router as announcements_router
 from app.modules.attendance.router import router as attendance_router
+from app.modules.audit.router import router as audit_router
 from app.modules.offerings.router import router as offerings_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.events.router import router as events_router
@@ -95,6 +96,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     reports_router,  # 7.9b — serves /api/v1/reports/* (api-spec §5 Module 10)
     events_router,  # 12 — serves /api/v1/events/* (scope addition; see progress-tracker)
     timetable_router,  # 13 — serves /api/v1/timetable/* (D29 sixth-form schedule)
+    audit_router,  # D45 Phase 7 — /api/v1/audit/* (§46 trail, §53 reports). READ ONLY.
 ]
 
 

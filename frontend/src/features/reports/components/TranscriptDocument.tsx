@@ -61,7 +61,7 @@ function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
 
       {semester.subjects.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-          No recorded grades for this term.
+          No recorded grades for this session.
         </Typography>
       ) : (
         <TableContainer>

@@ -15,6 +15,7 @@ function makeUser(role: Role, overrides: Partial<CurrentUser> = {}): CurrentUser
     student: 'Ana Lopez',
     hod: 'Daniel Cruz',
     auditor: 'Ruth Bennett',
+    sysadmin: 'Errol Nunez',
   };
   return {
     id: `mock-${role}`,

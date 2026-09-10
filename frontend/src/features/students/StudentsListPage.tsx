@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -30,6 +30,7 @@ import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
 import { surnameFirst } from '@shared/utils/names';
 import { CIVIL_STATUSES, genderLabel } from '@shared/types/enums';
+import type { StudentStatus } from '@shared/types/enums';
 import { useReligions } from '@features/settings/hooks/useReligions';
 import { useStudentFilterOptions, useStudentsList } from './hooks/useStudents';
 import { useOfferingOptions } from './hooks/useOfferingOptions';
@@ -69,6 +70,11 @@ import type { StudentListItem, StudentsListParams } from './types';
  * untouched: it is still the API's `last_name`, which the server expands to
  * `(last_name, first_name, id)`.
  */
+/** Whether a URL-supplied `?status=` is a status the register can actually filter on. */
+function isKnownStudentStatus(value: string | null): value is StudentStatus {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(STUDENT_STATUS_LABEL, value as string);
+}
+
 export function StudentsListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -80,7 +86,30 @@ export function StudentsListPage() {
   const debouncedSearch = useDebounce(search, 300);
   // Everything except search lives in one object so the modal can edit a draft copy of it
   // and commit the lot in a single state update (D33).
-  const [filters, setFilters] = useState<StudentFilterValues>(EMPTY_STUDENT_FILTERS);
+  /**
+   * `?status=` is read from the URL so the directory can be aimed at one cohort from
+   * elsewhere — the Dean dashboard's "Graduates" tile lands here at
+   * `?status=Graduated`.
+   *
+   * Only `status` is URL-addressable, deliberately. Syncing all eight filters both ways
+   * would put the modal's draft-then-Apply flow (D33) in a fight with the address bar,
+   * and no caller has asked to aim any of the others.
+   */
+  const [searchParams] = useSearchParams();
+  const urlStatus = searchParams.get('status');
+  const [filters, setFilters] = useState<StudentFilterValues>(() =>
+    isKnownStudentStatus(urlStatus)
+      ? { ...EMPTY_STUDENT_FILTERS, status: urlStatus }
+      : EMPTY_STUDENT_FILTERS,
+  );
+  // Re-seeded when the parameter changes, for the same reason as the admissions list:
+  // arriving twice at two different cohorts does not remount the screen.
+  useEffect(() => {
+    if (isKnownStudentStatus(urlStatus)) {
+      setFilters((prev) => ({ ...prev, status: urlStatus }));
+      setPage(0);
+    }
+  }, [urlStatus]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [printOpen, setPrintOpen] = useState(false);
   // D30 §D10: the register is ordered by SURNAME then given name. `last_name` is the

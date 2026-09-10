@@ -165,8 +165,12 @@ class TranscriptSubjectRow(BaseModel):
     #: Non-nullable here (unlike the report card) — the transcript only lists rows
     #: that actually resolved to a grade, OR carry a `notation` below.
     letter: str = ""
-    #: D35 — the registry notation for a course with no grade: `AU` (audited), `W/P`
-    #: (withdrew passing), `W/F` (withdrew failing). `None` for an ordinary graded row.
+    #: D35 — the registry notation for a course with no grade: `AU` (audited) or `W`
+    #: (withdrawn). `None` for an ordinary graded row.
+    #:
+    #: ⚠️ D45 §19 collapsed `W/P` + `W/F` into one `W`. The record no longer distinguishes
+    #: a withdrawal-passing from a withdrawal-failing, and a transcript must not print a
+    #: distinction the data cannot support.
     #:
     #: When this is set, `numeric` and `letter` are empty by definition and the row is
     #: excluded from the term average AND the GPA. It is printed anyway because that is
@@ -295,3 +299,223 @@ class EnrollmentReport(BaseModel):
     totals: EnrollmentTotals
     by_programme: list[EnrollmentByProgramme] = Field(default_factory=list)
     by_offering: list[EnrollmentByOffering] = Field(default_factory=list)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D45 Phase 9 — the four institutional reports of §53
+#
+# These four are DIFFERENT IN KIND from everything above. A report card and a
+# transcript are documents ABOUT ONE STUDENT, printed and handed over. These are
+# management reports about the COLLEGE — one row per programme, per offering or per
+# student — read on screen by the Dean, the Registrar, the Auditor or a Head of
+# Department to find the thing that needs attention.
+#
+# Every one of them therefore carries a `note`: a plain sentence saying what the
+# numbers mean and what they deliberately do not. A management report whose
+# definition lives only in a service docstring is a report two people will read two
+# different ways in the same meeting.
+# ══════════════════════════════════════════════════════════════════════════════
+class ReportScope(BaseModel):
+    """Who is looking, and how much of the college they were shown.
+
+    A Head of Department sees their own programmes and nobody else's, and the report
+    has to SAY so — an HOD reading "12 students below the attendance floor" must not
+    take it for the college total. `programmes` is empty for an unscoped reader.
+    """
+
+    is_scoped: bool = False
+    programmes: list[str] = Field(default_factory=list)
+
+
+# ── GET /reports/new-vs-returning ─────────────────────────────────────────────
+class NewVsReturningProgrammeRow(BaseModel):
+    programme: str
+    programme_code: str | None = None
+    new: int = 0
+    returning: int = 0
+    total: int = 0
+
+
+class NewVsReturningSemesterRow(BaseModel):
+    """One term of the chosen year.
+
+    ⚠️ `new` here is a DIFFERENT question from the year-level count: it means *this
+    term is the first term this student has ever registered in*. A student who first
+    registered in Semester 1 is `new` in that row and `returning` in Semester 2 — of
+    the same year. Both readings are legitimate and BAJC uses both (intake for the
+    year, intake for the term), so both are returned rather than one being picked.
+    """
+
+    semester: ReportSemesterRef
+    new: int = 0
+    returning: int = 0
+    total: int = 0
+
+
+class NewVsReturningStudentRow(BaseModel):
+    student: ReportStudentRef
+    programme: str | None = None
+    is_new: bool = False
+    #: The academic year the student FIRST registered in, whenever that was. For a new
+    #: student this is the report's own year; for a returning one it is the evidence.
+    first_registered_year: str | None = None
+
+
+class NewVsReturningReport(BaseModel):
+    academic_year: ReportAcademicYearRef
+    generated_at: datetime
+    new: int = 0
+    returning: int = 0
+    total: int = 0
+    by_programme: list[NewVsReturningProgrammeRow] = Field(default_factory=list)
+    by_semester: list[NewVsReturningSemesterRow] = Field(default_factory=list)
+    students: list[NewVsReturningStudentRow] = Field(default_factory=list)
+    scope: ReportScope = Field(default_factory=ReportScope)
+    note: str
+
+
+# ── GET /reports/overcapacity ─────────────────────────────────────────────────
+#: Only the three bands a row can be RETURNED in. There is deliberately no "under":
+#: classes with room to spare are counted in `OvercapacityReport.under_capacity` and not
+#: listed, because listing them would turn an exceptions report into the enrolment report.
+#: A wire enum carrying a value no response can ever hold is a value somebody writes a
+#: branch for and never sees taken.
+OvercapacityBand = Literal["over", "at", "unset"]
+
+
+class OvercapacityRow(BaseModel):
+    offering: OfferingRef
+    lecturer: str | None = None
+    capacity: int | None = None
+    registered: int = 0
+    #: `registered - capacity` when over, else 0. Sent rather than derived so the
+    #: screen and the report cannot disagree about what "over by" means for a NULL
+    #: capacity (it is 0, not the headcount).
+    over_by: int = 0
+    #: NULL when no capacity is set — a percentage of nothing is not 100%, it is
+    #: unanswerable, and rendering it as 0% would put every unlimited class at the
+    #: bottom of a list sorted by pressure.
+    utilisation_pct: float | None = None
+    band: OvercapacityBand = "unset"
+
+
+class OvercapacityReport(BaseModel):
+    semester: ReportSemesterRef
+    generated_at: datetime
+    #: The headline: offerings whose registered headcount EXCEEDS the seats set.
+    over: list[OvercapacityRow] = Field(default_factory=list)
+    #: Exactly full. Not a fault, but the next registration makes it one.
+    at_capacity: list[OvercapacityRow] = Field(default_factory=list)
+    #: Capacity never set. These CANNOT be over capacity — not because they have room,
+    #: but because nobody said how much room they have. Shown, not hidden: an empty
+    #: "over capacity" list means something quite different when half the college has
+    #: no limit recorded.
+    no_capacity_set: list[OvercapacityRow] = Field(default_factory=list)
+    #: Counted, not listed — see `OvercapacityBand`.
+    under_capacity: int = 0
+    offerings_total: int = 0
+    seats_total: int = 0
+    registered_total: int = 0
+    scope: ReportScope = Field(default_factory=ReportScope)
+    note: str
+
+
+# ── GET /reports/credit-load ──────────────────────────────────────────────────
+class CreditLoadStudentRow(BaseModel):
+    student: ReportStudentRef
+    programme: str | None = None
+    #: What the student DECLARED at admission ("Full Time" / "Part Time" / …). It is a
+    #: statement of intent made once, not a fact about this term.
+    declared_load: str | None = None
+    courses: int = 0
+    credits: int = 0
+    #: Credits being AUDITED (D35). Carried in `credits` too, because an audited course
+    #: is real workload, but split out because it earns nothing towards the award.
+    audit_credits: int = 0
+    #: Set only when the declared load and the actual credits contradict each other
+    #: under BAJC's own application-form definition. NULL is the normal case.
+    mismatch: str | None = None
+
+
+class CreditLoadBand(BaseModel):
+    credits: int
+    students: int = 0
+
+
+class CreditLoadByDeclared(BaseModel):
+    declared_load: str
+    students: int = 0
+    min_credits: int = 0
+    max_credits: int = 0
+    avg_credits: float = 0.0
+    mismatches: int = 0
+
+
+class CreditLoadReport(BaseModel):
+    semester: ReportSemesterRef
+    generated_at: datetime
+    students: int = 0
+    credits_total: int = 0
+    min_credits: int = 0
+    max_credits: int = 0
+    avg_credits: float = 0.0
+    #: The threshold the mismatch column is measured against, echoed so the screen
+    #: never hardcodes it and the reader can see what was applied.
+    full_time_credits: int = 15
+    mismatches: int = 0
+    by_declared_load: list[CreditLoadByDeclared] = Field(default_factory=list)
+    distribution: list[CreditLoadBand] = Field(default_factory=list)
+    rows: list[CreditLoadStudentRow] = Field(default_factory=list)
+    scope: ReportScope = Field(default_factory=ReportScope)
+    note: str
+
+
+# ── GET /reports/programme-attendance ─────────────────────────────────────────
+class ProgrammeAttendanceRow(BaseModel):
+    programme: str
+    programme_code: str | None = None
+    programme_id: UUID | None = None
+    #: Students of this programme with AT LEAST ONE register taken this term — not the
+    #: programme's headcount. A student nobody has marked contributes no percentage, and
+    #: counting them in the denominator would silently dilute every figure here.
+    students: int = 0
+    records: int = 0
+    present: int = 0
+    absent: int = 0
+    late: int = 0
+    excused: int = 0
+    pct_present: float = 0.0
+    #: BELOW the school's configured floor (`attendance_alert_threshold`, D45 Phase 1),
+    #: strictly — the same comparison `attendance/service.py::attendance_alerts` uses, so
+    #: this report and the alerts screen cannot disagree about who is in trouble.
+    #: NEVER true for a programme with no records — 0% of nothing is not a warning, it is
+    #: a programme nobody has taken a register for.
+    below_floor: bool = False
+    students_below_floor: int = 0
+
+
+class ProgrammeAttendanceStudentRow(BaseModel):
+    student: ReportStudentRef
+    records: int = 0
+    present: int = 0
+    absent: int = 0
+    late: int = 0
+    excused: int = 0
+    pct_present: float = 0.0
+    below_floor: bool = False
+
+
+class ProgrammeAttendanceReport(BaseModel):
+    semester: ReportSemesterRef
+    generated_at: datetime
+    #: The floor in force, from `school_profile.attendance_alert_threshold`.
+    floor_pct: float = 80.0
+    by_programme: list[ProgrammeAttendanceRow] = Field(default_factory=list)
+    #: Per-student rows, present ONLY when one programme was asked for. A college-wide
+    #: request returns the summary; drilling in is a second, narrower question.
+    programme: ProgrammeAttendanceRow | None = None
+    students: list[ProgrammeAttendanceStudentRow] = Field(default_factory=list)
+    records_total: int = 0
+    pct_present: float = 0.0
+    scope: ReportScope = Field(default_factory=ReportScope)
+    note: str

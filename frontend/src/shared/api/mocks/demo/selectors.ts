@@ -789,8 +789,36 @@ export function gpaFor(
  * and one grading scale, so there is nothing to reconcile across years.
  */
 export function passedCourseIds(studentId: string, excludeSemesterId: string): Set<string> {
-  const scale = getActiveGradingScale();
+  const results = courseResultsFor(studentId, excludeSemesterId);
   const passed = new Set<string>();
+  for (const [courseId, r] of results) if (r.passed) passed.add(courseId);
+  return passed;
+}
+
+/**
+ * Every course this student has a RESULT for, and whether it was a pass — mirrors
+ * `grades/service.completed_course_results` (D30 §D4).
+ *
+ * ⚠️ THE THREE-WAY DISTINCTION IS THE POINT, and `passedCourseIds` above could not
+ * express it: a `Set` of passes cannot tell "never took it" from "took it and failed",
+ * so the demo reported both as a flat "not passed". The server has always said
+ * *"Not yet taken."* or *"Taken but not passed (earned F)."* — and those are different
+ * conversations with a student. The client asked for exactly this distinction.
+ *
+ * A course with an enrolment but NO computable letter yields no result at all, not a
+ * failure — same as the server, which skips `term_letter === null` with the comment
+ * "nothing participated — not a result, not a failure". An ungraded course in progress
+ * must not read as a fail.
+ *
+ * The HIGHER numeric wins for a repeated course, which is how a transcript reads a
+ * retake.
+ */
+export function courseResultsFor(
+  studentId: string,
+  excludeSemesterId: string,
+): Map<string, { letter: string; numeric: number; passed: boolean }> {
+  const scale = getActiveGradingScale();
+  const out = new Map<string, { letter: string; numeric: number; passed: boolean }>();
   for (const enr of D.enrollments) {
     if (enr.student_id !== studentId) continue;
     if (enr.semester_id === excludeSemesterId) continue;
@@ -798,10 +826,12 @@ export function passedCourseIds(studentId: string, excludeSemesterId: string): S
     if (!offering) continue;
     const { numeric, letter } = computeTermGrade(studentId, offering.id);
     if (numeric === null || !letter) continue;
+    const held = out.get(offering.course_id);
+    if (held && held.numeric >= numeric) continue;
     const band = scale?.bands.find((b) => b.letter === letter);
-    if (band?.is_passing) passed.add(offering.course_id);
+    out.set(offering.course_id, { letter, numeric, passed: Boolean(band?.is_passing) });
   }
-  return passed;
+  return out;
 }
 
 /**
@@ -827,15 +857,28 @@ export function unmetPrerequisites(
   const applicable = rules.filter((r) => r.program_id === null || r.program_id === studentProgramId);
   if (applicable.length === 0) return [];
 
-  const passed = passedCourseIds(studentId, semesterId);
+  const results = courseResultsFor(studentId, semesterId);
   const issues: Array<{ code: string; reason: string }> = [];
 
+  /**
+   * ⚠️ The reason wording is the SERVER'S, verbatim — `prerequisites/service.
+   * check_eligibility` builds "Not yet taken." / "Taken but not passed (earned F)." and
+   * the offerings picker joins them as `CODE (reason without the full stop)`. This used
+   * to say a flat `'not passed'` for both cases, which is the one thing the client
+   * asked to be able to tell apart. Copying the string is deliberate: the two
+   * implementations disagreeing about the WORDS is how a screen gets signed off against
+   * a message the API never sends.
+   */
   const record = (requiredId: string) => {
-    if (passed.has(requiredId)) return;
+    const result = results.get(requiredId);
+    if (result?.passed) return;
     const course = getCourse(requiredId);
     issues.push({
       code: course?.code ?? '?',
-      reason: 'not passed',
+      reason:
+        result === undefined
+          ? 'Not yet taken'
+          : `Taken but not passed (earned ${result.letter})`,
     });
   };
 
@@ -985,7 +1028,7 @@ export function dashboardFor(role: string, userId?: string) {
       role,
       semester,
       stats: {
-        total_students: D.students.filter((s) => s.status === 'Registered').length,
+        total_students: D.students.filter((s) => s.status === 'Active').length,
         total_teachers: D.teachers.filter((t) => t.status === 'active').length,
         total_classes: offeringsForYear(DEMO_IDS.activeYearId).length,
         attendance_rate: schoolAttendanceRate(),
@@ -1043,7 +1086,7 @@ export function dashboardFor(role: string, userId?: string) {
 export function enrollmentByYearOfStudy(): Array<{ year_of_study: string; count: number }> {
   const map = new Map<string, number>();
   for (const s of D.students) {
-    if (s.status !== 'Registered' || !s.year_of_study) continue;
+    if (s.status !== 'Active' || !s.year_of_study) continue;
     map.set(s.year_of_study, (map.get(s.year_of_study) ?? 0) + 1);
   }
   // 'First' before 'Second' — progression order, which alphabetical happens to give.

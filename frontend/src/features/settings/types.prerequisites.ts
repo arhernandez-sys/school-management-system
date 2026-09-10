@@ -35,8 +35,21 @@ export interface PrerequisiteList {
    * The raw string from the course-sequence PDF. DOCUMENTATION ONLY — the gate reads
    * `items`. Surfaced so a Dean entering the relation can check it against what the
    * source actually said.
+   *
+   * D45 §3b P1: the server CLEARS this when the last structured requirement is removed.
+   * Leaving it behind made a successful delete look like it had failed — the dialog went
+   * on printing "MATH1110" after the rule was gone.
    */
   prerequisites_text: string | null;
+  /**
+   * D45 §3b P3 — courses that require THIS one. Read-only.
+   *
+   * The dialog could only ever answer "what does this course require", so a Dean trying
+   * to open Calculus 1 for enrolment would open Pre-Calculus — the previous course, the
+   * one named in the error — and remove ITS requirement, which changes nothing. The rule
+   * that blocks a course is always stored ON that course.
+   */
+  required_by: PrerequisiteCourseRef[];
 }
 
 export interface PrerequisiteCreatePayload {

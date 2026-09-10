@@ -108,6 +108,7 @@ export {
   gradePointFor,
   gpaFor,
   passedCourseIds,
+  courseResultsFor,
   unmetPrerequisites,
   attendanceFor,
   attendanceSummaryForOffering,

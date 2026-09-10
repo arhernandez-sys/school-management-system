@@ -14,6 +14,7 @@ import type { SchoolProfileReadContactPhone } from './schoolProfileReadContactPh
  */
 /**
  * HAND-EDITED (D39, Meeting #2 item 6) — `post_graduation_access_days`.
+ * HAND-EDITED (D45 §23) — `attendance_alert_threshold`.
  *
  * `npm run generate:api` is forbidden in this repo, so a new backend field cannot reach
  * these types the way orval intends. The alternative was a parallel hand-written type
@@ -34,4 +35,13 @@ export interface SchoolProfileRead {
   contact_phone?: SchoolProfileReadContactPhone;
   /** Days a graduate keeps grade/online access. `null` = never expires; `0` = ends on graduation day. */
   post_graduation_access_days?: number | null;
+  /**
+   * D45 §23 — the attendance warning floor, as a percentage.
+   *
+   * Was `ATTENDANCE_ALERT_THRESHOLD = 80.0`, a constant in the backend's
+   * `attendance/service.py`, which blueprint §57 says is the wrong home for an
+   * institutional rule. The alerts endpoint now resolves it from here, and echoes the
+   * resolved number back on every response so this screen and that one cannot disagree.
+   */
+  attendance_alert_threshold: number;
 }

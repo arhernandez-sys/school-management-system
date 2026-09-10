@@ -138,7 +138,7 @@ class RosterEntry(BaseModel):
     #: The column has existed since `005_tertiary.sql` §8 and was **mapped and nothing
     #: else** until D35 — no endpoint set it, no calculation read it, and all 393 live rows
     #: said `enrolled`. Putting it on the roster is what makes it visible at all.
-    enrollment_status: EnrollmentStatus = EnrollmentStatus.ENROLLED
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.REGISTERED
 
 
 class EnrollmentResult(BaseModel):
@@ -154,8 +154,31 @@ class EnrollmentResult(BaseModel):
     schedule_conflicts: list[ScheduleConflict] = Field(default_factory=list)
 
 
+class EnrollableStudent(StudentRef):
+    """A student the picker may offer, plus whether the gate will actually take them.
+
+    D45 §3b P2. The picker used to return a bare `StudentRef`, so it offered students
+    the prerequisite gate then refused — and because `enroll_students` validates the
+    whole batch before writing anything, ONE ineligible pick refused the entire
+    selection. The Dean's experience was "it isn't allowing to add students", with a
+    message naming a single student and no way to see which others were affected.
+
+    `eligible=False` is advisory for the UI only. The gate in `enroll_students` is
+    still the authority and is unchanged — this field must never be the thing that
+    decides an enrolment, or the rule would live in two places.
+    """
+
+    eligible: bool = True
+    #: Why not — the same prose the 409 uses. `None` when `eligible`.
+    ineligible_reason: str | None = None
+    #: D45 §12/§20 — WHICH rule bars them: `"prerequisites"` or `"student_status"`.
+    #: The client sends back the matching override flag, so a waiver names the rule it
+    #: actually waived instead of blanket-waiving everything the Dean can reach.
+    ineligible_rule: str | None = None
+
+
 class EnrollableStudents(BaseModel):
-    items: list[StudentRef] = Field(default_factory=list)
+    items: list[EnrollableStudent] = Field(default_factory=list)
 
 
 class OfferingMeetingInput(BaseModel):
@@ -262,12 +285,51 @@ class TeacherAssignRequest(BaseModel):
     lead_teacher_id: UUID | None = None
 
 
+class EnrollmentOverride(BaseModel):
+    """D45 §12/§20 — an authorized waiver of a registration restriction. **Dean only.**
+
+    §12 asks that a prerequisite be enforced *"or require an authorized override"*, and
+    §20's "???" asked which restrictions those are. Answered by BAJC on 2026-09-09:
+    **the prerequisite rule and the student-status rule; NOT capacity.**
+
+    Capacity was considered and deliberately excluded. It is warn-only today — the enrol
+    succeeds and returns `over_capacity_warning` — so there is nothing to override; making
+    it overridable would first mean making it a refusal, which is a stricter system than
+    BAJC asked for.
+
+    ⚠️ `year_archived` and `semester_mismatch` are NOT overridable and must never become
+    so. They are integrity invariants, not academic policy: an enrolment in an archived
+    year or in a term the offering does not run in produces a row no screen can explain
+    and no report can attribute. A waiver is for a rule the institution may choose to
+    set aside, not for a contradiction.
+
+    `reason` is REQUIRED. §12 and §20 both say every override is logged, and a waiver
+    with no stated cause is not an audit record — it is only a hole with a name on it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Waive `prerequisite_not_met` for every student in this batch that it blocks.
+    prerequisites: bool = False
+    #: Waive `student_not_enrollable` — the student is not in an enrollable status.
+    student_status: bool = False
+    reason: str = Field(
+        min_length=5,
+        max_length=500,
+        description="Why the rule is being set aside. Recorded against the Dean.",
+    )
+
+
 class EnrollRequest(BaseModel):
     """POST /offerings/{id}/enrollments. `semester_id` defaults to the offering's own."""
 
     model_config = ConfigDict(extra="forbid")
 
     student_ids: list[UUID] = Field(min_length=1)
+    #: D45 §12/§20. Absent for an ordinary enrolment — which is every existing caller, so
+    #: nothing changes for them. Present only when a Dean is deliberately setting a rule
+    #: aside; any other role sending it gets 403 `override_not_permitted`.
+    override: EnrollmentOverride | None = None
     semester_id: UUID | None = None
     #: D35 — how these students are sitting the offering. Applies to EVERY id in the
     #: batch, which is what an audit cohort actually looks like; a single student's status
@@ -276,7 +338,7 @@ class EnrollRequest(BaseModel):
     #: Defaults to `enrolled`, so every existing caller is unchanged. The two `withdraw_*`
     #: values are accepted here as well as on the PATCH — a Registrar transcribing a paper
     #: record backwards needs to be able to register a withdrawal that already happened.
-    enrollment_status: EnrollmentStatus = EnrollmentStatus.ENROLLED
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.REGISTERED
 
 
 class EnrollmentStatusRequest(BaseModel):
@@ -287,7 +349,7 @@ class EnrollmentStatusRequest(BaseModel):
       * `DELETE` un-enrols — the row is closed with `unenrolled_at` and the student is off
         the roster, as though the registration were a mistake.
       * a WITHDRAWAL is a fact about a course the student did sit and then left. The row
-        stays open and on the roster, because the transcript has to print `W/P` or `W/F`
+        stays open and on the roster, because the transcript has to print `W`
         against it. Deleting it would erase the very thing being recorded.
 
     `reason` is not stored on the enrolment — there is no column for it — but it is written

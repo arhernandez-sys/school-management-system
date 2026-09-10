@@ -176,7 +176,7 @@ class _Graph:
             **split_name("Ana Lopez"),
             date_of_birth=date(2004, 3, 4),
             enrollment_date=date(2025, 9, 1),
-            status="Registered",
+            status="Active",
             program_id=self.program_a.id,
             year_of_study="First",
         )

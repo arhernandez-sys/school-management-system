@@ -235,18 +235,27 @@ def enrollable_students(
     offering_id: uuid.UUID,
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=160)] = None,
+    include_ineligible: Annotated[bool, Query()] = False,
     db: Session = Depends(get_db),
     actor: User = Depends(_manage),
 ) -> EnrollableStudents:
+    """`include_ineligible` (D45 §20) also lists students the STATUS rule bars, flagged,
+    so the Dean can override one. **Silently ignored for the Registrar** rather than a
+    403: they cannot override anyway, so the only effect would be to show them students
+    they can do nothing about — and a hard error on a display toggle helps no one."""
     return service.enrollable_students(
-        db, offering_id=offering_id, semester_id=semester_id, search=search
+        db,
+        offering_id=offering_id,
+        semester_id=semester_id,
+        search=search,
+        include_ineligible=include_ineligible and actor.role == Role.PRINCIPAL,
     )
 
 
 @router.post(
     "/{offering_id}/enrollments",
     response_model=EnrollmentResult,
-    summary="Enrol students (Dean/Registrar; prerequisite gate is a hard 409)",
+    summary="Enrol students (Dean/Registrar; prerequisite + status gates, Dean may override)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def enroll_students(
@@ -255,6 +264,18 @@ def enroll_students(
     db: Session = Depends(get_db),
     actor: User = Depends(_manage),
 ) -> EnrollmentResult:
+    """409 `prerequisite_not_met` / `student_not_enrollable` / `semester_mismatch` /
+    `year_archived`; 403 `override_not_permitted`.
+
+    D45 §12/§20 — `payload.override` waives the prerequisite and/or status rule for the
+    students they block, with a required reason. **Dean only**, even though the Registrar
+    may reach this endpoint: waiving an academic rule is an academic-structure decision
+    (D30 §D14). Every waiver actually used is written to `audit_log` as
+    `enrollment.override`, one row per student per rule.
+
+    `year_archived` and `semester_mismatch` are NOT overridable and must not become so —
+    they are integrity invariants, not policy.
+    """
     return service.enroll_students(
         db, actor=actor, offering_id=offering_id, payload=payload
     )
@@ -273,11 +294,12 @@ def set_enrollment_status(
     db: Session = Depends(get_db),
     actor: User = Depends(_manage),
 ) -> RosterEntry:
-    """The client's `coursestatus`: `enrolled` / `audit` / `withdraw_passing` /
-    `withdraw_failing`.
+    """The client's `coursestatus`, in the blueprint's §19 vocabulary (D45):
+    `pre_registered` / `registered` / `added` / `dropped` / `withdrawn` / `completed` /
+    `failed` / `audit`.
 
     Distinct from `DELETE` below, which UN-ENROLS. A withdrawal keeps the row open and on
-    the roster because the transcript prints `W/P` or `W/F` against it; deleting it would
+    the roster because the transcript prints `W` against it; deleting it would
     erase the fact being recorded. 409 `enrollment_closed` on a row that is already
     un-enrolled.
     """

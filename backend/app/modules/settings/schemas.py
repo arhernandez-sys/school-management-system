@@ -34,6 +34,8 @@ class SchoolProfileRead(SchoolIdentity):
     #: Days a graduated student keeps grade / online access (D39, Meeting #2 item 6).
     #: `None` = never expires; `0` = access ends on graduation day.
     post_graduation_access_days: int | None = None
+    #: The attendance warning floor, as a percentage (D45 §23).
+    attendance_alert_threshold: float = 80.0
 
 
 class SchoolUpdateRequest(BaseModel):
@@ -47,6 +49,11 @@ class SchoolUpdateRequest(BaseModel):
     #: past that it is indistinguishable from "never", and a mistyped 3650 should be
     #: caught rather than stored.
     post_graduation_access_days: int | None = Field(default=None, ge=0, le=3650)
+    #: D45 §23. Bounded 0-100 because it is a percentage; a threshold of 100 ("flag
+    #: anyone who ever missed a class") is a defensible policy, so the top of the range
+    #: is inclusive. Defaulted rather than optional so a PUT that omits it does not
+    #: silently reset the college's number to zero and flag nobody.
+    attendance_alert_threshold: float = Field(default=80.0, ge=0, le=100)
 
 
 class LogoUploadResponse(BaseModel):
@@ -369,23 +376,3 @@ class ReligionList(BaseModel):
 
 
 # ── Audit log (D43) ────────────────────────────────────────────────────────────
-class AuditLogItem(BaseModel):
-    """One row of the append-only sensitive-action log.
-
-    `actor` is resolved to a name here rather than left as an id: an audit trail whose
-    every row reads `actor_user_id: 9f3c…` cannot be audited by a person, which is the
-    only reason it exists. It is nullable because the FK is `ON DELETE SET NULL` — a
-    deleted account must not take its history with it, so the ACTION survives the actor
-    and the screen shows it as an unknown user rather than dropping the row.
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    actor_user_id: UUID | None = None
-    actor_name: str | None = None
-    actor_role: str | None = None
-    action: str
-    entity_type: str
-    entity_id: UUID | None = None
-    summary: dict | None = None
-    created_at: datetime

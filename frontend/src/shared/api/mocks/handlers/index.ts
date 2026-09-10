@@ -27,8 +27,9 @@ import { revisionsHandlers } from './revisions';
 import { attendanceHandlers } from './attendance';
 import { announcementsHandlers } from './announcements';
 import { eventsHandlers } from './events';
+import { auditHandlers } from './audit';
 import { dashboardHandlers } from './dashboard';
-import { reportsHandlers } from './reports';
+import { institutionalReportHandlers, reportsHandlers } from './reports';
 import { timetableHandlers } from './timetable';
 
 export const handlers = [
@@ -57,6 +58,12 @@ export const handlers = [
   ...announcementsHandlers,
   ...eventsHandlers,
   ...dashboardHandlers,
+  // D45 Phase 7 — /audit/* (§46 trail, §53 reports). Read-only, like the server.
+  ...auditHandlers,
   ...reportsHandlers,
+  // D45 Phase 9 — /reports/new-vs-returning, /overcapacity, /credit-load,
+  // /programme-attendance. A separate export from the same module; see the block
+  // comment there for why they are not spread into `reportsHandlers`.
+  ...institutionalReportHandlers,
   ...timetableHandlers,
 ];

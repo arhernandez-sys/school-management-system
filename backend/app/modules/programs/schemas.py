@@ -32,6 +32,11 @@ class ProgramListItem(BaseModel):
     graduation_requirements: str | None = None
     #: D44. Registrar's free-text notes on the programme.
     comments: str | None = None
+    #: D45 §8 — Department Management on the programme, BAJC's actual organising unit.
+    #: `head_of_department` is a DISPLAYED name; `program_heads` remains the authoritative
+    #: link and the only thing the HOD role's scoping reads.
+    head_of_department: str | None = None
+    office_information: str | None = None
     #: Total credits as PRINTED on the programme's course sequence (86–102).
     total_credits: int | None = None
     #: The programme's pass mark as a grade point — 2.50 (C+) everywhere except
@@ -93,10 +98,13 @@ class ProgramCreateRequest(BaseModel):
     code: str = Field(min_length=1, max_length=CODE_MAX)
     name: str = Field(min_length=1, max_length=NAME_MAX)
     award: str | None = Field(default=None, max_length=100)
-    # D44 — the client's own column widths, kept as dumped.
-    admission_requirements: str | None = Field(default=None, max_length=100)
-    graduation_requirements: str | None = Field(default=None, max_length=100)
+    # D45 widened both to Text — 100 characters could not hold a requirements paragraph.
+    admission_requirements: str | None = None
+    graduation_requirements: str | None = None
     comments: str | None = None
+    #: D45 §8.
+    head_of_department: str | None = Field(default=None, max_length=150)
+    office_information: str | None = None
     total_credits: int | None = Field(default=None, gt=0, le=999)
     #: Defaults to C+ — correct for seven of the eight BAJC programmes. Primary
     #: Education is the exception and is created with 2.00.
@@ -114,9 +122,12 @@ class ProgramUpdateRequest(BaseModel):
     award: str | None = Field(default=None, max_length=100)
     # D44. Nullable AND omittable, which are different things here: `None` sent
     # explicitly clears the field, omitting it leaves it alone. See `update_program`.
-    admission_requirements: str | None = Field(default=None, max_length=100)
-    graduation_requirements: str | None = Field(default=None, max_length=100)
+    admission_requirements: str | None = None
+    graduation_requirements: str | None = None
     comments: str | None = None
+    #: D45 §8. Same explicit-null-clears rule as the two above.
+    head_of_department: str | None = Field(default=None, max_length=150)
+    office_information: str | None = None
     total_credits: int | None = Field(default=None, gt=0, le=999)
     min_passing_grade_point: Decimal | None = Field(
         default=None, ge=Decimal("0"), le=Decimal("4")

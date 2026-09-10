@@ -116,19 +116,49 @@ export function useOfferingRoster(offeringId: string | undefined) {
   });
 }
 
+/**
+ * One row of the enrol picker: a student, plus whether the prerequisite gate will
+ * actually accept them.
+ *
+ * D45 §3b P2. `eligible` is ADVISORY — the server's gate in `enroll_students` remains
+ * the authority and is unchanged. This exists so the Dean can see the refusal before
+ * submitting instead of after, because the enrol endpoint validates the whole batch
+ * before writing anything: one ineligible pick used to refuse the entire selection.
+ */
+export interface EnrollableStudent extends StudentRef {
+  eligible: boolean;
+  ineligible_reason: string | null;
+  /** D45 §12/§20 — which rule bars them, so the client waives that one and not both. */
+  ineligible_rule: 'prerequisites' | 'student_status' | null;
+}
+
+/** D45 §12/§20 — an authorized waiver. Dean only; the server returns 403 otherwise. */
+export interface EnrollmentOverride {
+  prerequisites?: boolean;
+  student_status?: boolean;
+  reason: string;
+}
+
 /** GET /offerings/{id}/enrollable-students — picker for the enroll dialog. */
 export function useEnrollableStudents(
   offeringId: string | undefined,
   search: string,
   enabled: boolean,
+  includeIneligible = false,
 ) {
   return useQuery({
-    queryKey: offeringKeys.enrollable(offeringId ?? '', search),
+    queryKey: [...offeringKeys.enrollable(offeringId ?? '', search), includeIneligible],
     enabled: enabled && Boolean(offeringId),
     queryFn: async ({ signal }) => {
-      const res = await api.get<{ items: StudentRef[] }>(
+      const res = await api.get<{ items: EnrollableStudent[] }>(
         `/offerings/${offeringId}/enrollable-students`,
-        { params: search ? { search } : undefined, signal },
+        {
+          params: {
+            ...(search ? { search } : {}),
+            ...(includeIneligible ? { include_ineligible: true } : {}),
+          },
+          signal,
+        },
       );
       return res.data.items;
     },
@@ -220,9 +250,16 @@ export function useReplaceMeetings(offeringId: string) {
 export function useEnrollStudents(offeringId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (studentIds: string[]) => {
+    mutationFn: async (
+      vars: string[] | { studentIds: string[]; override?: EnrollmentOverride },
+    ) => {
+      // Accepts a bare id array so every existing caller is untouched.
+      const { studentIds, override } = Array.isArray(vars)
+        ? { studentIds: vars, override: undefined }
+        : vars;
       const res = await api.post<EnrollmentResult>(`/offerings/${offeringId}/enrollments`, {
         student_ids: studentIds,
+        ...(override ? { override } : {}),
       });
       return res.data;
     },

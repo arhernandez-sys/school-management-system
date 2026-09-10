@@ -69,6 +69,7 @@ const AttendancePage = lazy(() => import('@features/attendance'));
 const AnnouncementsPage = lazy(() => import('@features/announcements'));
 const CalendarPage = lazy(() => import('@features/calendar'));
 const ReportsPage = lazy(() => import('@features/reports'));
+const AuditTrailPage = lazy(() => import('@features/audit'));
 const SettingsPage = lazy(() => import('@features/settings'));
 
 // The two "My Profile" variants are split from each other as well as from the
@@ -170,6 +171,8 @@ export const router = createBrowserRouter([
       { path: `${ROUTES.calendar}/*`, element: lazyGuarded('calendar', CalendarPage) },
       { path: `${ROUTES.reports}/*`, element: lazyGuarded('reports', ReportsPage) },
       { path: `${ROUTES.settings}/*`, element: lazyGuarded('settings', SettingsPage) },
+      // D45 §46/§53 — read-only; the server gates it to Dean / Auditor / Sysadmin.
+      { path: `${ROUTES.audit}/*`, element: lazyGuarded('audit', AuditTrailPage) },
       { path: ROUTES.myProfile, element: lazyGuarded('profile', MyProfilePage) },
       // Single teacher profile for roles without the directory (teacher self / student
       // read-only). NOT behind the teachers-module gate — TeacherProfileRoute does its

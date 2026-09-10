@@ -93,6 +93,7 @@ export function PrerequisitesDialog({
   // Already-required courses and the course itself are hidden from the picker: the
   // API rejects both (duplicate_prerequisite, and a course cannot require itself).
   const taken = items.map((i) => i.prerequisite_course?.id).filter(Boolean) as string[];
+  const requiredBy = query.data?.required_by ?? [];
   const options = useMemo(
     () =>
       (catalog.data?.items ?? []).filter(
@@ -201,10 +202,39 @@ export function PrerequisitesDialog({
             {query.data?.prerequisites_text && (
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  From the course sequence (reference only — the list above is what is
-                  enforced)
+                  From the printed course sequence — <strong>not enforced</strong>. The list
+                  above is what the system actually checks, and this text is cleared
+                  automatically when the last requirement is removed.
                 </Typography>
                 <Typography variant="body2">{query.data.prerequisites_text}</Typography>
+              </Box>
+            )}
+
+            {/* D45 §3b P3 — the reverse edge. Read-only: a requirement is always stored on
+                the course it BLOCKS, so unblocking one of these means opening that course's
+                own dialog, not editing anything here. Saying so explicitly is the point —
+                editing the wrong course is the mistake this section exists to prevent. */}
+            {requiredBy.length > 0 && (
+              <Box>
+                <Divider sx={{ mb: 1 }}>Required by</Divider>
+                <Typography variant="caption" color="text.secondary">
+                  {requiredBy.length === 1
+                    ? 'This course is a prerequisite for 1 other course.'
+                    : `This course is a prerequisite for ${requiredBy.length} other courses.`}{' '}
+                  To let a student into one of them, remove the requirement in{' '}
+                  <em>that</em> course&apos;s own Prerequisites dialog — not here.
+                </Typography>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 1, gap: 0.5 }}>
+                  {requiredBy.map((c) => (
+                    <Chip
+                      key={c.id}
+                      size="small"
+                      variant="outlined"
+                      label={c.code}
+                      title={c.name}
+                    />
+                  ))}
+                </Stack>
               </Box>
             )}
 
@@ -271,7 +301,7 @@ export function PrerequisitesDialog({
                 <Alert severity="info" variant="outlined">
                   A prerequisite is met only by <strong>passing</strong> the course —
                   judged against the student&apos;s programme pass mark. Having taken it
-                  is not enough, and neither is taking it in the same term.
+                  is not enough, and neither is taking it in the same session.
                 </Alert>
               </>
             )}

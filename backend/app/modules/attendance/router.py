@@ -32,7 +32,6 @@ from app.common.enums import Role
 from app.common.schemas import ErrorResponse
 from app.core.deps import get_db, require_role, require_role_within_access_window
 from app.modules.attendance import service
-from app.modules.attendance.service import ATTENDANCE_ALERT_THRESHOLD
 from app.modules.attendance.schemas import (
     AttendanceAlertsResponse,
     AttendanceRegister,
@@ -82,11 +81,15 @@ def list_offerings(
 )
 def get_alerts(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
-    threshold: Annotated[float, Query(ge=0, le=100)] = ATTENDANCE_ALERT_THRESHOLD,
+    threshold: Annotated[float | None, Query(ge=0, le=100)] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
 ) -> AttendanceAlertsResponse:
-    """Defaults to the year currently active and the 80% floor.
+    """Defaults to the year currently active and the college's configured floor.
+
+    D45 §23 — the floor is `school_profile.attendance_alert_threshold`, resolved in the
+    service. It cannot be defaulted here: a signature default is bound at import time and
+    would pin the value the process started with.
 
     Scoped exactly as `/offerings` is — a lecturer is alerted about their own classes and
     no one else's — because it is built on the same call. `threshold` is a query parameter

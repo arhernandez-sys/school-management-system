@@ -236,6 +236,91 @@ def _assert_midterm_not_frozen(db: Session, assessment: Assessment, actor: User)
         )
 
 
+def _assert_pre_midterm_marks_not_edited(
+    db: Session,
+    assessment: Assessment,
+    actor: User,
+    entries,  # noqa: ANN001 - Sequence[GradeEntry]; typed loosely to avoid a cycle
+    existing: dict[uuid.UUID, AssessmentGrade],
+) -> None:
+    """409 `midterm_revision_required` when a CLOSED window's mark is edited directly (D45).
+
+    **The second half of the freeze, which D33 stated but never enforced.** The docstring
+    on `midterm_freeze_state` already promised it: *"After `end` the window is over and
+    entry re-opens — a new mark goes in normally … while CHANGING one that was entered
+    before `start` needs the Dean to approve a revision."* Only the first half existed.
+    `_assert_midterm_not_frozen` raises strictly inside `[start, end]`, so the instant the
+    window closed a Lecturer got a revision button AND an editable cell — and the editable
+    cell won. Reproduced on 2026-09-08: a mid-term mark moved 11.0 -> 19.0 through the
+    ordinary save path, with no Dean approval and no revision record.
+
+    **Why that is worse than it looks.** The direct edit sets `graded_at = now`, which is
+    exactly what `midterm_revision_eligible` rule 3 reads. So the overwrite ALSO destroys
+    the evidence that the mark was ever part of the mid-term submission, and the revision
+    button disappears behind it. One action, both the change and the cover-up.
+
+    The conditions mirror `revisions.midterm_revision_eligible` rules 1-3 deliberately —
+    the two must partition cleanly, or there is a cell that can be neither edited nor
+    revised:
+
+      1. the window exists and has **closed** (inside it, `_assert_midterm_not_frozen`
+         already owns the refusal; before it, entry is simply open)
+      2. the **assessment** predates `start` - post-window work is graded normally
+      3. **this student's grade** predates `start` - a row first filled in after the
+         window opened was never part of the mid-term submission
+
+    Rule 4 (`semester.is_active`) is deliberately NOT mirrored. Eligibility uses it to stop
+    a *revision* reopening a settled term; here its absence would do the opposite and let a
+    closed term be edited freely, which is the one case that matters most.
+
+    **A no-op write is not an edit.** The gradebook saves whole rows, so a Lecturer typing
+    into one cell re-sends the forty that did not change. Refusing those would make the
+    screen unusable and teach everyone to route real corrections around the rule. Only an
+    entry that actually moves `status`, `score` or `makeup_score` is refused.
+
+    **The Dean is exempt**, matching `_assert_midterm_not_frozen`: approving a revision is
+    the Dean's sanctioned path, and a Dean who could not also correct a mark directly would
+    have no way to act on one.
+    """
+    if actor.role == Role.PRINCIPAL:
+        return
+    frozen, start, end = midterm_freeze_state(db, assessment.semester_id)
+    if start is None or end is None or frozen or utcnow() <= end:
+        return
+    if ensure_aware(assessment.created_at) >= start:
+        return
+
+    offenders: list[uuid.UUID] = []
+    for entry in entries:
+        row = existing.get(entry.student_id)
+        if row is None:
+            continue  # a mark entered for the first time now is post-window work
+        entered_at = ensure_aware(row.graded_at) or ensure_aware(row.created_at)
+        if entered_at is None or entered_at >= start:
+            continue
+        score = _dec(entry.score) if entry.status == GradeStatus.GRADED else None
+        makeup = _dec(entry.makeup_score) if entry.status == GradeStatus.ABSENT else None
+        if (
+            row.status == entry.status
+            and _dec(row.score) == score
+            and _dec(row.makeup_score) == makeup
+        ):
+            continue  # unchanged - the gradebook re-sending a row it did not touch
+        offenders.append(entry.student_id)
+
+    if offenders:
+        raise Conflict(
+            "This mark was part of the mid-term submission and can no longer be edited "
+            "directly. File a Revision of Grades for the Dean to approve.",
+            code="midterm_revision_required",
+            extra={
+                "midterm_submission_start": start.isoformat(),
+                "midterm_submission_end": end.isoformat(),
+                "student_id": [str(s) for s in offenders],
+            },
+        )
+
+
 def _assert_readable(db: Session, actor: User, cs: CourseOffering) -> bool:
     """Authorize a gradebook read. Returns whether the caller may WRITE it.
 
@@ -928,8 +1013,55 @@ def upsert_grades(
             ).all()
         }
 
+    # D45 — the closed-window lock. Placed HERE, after `existing` is loaded and before any
+    # mutation, because it is the only point where both halves of rule 3 are known: which
+    # rows already exist, and whether the incoming entry actually changes one. Still inside
+    # the all-or-nothing discipline — it collects every offender and raises once.
+    _assert_pre_midterm_marks_not_edited(db, assessment, actor, entries, existing)
+
     bands, _pass_mark = _bands_for_section(db, section) if section else ([], None)
+
+    # D45 §46 (Phase 7) — the BEFORE picture, captured before anything is mutated.
+    #
+    # §46's worked example is "a final grade going C+ -> B, citing a change request",
+    # and it was not reproducible from this log: `grade.update` recorded
+    # `{"entries": 3}` — the COUNT of cells touched. No student, no mark, no previous
+    # value. An auditor asking "who changed this student's grade, from what, to what,
+    # and why" could not be answered from the audit trail at all, only inferred from
+    # `updated_by` on the row itself, which holds the LAST writer and overwrites the
+    # one before.
+    #
+    # Letters as well as scores: the auditor's question is asked in letters, and a
+    # band edit means today's letter for an old score is not the letter that was
+    # awarded. Storing it settles what the mark actually WAS at the time.
+    def _letter_of(status, score):  # noqa: ANN001, ANN202
+        if status != GradeStatus.GRADED or score is None:
+            return None
+        return calc.letter_for(calc.percentage_for(score, assessment.max_score), bands)
+
+    def _status_value(status):  # noqa: ANN001, ANN202
+        """`status` comes back as a `GradeStatus` on a freshly written row and as a plain
+        `str` on one loaded from the database, depending on how the row entered the
+        identity map. `.value` on the second is an AttributeError, and it took three
+        existing freeze tests to surface it — the happy path never hits the str form.
+
+        `GradeStatus` is a `str` enum, so every COMPARISON in this function is safe either
+        way; only the attribute access was not."""
+        if status is None:
+            return None
+        return getattr(status, "value", status)
+
+    before_state: dict[uuid.UUID, dict] = {}
+    for sid, row in existing.items():
+        before_state[sid] = {
+            "score": _f(row.score),
+            "makeup_score": _f(row.makeup_score),
+            "status": _status_value(row.status),
+            "letter": _letter_of(row.status, row.score),
+        }
+
     results: list[GradeCellResult] = []
+    changed: list[tuple[uuid.UUID, dict | None, dict]] = []
     now = utcnow()
 
     for entry in entries:
@@ -974,12 +1106,70 @@ def upsert_grades(
             )
         )
 
+        # Only what actually MOVED. Re-saving a gradebook without touching a mark is
+        # the commonest action in the system, and logging a "change" for every
+        # unchanged cell would bury the real edits — the ones an auditor is looking
+        # for — under thousands of rows that say nothing happened.
+        after = {
+            "score": _f(score),
+            "makeup_score": _f(makeup),
+            # Same accessor as the BEFORE side on purpose: if the two ever rendered the
+            # status differently, every save would report a phantom status change.
+            "status": _status_value(entry.status),
+            "letter": letter,
+        }
+        before = before_state.get(entry.student_id)
+        if before != after:
+            changed.append((entry.student_id, before, after))
+
+    # One audit row PER STUDENT whose mark moved. §46 asks for the previous and new
+    # value of a grade; a single row for a whole gradebook cannot carry them, and
+    # "this student's grade went from X to Y" is the unit an auditor actually asks
+    # about. The batch row stays as well, so "the lecturer saved the gradebook" is
+    # still one findable event rather than only its consequences.
+    student_names = {}
+    if changed:
+        student_names = {
+            sp.id: (sp.full_name, sp.student_number)
+            for sp in db.scalars(
+                select(StudentProfile).where(
+                    StudentProfile.id.in_([sid for sid, _b, _a in changed])
+                )
+            ).all()
+        }
+    for sid, before, after in changed:
+        name, number = student_names.get(sid, (None, None))
+        db.add(
+            AuditLog(
+                actor_user_id=actor.id,
+                action="grade.update",
+                entity_type="grade",
+                entity_id=assessment.id,
+                summary={
+                    "student_id": str(sid),
+                    "student_name": name,
+                    "student_number": number,
+                    "assessment": assessment.title,
+                    "assessment_id": str(assessment.id),
+                    "max_score": _f(assessment.max_score),
+                    "first_entry": before is None,
+                },
+                previous_value=before,
+                new_value=after,
+            )
+        )
+
     _audit(
         db,
         actor=actor,
         action="grade.update",
         entity_id=assessment.id,
-        summary={"entries": len(entries)},
+        summary={
+            "entries": len(entries),
+            "changed": len(changed),
+            "assessment": assessment.title,
+            "batch": True,
+        },
     )
     db.commit()
     return GradeEntryResponse(updated=results)

@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.common.enums import DayOfWeek, Role
 from app.common.schemas import StudentRef, TeacherRef
 from app.core.errors import NotFound
-from app.core.rbac import _teacher_profile_id
+from app.core.rbac import _teacher_profile_id, hod_program_ids
 from app.modules.offerings.queries import offerings_in_year
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.models import (
@@ -299,13 +299,23 @@ def my_timetable(
 def student_timetable(
     db: Session,
     *,
+    actor: User,
     student_id: uuid.UUID,
     academic_year_id: uuid.UUID | None,
 ) -> TimetableView:
-    """Any student's week (P/S only — the role gate is the router's).
+    """Any student's week. Role gate is the router's; the HOD's SCOPE is here.
 
     The office needs this to check a student's week before enrolling them into one more
     class, which is the moment a clash is cheapest to catch.
+
+    D45 §40 opened this to the Head of Department, who the blueprint says oversees the
+    timetable and class lists of their department. The scope lands here rather than in
+    `require_role`, which is a role allowlist and cannot express "only their own
+    students" — the same division D43 used everywhere else the HOD reads.
+
+    **A student outside the head's programmes is 404, not 403.** Confirming that a
+    student exists but is off-limits leaks their existence (api-spec §3.3), and it is the
+    discipline every other HOD-scoped read in this system already follows.
     """
     profile = db.scalar(
         select(StudentProfile).where(
@@ -314,6 +324,13 @@ def student_timetable(
     )
     if profile is None:
         raise NotFound("Student not found.", code="student_not_found")
+
+    if actor.role == Role.HOD:
+        # `hod_program_ids` returns [] for a head with no `program_heads` row yet — a real
+        # state, since appointing a head and provisioning their login are two separate
+        # acts. [] must narrow to the empty set, never widen to everything.
+        if profile.program_id not in set(hod_program_ids(db, actor)):
+            raise NotFound("Student not found.", code="student_not_found")
 
     year_id = academic_year_id or _active_year_id(db)
     offering_ids = _student_offering_ids(db, student_id=profile.id, academic_year_id=year_id)

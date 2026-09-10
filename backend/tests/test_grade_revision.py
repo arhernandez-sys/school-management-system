@@ -526,9 +526,19 @@ class TestTheDeanWritesThroughTheFreeze:
         """D42 §5 — a term still carrying an expired `grade_submission_deadline` must
         behave exactly like one that does not. This is the regression that would bite
         first: the column is still written, and every seeded term from before the change
-        may hold a date in the past."""
+        may hold a date in the past.
+
+        D45: the mid-term window is CLEARED here. The `marked` fixture builds a pre-window
+        mid-term mark, and D45 §28 made those un-editable directly — a Lecturer must file a
+        revision instead (`test_midterm_freeze.py::TestTheClosedWindowLock`). That rule is
+        correct and is not what this test is about; leaving the window in place would mean
+        asserting a 200 that only the old defect could produce. Clearing it isolates the
+        one thing under test: the retired deadline column, on its own, blocks nothing.
+        """
         assessment, student, _grade = marked
         graph.sem.grade_submission_deadline = _utc(-30)
+        graph.sem.midterm_submission_start = None
+        graph.sem.midterm_submission_end = None
         db_session.flush()
         direct = client.put(
             f"{A}/{assessment.id}/grades",

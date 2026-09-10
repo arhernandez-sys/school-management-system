@@ -171,11 +171,16 @@ export function AcademicStructureScreen() {
   const [yearName, setYearName] = useState('');
   const [yearStart, setYearStart] = useState('');
   const [yearEnd, setYearEnd] = useState('');
-  // D30: a LIST, not two fixed slots. Seeded with the two-semester shape because that
+  // D30: a LIST, not two fixed slots. Seeded with the two-session shape because that
   // is still the common case; a Summer or Spring block is now one click away.
+  //
+  // D45 Phase 3A: the DEFAULT NAME is 'Session N'. These strings become `semesters.name`
+  // — real data, not display copy — and the Dean can edit each one before saving. The four
+  // rows already in `sims` keep their 'Semester N' names; renaming those is the optional
+  // SQL in the Phase 3A section of docs/d45-meeting4-yellow-plan.md.
   const [terms, setTerms] = useState<DraftTerm[]>([
-    blankTerm(1, 'Semester 1'),
-    blankTerm(2, 'Semester 2'),
+    blankTerm(1, 'Session 1'),
+    blankTerm(2, 'Session 2'),
   ]);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createFieldErrors, setCreateFieldErrors] = useState<Record<string, string[]>>({});
@@ -206,7 +211,7 @@ export function AcademicStructureScreen() {
     setYearName('');
     setYearStart('');
     setYearEnd('');
-    setTerms([blankTerm(1, 'Semester 1'), blankTerm(2, 'Semester 2')]);
+    setTerms([blankTerm(1, 'Session 1'), blankTerm(2, 'Session 2')]);
     setCreateError(null);
     setCreateFieldErrors({});
   };
@@ -224,7 +229,7 @@ export function AcademicStructureScreen() {
       ...prev,
       blankTerm(
         prev.length ? Math.max(...prev.map((t) => t.sequence)) + 1 : 1,
-        `Semester ${prev.length + 1}`,
+        `Session ${prev.length + 1}`,
       ),
     ]);
 

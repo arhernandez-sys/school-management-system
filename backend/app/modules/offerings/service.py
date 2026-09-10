@@ -56,7 +56,7 @@ from app.common.schemas import (
     TeacherRef,
     UserRef,
 )
-from app.core.errors import Conflict, NotFound, ValidationError
+from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.rbac import (
     _teacher_profile_id,
@@ -1096,8 +1096,21 @@ def get_roster(
 # GET /offerings/{id}/enrollable-students
 # ══════════════════════════════════════════════════════════════════════════════
 def enrollable_students(
-    db: Session, *, offering_id: uuid.UUID, semester_id: uuid.UUID | None, search: str | None
+    db: Session,
+    *,
+    offering_id: uuid.UUID,
+    semester_id: uuid.UUID | None,
+    search: str | None,
+    include_ineligible: bool = False,
 ):
+    """The picker. `include_ineligible` is D45 §20 (Phase 4).
+
+    By default this lists only students in an enrollable status, which is what it has
+    always done. But Phase 4 made the status rule **overridable by the Dean**, and a
+    student filtered out of the list entirely cannot be overridden from the UI at all —
+    the waiver would exist only for whoever hand-writes the HTTP request. So the Dean can
+    ask for them, clearly flagged, and they stay out of the ordinary path.
+    """
     offering = _offering_or_404(db, offering_id)
     target_semester = semester_id or offering.semester_id
 
@@ -1109,9 +1122,10 @@ def enrollable_students(
 
     stmt = select(StudentProfile).where(
         StudentProfile.deleted_at.is_(None),
-        StudentProfile.status == StudentStatus.REGISTERED,
         StudentProfile.id.notin_(already),
     )
+    if not include_ineligible:
+        stmt = stmt.where(StudentProfile.status.in_(tuple(ENROLLABLE_STATUSES)))
     if search:
         like = f"%{search.strip()}%"
         stmt = stmt.where(
@@ -1120,10 +1134,61 @@ def enrollable_students(
         )
     stmt = stmt.order_by(*STUDENT_NAME_ORDER).limit(200)
 
-    from app.modules.offerings.schemas import EnrollableStudents
+    from app.modules.offerings.schemas import EnrollableStudent, EnrollableStudents
 
     rows = db.execute(stmt).scalars().all()
-    return EnrollableStudents(items=[StudentRef.model_validate(s) for s in rows])
+
+    # D45 §3b P2 — tell the picker who the gate will refuse, so the Dean sees it BEFORE
+    # selecting rather than as a 409 that kills the whole batch.
+    #
+    # The early exit matters: `check_eligibility` reads grades per student, and the
+    # overwhelmingly common case is a course with no prerequisites at all. One cheap
+    # count keeps this endpoint at its previous cost for every ungated course — only
+    # the 64 gated ones in the catalog pay for the per-student pass.
+    from app.modules.prerequisites import service as prereq_service
+    from app.modules.prerequisites.models import CoursePrerequisite
+
+    gated = db.scalar(
+        select(func.count())
+        .select_from(CoursePrerequisite)
+        .where(CoursePrerequisite.course_id == offering.course_id)
+    )
+
+    items: list[EnrollableStudent] = []
+    for student in rows:
+        reason: str | None = None
+        rule: str | None = None
+
+        # The status objection is reported FIRST and alone: "this person is not a current
+        # student" is a more basic answer than "they have not passed MATH1110", and both
+        # at once would tell the Dean to waive two rules where one is the real one.
+        status_reason = _status_block(student)
+        if status_reason is not None:
+            reason, rule = status_reason, "student_status"
+        elif gated:
+            issues = prereq_service.check_eligibility(
+                db,
+                student=student,
+                course_id=offering.course_id,
+                semester_id=target_semester,
+            )
+            if issues:
+                reason = "; ".join(
+                    f"{i.course_code} ({i.reason.rstrip('.')})" for i in issues
+                )
+                rule = "prerequisites"
+
+        items.append(
+            EnrollableStudent(
+                id=student.id,
+                full_name=student.full_name,
+                student_number=student.student_number,
+                eligible=reason is None,
+                ineligible_reason=reason,
+                ineligible_rule=rule,
+            )
+        )
+    return EnrollableStudents(items=items)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1143,24 +1208,165 @@ def course_id_for_offering(db: Session, offering_id: uuid.UUID) -> uuid.UUID | N
     )
 
 
+#: D45 §12/§20 — the statuses a student may register in WITHOUT an override.
+#:
+#: `ACTIVE` alone. `ACCEPTED` was considered and left out: an accepted applicant becomes
+#: `ACTIVE` when the Registrar marks the application enrolled, and that step is what
+#: creates the student's programme placement. Registering before it would produce a
+#: roster row for someone with no programme to be assessed against — so if BAJC wants it,
+#: it should be a deliberate override with a reason, which is exactly what this provides.
+ENROLLABLE_STATUSES = frozenset({StudentStatus.ACTIVE})
+
+
+def _status_block(student: StudentProfile) -> str | None:
+    """Why this student may not register, or None. D45 §20."""
+    if student.status in ENROLLABLE_STATUSES:
+        return None
+    return f"status is {student.status.value}"
+
+
+def _assert_students_enrollable(
+    db: Session,
+    *,
+    actor: User,
+    offering: CourseOffering,
+    students: list[StudentProfile],
+    override,  # EnrollmentOverride | None
+) -> list[tuple[StudentProfile, str]]:
+    """Refuse students who are not in an enrollable status (D45 §20).
+
+    ⚠️ **THIS RULE WAS NOT ENFORCED BEFORE PHASE 4.** `enrollable_students` filtered the
+    PICKER to `ACTIVE`, and everyone assumed that was the rule — but this endpoint only
+    ever checked `deleted_at`. Verified by execution against a copy of `sims`: a student
+    forced to `Graduated` vanished from the picker and was still enrolled with a `200` by
+    a direct call. A filtered dropdown is not an access rule; the API is.
+
+    Returns the (student, reason) pairs that were WAIVED, so the caller can log them.
+    """
+    blocked = [(s, r) for s in students if (r := _status_block(s)) is not None]
+    if not blocked:
+        return []
+    if override is not None and override.student_status:
+        return blocked  # waived — the caller audits each one
+    detail = "; ".join(f"{s.full_name} ({r})" for s, r in blocked)
+    raise Conflict(
+        f"{'This student is' if len(blocked) == 1 else 'These students are'} not in a "
+        f"status that can be registered: {detail}. A Dean may override this with a "
+        f"reason.",
+        code="student_not_enrollable",
+    )
+
+
+def _assert_override_permitted(actor: User, override) -> None:
+    """Only the Dean may set a registration rule aside (BAJC, 2026-09-09).
+
+    The router lets the Registrar reach this endpoint — they run registration — but
+    waiving an academic rule is an academic-structure decision, which D30 §D14 keeps with
+    the Dean. The Registrar sees the refusal and the reason, and escalates.
+    """
+    if override is None:
+        return
+    if actor.role != Role.PRINCIPAL:
+        raise Forbidden(
+            "Only the Dean can override a registration restriction.",
+            code="override_not_permitted",
+        )
+
+
+def _audit_override(
+    db: Session,
+    *,
+    actor: User,
+    offering: CourseOffering,
+    student: StudentProfile,
+    rule: str,
+    detail: str,
+    reason: str,
+) -> None:
+    """One row per student per rule waived (§12, §20, §46).
+
+    Per STUDENT, not per request: the auditable unit is "this student was let into this
+    course despite this rule", and a single row for a batch of eight could not answer
+    that question afterwards.
+    """
+    db.add(
+        AuditLog(
+            actor_user_id=actor.id,
+            action="enrollment.override",
+            entity_type="class_enrollment",
+            entity_id=offering.id,
+            summary={
+                "rule": rule,
+                "detail": detail,
+                "reason": reason,
+                "student_id": str(student.id),
+                "student_number": student.student_number,
+                "student_name": student.full_name,
+                "offering_id": str(offering.id),
+                "course_id": str(offering.course_id),
+            },
+        )
+    )
+
+
 def _assert_prerequisites_met(
     db: Session,
     *,
     offering: CourseOffering,
     students: list[StudentProfile],
     semester_id: uuid.UUID,
-) -> None:
+    override=None,  # EnrollmentOverride | None
+) -> list[tuple[StudentProfile, str]]:
     """Refuse the whole enrolment if ANY student is short (D30 §D4).
+
+    Returns the (student, detail) pairs WAIVED by an override, so the caller can log
+    them. With no override this either returns `[]` or raises.
 
     Imported inside the function: `prerequisites.service` reads grades, which reads
     offerings, and a module-level import would close the cycle.
     """
     from app.modules.prerequisites import service as prereq_service
 
+    # D45 §3b P2 — collect EVERY blocked student, then raise once.
+    #
+    # This used to call `assert_eligible` in the loop, so it raised on the first one and
+    # the Dean learned about the rest one failed submission at a time. `check_eligibility`
+    # returns instead of raising for exactly this reason — the docstring says so — but the
+    # only caller was throwing that away.
+    blocked: list[tuple[StudentProfile, str]] = []
     for student in students:
-        prereq_service.assert_eligible(
+        issues = prereq_service.check_eligibility(
             db, student=student, course_id=offering.course_id, semester_id=semester_id
         )
+        if issues:
+            detail = "; ".join(
+                f"{i.course_code} ({i.reason.rstrip('.')})" for i in issues
+            )
+            blocked.append((student, detail))
+
+    if not blocked:
+        return []
+
+    # D45 §12 — the Dean may set this aside. Only the students actually blocked are
+    # waived, and each one is logged; the requirement itself stays in force for everyone
+    # else, which is the whole point. Before Phase 4 the only way through was to delete
+    # the requirement for the entire college.
+    if override is not None and override.prerequisites:
+        return blocked
+
+    if len(blocked) == 1:
+        student, detail = blocked[0]
+        raise Conflict(
+            f"{student.full_name} has not met the prerequisites: {detail}.",
+            code="prerequisite_not_met",
+        )
+    raise Conflict(
+        f"{len(blocked)} students have not met the prerequisites, so none were "
+        f"enrolled: "
+        + "; ".join(f"{s.full_name} — {d}" for s, d in blocked)
+        + ".",
+        code="prerequisite_not_met",
+    )
 
 
 def enroll_students(db: Session, *, actor: User, offering_id: uuid.UUID, payload):
@@ -1217,12 +1423,41 @@ def enroll_students(db: Session, *, actor: User, offering_id: uuid.UUID, payload
     # the Registrar has to be able to tell "one course short" from "sat it and failed".
     # Warn-only was considered and rejected: unlike a timetable clash (D-Q6), a missing
     # prerequisite is not fixed by the next edit.
-    _assert_prerequisites_met(
+    ordered = [students[sid] for sid in payload.student_ids]
+    override = getattr(payload, "override", None)
+    _assert_override_permitted(actor, override)
+
+    # D45 §20 — the status rule, enforced HERE for the first time. Runs before the
+    # prerequisite gate because "this person is not a current student" is a more basic
+    # objection than "this student has not passed MATH1110", and reporting the second
+    # about a graduate would be noise.
+    waived_status = _assert_students_enrollable(
+        db, actor=actor, offering=offering, students=ordered, override=override
+    )
+
+    # D30 §D4 — the prerequisite gate. Checked for EVERY student BEFORE anything is
+    # written, so a blocked student cannot leave the rest of the batch half-enrolled.
+    waived_prereq = _assert_prerequisites_met(
         db,
         offering=offering,
-        students=[students[sid] for sid in payload.student_ids],
+        students=ordered,
         semester_id=semester_id,
+        override=override,
     )
+
+    # §12/§20 — every override is logged, and only the ones actually USED. Passing an
+    # override that nothing needed must not write a waiver that never happened.
+    if override is not None:
+        for student, detail in waived_status:
+            _audit_override(
+                db, actor=actor, offering=offering, student=student,
+                rule="student_status", detail=detail, reason=override.reason,
+            )
+        for student, detail in waived_prereq:
+            _audit_override(
+                db, actor=actor, offering=offering, student=student,
+                rule="prerequisites", detail=detail, reason=override.reason,
+            )
 
     for sid in payload.student_ids:
         # Already active in THIS offering for the term? idempotent — skip create.
@@ -1329,7 +1564,7 @@ def set_enrollment_status(
     **Deliberately NOT `DELETE`.** Un-enrolling closes the row with `unenrolled_at` and
     takes the student off the roster, which says the registration was a mistake. A
     WITHDRAWAL is the opposite claim: the student did sit the course and then left, and the
-    transcript has to print `W/P` or `W/F` against it. So the row stays open and on the
+    transcript has to print `W` against it. So the row stays open and on the
     roster — deleting it would erase the very thing being recorded.
 
     **An un-enrolled row is refused**, because there is nothing to describe: the student is

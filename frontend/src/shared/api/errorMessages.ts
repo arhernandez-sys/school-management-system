@@ -79,6 +79,13 @@ const ERROR_COPY: Record<string, string> = {
     'Grades are closed while the mid-session freeze is running. Revisions open when it ends.',
   no_midterm_window:
     'This session has no mid-session period. The Dean sets one in Settings → Academic structure.',
+  // Registration restrictions (D45 §20, Phase 4). Both are overridable by the Dean with
+  // a reason; the copy says so, because a refusal with no stated way forward is what sent
+  // the Dean to delete the prerequisite for the whole college in the first place.
+  student_not_enrollable:
+    'This student is not in a status that can be registered. A Dean can override this with a reason.',
+  override_not_permitted:
+    'Only the Dean can override a registration restriction. Ask the Dean to authorise it.',
   duplicate_username: 'This username is already taken.',
   // Generic
   validation_error: 'Some fields need attention. Please review and try again.',

@@ -11,6 +11,15 @@ Endpoints:
   GET /reports/attendance        P/S/Teacher -> AttendanceReport  (?section_id=)
   GET /reports/enrollment        P/S ONLY    -> EnrollmentReport
 
+D45 Phase 9 added the four INSTITUTIONAL reports of blueprint §53. They read the college
+rather than one student, so they sit behind their own gate (Dean / Registrar / Auditor /
+HOD, the HOD scoped to their own programmes) and their own service module:
+
+  GET /reports/new-vs-returning      -> NewVsReturningReport      (?academic_year_id=)
+  GET /reports/overcapacity          -> OvercapacityReport        (?semester_id=)
+  GET /reports/credit-load           -> CreditLoadReport          (?semester_id=)
+  GET /reports/programme-attendance  -> ProgrammeAttendanceReport (?semester_id=&program_id=)
+
 Paths follow the finished frontend's QUERY-PARAM form, not api-spec §5.10's original
 path-param form (`/reports/report-card/{student_id}`) — see the api-spec reconciliation
 note. Route order matters: `/report-card/me` is declared BEFORE `/report-card` would
@@ -33,11 +42,15 @@ from app.common.enums import ReportCardKind, Role
 from app.common.schemas import ErrorResponse
 from app.core.deps import get_db, require_role, require_student_grade_visibility
 from app.core.pagination import PageParams, page_params
-from app.modules.reports import service
+from app.modules.reports import institutional, service
 from app.modules.reports.schemas import (
     AttendanceReport,
+    CreditLoadReport,
+    NewVsReturningReport,
     OfferingGradesReport,
+    OvercapacityReport,
     EnrollmentReport,
+    ProgrammeAttendanceReport,
     ReportCard,
     StudentPickerPage,
     Transcript,
@@ -193,3 +206,107 @@ def get_enrollment_report(
 ) -> EnrollmentReport:
     """No frontend caller today — FR-RPT-04 is served by the principal dashboard."""
     return service.get_enrollment_report(db, actor=actor)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D45 Phase 9 — the four institutional reports of §53
+#
+# Mounted here rather than under a new `/institutional` prefix: they ARE reports, the
+# frontend serves them as tabs of the Reports screen, and a second prefix would have
+# split one screen's calls across two routers for no gain.
+#
+# `_institutional` is a WIDER gate than `_admins` (it adds the HOD) and a NARROWER one
+# than `_staff` (it drops the Lecturer). The HOD is then scoped down to the programmes
+# they head inside the service — a role allowlist cannot express "only your own
+# programmes", which is the same reason D43 put the auditor's read-only refusal at the
+# auth choke point instead of on 121 route tuples.
+# ══════════════════════════════════════════════════════════════════════════════
+_institutional = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.HOD)
+
+
+@router.get(
+    "/new-vs-returning",
+    response_model=NewVsReturningReport,
+    summary="New versus returning students for one academic year (§53 Enrollment)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_new_vs_returning(
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_institutional),
+) -> NewVsReturningReport:
+    """Defaults to the ACTIVE year. 404 `academic_year_not_found` for an unknown id —
+    never a silent fallback to the active year, which would answer a different question
+    without saying so.
+
+    New/returning is measured from REGISTRATIONS, not from `enrollment_date`. See
+    `institutional.new_vs_returning` for why, and for the second, per-term reading that
+    comes back alongside the year one."""
+    return institutional.new_vs_returning(
+        db, actor=actor, academic_year_id=academic_year_id
+    )
+
+
+@router.get(
+    "/overcapacity",
+    response_model=OvercapacityReport,
+    summary="Classes past their capacity in one term (§53 Registration)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_overcapacity(
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_institutional),
+) -> OvercapacityReport:
+    """Defaults to the ACTIVE TERM (not the active year's first term). 404
+    `semester_not_found` for an unknown id.
+
+    Returns three lists, not one: over capacity, exactly at capacity, and no capacity
+    recorded. An empty "over capacity" list means two very different things depending on
+    the third one."""
+    return institutional.overcapacity(db, actor=actor, semester_id=semester_id)
+
+
+@router.get(
+    "/credit-load",
+    response_model=CreditLoadReport,
+    summary="Credits each student is carrying this term (§53 Registration)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_credit_load(
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_institutional),
+) -> CreditLoadReport:
+    """Defaults to the ACTIVE TERM. Students with no registration this term are absent
+    from the rows — a student carrying nothing has no load, and "should they be
+    registered?" is §53's separate students-not-registered report.
+
+    `mismatch` applies BAJC's own application-form rule (Part Time under 15 credits, Full
+    Time over 15) and deliberately does NOT flag exactly 15, which the form leaves
+    unstated."""
+    return institutional.credit_load(db, actor=actor, semester_id=semester_id)
+
+
+@router.get(
+    "/programme-attendance",
+    response_model=ProgrammeAttendanceReport,
+    summary="Attendance per programme — §53's department report (C4)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_programme_attendance(
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    program_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_institutional),
+) -> ProgrammeAttendanceReport:
+    """"Department" means PROGRAMME (D45 decision C4 — there is no `departments` table and
+    a programme is the unit BAJC has). Grouped by the STUDENT's programme, so a Biology
+    student's absence in a General Studies elective counts against Biology.
+
+    `program_id` drills into one programme and adds its per-student rows; an HOD may only
+    drill into a programme they head (403 otherwise). Flagged strictly below the college's
+    configured floor, matching the alerts screen."""
+    return institutional.programme_attendance(
+        db, actor=actor, semester_id=semester_id, program_id=program_id
+    )

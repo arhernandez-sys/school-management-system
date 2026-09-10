@@ -165,7 +165,7 @@ def _label(offering) -> str:
     return offering_label(offering._course.code, offering.section_code)
 
 
-def _student(db_session, *, status=StudentStatus.REGISTERED, user_id=None) -> StudentProfile:
+def _student(db_session, *, status=StudentStatus.ACTIVE, user_id=None) -> StudentProfile:
     s = StudentProfile(
         user_id=user_id,
         student_number=f"S-{uuid.uuid4().hex[:8]}",

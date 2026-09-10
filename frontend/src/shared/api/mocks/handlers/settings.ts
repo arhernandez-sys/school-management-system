@@ -4,7 +4,7 @@ import { DEMO_DATASET, DEMO_IDS, getActiveSemester, getActiveYear } from '@share
 import type { DemoUser } from '@shared/api/mocks/demo/dataset';
 import type { DemoSemester } from '@shared/api/mocks/demo/types';
 import { boolParam, errorResponse, listParamsFrom } from './_helpers';
-import { DEMO_TODAY, paginate } from '@shared/api/mocks/demo/dataset';
+import { paginate } from '@shared/api/mocks/demo/dataset';
 
 /**
  * MSW handlers for the SETTINGS module (api-spec §5.11), backing the ALREADY-BUILT
@@ -119,81 +119,17 @@ function userListItem(u: DemoUser) {
 const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
 const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 
-/**
- * D43 — the sensitive-action audit trail.
- *
- * The DEMO has no real audit_log: nothing in the mock layer calls `_audit()`, so there
- * is nothing to read. Rather than answer an empty page — which would look like a broken
- * screen and would let the UI ship untested against real data — the demo SYNTHESISES a
- * plausible trail from the seeded entities, so the Audit Log screen can be exercised
- * with filters, paging and a mix of actors.
- *
- * It is derived deterministically from the dataset (no `Date.now()`, no randomness), in
- * keeping with the rest of the demo.
- */
-function demoAuditRows() {
-  const rows: Array<Record<string, unknown>> = [];
-  const dean = D.users.find((u) => u.role === 'principal');
-  const registrar = D.users.find((u) => u.role === 'secretary');
-  let n = 1;
-  const push = (
-    actor: typeof dean,
-    action: string,
-    entity_type: string,
-    entity_id: string | null,
-    daysAgo: number,
-    summary: Record<string, unknown> | null = null,
-  ) => {
-    const d = new Date(DEMO_TODAY);
-    d.setDate(d.getDate() - daysAgo);
-    rows.push({
-      id: n++,
-      actor_user_id: actor?.id ?? null,
-      actor_name: actor?.full_name ?? null,
-      actor_role: actor?.role ?? null,
-      action,
-      entity_type,
-      entity_id,
-      summary,
-      created_at: d.toISOString(),
-    });
-  };
-
-  D.courses.slice(0, 8).forEach((c, i) => push(dean, 'course.create', 'course', c.id, 40 - i, { code: c.code }));
-  D.students.slice(0, 10).forEach((st, i) => push(registrar, 'student.create', 'student', st.id, 30 - i, { student_number: st.student_number }));
-  D.programs.slice(0, 4).forEach((pr, i) => push(dean, 'program.update', 'program', pr.id, 20 - i, { code: pr.code }));
-  D.teachers.slice(0, 5).forEach((t, i) => push(registrar, 'teacher.create', 'teacher', t.id, 14 - i, { staff_number: t.staff_number }));
-  D.program_heads.forEach((h, i) => push(dean, 'program.heads.set', 'program', h.program_id, 2 + i, { teacher_ids: [h.teacher_id] }));
-  push(dean, 'user.role_change', 'user', D.users[2]?.id ?? null, 1, { to: 'hod' });
-
-  // Newest first — an audit trail is read backwards from the most recent action.
-  return rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-}
+// ⚠️ `demoAuditRows()` LIVED HERE AND IS GONE (Sep 2026). It synthesised a plausible
+// `audit_log` from the seeded entities so the deleted Audit Log screen had something to
+// render. `handlers/audit.ts` has its own hand-written entries, already in the shape the
+// server RENDERS rather than the shape it stores, which is the whole point of that
+// screen — so a second synthesiser here would only demo the view that was removed.
 
 export const settingsHandlers = [
-  // GET /settings/audit-log — Dean + Auditor. Read-only; there is no write route.
-  http.get(`${API_BASE_URL}/settings/audit-log`, ({ request, cookies }) => {
-    const role = cookies['sis_mock_session'] ?? 'principal';
-    if (role !== 'principal' && role !== 'auditor') {
-      return errorResponse(403, 'forbidden', 'You do not have access to this resource.');
-    }
-    const url = new URL(request.url);
-    let rows = demoAuditRows();
-
-    const action = url.searchParams.get('action');
-    if (action) {
-      rows = rows.filter((r) => String(r.action).toLowerCase().includes(action.toLowerCase()));
-    }
-    const entityType = url.searchParams.get('entity_type');
-    if (entityType) rows = rows.filter((r) => r.entity_type === entityType);
-    const from = url.searchParams.get('date_from');
-    if (from) rows = rows.filter((r) => String(r.created_at).slice(0, 10) >= from);
-    const to = url.searchParams.get('date_to');
-    // INCLUSIVE of `date_to`, matching the server: "up to the 5th" means the whole 5th.
-    if (to) rows = rows.filter((r) => String(r.created_at).slice(0, 10) <= to);
-
-    return HttpResponse.json(paginate(rows as never, listParamsFrom(url)));
-  }),
+  // ⚠️ `GET /settings/audit-log` LIVED HERE AND IS GONE (Sep 2026). The one audit
+  // reader is `handlers/audit.ts`, over `GET /audit`. Two mock doors onto one table
+  // would have kept the deleted screen demoable, which is how a removed feature comes
+  // back.
 
   // ── School profile ────────────────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/settings/school`, () => HttpResponse.json(schoolProfileRead())),

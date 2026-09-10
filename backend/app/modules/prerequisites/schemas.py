@@ -46,7 +46,20 @@ class PrerequisiteList(BaseModel):
     #: The raw string from the course-sequence PDF, for comparison. DOCUMENTATION
     #: ONLY — validation reads `items`, never this. Surfaced so a Dean entering the
     #: relation can check it against what the PDF actually said.
+    #:
+    #: D45 §3b P1: it is CLEARED when the last structured requirement is removed.
+    #: Leaving it behind made a successful delete look like it had failed — the dialog
+    #: went on printing "Prerequisites: MATH1110" after the rule was gone, which is the
+    #: defect the client reported as "I removed the prerequisite but it didn't help".
     prerequisites_text: str | None = None
+    #: D45 §3b P3 — the REVERSE relation: courses that require THIS one.
+    #:
+    #: Read-only, and the whole point of it. Without it the only question the screen
+    #: could answer was "what does this course require", so a Dean trying to open
+    #: MATH1206 for enrolment would naturally open MATH1210 — the previous class, the
+    #: one the 409 names — and remove ITS requirement, which changes nothing. The rule
+    #: that blocks enrolment into a course is always stored ON that course.
+    required_by: list[PrerequisiteCourseRef] = Field(default_factory=list)
 
 
 class PrerequisiteCreateRequest(BaseModel):

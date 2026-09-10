@@ -15,23 +15,6 @@ export type { Role } from '@shared/api/generated/model';
 import type { Role } from '@shared/api/generated/model';
 
 /**
- * Student lifecycle, in the CLIENT'S vocabulary (D34) — adopted verbatim from their own
- * `student_profiles` dump, mixed case and all.
- *
- *   Registered    "instead of active" — enrolled and attending.
- *   Unregistered  "when student do not continue further semesters, but has successfully
- *                 completed the last semester". NOT a failure state, which is why
- *                 "inactive" was the wrong word.
- *   DropOut       left mid-programme. Pairs with `dropout_date` / `dropout_reason`.
- *   graduated     only the Dean and Registrar may set it (already true — the endpoint is
- *                 role-guarded to those two).
- *   transferred / withdrawn   unchanged.
- *
- * The mixed case is deliberate: it mirrors the client's enum exactly, because their dump
- * is the authority for that column and normalising it would put the database out of step
- * with their own tooling. Mirrors `app/common/enums.py::StudentStatus`.
- */
-/**
  * The gender values the forms offer (D37). Mirrors `app/common/enums.py::Gender`.
  *
  * **The COLUMNS are free text and stay so** — `student_profiles.gender` and
@@ -80,13 +63,57 @@ export function genderLabel(value: string | null | undefined): string | null {
   return value;
 }
 
+/**
+ * Student lifecycle — the blueprint's §7.5 vocabulary (D45, client decision C5).
+ *
+ * **REPLACES the D34 six.** D34 adopted the client's own dump verbatim, mixed case and
+ * all; the revised blueprint lists ten states and BAJC confirmed on 2026-09-08 that the
+ * ten are what they want. The old values map on cleanly:
+ *
+ *   Registered -> Active      Unregistered -> Inactive     DropOut -> Dropout
+ *   graduated  -> Graduated   withdrawn    -> Withdrawn    transferred -> Transferred
+ *
+ * `Transferred` is an ELEVENTH value and is NOT in the blueprint. The ten have no
+ * equivalent, one live row carries it, and folding it into `Withdrawn` would have
+ * rewritten that student's history to say something untrue about why they left — so the
+ * client kept it.
+ *
+ * ⚠️ **TitleCase, all of them, and the case is load-bearing HERE in a way it is not on
+ * the server.** MariaDB's collation is case-insensitive so `status = 'graduated'` matched
+ * either spelling; JavaScript's `===` does not. A stray lowercase value renders a BLANK
+ * select and the wrong label on the profile card — the same trap `canonicalGender` above
+ * documents, and the reason D45 normalised the stored bytes rather than leaving the
+ * mixed-case vocabulary in place.
+ *
+ * Mirrors `app/common/enums.py::StudentStatus`.
+ */
 export type StudentStatus =
-  | 'Registered'
-  | 'Unregistered'
-  | 'DropOut'
-  | 'transferred'
-  | 'graduated'
-  | 'withdrawn';
+  | 'Applicant'
+  | 'Accepted'
+  | 'Active'
+  | 'Inactive'
+  | 'Suspended'
+  | 'Withdrawn'
+  | 'Dropout'
+  | 'Completed'
+  | 'Graduated'
+  | 'Alumni'
+  | 'Transferred';
+
+/** All student statuses, in LIFECYCLE order — which is the order a human reads them. */
+export const STUDENT_STATUSES: readonly StudentStatus[] = [
+  'Applicant',
+  'Accepted',
+  'Active',
+  'Inactive',
+  'Suspended',
+  'Completed',
+  'Graduated',
+  'Alumni',
+  'Withdrawn',
+  'Dropout',
+  'Transferred',
+];
 
 export type TeacherStatus = 'active' | 'inactive';
 
@@ -110,6 +137,7 @@ export const ROLES: readonly Role[] = [
   'student',
   'hod',
   'auditor',
+  'sysadmin',
 ];
 
 /**

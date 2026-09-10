@@ -62,8 +62,8 @@ export const strings = {
     section: 'Section',
     program: 'Program',
     programs: 'Programs',
-    semester: 'Semester',
-    semesters: 'Semesters',
+    semester: 'Session',
+    semesters: 'Sessions',
     credits: 'Credits',
     gpa: 'GPA',
     qualityPoints: 'Quality points',
@@ -88,6 +88,7 @@ export const strings = {
     // even though the unit an HOD actually heads is a PROGRAMME.
     hod: 'Head of Department',
     auditor: 'Auditor',
+    sysadmin: 'System Administrator',
   },
   nav: {
     dashboard: 'Dashboard',
@@ -106,6 +107,7 @@ export const strings = {
     announcements: 'Announcements',
     calendar: 'Calendar',
     reports: 'Reports',
+    audit: 'Audit trail',
     settings: 'Settings',
     myProfile: 'My Profile',
     // Student possessive labels (design-system §3.2). A student never sees the word

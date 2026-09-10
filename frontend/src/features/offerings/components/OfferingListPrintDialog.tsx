@@ -115,7 +115,7 @@ export function OfferingListPrintDialog({
                   <TableRow>
                     <TableCell sx={{ fontWeight: 600 }}>Offering</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Course</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Term</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Session</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Lecturer</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Schedule</TableCell>
                     <TableCell sx={{ fontWeight: 600 }} align="right">

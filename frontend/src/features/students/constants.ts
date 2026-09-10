@@ -1,5 +1,5 @@
 import type { StatusKind } from '@shared/components';
-import type { StudentStatus } from '@shared/types/enums';
+import { STUDENT_STATUSES, type StudentStatus } from '@shared/types/enums';
 
 /**
  * Student status → {@link StatusBadge} kind / display label. Shared by the detail page header
@@ -7,34 +7,47 @@ import type { StudentStatus } from '@shared/types/enums';
  * the status vocabulary can never drift between them.
  */
 export const STUDENT_STATUS_KIND: Record<StudentStatus, StatusKind> = {
-  Registered: 'success',
+  // Pre-enrolment. Neither good nor bad news yet.
+  Applicant: 'neutral',
+  Accepted: 'info',
+  Active: 'success',
   // Not an error state: the client's definition is "completed the last semester but is not
   // continuing", so it reads neutral rather than warning.
-  Unregistered: 'neutral',
-  // This one IS a negative outcome — a student who left mid-programme — and it is the only
-  // status that should draw the eye on a register.
-  DropOut: 'error',
-  transferred: 'info',
-  graduated: 'info',
-  withdrawn: 'neutral',
+  Inactive: 'neutral',
+  // Imposed by the college, not chosen by the student — the one pause that IS a warning.
+  Suspended: 'warning',
+  Completed: 'info',
+  Graduated: 'success',
+  Alumni: 'info',
+  Withdrawn: 'neutral',
+  // A negative outcome — a student who left mid-programme — and the status that should
+  // draw the eye on a register.
+  Dropout: 'error',
+  Transferred: 'info',
 };
 
 export const STUDENT_STATUS_LABEL: Record<StudentStatus, string> = {
-  // The stored values are already display-ready except DropOut, which gets a space. The
-  // labels are what a Registrar reads; the VALUES are the client's and are not touched.
-  Registered: 'Registered',
-  Unregistered: 'Unregistered',
-  DropOut: 'Drop out',
-  transferred: 'Transferred',
-  graduated: 'Graduated',
-  withdrawn: 'Withdrawn',
+  // D45 — every stored value is now display-ready TitleCase, so these are one-to-one.
+  // `DropOut: 'Drop out'` is gone with the value it renamed.
+  Applicant: 'Applicant',
+  Accepted: 'Accepted',
+  Active: 'Active',
+  Inactive: 'Inactive',
+  Suspended: 'Suspended',
+  Completed: 'Completed',
+  Graduated: 'Graduated',
+  Alumni: 'Alumni',
+  Withdrawn: 'Withdrawn',
+  Dropout: 'Dropout',
+  Transferred: 'Transferred',
 };
 
-export const STUDENT_STATUS_OPTIONS: StudentStatus[] = [
-  'Registered',
-  'Unregistered',
-  'DropOut',
-  'transferred',
-  'graduated',
-  'withdrawn',
-];
+/**
+ * The status dropdown, in LIFECYCLE order rather than alphabetical.
+ *
+ * Sourced from `STUDENT_STATUSES` so the list cannot drift from the type: adding a value
+ * to the union without adding it here would otherwise leave a status that exists, renders
+ * on a badge, and cannot be selected.
+ */
+export const STUDENT_STATUS_OPTIONS: readonly StudentStatus[] = STUDENT_STATUSES;
+

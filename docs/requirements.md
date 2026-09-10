@@ -80,7 +80,8 @@ Capability levels:
 | **8. Attendance** | View-all | View-all | Create-Edit (own classes) | View-own (own attendance) | Create-Edit (own classes) · View-all (their programme) | View-all |
 | **9. Announcements** | Full (school-wide) | Full (school-wide) | Create-Edit (own classes) | View-own (targeted to them) | Create-Edit (own classes) | View-all (reads; never authors) |
 | **10. Reports** | View-all (incl. any student's transcript) | View-all (incl. any student's transcript) | View-own (their (section, subject) gradebooks/students; **no transcript access**) | View-own (own report card + own grades; **no transcript**) | View-all (their programme's gradebooks; **no transcript**) | View-all (incl. any transcript) |
-| **11. Settings** | Full (school + academic config) | Create-Edit (limited admin config) | View-own (account/profile) | View-own (account/profile) | View-own (account) + View-all (catalog) | View-all (read-only, incl. **Audit log**) |
+| **11. Settings** | Full (school + academic config) | Create-Edit (limited admin config) | View-own (account/profile) | View-own (account/profile) | View-own (account) + View-all (catalog) | View-all (read-only) |
+| **12. Audit trail** (Insights) | View-all | ✗ | ✗ | ✗ | ✗ | View-all |
 
 ### 2.1 Permission clarifications (what each role specifically can and cannot do)
 
@@ -114,7 +115,7 @@ Capability levels:
 - The link is the `program_heads` table, and **appointing a head grants the role automatically** — the account becomes `hod` on appointment and returns to `teacher` when the last appointment is removed. Three guards: only a plain lecturer is promoted (an administrator who also teaches is never changed), only an `hod` is demoted, and a head who still runs another programme keeps the role. Every change is audited as `user.role_change`.
 
 **Auditor** *(added D43)*
-- **Reads everything, writes nothing.** Sees all students, lecturers, courses, offerings, grades, attendance, applications, reports (including transcripts) and settings, plus the **Audit log** — the sensitive-action trail, which no other screen exposes.
+- **Reads everything, writes nothing.** Sees all students, lecturers, courses, offerings, grades, attendance, applications, reports (including transcripts) and settings, plus the **Audit trail** (Insights → Audit trail, `GET /audit`) — the sensitive-action record, which no other screen exposes. ⚠️ It used to be reachable from Settings → Audit log as well; that second screen was deleted on 10 Sep 2026 (see `docs/d45-meeting4-yellow-plan.md` §4b).
 - The write ban is not a matter of which routes they are listed on: **every** POST/PUT/PATCH/DELETE is refused with `403 read_only_role` in `get_current_user`, the one dependency every authenticated route passes through. A route added in future is read-only for them by default.
 - The three exceptions act on their own account, not on school data: log out, change their own password, set their own preferences.
 - **Cannot** author announcements, decide grade revisions, or be given any capability above `View-all`.

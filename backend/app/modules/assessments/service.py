@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -47,6 +48,23 @@ from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
+
+
+def _dec(value) -> Decimal | None:  # noqa: ANN001
+    """Coerce a stored Numeric to `Decimal`, or None if it is not a number.
+
+    Local rather than imported from `grades.calc`: this module already avoids importing
+    the grade engine, and the D45 §24 weighting check needs exact decimal arithmetic for
+    one reason only — 20 + 15 + 25 + 30 + 10 is exactly 100 in decimal and
+    99.99999999999999 in binary float, so a float sum would tell a lecturer their correct
+    gradebook was wrong.
+    """
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 # Legal assessment lifecycle transitions (API-16). `graded` is terminal.
 _LEGAL_TRANSITIONS: dict[AssessmentStatus, set[AssessmentStatus]] = {
@@ -699,7 +717,26 @@ def list_categories(db: Session, *, caller: User, offering_id: uuid.UUID):
     ).scalars().all()
     from app.modules.assessments.schemas import CategoryList
 
-    return CategoryList(items=[_cat_detail(c) for c in rows])
+    # D45 §24 — "The system should verify that assessment weighting totals 100%."
+    # Computed with Decimal: 20 + 15 + 25 + 30 + 10 is exactly 100 in decimal and
+    # 99.99999999999999 in binary float, so a float sum would tell the lecturer their
+    # correct gradebook was wrong.
+    total = sum((_dec(c.weight) or Decimal(0) for c in rows), start=Decimal(0))
+    uncategorized = db.scalar(
+        select(func.count())
+        .select_from(Assessment)
+        .where(
+            Assessment.offering_id == cs.id,
+            Assessment.category_id.is_(None),
+            Assessment.deleted_at.is_(None),
+        )
+    ) or 0
+    return CategoryList(
+        items=[_cat_detail(c) for c in rows],
+        weight_total=float(total),
+        weight_total_ok=bool(rows) and total == Decimal(100) and uncategorized == 0,
+        uncategorized_assessment_count=int(uncategorized),
+    )
 
 
 def _assert_can_read_cs(db: Session, caller: User, cs: CourseOffering) -> None:

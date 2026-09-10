@@ -44,6 +44,14 @@ export const RECEIVABLE_AUDIENCES: Record<Role, AnnouncementAudience[]> = {
   // bucket, so the filter offers all four. Note `_authors` on the server does not
   // include them: they read the feed, they never write to it.
   auditor: ['all', 'teachers', 'students', 'class'],
+  // D45 §2 — the System Administrator receives NOTHING. `all` is deliberately absent
+  // even though it is the one bucket that reaches everybody: the central technical-scope
+  // gate refuses this account `/announcements` outright (blueprint §48), so offering a
+  // filter here would render a screen the server will not answer. An option that can
+  // never match is worse than absent — it reads as "there are no announcements" rather
+  // than "you cannot receive these", which is the same argument the rest of this map is
+  // built on.
+  sysadmin: [],
 };
 
 /**
