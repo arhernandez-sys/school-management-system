@@ -1,4 +1,4 @@
-"""Suite for D38 — the PENDING form (`student_profile_temp`).
+"""Suite for D38 — the PENDING form (`application_temp`).
 
 The load-bearing behaviours pinned here:
 
@@ -510,3 +510,89 @@ class TestARefusedSubmitCostsNothing:
         assert r.status_code == 422, r.text
         db_session.expire_all()
         assert db_session.get(ApplicationTemp, uuid.UUID(temp_id)) is not None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestTheProgrammeIsReadBack:
+    """⚠️ REGRESSION (reported by the client, Sep 2026: *"why is programme not being
+    saved in the admission temp"*).
+
+    It **was** being saved. `application_temp.program_id` held the right value the
+    whole time — the column, the schema field and `_TEMP_WRITABLE` were all correct — and
+    `_pending_list_item` hardcoded `program=None` on the way out. Every read returned
+    null.
+
+    **That is worse than a blank column, and this is the part the tests must pin.** The
+    wizard seeds its draft with `detail.program?.id ?? ''` and sends
+    `program_id: draft.program_id === '' ? null : draft.program_id`. So a read returning
+    null made the Programme select reopen empty, and the next *Save and close* wrote that
+    emptiness back — **a read defect that destroyed data on the following write.**
+
+    Checked against the defect: with `program=None` put back, **5 of these 7 fail**.
+    `complete_body` had always sent `program_id`; nothing had ever asserted it came back.
+    """
+
+    def test_the_create_response_carries_the_programme(self, client, graph) -> None:
+        r = _save(client, graph)
+        assert r.status_code == 201, r.text
+        program = r.json()["program"]
+        assert program is not None, "the create response dropped the programme"
+        assert program["id"] == str(graph.program.id)
+
+    def test_it_carries_the_code_and_name_so_a_screen_can_label_it(
+        self, client, graph
+    ) -> None:
+        """An id alone forces every caller to go and look the programme up."""
+        program = _save(client, graph).json()["program"]
+        assert program["code"] == graph.program.code
+        assert program["name"] == graph.program.name
+
+    def test_the_detail_read_carries_it(self, client, graph) -> None:
+        """This is the read the wizard reopens with. It is the one that mattered."""
+        temp_id = _save(client, graph).json()["id"]
+        r = client.get(f"{P}/{temp_id}", headers=graph.S)
+        assert r.status_code == 200, r.text
+        assert (r.json()["program"] or {}).get("id") == str(graph.program.id)
+
+    def test_the_list_row_carries_it(self, client, graph) -> None:
+        """The blank Programme column on the Pending forms list."""
+        temp_id = _save(client, graph).json()["id"]
+        rows = client.get(f"{P}?page_size=100", headers=graph.S).json()["items"]
+        row = next(r for r in rows if r["id"] == temp_id)
+        assert (row["program"] or {}).get("id") == str(graph.program.id)
+
+    def test_reopening_and_saving_again_does_not_erase_it(self, client, graph) -> None:
+        """**The data-loss path.** Walks exactly what the wizard does: read the form,
+        seed the draft from `program.id` the way the screen does, send the whole body
+        back. Under the defect the draft seeded to empty and this wrote null."""
+        temp_id = _save(client, graph).json()["id"]
+
+        reopened = client.get(f"{P}/{temp_id}", headers=graph.S).json()
+        draft_program_id = (reopened.get("program") or {}).get("id") or ""
+
+        body = graph.complete_body()
+        body["program_id"] = draft_program_id or None
+        r = client.patch(f"{P}/{temp_id}", headers=graph.S, json=body)
+        assert r.status_code == 200, r.text
+
+        assert (r.json()["program"] or {}).get("id") == str(graph.program.id), (
+            "the programme was erased by a reopen-and-save cycle"
+        )
+
+    def test_an_explicit_null_still_clears_it(self, client, graph) -> None:
+        """The fix must not make the field impossible to unset — a Registrar who picked
+        the wrong programme has to be able to take it back off."""
+        temp_id = _save(client, graph).json()["id"]
+        body = graph.complete_body()
+        body["program_id"] = None
+        r = client.patch(f"{P}/{temp_id}", headers=graph.S, json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["program"] is None
+
+    def test_a_form_with_no_programme_reports_none_not_an_error(
+        self, client, graph
+    ) -> None:
+        """Saving a half-typed form is what this table is for."""
+        r = client.post(P, headers=graph.S, json=graph.minimal_body())
+        assert r.status_code == 201, r.text
+        assert r.json()["program"] is None

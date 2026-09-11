@@ -322,6 +322,8 @@ def _detail(db: Session, row: Application) -> ApplicationDetail:
         documents=_document_rows(db, row.id),
         credit_transfers=[_transfer_read(db, t) for t in transfers],
         blocking_issues=acceptance_issues(db, row),
+        # The form's OWN completeness — no login/provisioning rules. See the field note.
+        form_issues=submission_issues(row),
     )
 
 
@@ -422,11 +424,18 @@ def acceptance_issues(db: Session, app_row: Application) -> list[str]:
             "decision. Credit transfer may only be assessed at admission."
         )
 
-    if not (app_row.email or "").strip():
-        issues.append(
-            "An email address is required to issue the student a login "
-            "(or supply one when accepting)."
-        )
+    # ⚠️ THE EMAIL RULE USED TO LIVE HERE AND IS GONE (client, Sep 2026).
+    #
+    # It read "An email address is required to issue the student a login (or supply one
+    # when accepting)" and it was listed as *Outstanding before this can be accepted* on
+    # the review screen — which told the Registrar that the APPLICANT owed the college an
+    # address. They do not: **the login is an address the school issues**, and the
+    # applicant's personal email is a contact detail that D39 already decided must never
+    # silently become a login.
+    #
+    # So this is no longer a property of the application at all. It is an input to the
+    # accept ACTION, required and collected in the Accept dialog beside the other things
+    # only that moment can answer — see `accept_application`.
     return issues
 
 
@@ -1057,13 +1066,24 @@ def accept_application(
             code="application_not_decidable",
         )
 
-    login_email = (payload.login_email or row.email or "").strip()
-    # Re-run the completeness rules, minus the email clause when one is supplied here.
-    issues = [
-        issue
-        for issue in acceptance_issues(db, row)
-        if not (login_email and issue.startswith("An email address is required"))
-    ]
+    # ⚠️ NO FALLBACK TO `row.email` (client, Sep 2026). The login is the address the
+    # SCHOOL issues, so it is asked for here and nowhere else. Defaulting to the
+    # applicant's personal address made a contact detail into a credential by omission —
+    # exactly what D39 removed from the form's own help text, where it had promised "this
+    # becomes your login" about an application that may be refused.
+    #
+    # Reported as a FIELD error on `login_email`, not as an application-level issue: the
+    # thing that is incomplete is this dialog, not the applicant's form.
+    login_email = (payload.login_email or "").strip()
+    if not login_email:
+        raise ValidationError(
+            "A login email is required. This is the address the college issues to the "
+            "student, not their personal one.",
+            code="login_email_required",
+            fields={"login_email": ["Required."]},
+        )
+
+    issues = acceptance_issues(db, row)
     if issues:
         raise ValidationError(
             "This application cannot be accepted yet.",
@@ -1632,11 +1652,13 @@ def decide_credit_transfer(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# D38 · PENDING forms (`student_profile_temp`)
+# D38 · PENDING forms (`application_temp`)
 #
-# The wizard no longer writes on every step. A form reaches the database only when the
-# Registrar presses *Save and close* — into this holding table, owned by whoever typed it
-# — or *Save and submit*, which promotes it into `applications` and deletes it from here.
+# ⚠️ The wizard writes on EVERY step again (client, 11 Sep 2026), reversing D38's
+# save-only-at-the-end rule. Each *Continue* sends the whole form to this holding table,
+# owned by whoever typed it; *Submit* promotes it into `applications` and deletes it from
+# here. The cost is rows for forms nobody finishes — which the Pending forms list exists
+# to clear — and the gain is that a closed tab no longer eats six sections of typing.
 #
 # **The scope is `created_by`, and it is enforced in EVERY function below, not just the
 # list.** A Registrar who guessed another Registrar's temp id would otherwise be able to
@@ -1647,7 +1669,7 @@ def decide_credit_transfer(
 #: Every field a client may write onto a pending form.
 #:
 #: DERIVED from `_WRITABLE` rather than re-listed, so the two cannot drift — but no longer
-#: identical to it. `student_profile_temp` mirrors the *applicant-supplied* half of
+#: identical to it. `application_temp` mirrors the *applicant-supplied* half of
 #: `applications`, and D44's `conditions_of_admission` is not that: it is a condition the
 #: COLLEGE attaches to its own offer, which cannot exist on a form nobody has decided on
 #: yet. The temp table has no such column, so copying it across would raise AttributeError
@@ -1695,6 +1717,23 @@ def _author_names(db: Session, rows: list[ApplicationTemp]) -> dict[uuid.UUID, s
     }
 
 
+def _pending_programs(
+    db: Session, rows: list[ApplicationTemp]
+) -> dict[uuid.UUID, ProgramRef]:
+    """`program_id` -> `ProgramRef`, for a page of pending forms. One query.
+
+    Batched for the same reason `_author_names` is: the list renders a page at a time,
+    and `_program_ref` per row would be one round trip per form.
+    """
+    ids = {r.program_id for r in rows if r.program_id is not None}
+    if not ids:
+        return {}
+    return {
+        p.id: ProgramRef(id=p.id, code=p.code, name=p.name)
+        for p in db.scalars(select(Program).where(Program.id.in_(ids))).all()
+    }
+
+
 def _temp_education(row: ApplicationTemp) -> list[EducationRow]:
     """Section B out of `education_json`, in the shape the real table reads in.
 
@@ -1727,7 +1766,7 @@ def _temp_documents(row: ApplicationTemp) -> list[DocumentRow]:
 
 
 def _pending_list_item(
-    row: ApplicationTemp, *, author: str | None
+    row: ApplicationTemp, *, author: str | None, program: ProgramRef | None = None
 ) -> PendingApplicationListItem:
     return PendingApplicationListItem(
         id=row.id,
@@ -1737,7 +1776,18 @@ def _pending_list_item(
         middle_name=row.middle_name,
         last_name=row.last_name,
         school_year=row.school_year,
-        program=None,
+        # ⚠️ DEFECT FIXED HERE (Sep 2026). This was hardcoded `program=None`.
+        #
+        # `application_temp.program_id` was written correctly the whole time — the
+        # column, the schema field and `_TEMP_WRITABLE` were all in place — and then
+        # thrown away on the way OUT. The pending list showed a blank Programme column and
+        # `_pending_detail`, which builds on this function, returned `program: null`.
+        #
+        # **That made it worse than a display bug.** The wizard seeds its draft from
+        # `detail.program?.id ?? ''`, so reopening a saved form showed an empty Programme
+        # select; the next *Save and close* then sent `program_id: null` and **erased the
+        # stored value**. A read defect that destroys data on the next write.
+        program=program,
         year_of_study=row.year_of_study,
         enrollment_load=row.enrollment_load,
         email=row.email,
@@ -1757,7 +1807,8 @@ def _pending_list_item(
 
 def _pending_detail(db: Session, row: ApplicationTemp) -> PendingApplicationDetail:
     author = _author_names(db, [row]).get(row.created_by) if row.created_by else None
-    base = _pending_list_item(row, author=author)
+    program = _pending_programs(db, [row]).get(row.program_id) if row.program_id else None
+    base = _pending_list_item(row, author=author, program=program)
     return PendingApplicationDetail(
         **base.model_dump(),
         date_of_birth=row.date_of_birth,
@@ -1864,11 +1915,16 @@ def list_pending_applications(
         ).all()
     )
     authors = _author_names(db, rows)
+    programs = _pending_programs(db, rows)
     from math import ceil
 
     return PendingApplicationPage(
         items=[
-            _pending_list_item(r, author=authors.get(r.created_by) if r.created_by else None)
+            _pending_list_item(
+                r,
+                author=authors.get(r.created_by) if r.created_by else None,
+                program=programs.get(r.program_id) if r.program_id else None,
+            )
             for r in rows
         ],
         total=total,
@@ -1887,7 +1943,7 @@ def get_pending_application(
 def create_pending_application(
     db: Session, *, actor: User, payload: PendingApplicationWrite
 ) -> PendingApplicationDetail:
-    """POST /pending-applications -- *Save and close* on a form not yet on disk."""
+    """POST /pending-applications -- the first *Continue* on a form not yet on disk."""
     _assert_program_exists(db, payload.program_id)
     _assert_year_exists(db, payload.academic_year_id)
     # D44 — checked here as well as at promotion. Catching it at the first save is the
@@ -1919,7 +1975,7 @@ def create_pending_application(
 def update_pending_application(
     db: Session, *, actor: User, temp_id: uuid.UUID, payload: PendingApplicationWrite
 ) -> PendingApplicationDetail:
-    """PATCH /pending-applications/{id} -- *Save and close* on a form already on disk."""
+    """PATCH /pending-applications/{id} -- a later *Continue*, or an explicit save."""
     row = _pending_or_404(db, actor=actor, temp_id=temp_id)
     _assert_program_exists(db, payload.program_id)
     _assert_year_exists(db, payload.academic_year_id)
@@ -2005,7 +2061,7 @@ def submit_pending_application(
     row = Application(
         status=ApplicationStatus.SUBMITTED,
         created_by=temp.created_by,
-        # D44 — the pending row never had a number: `student_profile_temp` is a holding
+        # D44 — the pending row never had a number: `application_temp` is a holding
         # area, not an application, and issuing references for forms that may never be
         # filed would leave gaps in the sequence for no one's benefit. The number is
         # allocated at the moment the real `applications` row is created, which is here.

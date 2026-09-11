@@ -165,11 +165,10 @@ function acceptanceIssues(app: DemoApplication): string[] {
         'Credit transfer may only be assessed at admission.',
     );
   }
-  if (!app.email?.trim()) {
-    issues.push(
-      'An email address is required to issue the student a login (or supply one when accepting).',
-    );
-  }
+  // ⚠️ THE EMAIL RULE LIVED HERE AND IS GONE (Sep 2026), mirroring `acceptance_issues`
+  // on the server. The login is an address the COLLEGE issues, so its absence is not
+  // something outstanding against the application — it is a required input to the accept
+  // action, collected in the Accept dialog.
   return issues;
 }
 
@@ -260,6 +259,10 @@ function detail(app: DemoApplication) {
       .filter((row) => row.application_id === app.id)
       .map(transferRead),
     blocking_issues: acceptanceIssues(app),
+    // The form's own completeness, with none of the provisioning rules
+    // `acceptanceIssues` adds. The wizard reads this; the review screen reads
+    // `blocking_issues`. Mirrors `ApplicationDetail.form_issues` on the server.
+    form_issues: submissionIssues(app),
   };
 }
 
@@ -722,10 +725,19 @@ export const admissionsHandlers = [
       comments?: string | null;
       temporary_password?: string | null;
     };
-    const loginEmail = (body.login_email ?? app.email ?? '').trim();
-    const issues = acceptanceIssues(app).filter(
-      (issue) => !(loginEmail && issue.startsWith('An email address is required')),
-    );
+    // ⚠️ NO FALLBACK TO THE APPLICANT'S OWN ADDRESS (Sep 2026), and no filtering of the
+    // issue list by matching its prose. The login is the address the college issues, so
+    // it is required here and reported as a FIELD error — mirrors `accept_application`.
+    const loginEmail = (body.login_email ?? '').trim();
+    if (!loginEmail) {
+      return errorResponse(
+        422,
+        'login_email_required',
+        'A login email is required. This is the address the college issues to the student, not their personal one.',
+        { login_email: ['Required.'] },
+      );
+    }
+    const issues = acceptanceIssues(app);
     if (issues.length > 0) {
       return errorResponse(422, 'application_incomplete', 'This application cannot be accepted yet.', {
         application: issues,

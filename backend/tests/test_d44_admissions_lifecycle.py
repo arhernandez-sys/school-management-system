@@ -35,6 +35,8 @@ import uuid
 
 import pytest
 
+from tests.conftest import issued_login_email
+
 from app.common.enums import (
     DECIDED_APPLICATION_STATUSES,
     OPEN_APPLICATION_STATUSES,
@@ -215,13 +217,21 @@ class TestEligibleIsNotADecision:
         assert r.json()["status"] == "rejected"
 
     def test_eligibility_does_not_require_a_login_email(self, client, graph) -> None:
-        """THE DISTINCTION, pinned. `acceptance_issues` demands an email so a login can be
-        issued; `submission_issues` does not, because that is a provisioning prerequisite
-        and not an academic finding.
+        """THE DISTINCTION, pinned -- twice over, because the rule has since MOVED.
 
-        An applicant can plainly meet the requirements while the Registrar is still chasing
-        them for an email. Gating eligibility on it would mean the college could not record
-        that someone qualifies until it was ready to enrol them.
+        Originally: `acceptance_issues` demanded an email so a login could be issued;
+        `submission_issues` did not, because that is a provisioning prerequisite and not
+        an academic finding. An applicant can plainly meet the requirements while the
+        Registrar is still chasing them for an address, and gating eligibility on it
+        would mean the college could not record that someone qualifies until it was
+        ready to enrol them.
+
+        ⚠️ Since Sep 2026 the email is not an application-level rule at all -- the login
+        is an address the COLLEGE issues, so it is an input to the accept action
+        (`login_email_required`, a field error) rather than something the applicant owes.
+        The distinction this test exists to pin therefore survives the move intact:
+        eligibility asks nothing about logins, and accepting still cannot proceed without
+        one. Only the shape of the refusal changed.
 
         Regression: the first implementation reused `acceptance_issues` and refused a
         complete, submitted application for want of an email. Only driving the API found it.
@@ -237,9 +247,17 @@ class TestEligibleIsNotADecision:
         assert eligible.status_code == 200, eligible.text
         assert eligible.json()["status"] == "eligible"
 
-        # Accepting it, though, still needs one — the two checks stay different.
-        accepted = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
-        assert accepted.status_code == 422, accepted.text
+        # Accepting it, though, still needs one -- the two checks stay different.
+        refused = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["error"]["code"] == "login_email_required"
+
+        # ...and supplying one at that moment is all it takes. Nothing about the
+        # application had to change, which is the whole point of moving the rule.
+        accepted = client.post(
+            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": issued_login_email()}
+        )
+        assert accepted.status_code == 201, accepted.text
 
     def test_an_incomplete_application_cannot_be_marked_eligible(
         self, client, graph

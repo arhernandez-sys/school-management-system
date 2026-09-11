@@ -846,10 +846,24 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
                       <TableHead>
                         <TableRow>
                           <TableCell sx={{ color: 'text.secondary' }}>Course</TableCell>
-                          <TableCell align="right" sx={{ color: 'text.secondary' }}>
+                          {/* ⚠️ RESULTS AND FAILING STEP ASIDE ON A PHONE, and the RATE
+                              does not. Four columns overflow 390px, and `overflowX: auto`
+                              chose the last one to push off — which is the rate, the
+                              number this whole panel is named after. A ranked table whose
+                              rank is behind a horizontal scroll is not ranked. The
+                              denominator still reaches a phone reader: it is in the
+                              caption above ("at least five resolved grades") and in full
+                              on any wider screen. */}
+                          <TableCell
+                            align="right"
+                            sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'table-cell' } }}
+                          >
                             Results
                           </TableCell>
-                          <TableCell align="right" sx={{ color: 'text.secondary' }}>
+                          <TableCell
+                            align="right"
+                            sx={{ color: 'text.secondary', display: { xs: 'none', sm: 'table-cell' } }}
+                          >
                             Failing
                           </TableCell>
                           <TableCell align="right" sx={{ color: 'text.secondary' }}>
@@ -876,7 +890,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
                                 {c.course_name}
                               </Typography>
                             </TableCell>
-                            <TableCell align="right">
+                            <TableCell align="right" sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                               <Typography
                                 variant="body2"
                                 color="text.secondary"
@@ -885,7 +899,7 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
                                 {c.results}
                               </Typography>
                             </TableCell>
-                            <TableCell align="right">
+                            <TableCell align="right" sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
                               <Typography
                                 variant="body2"
                                 sx={{ fontVariantNumeric: 'tabular-nums' }}

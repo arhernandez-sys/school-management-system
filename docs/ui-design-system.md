@@ -1,6 +1,6 @@
 # UI Design System — School Management System (SIS)
 
-> **Phase 3 — UI/UX Design.** Owner: `ui-ux-designer`. This document is the design specification the Phase 6–7 frontend engineers implement against. It honors every locked decision in `progress-tracker.md` (D1–D17), the requirements in `requirements.md` (4 roles, 11 modules, permission matrix, 75 FRs), and the architecture in `architecture.md` (feature-based structure D15, role-aware AppShell, shared components, composite `/dashboard` endpoint, TanStack Query state strategy).
+> **Phase 3 — UI/UX Design.** Owner: `ui-ux-designer`. This document is the design specification the Phase 6–7 frontend engineers implement against. It honors every locked decision in `complete-work.md` (D1–D17), the requirements in `requirements.md` (4 roles, 11 modules, permission matrix, 75 FRs), and the architecture in `architecture.md` (feature-based structure D15, role-aware AppShell, shared components, composite `/dashboard` endpoint, TanStack Query state strategy).
 >
 > It does **not** define the DB schema (Phase 4), the API contract (Phase 5), or write application code (Phase 6–7). It defines *what the UI is and how it behaves* so an engineer can build it without re-deciding design questions.
 >
@@ -850,7 +850,7 @@ Every chart is wrapped in `ChartWithTable` so a non-visual user gets an equivale
 
 ## 11. New Decisions & Open Questions for the Orchestrator
 
-> Items to log in `progress-tracker.md`. None block Phase 4 (DB) or Phase 5 (API); they are frontend-facing and confirmable.
+> Items to log in `complete-work.md`. None block Phase 4 (DB) or Phase 5 (API); they are frontend-facing and confirmable.
 
 **New design decisions (proposed — recommend logging as D18–D22):**
 
@@ -876,4 +876,4 @@ Every chart is wrapped in `ChartWithTable` so a non-visual user gets an equivale
 
 ---
 
-_End of Phase 3 UI/UX design. Next: orchestrator review → update `progress-tracker.md` (log D18–D22, OQ-A..E) → Phase 4 (Database Design)._
+_End of Phase 3 UI/UX design. Next: orchestrator review → update `complete-work.md` (log D18–D22, OQ-A..E) → Phase 4 (Database Design)._

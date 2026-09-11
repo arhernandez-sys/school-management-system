@@ -41,6 +41,7 @@ connection string is hardcoded anywhere — `Settings` reads it from the env/.en
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -541,6 +542,24 @@ def auth_headers(make_token) -> "callable":  # noqa: ANN001
         return {"Authorization": f"Bearer {make_token(**kwargs)}"}
 
     return _auth_headers
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Accept helper (added Sep 2026 — the login email the COLLEGE issues)
+# ──────────────────────────────────────────────────────────────────────────────
+def issued_login_email(prefix: str = "issued") -> str:
+    """A fresh address for `POST /applications/{id}/accept`.
+
+    ⚠️ `login_email` is REQUIRED on every accept, and it does **not** fall back to the
+    applicant's own address any more. The login is something the college hands out; an
+    applicant's contact email is not a credential. Tests used to send ``json={}`` and
+    let the server borrow `applications.email`, so they were quietly exercising that
+    fallback — this helper is what replaces it.
+
+    Unique per call on purpose: a clash with an existing user is a 409, and a shared
+    constant would make every second accept in a module fail for the wrong reason.
+    """
+    return f"{prefix}.{uuid.uuid4().hex[:10]}@bajc.edu.bz"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

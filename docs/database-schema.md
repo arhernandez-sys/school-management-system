@@ -1,6 +1,6 @@
 # Database Schema — School Management System (SIS)
 
-> **Phase 4 — Database Design.** Owner: `database-engineer`. This document is the implementation-ready, normalized (≥3NF) PostgreSQL schema the Phase 5 (API) and Phase 7 (modules) engineers build on. It honors every locked decision in `progress-tracker.md` (D1–D24, D-Q4/Q6/Q9, DB1–DB17) and the models named in `architecture.md` (teacher↔(section,subject) ownership, user→student/teacher linkage, server-side refresh-token store, compute-on-read term grades + derive-on-read letters, archived-year grade freezing, server-side grade-release filter).
+> **Phase 4 — Database Design.** Owner: `database-engineer`. This document is the implementation-ready, normalized (≥3NF) PostgreSQL schema the Phase 5 (API) and Phase 7 (modules) engineers build on. It honors every locked decision in `complete-work.md` (D1–D24, D-Q4/Q6/Q9, DB1–DB17) and the models named in `architecture.md` (teacher↔(section,subject) ownership, user→student/teacher linkage, server-side refresh-token store, compute-on-read term grades + derive-on-read letters, archived-year grade freezing, server-side grade-release filter).
 >
 > It does **not** write application code (Phase 7) or the REST/OpenAPI contract (Phase 5). It defines tables, types, constraints, indexes, and the calculation model those phases implement against.
 >
@@ -787,12 +787,24 @@ Append-only event log for sensitive mutations beyond the inline `AuditMixin` (§
 
 > **Why `bigint identity` for the audit log only (the §1.2 exception):** an internal, append-only, insert-heavy table never exposed by id in a URL — the enumeration/PII argument for UUID doesn't apply, and a monotonic `bigint` gives perfect insert locality and natural chronological ordering for the highest-write table. A deliberate, documented divergence; every *business* table stays UUID.
 
-#### `student_profile_temp` (D38)
+#### `application_temp` (D38)
 
-A **saved but UNSUBMITTED** admission form. Created by `012_application_temp.sql`; the wizard writes
-it on *Save and close*, and `POST /pending-applications/{id}/submit` promotes it into `applications`
-and deletes it. Full rationale in **`docs/d38-pending-applications-plan.md`** and in the migration's
-own header, which is the authority on the column list.
+A **saved but UNSUBMITTED** admission form. The wizard writes it on every *Continue*, and
+`POST /pending-applications/{id}/submit` promotes it into `applications` and deletes it. Full
+rationale in **`complete-work.md`**; the authority on the column list is
+`ApplicationTemp` in `backend/app/modules/admissions/models.py`.
+
+> ⚠️ **Renamed 11 Sep 2026.** This table was `student_profile_temp` until then, which it never
+> was — the row describes an applicant who is not a student and may never become one. The
+> rename is `backend/db/mariadb/rename_application_temp.sql`, a bare `RENAME TABLE`: nothing
+> in the schema holds a foreign key pointing at this table, so there was nothing to repoint.
+> Its indexes and constraints were already named `*_apptemp_*` and came across untouched.
+
+> ⚠️ **The save model was reversed on 11 Sep 2026.** D38 wrote this row only at the end, on
+> *Save and close*; at the client's request every *Continue* now saves, and *Save and close*
+> is gone. The trade is that abandoned forms leave rows here — which the Pending forms list
+> exists to clear — against a Registrar no longer losing six sections of transcription to a
+> closed tab.
 
 Three properties are the reason it exists rather than another `applications.status`:
 
@@ -1161,7 +1173,7 @@ appointment, the role grants the reach, and only the service is trusted to link 
 
 DDL: `backend/db/mariadb/016_hod_auditor_roles.sql`.
 
-| DB-9 | **Role = enum column, no RBAC join tables** | 6 fixed roles since D43, one per user, single tenant (architecture §3.2) (§9). D43 kept the invariant deliberately: an HOD is a single role value that CARRIES lecturer powers, not a second role stacked on `teacher`, so no `user_roles` M:N table was needed (see `progress-tracker.md` OQ-DB3). |
+| DB-9 | **Role = enum column, no RBAC join tables** | 6 fixed roles since D43, one per user, single tenant (architecture §3.2) (§9). D43 kept the invariant deliberately: an HOD is a single role value that CARRIES lecturer powers, not a second role stacked on `teacher`, so no `user_roles` M:N table was needed (see `complete-work.md` OQ-DB3). |
 | DB-10 | **Server-layer enforcement list** (score≤max, no-future-date, band contiguity, ownership, archived-year read-only) | Cross-row/temporal/ownership rules a stored CHECK can't express; centralized & testable (§5). |
 | DB-11 | **`subject_specializations text[]`** on teacher (denormalized, GIN-indexed) | Display/search tag, not referential truth (which is the class graph) (§3.B). |
 | DB-12 | **`semester_id` denormalized onto term-scoped children** (enrollments, assessments, attendance) | Keeps hot queries single-join; year derivable via semester→year (§1.6). |
@@ -1185,4 +1197,4 @@ DDL: `backend/db/mariadb/016_hod_auditor_roles.sql`.
 
 ---
 
-_End of Phase 4 database design (Phase 4.5 reworked for D23 section model + D24 transcript). Next: orchestrator review → update `progress-tracker.md` (log DB-1..DB-17; OQ-DB1 RESOLVED via DB-14; OQ-DB2..DB7 outstanding) → Phase 5 (API Design) builds the `/api/v1` contract against these tables._
+_End of Phase 4 database design (Phase 4.5 reworked for D23 section model + D24 transcript). Next: orchestrator review → update `complete-work.md` (log DB-1..DB-17; OQ-DB1 RESOLVED via DB-14; OQ-DB2..DB7 outstanding) → Phase 5 (API Design) builds the `/api/v1` contract against these tables._

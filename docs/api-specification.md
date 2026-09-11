@@ -1,6 +1,6 @@
 # API Specification — School Management System (SIS)
 
-> **Phase 5 — API Design.** Owner: `backend-engineer` (primary author) → `product-architect` (contract review). This document is the implementation-ready, OpenAPI-aligned REST contract that the Phase 7 backend engineers implement and that the Phase 6 frontend consumes **via a TypeScript client generated from the FastAPI-emitted OpenAPI schema** (D14). It honors every locked decision in `progress-tracker.md` (D1–D26, DB1–DB17, D-Q4/Q6/Q9) and conforms to `architecture.md` (auth/RBAC/session model, the two ownership helpers, server-derived student scoping, server-side grade-release filter, composite `/dashboard`, `Page[T]`) and `database-schema.md` (the authoritative 27-table model).
+> **Phase 5 — API Design.** Owner: `backend-engineer` (primary author) → `product-architect` (contract review). This document is the implementation-ready, OpenAPI-aligned REST contract that the Phase 7 backend engineers implement and that the Phase 6 frontend consumes **via a TypeScript client generated from the FastAPI-emitted OpenAPI schema** (D14). It honors every locked decision in `complete-work.md` (D1–D26, DB1–DB17, D-Q4/Q6/Q9) and conforms to `architecture.md` (auth/RBAC/session model, the two ownership helpers, server-derived student scoping, server-side grade-release filter, composite `/dashboard`, `Page[T]`) and `database-schema.md` (the authoritative 27-table model).
 >
 > It does **not** write application code (Phase 7) or re-decide DB/UI/architecture questions — it formalizes the wire contract those phases build against. The DB schema is the source of truth for entities and constraints; this doc maps them to HTTP.
 
@@ -275,7 +275,7 @@ AnnouncementAudience = all | students | teachers | class
 > because grading is assessment-first (§7, there is no `POST /grades`), but its logic
 > belongs to the Grades module. Module 7 (4) is therefore the `/grades/*` reads only.
 > Module 12 is a scope addition outside the original 11-module charter — see
-> `project-overview.md` §4 for its provenance.
+> `project-now.md` §4 for its provenance.
 
 ### 5.0a Corrections applied 2026-07-28 (frontend is binding)
 
@@ -1223,4 +1223,4 @@ The API is **FastAPI-first**: the OpenAPI document is *generated from* the Pydan
 
 ---
 
-_End of Phase 5 API design (revised post-review: M1–M5 + S1–S6 closed, OQ-API-1..7 resolved). Next: `product-architect` contract re-check → update `progress-tracker.md` (log API-1..API-19; OQ-API-1..7 resolved, with Q8/OQ-A + OQ-DB5 still flagged to stakeholder) → Phase 6 (Frontend Foundation) builds against the FastAPI-generated OpenAPI TS client._
+_End of Phase 5 API design (revised post-review: M1–M5 + S1–S6 closed, OQ-API-1..7 resolved). Next: `product-architect` contract re-check → update `complete-work.md` (log API-1..API-19; OQ-API-1..7 resolved, with Q8/OQ-A + OQ-DB5 still flagged to stakeholder) → Phase 6 (Frontend Foundation) builds against the FastAPI-generated OpenAPI TS client._

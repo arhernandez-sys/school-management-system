@@ -454,7 +454,19 @@ class ApplicationTemp(Base, TimestampMixin, AuditMixin):
     an application or the Registrar abandoned it.
     """
 
-    __tablename__ = "student_profile_temp"
+    # ⚠️ RENAMED 11 Sep 2026: this was `student_profile_temp`, which it never was.
+    # The row is an APPLICATION that has been saved but not submitted — the person
+    # it describes is an applicant, not a student, and may never become one. Every
+    # other name attached to the table already said so: the class is `ApplicationTemp`,
+    # the constraints are `fk_apptemp_*`, the audit trail writes
+    # `entity_type="application_temp"`, and even the D38 migration that CREATED it was
+    # called `012_application_temp.sql`. The table name was the only holdout — which is
+    # why it survived: nothing a reader normally looks at repeated the mistake.
+    #
+    # The rename is `backend/db/mariadb/rename_application_temp.sql` — a bare
+    # `RENAME TABLE`, safe because nothing in the schema has a foreign key pointing
+    # AT this table. Run it before the pending-forms endpoints are used again.
+    __tablename__ = "application_temp"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     #: Always `pending`. A plain string, NOT `ApplicationStatus`: adding a `pending` member

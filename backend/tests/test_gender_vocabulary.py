@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import issued_login_email
+
 from app.common.enums import Gender, normalise_gender
 from tests.test_admissions import A, _file, graph  # noqa: F401 — reuse the admissions graph
 
@@ -175,7 +177,11 @@ class TestTheAcceptanceCopy:
         row.gender = "Male"
         db_session.flush()
 
-        accepted = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        accepted = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         assert accepted.status_code == 201, accepted.text
 
         student = db_session.get(
@@ -194,7 +200,11 @@ class TestTheAcceptanceCopy:
         from app.modules.students.models import StudentProfile
 
         app_id = _file(client, graph, submit=True, gender="female").json()["id"]
-        accepted = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        accepted = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         assert accepted.status_code == 201, accepted.text
         student = db_session.get(
             StudentProfile, _uuid.UUID(accepted.json()["student_id"])

@@ -132,11 +132,20 @@ class TestFormat:
         assert number.startswith(f"{key}-")
 
     def test_application_number_matches_the_documented_shape(self, db_session) -> None:
-        key = year_key()
-        _clear(db_session, SCOPE_APPLICATION, key)
-        number = allocate_application_number(db_session)
+        """⚠️ Uses `ISOLATED`, not the current year, and that is load-bearing.
+
+        It used to clear the counter for the LIVE year and allocate against it. That
+        works only while the live year holds fewer applications than `_MAX_ATTEMPTS`:
+        resetting the counter to 0 makes the allocator retry `00001`, `00002`, … over
+        numbers that already exist, and it gives up after five. The register reached five
+        applications for 2026 on 10 Sep 2026 and this test began failing on data alone,
+        having never been about the live year in the first place.
+
+        The module already keeps `ISOLATED` for exactly this — see its note."""
+        _clear(db_session, SCOPE_APPLICATION, ISOLATED_KEY)
+        number = allocate_application_number(db_session, on=ISOLATED)
         assert APPLICATION_RE.match(number), number
-        assert number.startswith(f"APP-{key}-")
+        assert number.startswith(f"APP-{ISOLATED_KEY}-")
 
     def test_the_clients_worked_examples(self, db_session) -> None:
         """The two examples the client actually wrote down: `2026-00012` is the twelfth
@@ -389,8 +398,13 @@ class TestCreateApplicationIntegration:
         anybody decides anything."""
         from app.common.enums import Role
 
+        # ⚠️ The counter is deliberately NOT cleared. This test files through the real
+        # endpoint, so the allocator runs on TODAY and cannot be pointed at `ISOLATED`.
+        # Resetting the counter to 0 made it retry numbers the register already holds and
+        # exhaust after `_MAX_ATTEMPTS`; letting the real counter continue is both
+        # realistic and the only thing that works on a populated database. Nothing here
+        # asserts an exact number — only the shape and the year prefix.
         key = year_key()
-        _clear(db_session, SCOPE_APPLICATION, key)
         registrar = make_user(role=Role.SECRETARY)
         resp = client.post(
             "/api/v1/applications",

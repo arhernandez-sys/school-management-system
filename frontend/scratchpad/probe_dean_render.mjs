@@ -17,6 +17,7 @@
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { unlinkSync } from 'node:fs';
 
 const FE = String.raw`C:\Users\arhernandez\source\repos\school-management-system\frontend`;
 const out = path.join(FE, 'scratchpad', `.dean-render-${process.pid}.cjs`);
@@ -65,6 +66,9 @@ await build({
 });
 
 const require = createRequire(import.meta.url);
+// Delete the bundle the moment it is loaded. Six of these were committed by
+// accident on 10 Sep 2026 — 118k lines each — because the probes left them behind.
+process.on('exit', () => { try { unlinkSync(out); } catch { /* already gone */ } });
 const { render } = require(out);
 
 // MUI and react-router both call `useLayoutEffect`, which React warns about on the server

@@ -201,6 +201,12 @@ export interface ApplicationDetail extends ApplicationListItem {
    * browser is how the two start disagreeing.
    */
   blocking_issues: string[];
+  /**
+   * What stops this being SUBMITTED — the form's own completeness, with none of the
+   * provisioning rules `blocking_issues` carries. The wizard shows this; the review
+   * screen shows `blocking_issues`. Optional so an older server still renders.
+   */
+  form_issues?: string[];
 }
 
 /** Every writable field. All optional — see the module note on drafts. */
@@ -355,7 +361,7 @@ export const DOCUMENT_TYPES: { value: ApplicationDocumentType; label: string }[]
 
 
 /* ────────────────────────────────────────────────────────────────────────────
- * D38 · the PENDING form (`student_profile_temp`)
+ * D38 · the PENDING form (`application_temp`)
  *
  * A form the Registrar saved but has not submitted. It is NOT an application yet: it
  * lives in its own table, it is visible only to whoever filed it (and to the Dean), and

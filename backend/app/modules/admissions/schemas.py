@@ -410,6 +410,22 @@ class ApplicationDetail(ApplicationListItem):
     #: show the Registrar what is missing BEFORE they press Accept — and so that
     #: "why is this button disabled?" is answerable on the page.
     blocking_issues: list[str] = Field(default_factory=list)
+    #: ⚠️ TWO DIFFERENT QUESTIONS, and they were being answered by one field.
+    #:
+    #: `blocking_issues` is **what stops this being ACCEPTED** — it includes the
+    #: provisioning prerequisites, chiefly "an email address is required to issue the
+    #: student a login". That belongs on the review screen, where somebody is deciding.
+    #:
+    #: `form_issues` is **what stops this being SUBMITTED** — the applicant-supplied
+    #: form's own completeness, and nothing about logins. That is what the wizard has
+    #: to show: a Registrar correcting Section C was being told the form was incomplete
+    #: because the applicant had not given an email, which is neither their problem
+    #: at that moment nor something the form asks for.
+    #:
+    #: The server already drew this distinction — `POST /applications/{id}/eligible`
+    #: deliberately uses `submission_issues` and not `acceptance_issues`, for exactly
+    #: this reason. The wire just never carried both.
+    form_issues: list[str] = Field(default_factory=list)
 
 
 class ApplicationAcceptResponse(BaseModel):
@@ -429,16 +445,17 @@ class ApplicationAcceptResponse(BaseModel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# D38 · the PENDING form (`student_profile_temp`)
+# D38 · the PENDING form (`application_temp`)
 # ──────────────────────────────────────────────────────────────────────────────
 class PendingApplicationWrite(_ApplicationFields):
     """POST / PATCH `/pending-applications` — the WHOLE form in one body.
 
-    Unlike `ApplicationUpdateRequest` this is not a per-section patch, because D38 removed
-    per-section saving: the wizard holds all seven sections in the browser and writes them
-    once, when the Registrar presses *Save and close* or *Save and submit*. Sending the
-    whole form is therefore correct rather than wasteful — there are no other sections
-    sitting on the server that a full body could clobber.
+    Unlike `ApplicationUpdateRequest` this is not a per-section patch. The wizard holds
+    all seven sections in the browser and sends all of them on every write — originally
+    once at the end (D38), and since 11 Sep 2026 on every *Continue*. Sending the whole
+    form is correct rather than wasteful: the browser is the only place the form exists
+    in full, so a full body cannot clobber sections the server knows about and the
+    client does not.
 
     The names stay required. A pending form with no name on it cannot be found again in a
     list, which is the only thing the table is for.

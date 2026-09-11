@@ -7,7 +7,7 @@ means for Phase 8. It is written to be read by someone deciding whether this sys
 to put in front of a school, so the gaps are stated as plainly as the coverage.
 
 Companion documents: `RUNBOOK.md` (how to run things), `docs/requirements.md` §5 (the eight
-acceptance-criteria flows this plan traces to), `docs/progress-tracker.md` (project state).
+acceptance-criteria flows this plan traces to), `complete-work.md` (project state).
 
 ---
 
@@ -506,7 +506,7 @@ Phase 8 is complete when **all** of the following hold:
 - [ ] **8.4** All eight UAT scripts (§5) executed against the live API, results recorded.
 - [ ] **8.5** Every blocker and major defect found in 8.4 is fixed **with a regression test**,
       and the full suite is re-run green.
-- [ ] **8.6** `docs/security-review.md` authored (Step 5 — still a stub).
+- [ ] **8.6** `needs-attention.md` authored (Step 5 — still a stub).
 - [ ] **8.7** Doc reconciliation: the Postgres→MariaDB drift in §6.7 resolved (Step 5).
 - [ ] **8.8** A **decision recorded** on each item below. These are the gaps that cannot be
       closed by testing harder, only by someone choosing to spend on them:

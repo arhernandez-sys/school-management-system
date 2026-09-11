@@ -644,7 +644,7 @@ export interface DemoApplication {
 }
 
 /**
- * D38 — a SAVED but UNSUBMITTED form (`student_profile_temp`).
+ * D38 — a SAVED but UNSUBMITTED form (`application_temp`).
  *
  * Not an application: it lives in its own table, `created_by` is its VISIBILITY (the
  * Registrar who filed it, plus the Dean), and Sections B and F ride as arrays because a

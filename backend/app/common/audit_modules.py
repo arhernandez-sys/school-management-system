@@ -64,6 +64,10 @@ RECORD_LABELS: dict[str, str] = {
     "event": "Calendar event",
     "announcement": "Announcement",
     "application": "Application",
+    # A saved-but-unsubmitted admissions form (D38). It was missing, so every
+    # `application.pending.*` row read "Record" — found when those rows turned up as the
+    # newest entries in a scratch database and a test that expected "Grade" got "Record".
+    "application_temp": "Pending application",
     "credit_transfer": "Credit transfer",
     "classroom": "Classroom",
     "school": "College settings",

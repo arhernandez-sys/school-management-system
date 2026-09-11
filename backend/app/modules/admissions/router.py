@@ -98,7 +98,7 @@ from app.modules.users.models import User
 
 router = APIRouter(prefix="/applications", tags=["admissions"])
 credit_transfers_router = APIRouter(prefix="/credit-transfers", tags=["admissions"])
-#: D38 — saved-but-unsubmitted forms (`student_profile_temp`). Its own prefix so the
+#: D38 — saved-but-unsubmitted forms (`application_temp`). Its own prefix so the
 #: literal `pending` can never be parsed as an application UUID; see the section below.
 pending_applications_router = APIRouter(
     prefix="/pending-applications", tags=["admissions"]
@@ -569,8 +569,13 @@ def create_pending_application(
     db: Session = Depends(get_db),
     actor: User = Depends(_admissions),
 ) -> PendingApplicationDetail:
-    """The WHOLE form in one body, including Sections B and F — D38 removed per-step
-    saving, so the browser holds all seven sections until *Save and close*."""
+    """The WHOLE form in one body, including Sections B and F.
+
+    Per-step saving came back on 11 Sep 2026 (every *Continue* saves), but the SHAPE did
+    not change: each *Continue* re-sends the whole form rather than the step it just
+    finished. That keeps this a single idempotent write — there is no partial state on
+    the server for a later step to contradict, and no ordering problem if two saves race.
+    """
     return service.create_pending_application(db, actor=actor, payload=payload)
 
 

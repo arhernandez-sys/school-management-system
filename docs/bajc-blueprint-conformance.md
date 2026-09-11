@@ -289,7 +289,7 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
   ⚠️ **`GET /settings/audit-log` (D43) is DELETED** (10 Sep 2026). It was a second door onto the
   same table, showing the rows raw — and its gate had grown to include the System Administrator,
   whom Phase 7 deliberately refused on `/audit` because the trail is mostly academic records
-  (§48). One table, one reader. See `docs/d45-meeting4-yellow-plan.md` §4b.
+  (§48). One table, one reader. See `complete-work.md` §4b.
   🟡 **Still open:** retention (§7 item 12), and whether the Registrar should read it (item 13).
   ✅ Audit records are not editable through the application, and there is no write endpoint.
 - [x] **§47 Login and Security** — ✅ Argon2id hashing (tuned time/memory/parallelism, with a

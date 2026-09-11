@@ -55,6 +55,7 @@ import {
   DISTRICTS,
   DOCUMENT_TYPES,
   type ApplicationDetail,
+  isDecidedApplication,
   type ApplicationWritePayload,
   type District,
   type DocumentRow,
@@ -485,11 +486,25 @@ export function ApplicationWizardScreen() {
   ]);
 
   /**
-   * D38 — *Continue* makes NO request. It moves between sections in browser state, which
-   * is the whole point: nothing is written until the Registrar asks for it on the last step.
+   * *Continue* SAVES, then advances (client request, Sep 2026).
+   *
+   * ⚠️ This reverses D38, which made *Continue* a pure browser-state move so that
+   * nothing reached the database until the Registrar asked for it. The client has asked
+   * for the opposite — each step written to the holding table as it is completed — and
+   * the trade is worth stating: the form now survives a closed tab or a dead battery
+   * halfway through, at the cost of rows in `application_temp` for forms nobody ever
+   * finishes. The Pending forms list already exists to clear those, and a Registrar
+   * losing six sections of transcription is the worse failure.
+   *
+   * **The step advances even if the save fails.** Refusing to let someone move on
+   * because the server is unreachable would trap them in a form they are still typing;
+   * the error is shown, the draft is intact in the browser, and the next *Continue* or
+   * *Submit* retries. The one exception is Section A, which is gated separately —
+   * without names there is nothing the holding table will accept.
    */
-  const next = () => {
+  const next = async () => {
     setError(null);
+    if (personalInfoComplete) await saveForm();
     setStep((prev) => Math.min(prev + 1, STEPS.length - 1));
   };
 
@@ -498,7 +513,14 @@ export function ApplicationWizardScreen() {
     setStep((prev) => Math.max(prev - 1, 0));
   };
 
-  /** *Save and close* — the form goes to the holding table and the Registrar leaves. */
+  /**
+   * *Save changes* — correcting an application that is already in the queue. There is
+   * nothing to submit, so this is the only action its last step offers.
+   *
+   * The *Save and close* it replaced is gone from the new-application flow: now that
+   * every *Continue* saves, a separate "save" button on the last step would be a second
+   * name for something that has already happened.
+   */
   const finish = async () => {
     const saved = await saveForm();
     if (saved === null) return;
@@ -555,8 +577,20 @@ export function ApplicationWizardScreen() {
     draft.civil_status.trim().length > 0 &&
     draft.religion.trim().length > 0;
   const isLast = step === STEPS.length - 1;
-  //: Whichever record the route named. Empty on a form that has never been saved.
-  const savedIssues = (detail ?? pending)?.blocking_issues ?? [];
+  /**
+   * Whichever record the route named. Empty on a form that has never been saved.
+   *
+   * ⚠️ For an APPLICATION this reads `form_issues`, not `blocking_issues` (client, Sep
+   * 2026: *"remove the email as required and remove the text 'email address is
+   * required'"*). `blocking_issues` answers "what stops this being ACCEPTED" and
+   * includes the provisioning prerequisite *"An email address is required to issue the
+   * student a login"* — a true statement on the review screen, and the wrong thing to
+   * tell someone who is filling in a form that does not ask for an email. A pending
+   * form's `blocking_issues` was always submission-only, so it needs no equivalent.
+   */
+  const savedIssues = detail
+    ? (detail.form_issues ?? detail.blocking_issues ?? [])
+    : (pending?.blocking_issues ?? []);
 
   if (applicationId && detailQuery.isLoading) return <LoadingState variant="form" />;
   if (applicationId && detailQuery.isError) {
@@ -576,14 +610,28 @@ export function ApplicationWizardScreen() {
       </PageContainer>
     );
   }
-  if (detail && detail.status !== 'draft') {
-    // A submitted or decided application is reviewed, not re-typed. Sending them to the
-    // review screen is more useful than a form that will 409 on the first save.
+  /**
+   * ⚠️ DEFECT FIXED HERE (client, Sep 2026: *"the edit button doesn't work when an
+   * application is under review"*).
+   *
+   * This used to turn away **every** non-draft application. D44 had already added the
+   * Edit button to the review screen and a mode-aware footer for exactly this case — the
+   * server has allowed a PATCH right up until a decision since the beginning
+   * (`_assert_editable` refuses only `is_decided`) — but this early return predates that
+   * work and was never removed. It fires before any of it, so the Edit button landed on
+   * *"This application is no longer a draft"* and `isEditingSubmitted` below was dead
+   * code. Two correct changes, made months apart, that never met.
+   *
+   * The condition is now the SERVER's: a decided application is a record and cannot be
+   * edited; everything still in the queue can. That is submitted, under review,
+   * documents pending and eligible.
+   */
+  if (detail && isDecidedApplication(detail.status)) {
     return (
       <PageContainer>
         <ErrorState
-          title="This application is no longer a draft"
-          message={`It is ${detail.status}. Use Try again to open its review screen.`}
+          title="This application has been decided"
+          message={`It is ${detail.status}, so it is a record rather than a form. Use Try again to open its review screen.`}
           onRetry={() => navigate(`${ROUTES.applications}/${detail.id}`)}
         />
       </PageContainer>
@@ -1275,9 +1323,10 @@ export function ApplicationWizardScreen() {
         )}
       </Paper>
 
-      {/* D38 — the footer is where the new save model is visible.
-          *Continue* writes nothing; the two save actions exist only on the last step, so
-          there is exactly one place in the flow where the form reaches the database. */}
+      {/* The footer, after the Sep 2026 change: *Continue* saves and advances, so the
+          last step needs only ONE action — *Submit* on a form being filed, *Save
+          changes* on an application being corrected. *Save and close* is gone: every
+          step has already been saved by the time anyone reaches the end. */}
       <Stack direction="row" spacing={1} sx={{ mt: 2, alignItems: 'center' }}>
         <Button onClick={back} disabled={step === 0 || saving}>
           Back
@@ -1285,42 +1334,25 @@ export function ApplicationWizardScreen() {
         <Box sx={{ flexGrow: 1 }} />
         {saving && <CircularProgress size={18} />}
         {isLast ? (
-          <>
-            <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
-              <span>
-                <Button
-                  variant={isEditingSubmitted ? 'contained' : 'text'}
-                  onClick={() => void finish()}
-                  disabled={saving || !personalInfoComplete}
-                >
-                  {/* D44 — an already-submitted application is being CORRECTED, and there
-                      is nothing left to submit. */}
-                  {isEditingSubmitted ? 'Save changes' : 'Save and close'}
-                </Button>
-              </span>
-            </Tooltip>
-            {/* Hidden rather than disabled: a disabled button invites the question "why
-                can't I?", and the answer here is that the action does not apply at all. */}
-            {!isEditingSubmitted && (
-              <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
-                <span>
-                  <Button
-                    variant="contained"
-                    onClick={() => void submitNow()}
-                    disabled={saving || !personalInfoComplete}
-                  >
-                    Save and submit
-                  </Button>
-                </span>
-              </Tooltip>
-            )}
-          </>
+          <Tooltip title={personalInfoComplete ? '' : PERSONAL_INFO_HINT}>
+            <span>
+              <Button
+                variant="contained"
+                onClick={() => void (isEditingSubmitted ? finish() : submitNow())}
+                disabled={saving || !personalInfoComplete}
+              >
+                {/* An application already in the queue is being CORRECTED — there is
+                    nothing left to submit. Everything else is being filed. */}
+                {isEditingSubmitted ? 'Save changes' : 'Submit'}
+              </Button>
+            </span>
+          </Tooltip>
         ) : (
           <Tooltip title={step === 0 && !personalInfoComplete ? PERSONAL_INFO_HINT : ''}>
             <span>
               <Button
                 variant="contained"
-                onClick={next}
+                onClick={() => void next()}
                 disabled={saving || (step === 0 && !personalInfoComplete)}
               >
                 Continue

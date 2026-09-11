@@ -1,6 +1,6 @@
 # System Architecture — School Management System (SIS)
 
-> **Phase 2 — System Architecture.** Owner: `product-architect`. This document resolves the high-level technical decisions that Phases 3–7 build on: backend technology + hosting (Open Issue **O1**), authentication/authorization model, module breakdown, folder structures, the data/state strategy, and cross-cutting concerns. It honors all locked decisions in `progress-tracker.md` (D2, D5, D8–D11) and the requirements in `requirements.md`.
+> **Phase 2 — System Architecture.** Owner: `product-architect`. This document resolves the high-level technical decisions that Phases 3–7 build on: backend technology + hosting (Open Issue **O1**), authentication/authorization model, module breakdown, folder structures, the data/state strategy, and cross-cutting concerns. It honors all locked decisions in `complete-work.md` (D2, D5, D8–D11) and the requirements in `requirements.md`.
 >
 > It does **not** define the detailed DB schema (Phase 4), UI design (Phase 3), or the full API spec (Phase 5) — but it makes the decisions those phases extend.
 
@@ -399,4 +399,4 @@ This architecture aligns with the orchestrator's foundation → modules sequenci
 
 ---
 
-_End of Phase 2 architecture. Next: orchestrator review (`staff-eng-tech-lead` + `principal-fullstack-engineer`) → update `progress-tracker.md` (resolve O1, log new decisions) → Phase 3 (UI/UX Design)._
+_End of Phase 2 architecture. Next: orchestrator review (`staff-eng-tech-lead` + `principal-fullstack-engineer`) → update `complete-work.md` (resolve O1, log new decisions) → Phase 3 (UI/UX Design)._

@@ -480,16 +480,34 @@ class TestTheTwoScreensMerged:
         assert r.status_code == 200, r.text
         return r.json()["items"]
 
+    def _entry(self, client, make_user, auth_headers, row, actor=None) -> dict:
+        """The entry for ONE audit row, found by its own reference.
+
+        ⚠️ These tests used to read `items[0]` and assume it was the row they had just
+        inserted. That holds in an empty log and nowhere else: the suite runs against a
+        COPY of the live database, and any service that commits an audit row — a pending
+        application being saved, for instance — leaves rows that sort newer than a
+        test's. Four of these tests failed that way, all reporting a real row's values
+        instead of the planted one.
+
+        `reference` is `Entry #<id>`, so the row can name itself.
+        """
+        wanted = f"Entry #{row.id}"
+        entries = self._entries(client, make_user, auth_headers, actor=actor)
+        match = next((e for e in entries if e["reference"] == wanted), None)
+        assert match is not None, f"{wanted} not in the {len(entries)} entries returned"
+        return match
+
     def test_the_record_type_is_named_in_the_registrars_words(
         self, client, make_user, auth_headers, db_session
     ) -> None:
         dean = make_user(role=Role.PRINCIPAL)
         student = _student(db_session)
-        _row(
+        row = _row(
             db_session, actor=dean, action="grade.update", entity_type="assessment_grade",
             entity_id=uuid.uuid4(), summary={"student_id": str(student.id)},
         )
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert entry["record"] == "Grade"
 
     def test_an_unmapped_record_type_says_Record_not_its_table_name(
@@ -499,11 +517,11 @@ class TestTheTwoScreensMerged:
         wrong: `class_enrollments` came out as "Class enrollments", which is a table name
         with a capital letter on it."""
         dean = make_user(role=Role.PRINCIPAL)
-        _row(
+        row = _row(
             db_session, actor=dean, action="school.update",
             entity_type="some_new_table_nobody_mapped", entity_id=uuid.uuid4(),
         )
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert entry["record"] == "Record"
 
     def test_every_entry_has_a_quotable_reference(
@@ -513,7 +531,7 @@ class TestTheTwoScreensMerged:
         autoincrement integer and no endpoint takes one."""
         dean = make_user(role=Role.PRINCIPAL)
         row = _row(db_session, actor=dean, action="school.update", entity_type="school")
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert entry["reference"] == f"Entry #{row.id}"
         assert _UUID_RE.search(entry["reference"]) is None
 
@@ -525,7 +543,7 @@ class TestTheTwoScreensMerged:
         screen — the override said a rule was waived without saying which one."""
         dean = make_user(role=Role.PRINCIPAL)
         student = _student(db_session)
-        _row(
+        row = _row(
             db_session, actor=dean, action="enrollment.override",
             entity_type="class_enrollment", entity_id=uuid.uuid4(),
             summary={
@@ -535,7 +553,7 @@ class TestTheTwoScreensMerged:
                 "reason": "Sat and passed the August make-up examination.",
             },
         )
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         details = {d["label"]: d["value"] for d in entry["details"]}
         assert details["Rule waived"] == "Course prerequisite"
         assert "MATH1110" in details["Requirement"]
@@ -548,13 +566,13 @@ class TestTheTwoScreensMerged:
     ) -> None:
         """One fact under two headings reads as two facts."""
         dean = make_user(role=Role.PRINCIPAL)
-        _row(
+        row = _row(
             db_session, actor=dean, action="student.status_change", entity_type="student",
             entity_id=uuid.uuid4(),
             summary={"status": "Withdrawn"},
             previous={"status": "Active"}, new={"status": "Withdrawn"},
         )
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert [c["field"] for c in entry["changes"]] == ["Status"]
         assert "Status" not in {d["label"] for d in entry["details"]}
 
@@ -565,11 +583,11 @@ class TestTheTwoScreensMerged:
         system — any call site can put anything in it. It goes through the same
         `_render_value` the before/after table uses, so a bare id becomes "changed"."""
         dean = make_user(role=Role.PRINCIPAL)
-        _row(
+        row = _row(
             db_session, actor=dean, action="school.update", entity_type="school",
             summary={"scope": str(uuid.uuid4())},
         )
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert _UUID_RE.search(json.dumps(entry)) is None
         assert {d["value"] for d in entry["details"]} <= {"changed"}
 
@@ -580,6 +598,6 @@ class TestTheTwoScreensMerged:
         offers a disclosure only when there is something behind it, and a list that is
         never empty makes that disclosure always open onto nothing."""
         dean = make_user(role=Role.PRINCIPAL)
-        _row(db_session, actor=dean, action="school.update", entity_type="school")
-        entry = self._entries(client, make_user, auth_headers, actor=dean)[0]
+        row = _row(db_session, actor=dean, action="school.update", entity_type="school")
+        entry = self._entry(client, make_user, auth_headers, row, actor=dean)
         assert entry["details"] == []

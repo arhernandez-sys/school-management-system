@@ -34,6 +34,7 @@ from app.modules.admissions.models import Application
 from app.modules.programs.models import Program
 from app.modules.students.models import StudentProfile, StudentProgramHistory
 from app.modules.users.models import User
+from tests.conftest import issued_login_email
 
 pytestmark = pytest.mark.requires_db
 
@@ -415,7 +416,11 @@ class TestAcceptance:
     def test_accept_creates_student_login_and_number(self, client, graph, db_session) -> None:
         """Decision #5 — the SINGLE action that admits a student."""
         app_id = self._submitted(client, graph)
-        r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        r = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         assert r.status_code == 201, r.text
         body = r.json()
 
@@ -447,7 +452,11 @@ class TestAcceptance:
         """History starts at admission, not at the first change — otherwise a student who
         never changes programme has no record of when they started it."""
         app_id = self._submitted(client, graph)
-        body = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).json()
+        body = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        ).json()
         rows = db_session.scalars(
             select(StudentProgramHistory).where(
                 StudentProgramHistory.student_id == uuid.UUID(body["student_id"])
@@ -462,7 +471,11 @@ class TestAcceptance:
         `student_profiles.user_id` needs the user first, and `applications.student_id`
         needs the student."""
         app_id = self._submitted(client, graph)
-        body = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).json()
+        body = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        ).json()
         db_session.expire_all()
         app_row = db_session.get(Application, uuid.UUID(app_id))
         student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
@@ -476,7 +489,10 @@ class TestAcceptance:
         body = client.post(
             f"{A}/{app_id}/accept",
             headers=graph.S,
-            json={"temporary_password": "Kn0wnPassw0rd!"},
+            json={
+                "login_email": issued_login_email(),
+                "temporary_password": "Kn0wnPassw0rd!",
+            },
         ).json()
         assert body["temporary_password"] is None
 
@@ -488,7 +504,15 @@ class TestAcceptance:
 
     def test_accepting_twice_is_409(self, client, graph) -> None:
         app_id = self._submitted(client, graph)
-        assert client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).status_code == 201
+        first = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
+        assert first.status_code == 201, first.text
+        # A second accept is refused on STATUS, before the login rule is even reached --
+        # hence the empty body: an accepted application is not re-openable by supplying
+        # better inputs.
         r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_accepted")
@@ -499,12 +523,17 @@ class TestAcceptance:
         """The whole accept is one transaction: a clash on the LAST step must not leave a
         student, a burnt student number or a half-linked application behind."""
         taken = make_user(role=Role.STUDENT, full_name="Already Here")
-        app_id = _file(client, graph, submit=True, email=taken.email).json()["id"]
+        app_id = _file(client, graph, submit=True).json()["id"]
 
         before = db_session.scalar(
             select(Application.student_id).where(Application.id == uuid.UUID(app_id))
         )
-        r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        # The clash is now in what the Registrar TYPES, not in what the form carried:
+        # since the accept no longer borrows `applications.email`, an address already in
+        # `users` can only arrive here.
+        r = client.post(
+            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": taken.email}
+        )
         assert r.status_code == 409
         _assert_envelope(r.json(), code="duplicate_email")
 
@@ -513,11 +542,11 @@ class TestAcceptance:
         assert before is None and app_row.student_id is None
         assert app_row.status.value == "submitted"  # not left half-decided
 
-    def test_a_login_email_may_be_supplied_when_the_form_had_none(
+    def test_an_application_with_no_email_of_its_own_still_accepts(
         self, client, graph
     ) -> None:
-        """An applicant who gave no email still needs a login, so `login_email` satisfies
-        the same blocking issue rather than forcing a PATCH first."""
+        """The applicant's own address is irrelevant to the login, so a form that carries
+        none is not a special case any more -- it accepts exactly like any other."""
         app_id = _file(client, graph, email=None).json()["id"]
         client.post(f"{A}/{app_id}/submit", headers=graph.S)
         r = client.post(
@@ -528,20 +557,55 @@ class TestAcceptance:
         assert r.status_code == 201, r.text
         assert r.json()["login_email"] == f"issued.{graph.tag}@bajc.edu.bz"
 
-    def test_no_email_anywhere_is_a_blocking_issue(self, client, graph) -> None:
-        app_id = _file(client, graph, email=None).json()["id"]
-        client.post(f"{A}/{app_id}/submit", headers=graph.S)
+    def test_the_login_email_is_required_and_is_a_field_error(
+        self, client, graph
+    ) -> None:
+        """⚠️ Client, Sep 2026 -- *"the email that is going to be used is one the
+        school will provide, not their personal one"*.
+
+        This replaces `test_no_email_anywhere_is_a_blocking_issue`, which asserted the
+        opposite shape: the rule used to be an application-level issue listed under
+        *Outstanding before this can be accepted*, which read as a debt the APPLICANT
+        owed. It is an input to this action, so it comes back on the `login_email`
+        field -- and it is required even when the form carries a perfectly good address.
+        """
+        app_id = self._submitted(client, graph)
         r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
-        assert r.status_code == 422
-        assert any(
-            "email address is required" in issue
-            for issue in r.json()["error"]["fields"]["application"]
-        )
+        assert r.status_code == 422, r.text
+        error = r.json()["error"]
+        assert error["code"] == "login_email_required"
+        assert error["fields"] == {"login_email": ["Required."]}
+        # Not smuggled back in under the old key.
+        assert "application" not in error["fields"]
+
+    def test_the_applicants_own_address_is_never_borrowed(
+        self, client, graph, db_session
+    ) -> None:
+        """The fallback is gone: a contact detail must not become a credential because
+        nobody typed anything."""
+        app_id = self._submitted(client, graph)
+        form_email = client.get(f"{A}/{app_id}", headers=graph.S).json()["email"]
+        assert form_email  # the graph's applicant does give one
+
+        issued = issued_login_email()
+        body = client.post(
+            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": issued}
+        ).json()
+        assert body["login_email"] == issued
+
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        login = db_session.get(User, student.user_id)
+        assert login.email == issued != form_email
 
     def test_the_dean_may_also_accept(self, client, graph) -> None:
         """Registrar + Dean, per §D14 — the Dean is not locked out of administration."""
         app_id = self._submitted(client, graph)
-        assert client.post(f"{A}/{app_id}/accept", headers=graph.P, json={}).status_code == 201
+        r = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.P,
+            json={"login_email": issued_login_email()},
+        )
+        assert r.status_code == 201, r.text
 
     def test_a_lecturer_may_not_accept(self, client, graph) -> None:
         app_id = self._submitted(client, graph)
@@ -551,7 +615,11 @@ class TestAcceptance:
         """So the report-card header and the student list have something to print from day
         one rather than a blank `year_of_study`."""
         app_id = self._submitted(client, graph)
-        body = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).json()
+        body = client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        ).json()
         student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
         assert student.year_of_study == "First"
 
@@ -609,7 +677,11 @@ class TestDenyWithdrawDelete:
     def test_an_accepted_application_cannot_be_deleted(self, client, graph) -> None:
         """A student and a login hang off it; hiding it would leave them untraceable."""
         app_id = _file(client, graph, submit=True).json()["id"]
-        client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        client.post(
+            f"{A}/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         r = client.delete(f"{A}/{app_id}", headers=graph.S)
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_accepted")
@@ -656,3 +728,50 @@ class TestListing:
 
     def test_unknown_application_is_404(self, client, graph) -> None:
         assert client.get(f"{A}/{uuid.uuid4()}", headers=graph.S).status_code == 404
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestFormIssuesAreNotAcceptanceIssues:
+    """⚠️ Client, Sep 2026: *"remove the email as required and remove the text 'email
+    address is required'"*.
+
+    The form never required an email — `submission_issues` has no such rule. What the
+    wizard rendered was `ApplicationDetail.blocking_issues`, which is
+    `acceptance_issues`, and that DOES require one: a login cannot be issued without an
+    address. A true statement on the review screen, shown to somebody filling in a form
+    that does not ask for an email.
+
+    So the wire now carries both, and the rule stays exactly where it was.
+    """
+
+    def _detail(self, client, graph, app_id):
+        r = client.get(f"{A}/{app_id}", headers=graph.S)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def test_the_form_is_not_told_an_email_is_required(self, client, graph) -> None:
+        app_id = _file(client, graph, email=None).json()["id"]
+        detail = self._detail(client, graph, app_id)
+        assert not any(
+            "email address is required" in i.lower() for i in detail["form_issues"]
+        ), detail["form_issues"]
+
+    def test_acceptance_is_not_told_one_either(self, client, graph) -> None:
+        """⚠️ This reverses `test_acceptance_still_is`, and the reversal is the point.
+
+        The first fix moved the rule from `form_issues` to `blocking_issues` -- off the
+        wizard, onto the review screen. The client then said the review screen is wrong
+        too: an address the COLLEGE issues is not something the application is missing,
+        so it is not an *issue* with the application at all. It is an input to the
+        accept action, asserted in `TestAcceptance`.
+        """
+        app_id = _file(client, graph, email=None).json()["id"]
+        detail = self._detail(client, graph, app_id)
+        for field in ("form_issues", "blocking_issues"):
+            assert not any(
+                "email address is required" in i.lower() for i in detail[field]
+            ), (field, detail[field])
+
+    def test_the_two_fields_are_both_present(self, client, graph) -> None:
+        detail = self._detail(client, graph, _file(client, graph).json()["id"])
+        assert "form_issues" in detail and "blocking_issues" in detail

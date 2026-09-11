@@ -28,7 +28,7 @@ import pytest
 
 from app.common.enums import Role, StudentStatus, normalise_civil_status
 from app.modules.students.models import StudentProfile
-from tests.conftest import split_name
+from tests.conftest import issued_login_email, split_name
 from tests.test_admissions import _file, graph  # noqa: F401 - fixture re-export
 
 pytestmark = pytest.mark.requires_db
@@ -384,7 +384,11 @@ class TestAdmissionsPathFolds:
         row.civil_status = "married"  # pre-D40 spelling, straight into the column
         db_session.flush()
 
-        r = client.post(f"/api/v1/applications/{app_id}/accept", headers=graph.S, json={})
+        r = client.post(
+            f"/api/v1/applications/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         assert r.status_code == 201, r.text
 
         student = client.get(
@@ -402,7 +406,11 @@ class TestAdmissionsPathFolds:
         row.civil_status = "Common law"
         db_session.flush()
 
-        r = client.post(f"/api/v1/applications/{app_id}/accept", headers=graph.S, json={})
+        r = client.post(
+            f"/api/v1/applications/{app_id}/accept",
+            headers=graph.S,
+            json={"login_email": issued_login_email()},
+        )
         assert r.status_code == 201, r.text
         student = client.get(
             f"{STUDENTS}/{r.json()['student_id']}", headers=graph.S

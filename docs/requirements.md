@@ -1,6 +1,6 @@
 # Requirements Specification — School Management System (SIS)
 
-> **Phase 1 — Requirements Analysis.** Owner: business-analyst. This document defines *what* the system must do for v1 and the rules that govern it. It does **not** define architecture, database, UI, or API design — those are owned by later phases. It honors the fixed constraints in `project-overview.md` (4 roles, 11 modules, fixed frontend stack) and flags open issues from `progress-tracker.md` (O1, O2).
+> **Phase 1 — Requirements Analysis.** Owner: business-analyst. This document defines *what* the system must do for v1 and the rules that govern it. It does **not** define architecture, database, UI, or API design — those are owned by later phases. It honors the fixed constraints in `project-now.md` (4 roles, 11 modules, fixed frontend stack) and flags open issues from `complete-work.md` (O1, O2).
 
 > **Phase 4.5 reconciliation (2026-06-26):** Updated to reflect confirmed stakeholder decisions. **D23 — Class = multi-subject SECTION/homeroom:** a "class" is a section (e.g. "Form 1A") with one roster and many subjects taught within it, each subject having its own teacher(s) and gradebook; a student enrolls in one section. Terminology and FRs in Classes (§3.5), Assessments (§3.6), Grades (§3.7), Attendance (§3.8), and Reports (§3.10) clarified accordingly. **D24 — Multi-year transcript is a v1 feature:** new Transcript requirement set (FR-TRN-01..07) and acceptance criteria (§5.8) added. **D26 — Transcript visibility = Principal/Secretary ONLY** (resolves OQ-TRN; reverses the earlier teacher-scope assumption): Teachers and Students have no compiled-transcript access; US-PRIN-10/US-SEC-10 retained, US-STD-10 removed. **D25 — Grade exclusions are teacher-controlled & persisted** (resolves OQ-DB7): excused = always excluded (distinct from absent); teacher-configured, stored drop-lowest applied automatically (FR-GRD-05, FR-GRD-11). Authoritative model: `database-schema.md` (class_subjects, §10.6 transcript assembly; DB-14 grading policy).
 
@@ -115,7 +115,7 @@ Capability levels:
 - The link is the `program_heads` table, and **appointing a head grants the role automatically** — the account becomes `hod` on appointment and returns to `teacher` when the last appointment is removed. Three guards: only a plain lecturer is promoted (an administrator who also teaches is never changed), only an `hod` is demoted, and a head who still runs another programme keeps the role. Every change is audited as `user.role_change`.
 
 **Auditor** *(added D43)*
-- **Reads everything, writes nothing.** Sees all students, lecturers, courses, offerings, grades, attendance, applications, reports (including transcripts) and settings, plus the **Audit trail** (Insights → Audit trail, `GET /audit`) — the sensitive-action record, which no other screen exposes. ⚠️ It used to be reachable from Settings → Audit log as well; that second screen was deleted on 10 Sep 2026 (see `docs/d45-meeting4-yellow-plan.md` §4b).
+- **Reads everything, writes nothing.** Sees all students, lecturers, courses, offerings, grades, attendance, applications, reports (including transcripts) and settings, plus the **Audit trail** (Insights → Audit trail, `GET /audit`) — the sensitive-action record, which no other screen exposes. ⚠️ It used to be reachable from Settings → Audit log as well; that second screen was deleted on 10 Sep 2026 (see `complete-work.md` §4b).
 - The write ban is not a matter of which routes they are listed on: **every** POST/PUT/PATCH/DELETE is refused with `403 read_only_role` in `get_current_user`, the one dependency every authenticated route passes through. A route added in future is read-only for them by default.
 - The three exceptions act on their own account, not on school data: log out, change their own password, set their own preferences.
 - **Cannot** author announcements, decide grade revisions, or be given any capability above `View-all`.
@@ -309,7 +309,7 @@ School-level configuration and per-user account settings.
 
 > **Scope addition, 2026-07.** Not part of the original 11-module charter. Added because
 > the shipped frontend already contained a full calendar and the `events` table already
-> existed in the database — see `project-overview.md` §4 for the provenance. Documented
+> existed in the database — see `project-now.md` §4 for the provenance. Documented
 > here so the module has requirements like every other one.
 
 - **FR-CAL-01:** The Principal and Secretary shall create, edit and delete school
@@ -523,4 +523,4 @@ Student `view-all` (global-visibility events only). Matches the frontend's
 
 ---
 
-_End of Phase 1 requirements. Next: Orchestrator review → update `progress-tracker.md` → Phase 2 (Architecture). Per orchestration principles, do not build ahead._
+_End of Phase 1 requirements. Next: Orchestrator review → update `complete-work.md` → Phase 2 (Architecture). Per orchestration principles, do not build ahead._

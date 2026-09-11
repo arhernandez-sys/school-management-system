@@ -6,7 +6,7 @@ import { ROUTES } from '@shared/constants/routes';
  * The two admissions lists, as tabs (D38).
  *
  * **Why a tab and not another value in the Status filter.** A pending form is not an
- * application: it lives in `student_profile_temp`, it is visible only to whoever filed it
+ * application: it lives in `application_temp`, it is visible only to whoever filed it
  * (and to the Dean), and it has no admission status to filter on. Folding it into the
  * Status dropdown would put rows from two tables with two different visibility rules behind
  * one control, and "why can my colleague not see this one?" would have no answer on screen.

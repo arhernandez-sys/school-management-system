@@ -12,7 +12,7 @@ database, and how to recover when something breaks.
 
 > The docs under `docs/` still describe PostgreSQL on Railway in several places
 > (`database-schema.md`, `architecture.md`, `api-specification.md`). That is **stale**.
-> MariaDB is authoritative — see `docs/progress-tracker.md` line 111 and
+> MariaDB is authoritative — see `docs/complete-work.md` line 111 and
 > `backend/db/mariadb/README.md`. Reconciling those docs is Step 5 of the production plan.
 
 ---
@@ -140,7 +140,7 @@ contents.
 **Grade numbers differ between the two, deliberately.** The backend implements the documented
 two-level category rollup (weights + drop-lowest); the demo's `selectors.ts::computeTermGrade`
 does a flat mean and ignores both. Do not report that as a bug — see
-`docs/progress-tracker.md` line 107.
+`docs/complete-work.md` line 107.
 
 ---
 
@@ -297,7 +297,7 @@ SEED_ADMIN_EMAIL=principal@school.local
 ```
 
 > ⚠️ **URL-encode special characters in the password** (`@` → `%40`). Both
-> `alembic/env.py:31` and `tests/conftest.py:81` depend on the value staying encoded.
+> `tests/conftest.py:81` depends on the value staying encoded.
 >
 > _(An earlier note here warned that `backend/.env.example` advertised a
 > `postgresql+psycopg://` URL. That was already fixed — the example is MariaDB
@@ -332,122 +332,72 @@ VITE_ENABLE_MOCKS=true
 
 > Not needed on this machine — `sims` is already provisioned and seeded.
 
-**Alembic does not work.** The single revision
-(`backend/alembic/versions/0001_initial_schema.py`) is PostgreSQL-only — native enums,
-`pgcrypto`, RLS, `CREATE INDEX CONCURRENTLY`. Running `alembic upgrade head` against MariaDB
-will fail. This is a known, accepted gap: fresh provisioning is **manual**.
-
-Apply these in **exact order** against the `sims` database. All are re-runnable.
-
-Two ways to run one:
+**One file does it.** `backend/db/mariadb/sims_final.sql` is a complete HeidiSQL dump of
+the live database: 44 tables, their data, and every schema change made up to and
+including D45.
 
 ```powershell
-# (a) From a terminal — reads DATABASE_URL from backend/.env, prints each statement's result.
-#     Must be run from `backend\` (the .env path is relative).
+# HeidiSQL: open the file and run it. Or from a terminal:
 cd C:\Users\arhernandez\source\repos\school-management-system\backend
-.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --check                      # inspect, change nothing
-.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --backup pre.sql             # snapshot first
-.\.venv\Scripts\python.exe db\mariadb\apply_sql.py db\mariadb\005_tertiary.sql  # apply
+mariadb -u root -p < db\mariadb\sims_final.sql
 ```
 
-(b) HeidiSQL — open the file and run the whole thing.
+It creates the database (`CREATE DATABASE IF NOT EXISTS sims`) and selects it, so it
+needs nothing prepared.
 
-Prefer (a): it reports per-statement, so a failure names the exact statement instead of
-leaving you to find it. It exists because Alembic cannot be used here (see above).
+### ⚠️ The 20 numbered migrations are gone
 
-| # | File | Purpose |
-|---|---|---|
-| 1 | `backend/db/mariadb/sims.sql` | Base legacy schema. **Empty DB only.** |
-| 2 | `backend/db/mariadb/001_missing_fields.sql` | The big ORM reconciliation — renames, type changes, PK swaps, FK adds, generated columns emulating Postgres partial-unique indexes |
-| 3 | `backend/db/mariadb/002_column_defaults.sql` | `CURRENT_TIMESTAMP` defaults on `login_attempts.attempted_at`, `refresh_sessions.issued_at`/`last_used_at`. **Without this the entire auth flow fails** with MariaDB error 1364 |
-| 4 | `backend/db/mariadb/003_subjects_is_active.sql` | Converts `subjects.is_active` from generated to a real column |
-| 5 | `backend/db/mariadb/004_subject_class_model.sql` | **D29 sixth-form subject-class model** — adds `class_meetings` and `student_profiles.year_group`. **This step was missing from the list**, so a DB provisioned by following this runbook had no timetable table and the Timetable module was dead |
-| 6 | `backend/db/mariadb/005_tertiary.sql` | **D30 tertiary / junior-college model (BAJC)** — the `courses` catalog, `programs`, curriculum, prerequisites, grade points, applications, credit transfer, grade revisions, `YYYYMM###` student-ID sequences. See `docs/tertiary-refactor-plan.md` |
-| 7 | `backend/db/mariadb/006_courses_cutover.sql` | **D30 Phase 2A catalog cutover** — swaps the catalog FKs from `subjects` to `courses` and comments `subjects` as retired (it is kept, not dropped). Applied 2026-08-16 together with the ORM change that points `Subject.__tablename__` at `courses`; applying it against an OLDER checkout of the app breaks every course write with 1452. |
-| 8 | `backend/db/mariadb/007_student_names.sql` | **D30 Phase 1 name split** — tightens `student_profiles.lastname` to NOT NULL and **drops `full_name`**, which becomes a computed property on the ORM. Same rule as `006`: apply it with the matching code, never against an older checkout, or every student INSERT fails on the NOT NULL column. |
-| 9 | `backend/db/mariadb/008_course_offerings.sql` | **D31 offering model** — `course_offerings` replaces `classes` + `class_subjects`. Re-points every child (`assessments`, `assessment_categories`, `class_teachers`, `class_meetings`, `term_grade_snapshots`, `class_enrollments`, `attendance_records`, `announcements`) from `class_id`/`class_subject_id` to `offering_id`, drops `student_profiles.year_group`, and quarantines 7 superseded tables as `*_legacy_pre_d31` (renamed, never dropped). Same rule as `006`/`007`, and it matters most here: **apply it with the matching code**, or every offering write breaks. Verify with `python db\mariadb\verify_schema.py --expect 008` (20 probes). See `docs/tertiary-offerings-refactor-plan.md` |
-| 10 | `backend/db/mariadb/009_midterm_windows.sql` … `016_hod_auditor_roles.sql` | D32–D43, in numeric order. Each is re-runnable and documented in its own header. |
-| 11 | `backend/db/mariadb/017_sims10_reconcile.sql` | **D44 — the client's `sims_10` dump.** The ten-state `applications.status` (renaming `denied` → `rejected`, with the data migration), `application_number` + backfill, `number_sequences` (replacing `student_number_sequences`), `term_type` += `independent`, `semester_status`, three `programs` columns, the `classroom` table, `course_offerings.classroomid` + FK, and `users.role` += `sysadmin`. **Four of the dump's decisions are deliberately NOT reproduced** — read the file header before touching it, especially `programs.head_of_dept_id` (not added; `program_heads` owns that fact) and the LOWERCASE `independent`. Verify with `python db\mariadberify_schema.py --expect 017` (17 probes). See `docs/d44-sims10-and-meeting3.md` |
+`001_missing_fields.sql` … `020_d45_audit_trail.sql` were deleted on **10 Sep 2026**.
+Every one of them had already been applied to the database `sims_final.sql` was dumped
+from, so as a provisioning path they were redundant.
 
-> 🔴 **`008` is DESTRUCTIVE, and its destructive half is gated on a pre-collapse sentinel.**
-> Every `DELETE` is keyed on `class_subjects` still existing, so a replay *after* the demo data
-> has been re-seeded deletes nothing. That gate is why the deletes are safe to ship inside a
-> migration at all. It also carries **no hardcoded `USE \`sims\`;`** (unlike `005`–`007`), so
-> it honours the DSN you connect with — which is what makes rehearsing it on a copy possible.
->
-> ⚠️ **The pre-`008` demo data is destroyed, not migrated.** Forced, not chosen: `classes` is
-> year-scoped and an offering is semester-scoped, so one academic year maps to *two* semesters
-> and nothing in the data says which. Take a backup first
-> (`apply_sql.py --backup` plus a `mysqldump`).
+They are **in git history** if a specific change ever needs re-reading:
 
-Then seed. **(a) and (b) are both reference data — run both, in order. (c) is optional.**
+```powershell
+git log --oneline --all -- backend/db/mariadb/008_course_offerings.sql
+git show 58c2803:backend/db/mariadb/008_course_offerings.sql | more
+```
+
+Source files still name them in docstrings — "`005_tertiary.sql` §8 moved this column".
+That prose is the surviving record of *why* a column exists and was deliberately left in
+place.
+
+**The consequence you have to live with:** `sims_final.sql` is now the only artefact that
+describes the schema, so **re-dump it after any schema change**. A stale dump means a
+fresh environment is built from a stale schema, and nothing will warn you.
+
+### Applying an ad-hoc `.sql`
+
+`apply_sql.py` still exists and is still the better way to run a file, because it reports
+per statement — a failure names the exact statement instead of leaving you to find it.
 
 ```powershell
 cd C:\Users\arhernandez\source\repos\school-management-system\backend
-
-# (a) Minimal bootstrap — idempotent, safe on a populated DB.
-#     Creates school profile, one academic year + 2 semesters, grading scale,
-#     and ONE principal with a generated temp password PRINTED ONCE. Copy it.
-.\.venv\Scripts\python.exe -m app.db.seed
-
-# (b) The REAL BAJC catalog (D30 Phase 2D) — idempotent, safe on a populated DB.
-#     114 courses, 8 programmes, 243 curriculum rows, 63 prerequisites, and the
-#     Internship's ALL-COURSES gate, from the 2026/27 course sequences.
-#     `--dry-run` reports what would change and rolls back.
-#     REQUIRED BEFORE (c): the demo seed references these courses by code.
-.\.venv\Scripts\python.exe -m app.db.seed_bajc
-
-# (c) The BAJC GRADING SCALE (D30 Phase 3) — idempotent, `--dry-run` supported.
-#     Re-bands existing grading scales onto the 8-band BAJC scale with grade points:
-#     A 95-100 (4.00) ... C 70-74 (2.00), D 65-69 (1.00, FAIL), F 0-64 (0.00, FAIL),
-#     pass_mark 70. `app.db.seed` already creates it for a NEW year, so this is only
-#     needed on a database provisioned before Phase 3.
-#     It SKIPS frozen scales on purpose: an archived year keeps the bands that were in
-#     force when it ran (schema 10.4), so its report cards do not get re-lettered.
-.\.venv\Scripts\python.exe -m app.db.seed_grading_scale
-
-# (d) Full demo dataset — 19 users / 45 students / ~4,400 rows.
-.\.venv\Scripts\python.exe -m db.mariadb.seed_demo
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --check                 # inspect, change nothing
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py --backup pre.sql        # snapshot first
+.\.venv\Scripts\python.exe db\mariadb\apply_sql.py db\mariadb\some.sql   # apply
 ```
 
-> ⚠️ **Without (c), the GPA is weightless.** `grading_scale_bands.grade_point` is NULL on a
-> pre-Phase-3 scale, so `calc.grade_point_for` answers None for every letter, every report
-> card prints GPA 0.00, and `calc.meets_grade_point` falls back to the band's `is_passing`
-> when gating prerequisites. Nothing errors — which is exactly why it is easy to miss.
+### Checking a database is what the code expects
 
-> 🔴 **`seed_demo` IS DESTRUCTIVE.** It runs `DELETE FROM` against its seeded tables before
-> inserting. Never point it at anything you care about.
->
-> ⚠️ It does **NOT** touch `courses`. The catalog is reference data owned by
-> `app.db.seed_bajc`; clearing it here — FK checks are off during that sweep — would
-> silently destroy 114 courses and every programme curriculum hanging off them. `seed_demo`
-> resolves its courses by code and fails loudly if the catalog seed has not been run.
->
-> 🔴 It creates 19 login accounts and deletes every row in ~34 tables. **This must never run
-> against production.** Two independent guards must both be satisfied on purpose
-> (`ENVIRONMENT=local` **and** `SIS_ALLOW_DEMO_SEED=yes-destroy-my-data`), and it prints the
-> target database — with the password redacted — when it refuses.
->
-> Since D31 Phase 5 each of those accounts gets its OWN generated password with
-> `must_change_password = true`, written to `backend/db/mariadb/generated/demo-credentials.txt`.
->
-> The static equivalent is now **`backend/db/mariadb/generated/010_seed_demo.sql`**, written by
-> the same run, if you'd rather load it in HeidiSQL. It is gitignored and must not be committed
-> or copied between machines: it carries that run's password hashes. Re-generate instead.
->
-> It also requires `008_course_offerings.sql` to have been applied, and says so before touching
-> anything rather than failing halfway through the sweep.
+```powershell
+.\.venv\Scripts\python.exe db\mariadb\verify_schema.py
+```
 
-### Fresh machine, first time
+It probes a live database for the columns, indexes and foreign keys the ORM needs. Its
+probe groups are still *named* after the migrations that introduced them — that is a
+label, not a file read, so it works with the `.sql` files gone.
 
-**Moved to §1 — first-time setup.** It covers the venv, `requirements-dev.txt`, `npm
-install`, and how to verify each half. A second copy here had already started to drift
-(it recommended a different install command), which is why it is a pointer now and not
-a duplicate.
+### Demo data
 
-Then come back to this section to provision the database itself.
+```powershell
+.\.venv\Scripts\python.exe db\mariadb\seed_demo.py
+```
 
----
+Writes `db/mariadb/generated/` (gitignored), including a per-account credentials file.
+Every account gets its own generated password with `must_change_password = true` — there
+is no shared demo password, and the hash is never committed.
+
 
 ## 6. Database timezone — important
 
@@ -527,8 +477,7 @@ cd C:\Users\arhernandez\source\repos\school-management-system\backend
 | Logged out on every hard refresh | `VITE_API_BASE_URL` is absolute → cross-site `SameSite=Lax` cookie dropped | Set it back to `/api/v1` |
 | `423` on login with `retry_after_seconds` | Account lockout, 5 failures / 900s | Wait, or clear `users.failed_login_count` + `locked_until` |
 | Backend starts but every query fails | Started from the wrong directory → `.env` not found | `cd backend` first |
-| MariaDB error 1364 "doesn't have a default value" on login | `002_column_defaults.sql` never applied | Apply it |
-| `alembic upgrade head` fails | The revision is Postgres-only | Don't use Alembic — see §5 |
+| MariaDB error 1364 "doesn't have a default value" on login | The `CURRENT_TIMESTAMP` defaults on `login_attempts.attempted_at` / `refresh_sessions.issued_at` are missing — the database predates them | Re-provision from `sims_final.sql` (§5), which has them |
 | CORS error in browser console | Origin missing from `CORS_ORIGINS` | Add it, restart backend |
 | Timestamps display 6 hours early | Rows written before the §6 fix | Cosmetic; re-seed if it matters |
 | `npm run demo` shows a blank/404 app | Missing `public/mockServiceWorker.js` or `.env.demo` (both gitignored) | `npx msw init public/ --save`, recreate `.env.demo` per §4 |
@@ -605,7 +554,7 @@ request; the app cannot enforce them for you.
 seed now generates a separate password per account with `must_change_password = true`, the
 server enforces that flag, and the SQL file carrying the hashes is no longer tracked in git.
 What it could not fix is *data already written* — and until the `sims` cut-over is run (see
-`docs/tertiary-offerings-refactor-plan.md`, "The `sims` cut-over"), the `sims` database on this
+`docs/complete-work.md`, "The `sims` cut-over"), the `sims` database on this
 machine **still holds the 19 pre-D31 accounts sharing `SimsDemo2025!` with
 `must_change_password = false`**, and that password is still in this repository's git history.
 If that database is what goes live, the system is open to anyone who has read the history.
@@ -725,8 +674,10 @@ tracked in `docs/testing-plan.md` §6 and the progress tracker:
 - **No backups.** Nothing is scheduled and no restore has ever been tested. For student
   records this is the largest remaining risk on this list — an untested backup is not a
   backup. A nightly `mysqldump` off-host is a few lines.
-- **No reproducible provisioning.** Alembic cannot run against MariaDB (§5), so rebuilding
-  the schema is a manual four-file sequence.
+- **Provisioning depends on one file staying current.** `sims_final.sql` is the whole
+  schema and the whole dataset (§5); nothing regenerates it, so a schema change that is
+  not re-dumped silently ages it. Alembic was deleted on 10 Sep 2026 — its single
+  revision was PostgreSQL-only and could never run here.
 - **Retention not scheduled.** `python -m app.jobs.purge` works (`--dry-run` first) but
   nothing calls it, so `login_attempts` and `audit_log` grow without bound.
 - **The rate limiter is in-process.** With `--workers 4` the effective limit is ~4x the
@@ -784,11 +735,8 @@ read §10 — several of these become blockers there.**
   catastrophic on a public URL. **The code cause is fixed** — the seed now generates a password
   per account with the forced-change flag, the server enforces that flag, and the hash file is
   untracked — but these ROWS survive until the `sims` cut-over re-seeds them
-  (`docs/tertiary-offerings-refactor-plan.md`). See §10.1 before going live.
-- ⚠️ **This checkout cannot run against `sims` yet.** D31 is committed and the code expects
-  `008_course_offerings.sql`, which is deliberately **not** applied to `sims`. Point
-  `DATABASE_URL` at `sims_d31` (which has `008` and the D31 demo data) until the cut-over is
-  done.
+  (`docs/complete-work.md`). See §10.1 before going live.
+- ✅ ~~**This checkout cannot run against `sims` yet.**~~ **Obsolete.** It warned that D31's `008_course_offerings.sql` was not applied to `sims` and that `DATABASE_URL` should point at `sims_d31` instead. That cut-over happened long ago; `sims` has been through every migration since, up to and including D45's, and it is what `.env` points at.
 - ~~**`GET /students/me/years` and `GET /students/{id}/years` return 404 live**~~ — **stale,
   both are served.** Verified in the live route table (`app/modules/students/router.py:104`
   and `:142`), with `/me/years` declared first so "me" is never parsed as a UUID. The

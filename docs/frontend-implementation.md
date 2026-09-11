@@ -1,6 +1,6 @@
 # Frontend Implementation — School Management System (SIS)
 
-> **Phase 6 — Frontend Foundation.** Owner: `frontend-engineer`. This is the first code-writing phase. It delivers the **application shell everything else plugs into** — scaffold, theme, routing + guards, auth structure, TanStack Query + API client infra, and the feature-based folder tree. It deliberately builds **no feature-module functionality** (that is Phase 7). It honors `architecture.md` (§3 auth, §5 folder structure, §7 state strategy), `ui-design-system.md` (D18 nav, D19 theme tokens, D20–D22), `api-specification.md` (§1 conventions, §2 auth, §4 envelopes), and `progress-tracker.md` (D14/D15/D27/D28).
+> **Phase 6 — Frontend Foundation.** Owner: `frontend-engineer`. This is the first code-writing phase. It delivers the **application shell everything else plugs into** — scaffold, theme, routing + guards, auth structure, TanStack Query + API client infra, and the feature-based folder tree. It deliberately builds **no feature-module functionality** (that is Phase 7). It honors `architecture.md` (§3 auth, §5 folder structure, §7 state strategy), `ui-design-system.md` (D18 nav, D19 theme tokens, D20–D22), `api-specification.md` (§1 conventions, §2 auth, §4 envelopes), and `complete-work.md` (D14/D15/D27/D28).
 
 _Last updated: 2026-07-28._
 

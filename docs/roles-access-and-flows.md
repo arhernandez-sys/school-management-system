@@ -3,7 +3,7 @@
 > **⚠️ D43 — there are now SIX roles.** HOD and Auditor were added; their rows are in §2
 > below and their summaries beside the others. The rest of this document still describes
 > the pre-D31 secondary-school model (sections, homerooms, "Form 1A") and was already
-> flagged stale in `tertiary-refactor-plan.md` — D43 updated the ROLE content only and
+> flagged stale in `complete-work.md` — D43 updated the ROLE content only and
 > deliberately did not attempt to de-stale the vocabulary around it.
 >
 > **Purpose.** A plain-language reference for what each of the six roles _is_, what it can _see and do_ in every module, and how work _flows_ between roles. Use this as the map when we go section-by-section: point at a row and tell me how you want it to behave.
