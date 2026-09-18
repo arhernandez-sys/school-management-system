@@ -22,6 +22,7 @@ routes touches no connection.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -164,14 +165,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # for the optional hardening. Raises RuntimeError → uvicorn refuses to start (§8.4).
     settings.validate_runtime()
 
+    IS_CPANEL = "repositories" in os.getcwd()
+
     app = FastAPI(
-        # D30: BAJC is a junior college, so the product is a STUDENT Management
-        # Information System. Display name only — every path, tag and schema name is
-        # unchanged, so the generated TS client is unaffected.
         title="Student Management Information System API",
         version="1.0.0",
-        # Serve docs + schema UNDER the version prefix so the generated TS client
-        # (orval, 7.0e) and the browser read `/api/v1/openapi.json` (api-spec §1.1).
+        
+        # Force FastAPI to prepend the cPanel folder path structure to all internal routing matches
+        root_path="/repositories/school-management-system/backend" if IS_CPANEL else "",
+
+        # Keep your versioned prefix mapping perfectly intact for Orval
         openapi_url=f"{API_V1_PREFIX}/openapi.json",
         docs_url=f"{API_V1_PREFIX}/docs",
         redoc_url=f"{API_V1_PREFIX}/redoc",
