@@ -13,6 +13,7 @@ where something went._
 | [`project-now.md`](project-now.md) | You want to know what the system IS today — stack, layout, how to run it |
 | [`needs-attention.md`](needs-attention.md) | You want to know what is open and who owns it |
 | [`../RUNBOOK.md`](../RUNBOOK.md) | You are setting up, deploying, or something is broken |
+| [`cpanel-deployment.md`](cpanel-deployment.md) | You are deploying to **cPanel shared hosting** (Passenger). RUNBOOK §10 covers the VPS/nginx target instead |
 
 These four replace `progress-tracker.md` and fifteen per-cycle plan documents.
 

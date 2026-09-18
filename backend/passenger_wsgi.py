@@ -58,6 +58,54 @@ from a2wsgi import ASGIMiddleware  # noqa: E402  (must follow the sys.path setup
 
 from app.main import app as asgi_app  # noqa: E402
 
+
+def _unmount(environ: dict) -> None:
+    """Fold Passenger's mount prefix back into the path Starlette routes on.
+
+    THIS IS THE FIX FOR "the routes are all there but every request 404s".
+
+    When the cPanel app's URL has a path component (`school.edu.bz/api` rather
+    than a bare `api.school.edu.bz`), Apache/Passenger splits the request:
+
+        GET /api/v1/health   ->   SCRIPT_NAME="/api"   PATH_INFO="/v1/health"
+
+    `a2wsgi` faithfully maps that to ASGI as `path="/api/v1/health"` plus
+    `root_path="/api"` — and Starlette's router then STRIPS `root_path` off
+    `path` before matching, so it looks for `/v1/health`. No such route exists,
+    because every route in this app is mounted under the literal `/api/v1`
+    prefix (`main.API_V1_PREFIX`), so the request 404s.
+
+    That 404 is uncommonly hard to read, because the request log line prints the
+    UNSTRIPPED path:
+
+        sis.request request method=GET path=/api/v1/health status=404
+
+    — a path that plainly does exist, reported missing. Anyone comparing it
+    against the route table concludes the route table is wrong. It is not; the
+    mount prefix is being subtracted twice.
+
+    Clearing `SCRIPT_NAME` after prepending it makes `root_path` empty, so
+    Starlette matches the full incoming path and the app answers identically
+    whether it is mounted at a subdomain root or under a sub-path. It is a no-op
+    on a root mount, where `SCRIPT_NAME` is already `""`.
+
+    The cost of clearing `root_path`: FastAPI no longer knows the prefix, so the
+    `servers` block in the generated OpenAPI document and the "Try it out"
+    button in `/api/v1/docs` use paths relative to the mount instead of the site
+    root. Nothing the SPA consumes is affected — it calls a relative
+    `VITE_API_BASE_URL=/api/v1` and never reads `servers`.
+    """
+    script_name = environ.get("SCRIPT_NAME", "")
+    if script_name:
+        environ["PATH_INFO"] = script_name + environ.get("PATH_INFO", "")
+        environ["SCRIPT_NAME"] = ""
+
+
+_bridge = ASGIMiddleware(asgi_app)
+
+
 #: The WSGI callable Passenger looks for. The name must match the panel's
 #: "Application entry point" field exactly.
-application = ASGIMiddleware(asgi_app)
+def application(environ, start_response):
+    _unmount(environ)
+    return _bridge(environ, start_response)
