@@ -34,6 +34,7 @@ What this bridge costs you, and why it is acceptable here:
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 # ── Make the `app` package importable, whatever Passenger's cwd happens to be ──
@@ -101,11 +102,33 @@ def _unmount(environ: dict) -> None:
         environ["SCRIPT_NAME"] = ""
 
 
-_bridge = ASGIMiddleware(asgi_app)
+# ── One bridge PER PROCESS, built on first request — never at import ──────────
+# `ASGIMiddleware.__init__` starts a thread running the event loop, and every
+# request then blocks on `run_coroutine_threadsafe(...).result()` with NO timeout.
+# LiteSpeed (this host's server — `Server: LiteSpeed`, not Apache) imports this
+# file once and then FORKS its worker processes. Threads do not survive a fork,
+# so a bridge built at import leaves every worker waiting on a loop nobody runs:
+# the request hangs until LiteSpeed gives up and answers 503 "temporarily busy"
+# — on every path, health included, while the database is perfectly reachable.
+# Keying the bridge on the pid gives each forked worker its own live loop.
+_bridge: ASGIMiddleware | None = None
+_bridge_pid: int | None = None
+_bridge_lock = threading.Lock()
+
+
+def _get_bridge() -> ASGIMiddleware:
+    global _bridge, _bridge_pid
+    pid = os.getpid()
+    if _bridge is None or _bridge_pid != pid:
+        with _bridge_lock:
+            if _bridge is None or _bridge_pid != pid:
+                _bridge = ASGIMiddleware(asgi_app)
+                _bridge_pid = pid
+    return _bridge
 
 
 #: The WSGI callable Passenger looks for. The name must match the panel's
 #: "Application entry point" field exactly.
 def application(environ, start_response):
     _unmount(environ)
-    return _bridge(environ, start_response)
+    return _get_bridge()(environ, start_response)
