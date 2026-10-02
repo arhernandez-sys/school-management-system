@@ -727,11 +727,8 @@ export function ApplicationWizardScreen() {
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               {/* D37 — a SELECT, not free text. `school_year` is a label distinct from
-                  `academic_year_id`, and free text let the two diverge: the one live
-                  application says 2026-2027 while the years on file are 2024-2025 and
-                  2025-2026. The options are the years on file plus the next few derived
-                  from the latest, because an application is for a FUTURE intake and a
-                  strict list of existing years would block the normal case. */}
+                  `academic_year_id`, and free text let the two diverge. The options are
+                  the academic years in the database, nothing derived. */}
               <TextField
                 select
                 label="School year"

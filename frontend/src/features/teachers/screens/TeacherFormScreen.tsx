@@ -218,6 +218,18 @@ export function TeacherFormScreen() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => ({ ...prev, [key]: value }));
 
+  /**
+   * First / last name are typed; Full name is DERIVED from them and read-only, so the two
+   * can never disagree. Only a keystroke in a name part rewrites it — an existing record
+   * whose parts are blank keeps its stored full name until someone fills them in.
+   */
+  const setNamePart = (key: 'first_name' | 'last_name', value: string) =>
+    setDraft((prev) => {
+      const next = { ...prev, [key]: value };
+      next.full_name = [next.first_name.trim(), next.last_name.trim()].filter(Boolean).join(' ');
+      return next;
+    });
+
   const err = (field: string) => fieldErrors[field]?.join(' ');
 
   const addExpertise = () =>
@@ -254,13 +266,24 @@ export function TeacherFormScreen() {
   const missing = useMemo(() => {
     const out: string[] = [];
     if (!editing && draft.staff_number.trim().length === 0) out.push('a staff number');
+    if (!editing && draft.first_name.trim().length === 0) out.push('a first name');
+    if (!editing && draft.last_name.trim().length === 0) out.push('a last name');
     if (draft.full_name.trim().length === 0) out.push('a full name');
     if (editing && draft.gender.length === 0) out.push('a gender');
     if (!editing && draft.create_login && draft.login_email.trim().length === 0) {
       out.push('a login email');
     }
     return out;
-  }, [editing, draft.staff_number, draft.full_name, draft.gender, draft.create_login, draft.login_email]);
+  }, [
+    editing,
+    draft.staff_number,
+    draft.first_name,
+    draft.last_name,
+    draft.full_name,
+    draft.gender,
+    draft.create_login,
+    draft.login_email,
+  ]);
 
   const saving = createMut.isPending || updateMut.isPending;
   const incompleteHint =
@@ -416,30 +439,35 @@ export function TeacherFormScreen() {
             <TextField
               label="Full name"
               value={draft.full_name}
-              onChange={(e) => set('full_name', e.target.value)}
-              required
               fullWidth
-              autoFocus={editing}
+              slotProps={{ input: { readOnly: true } }}
               error={Boolean(fieldErrors.full_name)}
-              helperText={err('full_name') ?? 'The name shown everywhere in the system.'}
+              helperText={
+                err('full_name') ?? 'Filled in from first and last name. Shown everywhere in the system.'
+              }
             />
           </Row>
           <Row>
-            {/* D39 — additive to `full_name`, not a replacement for it: the client's
-                reports want the parts, and the display value stays the authority for
-                every screen that prints a name. */}
+            {/* D39 — the parts the client's reports want. `full_name` is derived from
+                them (see `setNamePart`) and stays the display value every screen prints. */}
             <TextField
-              label="First name (optional)"
+              label="First name"
               value={draft.first_name}
-              onChange={(e) => set('first_name', e.target.value)}
+              onChange={(e) => setNamePart('first_name', e.target.value)}
+              // 79 + space + 79 stays inside full_name's 160-character limit.
+              slotProps={{ htmlInput: { maxLength: 79 } }}
+              required={!editing}
               fullWidth
+              autoFocus={editing}
               error={Boolean(fieldErrors.first_name)}
               helperText={err('first_name')}
             />
             <TextField
-              label="Last name (optional)"
+              label="Last name"
               value={draft.last_name}
-              onChange={(e) => set('last_name', e.target.value)}
+              onChange={(e) => setNamePart('last_name', e.target.value)}
+              slotProps={{ htmlInput: { maxLength: 79 } }}
+              required={!editing}
               fullWidth
               error={Boolean(fieldErrors.last_name)}
               helperText={err('last_name')}
