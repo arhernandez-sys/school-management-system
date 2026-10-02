@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Student Management Information System API",
+    "title": "Student Information Management System API",
     "version": "1.0.0"
   },
   "paths": {

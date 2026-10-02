@@ -168,7 +168,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # D30: BAJC is a junior college, so the product is a STUDENT Management
         # Information System. Display name only — every path, tag and schema name is
         # unchanged, so the generated TS client is unaffected.
-        title="Student Management Information System API",
+        title="Student Information Management System API",
         version="1.0.0",
         # Serve docs + schema UNDER the version prefix so the generated TS client
         # (orval, 7.0e) and the browser read `/api/v1/openapi.json` (api-spec §1.1).
