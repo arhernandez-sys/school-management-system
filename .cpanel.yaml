@@ -1,0 +1,8 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/edubx/repositories/school-management-system
+    - /bin/mkdir -p $DEPLOYPATH
+    - /bin/cp -R frontend $DEPLOYPATH
+    - /bin/cp -R backend $DEPLOYPATH
+    - /bin/cp * $DEPLOYPATH 2>/dev/null || true
