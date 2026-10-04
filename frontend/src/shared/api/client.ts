@@ -142,9 +142,11 @@ api.interceptors.response.use(
     const original = error.config as (RetriableConfig & InternalAxiosRequestConfig) | undefined;
 
     // Only attempt refresh-and-replay for a genuine 401 on a non-retried request,
-    // and never for the refresh endpoint itself.
-    const isRefreshCall = original?.url?.includes('/auth/refresh');
-    if (status === 401 && original && !original._retried && !isRefreshCall) {
+    // and never for the refresh endpoint itself or for login: a login 401 means bad
+    // credentials, and it must reach the form as-is rather than trigger a refresh.
+    const isAuthEntryCall =
+      original?.url?.includes('/auth/refresh') || original?.url?.includes('/auth/login');
+    if (status === 401 && original && !original._retried && !isAuthEntryCall) {
       original._retried = true;
       try {
         const newToken = await performRefresh();

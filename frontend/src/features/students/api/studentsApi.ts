@@ -1,8 +1,10 @@
 import { api } from '@shared/api/client';
 import type { Page } from '@shared/types/api';
 import type {
-  StudentAssessmentGroup,
+  NudgeReleaseResult,
+  StudentAssessmentsResponse,
   StudentDetail,
+  StudentFilterOptions,
   StudentListItem,
   StudentWritePayload,
   StudentYear,
@@ -27,6 +29,18 @@ export async function listStudents(
   return res.data;
 }
 
+/**
+ * GET /students/filter-options — the DISTINCT religions present in the directory (D32).
+ *
+ * Only religion is served: `gender` is a fixed pair and programmes come from `/programs`.
+ */
+export async function getStudentFilterOptions(
+  signal?: AbortSignal,
+): Promise<StudentFilterOptions> {
+  const res = await api.get<StudentFilterOptions>('/students/filter-options', { signal });
+  return res.data;
+}
+
 /** GET /students/{id} — full detail. `academicYearId` scopes the section to that year. */
 export async function getStudent(
   id: string,
@@ -46,23 +60,55 @@ export async function getStudentYears(id: string, signal?: AbortSignal): Promise
   return res.data.items;
 }
 
-/** GET /students/me — the acting student's own record. */
-export async function getMyStudentRecord(signal?: AbortSignal): Promise<StudentDetail> {
-  const res = await api.get<StudentDetail>('/students/me', { signal });
+/**
+ * GET /students/me — the acting student's own record.
+ *
+ * `academicYearId` scopes `current_section` to the section the caller sat in that year,
+ * exactly as it does on `getStudent` above. WHICH student is read still comes from the
+ * token alone (api-spec §3.2), so this narrows the caller's own record and can never
+ * reach anyone else's.
+ */
+export async function getMyStudentRecord(
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<StudentDetail> {
+  const res = await api.get<StudentDetail>('/students/me', {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
 }
 
-/** GET /students/{id}/assessments — assessments grouped by subject, with term grades. */
+/**
+ * GET /students/{id}/assessments — assessments grouped by subject, with term grades.
+ *
+ * Returns the WHOLE envelope rather than just `items`: the response also carries
+ * `nudge_cooldown_seconds`, which the Grades tab needs to decide whether the
+ * "Remind teacher" action is still inside its cooldown.
+ */
 export async function getStudentAssessments(
   id: string,
   academicYearId?: string,
   signal?: AbortSignal,
-): Promise<StudentAssessmentGroup[]> {
-  const res = await api.get<{ items: StudentAssessmentGroup[] }>(`/students/${id}/assessments`, {
+): Promise<StudentAssessmentsResponse> {
+  const res = await api.get<StudentAssessmentsResponse>(`/students/${id}/assessments`, {
     params: academicYearId ? { academic_year_id: academicYearId } : undefined,
     signal,
   });
-  return res.data.items;
+  return res.data;
+}
+
+/**
+ * POST /assessments/{id}/nudge-release — remind the teacher to release this
+ * assessment's grades. Principal/secretary only.
+ *
+ * Errors worth handling at the call site: 409 `nothing_awaiting_release` (nothing
+ * is marked-and-hidden), 409 `no_assigned_teacher`, 429 `rate_limited` (inside the
+ * cooldown — the UI should normally prevent this by disabling the control).
+ */
+export async function nudgeRelease(assessmentId: string): Promise<NudgeReleaseResult> {
+  const res = await api.post<NudgeReleaseResult>(`/assessments/${assessmentId}/nudge-release`);
+  return res.data;
 }
 
 /** POST /students — create a student profile (+ optional section enroll). */

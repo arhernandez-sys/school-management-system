@@ -32,9 +32,11 @@ from sqlalchemy import func, select
 from app.common.enums import Role
 from app.core.cookies import REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH
 from app.core.security import parse_refresh_jti, sha256_hash
+from app.core.timeutil import ensure_aware
 from app.modules.auth.models import LoginAttempt, RefreshSession
 from app.modules.settings.models import AuditLog
 from app.modules.users.models import User
+from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
@@ -209,7 +211,9 @@ class TestLogin:
         assert err["retry_after_seconds"] <= settings.lockout_duration
 
         db_session.refresh(user)
-        assert user.locked_until is not None and user.locked_until > _now()
+        assert user.locked_until is not None
+        # locked_until may read back tz-naive (MariaDB) or aware (Postgres); coerce.
+        assert ensure_aware(user.locked_until) > _now()
 
     def test_correct_password_while_locked_still_423(self, client, make_user, settings) -> None:
         """A correct password during the lockout window is still refused (423)."""
@@ -441,7 +445,7 @@ class TestMe:
         prof = StudentProfile(
             user_id=user.id,
             student_number=f"S-{user.id.hex[:8]}",
-            full_name="Student One",
+            **split_name("Student One"),
             date_of_birth=date(2010, 1, 1),
             enrollment_date=date(2024, 9, 1),
         )
@@ -516,6 +520,66 @@ class TestChangePassword:
         assert other.is_revoked is True
         current_row = db_session.get(RefreshSession, current_jti)
         assert current_row is not None and current_row.is_revoked is False
+
+    def test_forced_change_is_enforced_server_side(self, client, make_user) -> None:
+        """A flagged account is refused everywhere except the three exempt calls.
+
+        Until D31 Phase 5 this was a CHARACTERISATION test pinning the opposite: the
+        flag was written by four paths and returned on `CurrentUser`, but no server
+        path read it, so enforcement was one client redirect (`LoginForm.tsx`) and a
+        deep link, a stale tab or any API client with a valid token walked past it.
+        `core/deps.get_current_user` now raises 403 `password_change_required`
+        instead, which is what this asserts.
+
+        `GET /auth/me` stays 200 ON PURPOSE and is not a gap: it is how the client
+        LEARNS about the flag (the frontend bootstrap is refresh-then-/me), it carries
+        the caller's own identity only, and refusing it would strand the very screen
+        that clears the flag. See `_FORCED_CHANGE_EXEMPT` for the full argument.
+        """
+        _user, access = self._login(client, make_user, must_change_password=True)
+        headers = {"Authorization": f"Bearer {access}"}
+
+        # Exempt: read your own identity, and the flag reaches the client.
+        me = client.get(ME, headers=headers)
+        assert me.status_code == 200, me.text
+        assert me.json()["must_change_password"] is True
+
+        # Everything else is refused, with the machine-readable code the client
+        # branches on rather than a bare 403.
+        blocked = client.get("/api/v1/settings/users", headers=headers)
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json()["error"]["code"] == "password_change_required"
+
+        # A write is refused for the same reason, so this is not a read-only gate.
+        blocked_write = client.post(
+            "/api/v1/announcements",
+            headers=headers,
+            json={"title": "Nope", "body": "Should never land", "audience": "all"},
+        )
+        assert blocked_write.status_code == 403, blocked_write.text
+        assert blocked_write.json()["error"]["code"] == "password_change_required"
+
+    def test_forced_change_still_allows_logging_out(self, client, make_user) -> None:
+        """Exempt: a flagged account can always walk away rather than being trapped
+        between a 403 on everything and a password it does not want to set."""
+        _user, access = self._login(client, make_user, must_change_password=True)
+        resp = client.post(LOGOUT, headers={"Authorization": f"Bearer {access}"})
+        assert resp.status_code == 204, resp.text
+
+    def test_gate_lifts_once_the_password_is_changed(self, client, make_user) -> None:
+        """The 403 is a state, not a ban: clearing the flag through the one exempt
+        write immediately restores normal access on the SAME access token."""
+        _user, access = self._login(client, make_user, must_change_password=True)
+        headers = {"Authorization": f"Bearer {access}"}
+        assert client.get("/api/v1/settings/users", headers=headers).status_code == 403
+
+        changed = client.patch(
+            ME_PASSWORD, headers=headers, json={"new_password": "FreshStart!2026"}
+        )
+        assert changed.status_code == 204, changed.text
+
+        after = client.get("/api/v1/settings/users", headers=headers)
+        assert after.status_code == 200, after.text
 
     def test_must_change_password_path_omits_current(self, client, make_user) -> None:
         """When must_change_password=true, current_password may be omitted → 204

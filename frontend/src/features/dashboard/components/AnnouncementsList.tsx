@@ -1,21 +1,24 @@
 import { Box, Card, CardContent, Chip, Divider, List, ListItem, Stack, Typography } from '@mui/material';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined';
 import { EmptyState } from '@shared/components';
+import { AUDIENCE_LABEL as ANNOUNCEMENT_AUDIENCE_LABEL } from '@features/announcements/presentation';
 import type { DashboardAnnouncement } from '../types';
 
 /** Format an RFC3339 instant to a short, locale-stable date. */
 function formatDate(iso: string): string {
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatSchoolDate(d);
 }
 
-const AUDIENCE_LABEL: Record<string, string> = {
-  all: 'Everyone',
-  teachers: 'Teachers',
-  students: 'Students',
-  class: 'Class',
-};
+/**
+ * D30: was a second hardcoded copy of the announcements audience labels, which drifted
+ * the moment the tertiary terms landed. Reuses the feature's own map instead.
+ * `DashboardAnnouncement.audience` is a plain string here, hence the widening.
+ */
+const AUDIENCE_LABEL: Record<string, string> = ANNOUNCEMENT_AUDIENCE_LABEL;
 
 export interface AnnouncementsListProps {
   title: string;

@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import {
   Box,
   Button,
@@ -16,20 +17,38 @@ import EventBusyIcon from '@mui/icons-material/EventBusy';
 import RuleIcon from '@mui/icons-material/Rule';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { StatCard, StatusBadge, EmptyState } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
-import type { TeacherDashboard as TeacherDashboardData } from '../types';
+import type {
+  TeacherDashboard as TeacherDashboardData,
+  HodDashboard as HodDashboardData,
+} from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
 
 export interface TeacherDashboardProps {
-  data: TeacherDashboardData;
+  /** D43 — also accepts the HOD variant, which is the same payload with an honest
+   *  discriminator. A head's landing page IS their own teaching. */
+  data: TeacherDashboardData | HodDashboardData;
 }
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'TBD';
-  const d = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  // `iso` here is a date-only `YYYY-MM-DD`, which the formatter reads as a calendar date
+  // rather than as UTC midnight — the reason the old `T00:00:00Z` suffix is gone.
+  return formatSchoolDayMonth(iso);
+}
+
+/**
+ * Deep link into the gradebook for one offering. The gradebook selects by
+ * `?class_subject_id=` (a query param, not a path segment — see
+ * `features/grades/GradeAssessmentsScreen.tsx`); with no id it opens the picker.
+ */
+function gradebookLink(offeringId?: string): string {
+  return offeringId
+    ? `${ROUTES.grades}?offering_id=${encodeURIComponent(offeringId)}`
+    : ROUTES.grades;
 }
 
 /**
@@ -44,16 +63,16 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
   return (
     <Grid container spacing={3}>
       {/* Stat row */}
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={3}>
         <StatCard
-          label="My classes"
-          value={stats.my_sections}
+          label="My courses"
+          value={stats.my_offerings}
           icon={<ClassIcon />}
           color="primary"
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={3}>
         <StatCard
           label="Attendance due today"
           value={stats.attendance_due_today}
@@ -63,13 +82,30 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
           to={ROUTES.attendance}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={3}>
         <StatCard
           label="Ungraded items"
           value={stats.ungraded_items}
           icon={<RuleIcon />}
           color="info"
+          helperText="Still to mark"
           to={ROUTES.grades}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} lg={3}>
+        {/* Marked but not yet published — a DIFFERENT outstanding action from
+            "ungraded items", so it gets its own tile rather than being folded in.
+            Links to the offering with the oldest hidden work; falls back to the
+            gradebook picker when the queue is empty. */}
+        <StatCard
+          label="Awaiting release"
+          value={stats.awaiting_release_items}
+          icon={<VisibilityOffIcon />}
+          color={stats.awaiting_release_items > 0 ? 'warning' : 'success'}
+          helperText={
+            stats.awaiting_release_items > 0 ? 'Students cannot see these' : 'All released'
+          }
+          to={gradebookLink(data.awaiting_release[0]?.offering_id)}
         />
       </Grid>
 
@@ -84,13 +120,13 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               <EmptyState
                 icon={<ClassIcon fontSize="inherit" />}
                 title="No classes assigned"
-                description="You have no sections in the active term yet."
+                description="You have no course offerings in the active session yet."
                 variant="card"
               />
             ) : (
               <List disablePadding>
                 {data.today_classes.map((c, i) => (
-                  <Box key={c.section_id}>
+                  <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
                     <ListItem
                       sx={{ px: 0, py: 1.5, gap: 1, flexWrap: 'wrap' }}
@@ -110,8 +146,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                     >
                       <Stack spacing={0.5} sx={{ minWidth: 0 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
-                          {c.section_name}
-                          {c.subject_name ? ` · ${c.subject_name}` : ''}
+                          {c.offering.label} · {c.offering.course.name}
                         </Typography>
                         <StatusBadge
                           label={c.attendance_recorded ? 'Recorded' : 'Not recorded'}
@@ -131,6 +166,65 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
       <Grid item xs={12} lg={5}>
         <AnnouncementsList title="Announcements" announcements={data.recent_announcements} />
       </Grid>
+
+      {/* Awaiting release — the standing "marked but still hidden" queue. Rendered
+          only when non-empty: an always-present empty card would add noise to the
+          common case where a teacher releases as they mark. */}
+      {data.awaiting_release.length > 0 && (
+        <Grid item xs={12}>
+          <Card variant="outlined">
+            <CardContent>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
+              >
+                <Typography variant="h4" component="h3">
+                  Awaiting release
+                </Typography>
+                <StatusBadge
+                  label={`${stats.awaiting_release_items} to release`}
+                  kind="warning"
+                />
+              </Stack>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Marked, but students still cannot see these results.
+              </Typography>
+              <List disablePadding>
+                {data.awaiting_release.map((a, i) => (
+                  <Box key={a.id}>
+                    {i > 0 && <Divider component="li" />}
+                    <ListItem
+                      sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}
+                      secondaryAction={
+                        <Button
+                          component={RouterLink}
+                          to={gradebookLink(a.offering_id)}
+                          size="small"
+                          variant="contained"
+                        >
+                          Release
+                        </Button>
+                      }
+                    >
+                      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
+                        <Typography variant="subtitle2" component="p" noWrap>
+                          {a.title}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
+                          · {a.graded_unreleased_count}{' '}
+                          {a.graded_unreleased_count === 1 ? 'student' : 'students'} waiting
+                        </Typography>
+                      </Stack>
+                    </ListItem>
+                  </Box>
+                ))}
+              </List>
+            </CardContent>
+          </Card>
+        </Grid>
+      )}
 
       {/* Upcoming / recent assessments */}
       <Grid item xs={12}>
@@ -166,8 +260,8 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.section_name}
-                          {a.subject_name ? ` · ${a.subject_name}` : ''} · {formatDate(a.assessment_date)}
+                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
+                          · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
                       <StatusBadge

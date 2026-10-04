@@ -6,6 +6,7 @@ import type {
   TeacherDetail,
   TeacherListItem,
   TeacherUpdateBody,
+  TeacherYear,
   TeachersListParams,
 } from '../types';
 import type { TeacherStatus } from '@shared/types/enums';
@@ -27,10 +28,31 @@ export async function listTeachers(
   return res.data;
 }
 
-/** GET /teachers/{id} — full detail incl. classes_taught. */
-export async function getTeacher(id: string, signal?: AbortSignal): Promise<TeacherDetail> {
-  const res = await api.get<TeacherDetail>(`/teachers/${id}`, { signal });
+/**
+ * GET /teachers/{id} — full detail incl. classes_taught.
+ *
+ * `academicYearId` scopes `classes_taught` to one year (D42 §2). Omitted, every assignment
+ * the lecturer holds comes back — which is what the create/edit flows want.
+ */
+export async function getTeacher(
+  id: string,
+  academicYearId?: string,
+  signal?: AbortSignal,
+): Promise<TeacherDetail> {
+  const res = await api.get<TeacherDetail>(`/teachers/${id}`, {
+    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+    signal,
+  });
   return res.data;
+}
+
+/** GET /teachers/{id}/years — the academic years this lecturer taught in (newest first). */
+export async function getTeacherYears(
+  id: string,
+  signal?: AbortSignal,
+): Promise<TeacherYear[]> {
+  const res = await api.get<{ items: TeacherYear[] }>(`/teachers/${id}/years`, { signal });
+  return res.data.items;
 }
 
 /** POST /teachers — create profile (+ optional linked login). */

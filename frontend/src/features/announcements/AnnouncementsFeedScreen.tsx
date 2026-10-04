@@ -8,6 +8,8 @@ import {
   Select,
   Stack,
   TablePagination,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -22,7 +24,7 @@ import {
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
-import { AUDIENCE_LABEL } from './presentation';
+import { RECEIVABLE_AUDIENCES, audienceFilterLabel } from './presentation';
 import {
   useAnnouncementsList,
   useCreateAnnouncement,
@@ -30,6 +32,7 @@ import {
   useDeleteAnnouncement,
   useMarkRead,
   useAnnouncementDetail,
+  useUnreadCount,
 } from './hooks/useAnnouncements';
 import { AnnouncementFeedItem } from './components/AnnouncementFeedItem';
 import { AnnouncementDetailDialog } from './components/AnnouncementDetailDialog';
@@ -52,12 +55,20 @@ import type {
  * All write-gating here is UX only; the server (MSW handler) re-checks role + ownership.
  */
 const PAGE_SIZE = 10;
-const ALL_AUDIENCES: AnnouncementAudience[] = ['all', 'teachers', 'students', 'class'];
 
 export function AnnouncementsFeedScreen() {
   const { user } = useAuth();
   const canCompose = user ? canWrite(user.role, 'announcements') : false;
   const isPrincipal = user?.role === 'principal';
+  const role = user?.role ?? 'student';
+
+  /**
+   * Only the audiences THIS role can receive. The list was a module-level constant of
+   * all four values, so a student was offered "Teachers" — an option the server can
+   * never satisfy for them, which renders as "No announcements match your filters" and
+   * reads like a bug rather than a permission.
+   */
+  const audienceOptions = RECEIVABLE_AUDIENCES[role];
 
   // ── filter + pagination state ──────────────────────────────────────────────
   const [audience, setAudience] = useState<'' | AnnouncementAudience>('');
@@ -77,6 +88,10 @@ export function AnnouncementsFeedScreen() {
   const query = useAnnouncementsList(params);
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
+  // Already fetched app-wide for the top-bar bell (30s staleTime), so putting the number
+  // on the Unread toggle costs no extra request and tells the reader whether flipping it
+  // will show them anything.
+  const unreadCount = useUnreadCount();
 
   const createMut = useCreateAnnouncement();
   const updateMut = useUpdateAnnouncement();
@@ -156,7 +171,15 @@ export function AnnouncementsFeedScreen() {
     <>
       <PageHeader
         title="Announcements"
-        subtitle="School and class notices targeted to you."
+        // Announcements are NOT academic-year scoped (they have no year or semester
+        // column — targeting is by audience and validity dates), so this screen
+        // deliberately does not follow the global year·semester switcher. Say what the
+        // feed contains so its indifference to the switcher reads as intentional.
+        subtitle={
+          role === 'student'
+            ? 'School-wide notices, notices for all students, and notices for your class.'
+            : 'School and class notices targeted to you.'
+        }
         primaryAction={
           canCompose ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
@@ -182,28 +205,36 @@ export function AnnouncementsFeedScreen() {
               }}
             >
               <MenuItem value="">All audiences</MenuItem>
-              {ALL_AUDIENCES.map((a) => (
+              {audienceOptions.map((a) => (
                 <MenuItem key={a} value={a}>
-                  {AUDIENCE_LABEL[a]}
+                  {audienceFilterLabel(a, role)}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel id="filter-read-label">Show</InputLabel>
-            <Select
-              labelId="filter-read-label"
-              label="Show"
-              value={readFilter}
-              onChange={(e: SelectChangeEvent) => {
-                setReadFilter(e.target.value as ReadFilter);
-                resetPage();
-              }}
-            >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="unread">Unread only</MenuItem>
-            </Select>
-          </FormControl>
+          {/* Read state is a two-way choice people flip constantly, so it is a visible
+              segmented control rather than a collapsed Select where "Unread only" is
+              hidden until opened. `exclusive` + the null guard keep one option always
+              selected — deselecting would leave the filter in no state at all. */}
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={readFilter}
+            onChange={(_, next: ReadFilter | null) => {
+              if (!next) return;
+              setReadFilter(next);
+              resetPage();
+            }}
+            aria-label="Filter by read state"
+          >
+            <ToggleButton value="all" aria-label="Show all announcements">
+              All
+            </ToggleButton>
+            <ToggleButton value="unread" aria-label="Show unread announcements only">
+              Unread
+              {unreadCount.data ? ` (${unreadCount.data})` : ''}
+            </ToggleButton>
+          </ToggleButtonGroup>
         </Stack>
       </Paper>
 

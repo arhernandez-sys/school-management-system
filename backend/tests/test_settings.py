@@ -17,7 +17,11 @@ DB-dependent tests are marked `requires_db` (skip cleanly with no DATABASE_URL).
 
 Seed preconditions this suite relies on (progress-tracker DISCOVERY 2026-06-29):
   * ONE active academic year `2025-2026` with `Semester 1` active.
-  * Its grading scale: pass_mark=60, bands A/B/C/D/F with `.99` ceilings.
+  * Its grading scale: the BAJC 8-band scale with pass_mark=70 (D30 §D5) —
+    A 95-100 (4.00), A- 90-94 (3.75), B+ 85-89 (3.50), B 80-84 (3.00),
+    C+ 75-79 (2.50), C 70-74 (2.00), D 65-69 (1.00, FAIL), F 0-64 (0.00, FAIL).
+    It replaced the generic 5-band A/B/C/D/F scale with `.99` ceilings; apply it to
+    an older database with `python -m app.db.seed_grading_scale`.
   * Single-row school_profile (id=1) + assessment_policies (id=1).
 Tests that need the "no active year" precondition call `archive_seeded_active_year`
 (conftest) to flip the seeded year to ARCHIVED inside the rollback.
@@ -32,7 +36,9 @@ import pytest
 from sqlalchemy import func, select
 
 from app.common.enums import AcademicYearStatus, Role
+from app.modules.settings import service as settings_service
 from app.modules.settings.models import (
+    Religion,
     AcademicYear,
     AuditLog,
     GradingScale,
@@ -43,6 +49,7 @@ from app.modules.users.models import User, UserPreferences
 pytestmark = pytest.mark.requires_db
 
 # Paths (api-spec §1.1 + §5.11).
+RELIGIONS = "/api/v1/settings/religions"
 SCHOOL = "/api/v1/settings/school"
 LOGO = "/api/v1/settings/school/logo"
 ACTIVE_TERM = "/api/v1/settings/active-term"
@@ -95,15 +102,29 @@ class TestSchool:
         self, client, make_user, auth_headers
     ) -> None:
         """GET /settings/school — authenticated read (any role); returns the seeded
-        single-row identity. logo_url is None (storage stubbed, TODO OQ-DB5)."""
+        single-row identity.
+
+        D39: `logo_url` is no longer asserted to be None. It used to be, because
+        `_logo_url_for` returned None unconditionally while waiting on a Supabase bucket
+        that the MariaDB pivot cancelled — so this assertion was pinning a bug in place.
+        A key that is already a usable reference now resolves; a bare object key still
+        does not. The assertion is `str | None` so it describes the contract rather than
+        whatever the fixture happens to seed; `TestLogoUrlResolution` pins the rule.
+        """
         student = make_user(role=Role.STUDENT)
         resp = client.get(SCHOOL, headers=auth_headers(user_id=student.id, role=Role.STUDENT))
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert isinstance(body["name"], str) and body["name"]
-        assert body["logo_url"] is None  # stubbed storage — assert shape, not a URL
+        assert body["logo_url"] is None or isinstance(body["logo_url"], str)
         assert set(body.keys()) == {
-            "name", "logo_url", "address", "contact_email", "contact_phone"
+            "name", "logo_url", "address", "contact_email", "contact_phone",
+            # D39 (Meeting #2 item 6) — operator-set policy, not identity, but it rides
+            # on the same singleton and the Settings screen edits it here.
+            "post_graduation_access_days",
+            # D45 §23 — the attendance warning floor became configuration rather than a
+            # constant in `attendance/service.py` (blueprint §57).
+            "attendance_alert_threshold",
         }
 
     def test_get_school_unauthenticated_401(self, client) -> None:
@@ -291,20 +312,36 @@ class TestListAcademicStructure:
         )
         assert resp.status_code == 200, resp.text
 
-    def test_list_years_teacher_403(self, client, make_user, auth_headers) -> None:
+    # ── The two READS are open to every authenticated role ────────────────────
+    # Changed 2026-07-29 (was P/S-only, asserted 403 here). This endpoint is the
+    # calendar every period picker is built from: the staff `?year=` filter
+    # (`useYearFilter`) runs on teacher-reachable screens, and the student's global
+    # year·semester switcher needs each year's semesters. Gated to P/S, a teacher's
+    # picker got a 403, silently emptied, and sent no `academic_year_id` at all — and
+    # because the MSW mock has no role gate, demo mode hid it completely. Year names
+    # and dates are not sensitive; `/settings/active-term` already exposes the current
+    # pair to everyone. The WRITES stay principal-only (asserted further down).
+    def test_list_years_teacher_allowed(self, client, make_user, auth_headers) -> None:
         teacher = make_user(role=Role.TEACHER)
         resp = client.get(
             ACADEMIC_YEARS, headers=auth_headers(user_id=teacher.id, role=Role.TEACHER)
         )
-        assert resp.status_code == 403
-        _assert_envelope(resp.json(), code="forbidden")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["items"], "a teacher's year picker must not come back empty"
 
-    def test_list_years_student_403(self, client, make_user, auth_headers) -> None:
+    def test_list_years_student_allowed(self, client, make_user, auth_headers) -> None:
         student = make_user(role=Role.STUDENT)
         resp = client.get(
             ACADEMIC_YEARS, headers=auth_headers(user_id=student.id, role=Role.STUDENT)
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200, resp.text
+        # The student switcher joins this against /students/me/years for the semesters,
+        # so every year must carry them.
+        assert all("semesters" in y for y in resp.json()["items"])
+
+    def test_list_years_requires_auth(self, client) -> None:
+        """Widened to 'authenticated', NOT to anonymous."""
+        assert client.get(ACADEMIC_YEARS).status_code == 401
 
     def test_list_semesters_filter_by_year(
         self, client, make_user, auth_headers, db_session
@@ -326,12 +363,16 @@ class TestListAcademicStructure:
         assert len(body["items"]) == 2  # D10: exactly two semesters per year
         assert {s["sequence"] for s in body["items"]} == {1, 2}
 
-    def test_list_semesters_teacher_403(self, client, make_user, auth_headers) -> None:
+    def test_list_semesters_teacher_allowed(self, client, make_user, auth_headers) -> None:
+        """Authenticated, same reasoning as `/academic-years` above."""
         teacher = make_user(role=Role.TEACHER)
         resp = client.get(
             SEMESTERS, headers=auth_headers(user_id=teacher.id, role=Role.TEACHER)
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200, resp.text
+
+    def test_list_semesters_requires_auth(self, client) -> None:
+        assert client.get(SEMESTERS).status_code == 401
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -367,8 +408,8 @@ class TestCreateAcademicYear:
         self, client, make_user, auth_headers, archive_seeded_active_year, db_session
     ) -> None:
         """With the seeded year archived (rollback), create-year succeeds: 201, makes
-        EXACTLY 2 semesters (D10), seeds a grading scale + 5 default bands (D11), and
-        activates sequence-1."""
+        EXACTLY 2 semesters (D10), seeds a grading scale + the 8 BAJC default bands
+        (D11 / D30 §D5), and activates sequence-1."""
         archive_seeded_active_year()
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.post(
@@ -386,11 +427,12 @@ class TestCreateAcademicYear:
         assert len(active_sem) == 1 and active_sem[0]["sequence"] == 1
 
         new_year_id = uuid.UUID(body["id"])
-        # Grading scale + exactly 5 default bands were seeded for the new year.
+        # Grading scale + exactly the 8 BAJC bands were seeded for the new year.
         scale = db_session.scalar(
             select(GradingScale).where(GradingScale.academic_year_id == new_year_id)
         )
         assert scale is not None
+        assert float(scale.pass_mark) == 70.0
         n_bands = db_session.scalar(
             select(func.count()).select_from(GradingScale).where(
                 GradingScale.academic_year_id == new_year_id
@@ -398,12 +440,21 @@ class TestCreateAcademicYear:
         )
         assert n_bands == 1  # one scale row
         from app.modules.settings.models import GradingScaleBand
-        band_count = db_session.scalar(
-            select(func.count()).select_from(GradingScaleBand).where(
+        seeded = db_session.scalars(
+            select(GradingScaleBand).where(
                 GradingScaleBand.grading_scale_id == scale.id
             )
-        )
-        assert band_count == 5
+        ).all()
+        assert len(seeded) == 8
+        # D30 §D5 — the grade points are the WHOLE POINT of the new default. A scale
+        # seeded without them leaves `calc.compute_gpa` weightless and
+        # `calc.meets_grade_point` stuck on its lenient `is_passing` fallback.
+        assert {b.letter: float(b.grade_point) for b in seeded} == {
+            "A": 4.00, "A-": 3.75, "B+": 3.50, "B": 3.00,
+            "C+": 2.50, "C": 2.00, "D": 1.00, "F": 0.00,
+        }
+        # D is NOT a pass: 1.00 fails every programme's min_passing_grade_point.
+        assert {b.letter for b in seeded if not b.is_passing} == {"D", "F"}
 
     def test_create_year_bad_sequences_422(
         self, client, make_user, auth_headers, archive_seeded_active_year
@@ -452,6 +503,352 @@ class TestCreateAcademicYear:
             json=self._year_payload(),
         )
         assert resp.status_code == 403
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# D30 §D3 — N CALENDAR TERMS PER YEAR
+# ════════════════════════════════════════════════════════════════════════════
+class TestNTermSemesters:
+    """The 2-terms-per-year cap, and the endpoints that replace it.
+
+    Before D30 two things together made a third term impossible:
+    `ck_semesters_sequence CHECK (sequence IN (1,2))` in the schema, and
+    `POST /settings/academic-years` hard-creating exactly two terms with no
+    `POST /settings/semesters` to add another. BAJC runs Summer and Spring blocks
+    alongside its numbered semesters, so both had to go.
+    """
+
+    def _five_term_payload(self) -> dict:
+        """A BAJC-shaped year: a Summer block plus four semesters."""
+        return {
+            "name": "2099-2100",
+            "start_date": "2099-07-01",
+            "end_date": "2101-06-30",
+            "semesters": [
+                {"name": "Summer 1", "term_type": "summer", "sequence": 1,
+                 "start_date": "2099-07-01", "end_date": "2099-08-20"},
+                {"name": "Semester 1", "term_type": "semester", "sequence": 2,
+                 "start_date": "2099-08-24", "end_date": "2100-01-16"},
+                {"name": "Semester 2", "term_type": "semester", "sequence": 3,
+                 "start_date": "2100-01-19", "end_date": "2100-06-26"},
+                {"name": "Spring 1", "term_type": "spring", "sequence": 4,
+                 "start_date": "2100-09-01", "end_date": "2101-01-15"},
+                {"name": "Semester 3", "term_type": "semester", "sequence": 5,
+                 "start_date": "2101-01-18", "end_date": "2101-06-30"},
+            ],
+        }
+
+    def test_a_year_can_have_more_than_two_terms(
+        self, client, make_user, auth_headers, archive_seeded_active_year
+    ) -> None:
+        """The headline change. Five terms, three kinds — impossible before D30."""
+        archive_seeded_active_year()
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            ACADEMIC_YEARS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._five_term_payload(),
+        )
+        assert resp.status_code == 201, resp.text
+        terms = resp.json()["semesters"]
+        assert len(terms) == 5
+        assert [t["sequence"] for t in terms] == [1, 2, 3, 4, 5]
+        assert {t["term_type"] for t in terms} == {"summer", "semester", "spring"}
+
+    def test_the_lowest_sequence_is_the_one_activated(
+        self, client, make_user, auth_headers, archive_seeded_active_year
+    ) -> None:
+        """`sequence == 1` used to stand in for "the first term". With N terms that
+        is no longer safe — a year whose terms start at 2 would have been created with
+        NO active term at all — so the service activates the minimum instead."""
+        archive_seeded_active_year()
+        principal = make_user(role=Role.PRINCIPAL)
+        payload = self._five_term_payload()
+        for i, term in enumerate(payload["semesters"], start=4):
+            term["sequence"] = i  # 4..8, none of them 1
+        resp = client.post(
+            ACADEMIC_YEARS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=payload,
+        )
+        assert resp.status_code == 201, resp.text
+        active = [t for t in resp.json()["semesters"] if t["is_active"]]
+        assert len(active) == 1
+        assert active[0]["sequence"] == 4
+
+    def test_one_term_is_enough(
+        self, client, make_user, auth_headers, archive_seeded_active_year
+    ) -> None:
+        """`min_length` went 2 → 1: a year that has only opened its Summer block is a
+        real state, and the old schema rejected it."""
+        archive_seeded_active_year()
+        principal = make_user(role=Role.PRINCIPAL)
+        payload = self._five_term_payload()
+        payload["semesters"] = payload["semesters"][:1]
+        resp = client.post(
+            ACADEMIC_YEARS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=payload,
+        )
+        assert resp.status_code == 201, resp.text
+        assert len(resp.json()["semesters"]) == 1
+
+    def test_term_type_defaults_to_semester(
+        self, client, make_user, auth_headers, archive_seeded_active_year
+    ) -> None:
+        """An existing caller that never heard of `term_type` still works."""
+        archive_seeded_active_year()
+        principal = make_user(role=Role.PRINCIPAL)
+        payload = self._five_term_payload()
+        payload["semesters"] = [
+            {k: v for k, v in payload["semesters"][0].items() if k != "term_type"}
+        ]
+        resp = client.post(
+            ACADEMIC_YEARS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=payload,
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["semesters"][0]["term_type"] == "semester"
+
+    # ── POST /settings/semesters ────────────────────────────────────────────
+    def _active_year_id(self, db_session):  # noqa: ANN001, ANN202
+        return db_session.scalar(
+            select(AcademicYear.id).where(
+                AcademicYear.status == AcademicYearStatus.ACTIVE
+            )
+        )
+
+    def _term_body(self, year_id, **over) -> dict:  # noqa: ANN001
+        body = {
+            "academic_year_id": str(year_id),
+            "name": "Summer 1",
+            "term_type": "summer",
+            "sequence": 9,
+            "start_date": "2026-07-01",
+            "end_date": "2026-08-20",
+        }
+        body.update(over)
+        return body
+
+    def test_dean_adds_a_term_to_an_existing_year(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The endpoint that did not exist. Adding BAJC's Summer block to a year that
+        already has its two semesters had no route at all before D30."""
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(self._active_year_id(db_session)),
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["name"] == "Summer 1"
+        assert body["term_type"] == "summer"
+        assert body["sequence"] == 9
+
+    def test_a_new_term_is_created_inactive(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Adding a FUTURE block must not move the school's current term as a side
+        effect — activating is the separate, deliberate `/activate` call."""
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(self._active_year_id(db_session)),
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["is_active"] is False
+
+    def test_a_summer_term_outside_the_years_dates_is_allowed(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """NOT a bug, and deliberately not validated.
+
+        BAJC's own sample report card prints `Summer, July 2026 - August 2026` for a
+        year that begins in August. Requiring a term to sit inside its academic year's
+        range would reject the institution's real calendar.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        year = db_session.get(AcademicYear, self._active_year_id(db_session))
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(
+                year.id,
+                start_date=str(year.start_date.replace(year=year.start_date.year - 1)),
+                end_date=str(year.start_date),
+            ),
+        )
+        assert resp.status_code == 201, resp.text
+
+    def test_duplicate_sequence_in_the_same_year_409(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`uq_semesters_year_seq` survived D30 — only the 1-or-2 CHECK went."""
+        principal = make_user(role=Role.PRINCIPAL)
+        year_id = self._active_year_id(db_session)
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(year_id, sequence=1, name="Clash"),
+        )
+        assert resp.status_code == 409, resp.text
+        _assert_envelope(resp.json(), code="duplicate_semester_sequence")
+
+    def test_cannot_add_a_term_to_an_archived_year(
+        self, client, make_user, auth_headers, db_session, archive_seeded_active_year
+    ) -> None:
+        year = archive_seeded_active_year()
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(year.id),
+        )
+        assert resp.status_code == 409, resp.text
+        _assert_envelope(resp.json(), code="year_archived")
+
+    def test_end_before_start_422(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.post(
+            SEMESTERS,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json=self._term_body(
+                self._active_year_id(db_session),
+                start_date="2026-08-20",
+                end_date="2026-07-01",
+            ),
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_adding_a_term_is_dean_only(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """§D14 — the academic calendar is the Dean's, not the Registrar's."""
+        year_id = self._active_year_id(db_session)
+        for role in (Role.SECRETARY, Role.TEACHER, Role.STUDENT):
+            user = make_user(role=role)
+            resp = client.post(
+                SEMESTERS,
+                headers=auth_headers(user_id=user.id, role=role),
+                json=self._term_body(year_id),
+            )
+            assert resp.status_code == 403, f"{role}: {resp.text}"
+
+    # ── PATCH /settings/semesters/{id} ──────────────────────────────────────
+    def _make_term(self, client, headers, db_session, **over):  # noqa: ANN001
+        resp = client.post(
+            SEMESTERS, headers=headers, json=self._term_body(
+                self._active_year_id(db_session), **over
+            )
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    def test_dean_corrects_a_terms_dates_and_kind(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """A term created with the wrong dates was otherwise unfixable — there is no
+        delete path, because a term anchors every enrolment and grade inside it."""
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        term = self._make_term(client, H, db_session)
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}",
+            headers=H,
+            json={"name": "Spring 1", "term_type": "spring", "end_date": "2026-09-30"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["name"] == "Spring 1"
+        assert body["term_type"] == "spring"
+        assert body["end_date"] == "2026-09-30"
+
+    def test_patch_validates_against_the_merged_dates(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Moving ONLY `start_date` past the stored `end_date` has to be caught here.
+
+        Validating just the supplied fields would let it through to
+        `ck_semesters_dates` at the driver, which surfaces as a 500 rather than a 422
+        naming the field.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        term = self._make_term(client, H, db_session)  # 2026-07-01 → 2026-08-20
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}", headers=H, json={"start_date": "2026-12-01"}
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_patch_to_a_taken_sequence_409(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        term = self._make_term(client, H, db_session)
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}", headers=H, json={"sequence": 1}
+        )
+        assert resp.status_code == 409, resp.text
+        _assert_envelope(resp.json(), code="duplicate_semester_sequence")
+
+    def test_patch_to_its_own_sequence_is_fine(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """Re-submitting the unchanged value must not self-collide."""
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        term = self._make_term(client, H, db_session)
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}", headers=H, json={"sequence": term["sequence"]}
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_patch_cannot_move_a_term_between_years(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`academic_year_id` is absent from the request model (`extra="forbid"`), so
+        sending it is a 422. Re-filing a term would silently re-file every enrolment,
+        assessment and snapshot that keys off it."""
+        principal = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        term = self._make_term(client, H, db_session)
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}",
+            headers=H,
+            json={"academic_year_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_patch_unknown_404(self, client, make_user, auth_headers) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.patch(
+            f"{SEMESTERS}/{uuid.uuid4()}",
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"name": "Ghost"},
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_patch_is_dean_only(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        principal = make_user(role=Role.PRINCIPAL)
+        term = self._make_term(
+            client, auth_headers(user_id=principal.id, role=Role.PRINCIPAL), db_session
+        )
+        secretary = make_user(role=Role.SECRETARY)
+        resp = client.patch(
+            f"{SEMESTERS}/{term['id']}",
+            headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
+            json={"name": "Registrar was here"},
+        )
+        assert resp.status_code == 403, resp.text
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -517,8 +914,13 @@ class TestArchiveAcademicYear:
     def test_archive_seeded_year_202_and_no_active_remaining(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        """Archiving the only active year → 202 with snapshots_written=0 (stub) and
-        no_active_year_remaining=true. State transitions verified."""
+        """Archiving the only active year → 202 and no_active_year_remaining=true.
+
+        `snapshots_written` was 0 while the freeze was stubbed; the freeze is real as
+        of 2026-07-28, so this now asserts the shape and non-negativity rather than a
+        hardcoded 0 (the exact count depends on how much graded seed data exists).
+        Dedicated freeze coverage lives in `TestArchiveFreeze`.
+        """
         principal = make_user(role=Role.PRINCIPAL)
         year_id = db_session.scalar(
             select(AcademicYear.id).where(AcademicYear.status == AcademicYearStatus.ACTIVE)
@@ -529,7 +931,10 @@ class TestArchiveAcademicYear:
         )
         assert resp.status_code == 202, resp.text
         body = resp.json()
-        assert body == {"snapshots_written": 0, "no_active_year_remaining": True}
+        assert set(body.keys()) == {"snapshots_written", "no_active_year_remaining"}
+        assert body["no_active_year_remaining"] is True
+        assert isinstance(body["snapshots_written"], int)
+        assert body["snapshots_written"] >= 0
 
         db_session.expire_all()
         year = db_session.get(AcademicYear, year_id)
@@ -590,7 +995,7 @@ class TestGradingScale:
         self, client, make_user, auth_headers
     ) -> None:
         """GET /settings/grading-scale (authenticated; default active year) →
-        {pass_mark, is_frozen, bands[]} with the seeded 5 bands."""
+        {pass_mark, is_frozen, bands[]} with the seeded BAJC 8 bands (D30 §D5)."""
         student = make_user(role=Role.STUDENT)
         resp = client.get(
             GRADING_SCALE, headers=auth_headers(user_id=student.id, role=Role.STUDENT)
@@ -599,8 +1004,68 @@ class TestGradingScale:
         body = resp.json()
         assert {"academic_year_id", "pass_mark", "is_frozen", "bands"} <= set(body.keys())
         assert body["is_frozen"] is False
-        assert len(body["bands"]) == 5
-        assert {b["letter"] for b in body["bands"]} == {"A", "B", "C", "D", "F"}
+        assert body["pass_mark"] == 70.0
+        assert len(body["bands"]) == 8
+        assert {b["letter"] for b in body["bands"]} == {
+            "A", "A-", "B+", "B", "C+", "C", "D", "F"
+        }
+        # The grade points must reach the WIRE, not just the table: the Dean's scale
+        # editor round-trips this shape, and a band read back without its point would
+        # be saved back without it.
+        assert {b["letter"]: b["grade_point"] for b in body["bands"]} == {
+            "A": 4.00, "A-": 3.75, "B+": 3.50, "B": 3.00,
+            "C+": 2.50, "C": 2.00, "D": 1.00, "F": 0.00,
+        }
+
+    def test_put_grading_scale_round_trips_grade_points(
+        self, client, make_user, auth_headers
+    ) -> None:
+        """A PUT carrying grade points reads them back (D30 §D5).
+
+        The regression this guards: `GradingBand` gained `grade_point` on the READ side
+        first, and a write model without it would have let the Dean's editor post the
+        seeded bands back stripped of their points — silently un-seeding the scale and
+        sending `calc.meets_grade_point` back to its lenient fallback school-wide.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        bands = [
+            {"letter": "P", "min_score": 50, "max_score": 100,
+             "grade_point": 4, "is_passing": True, "sort_order": 1},
+            {"letter": "Q", "min_score": 0, "max_score": 49,
+             "grade_point": 1.25, "is_passing": False, "sort_order": 2},
+        ]
+        resp = client.put(
+            GRADING_SCALE,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={"pass_mark": 50, "bands": bands},
+        )
+        assert resp.status_code == 200, resp.text
+        got = {b["letter"]: b["grade_point"] for b in resp.json()["bands"]}
+        assert got == {"P": 4.0, "Q": 1.25}
+
+    def test_put_grading_scale_without_grade_points_stores_null(
+        self, client, make_user, auth_headers
+    ) -> None:
+        """`grade_point` omitted → NULL, not 0.00 (D30 §D5).
+
+        The distinction is load-bearing: `calc.grade_point_for` reads NULL as "this
+        scale cannot answer", whereas 0.00 is an F. Defaulting the field to zero would
+        have made every unpriced band fail every prerequisite in the school.
+        """
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.put(
+            GRADING_SCALE,
+            headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
+            json={
+                "pass_mark": 50,
+                "bands": [
+                    {"letter": "P", "min_score": 0, "max_score": 100,
+                     "is_passing": True, "sort_order": 1},
+                ],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["bands"][0]["grade_point"] is None
 
     def test_put_grading_scale_dot99_style_succeeds(
         self, client, make_user, auth_headers
@@ -742,14 +1207,22 @@ class TestGradingScale:
 # ════════════════════════════════════════════════════════════════════════════
 class TestAssessmentPolicy:
     def test_get_policy_secretary_allowed(self, client, make_user, auth_headers) -> None:
-        """GET /settings/assessment-policy (P/S) → the 3 school-default fields."""
+        """GET /settings/assessment-policy (P/S) → the school-default fields.
+
+        D32 added `students_can_view_grades` to this singleton (brief §4) — see the model
+        for why it lives here rather than in a second settings table."""
         secretary = make_user(role=Role.SECRETARY)
         resp = client.get(
             ASSESSMENT_POLICY, headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY)
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert set(body.keys()) == {"absent_as_zero", "allow_makeup", "drop_lowest_count"}
+        assert set(body.keys()) == {
+            "absent_as_zero",
+            "allow_makeup",
+            "drop_lowest_count",
+            "students_can_view_grades",
+        }
 
     def test_get_policy_teacher_403(self, client, make_user, auth_headers) -> None:
         teacher = make_user(role=Role.TEACHER)
@@ -759,7 +1232,7 @@ class TestAssessmentPolicy:
         assert resp.status_code == 403
 
     def test_put_policy_principal_updates(self, client, make_user, auth_headers) -> None:
-        """PUT /settings/assessment-policy (principal) sets the 3 fields."""
+        """PUT /settings/assessment-policy (principal) sets the fields."""
         principal = make_user(role=Role.PRINCIPAL)
         resp = client.put(
             ASSESSMENT_POLICY,
@@ -768,7 +1241,13 @@ class TestAssessmentPolicy:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json() == {
-            "absent_as_zero": True, "allow_makeup": False, "drop_lowest_count": 2
+            "absent_as_zero": True,
+            "allow_makeup": False,
+            "drop_lowest_count": 2,
+            # D32: omitted from the request, so it takes the schema default. Deliberate —
+            # a pre-D32 client PUTting this object must not silently enable student grade
+            # visibility it never meant to touch.
+            "students_can_view_grades": False,
         }
 
     def test_put_policy_secretary_403(self, client, make_user, auth_headers) -> None:
@@ -1195,3 +1674,125 @@ class TestEnvelopeConformance:
         ).json()
         err = _assert_envelope(body, code="validation_error")
         assert "fields" in err
+
+
+class TestLogoUrlResolution:
+    """`_logo_url_for` — the D39 rule, tested directly rather than through an endpoint.
+
+    This function returned None unconditionally for the whole Supabase era, and the one
+    test that touched it asserted exactly that, so the school logo silently never reached
+    a report card even with a key configured. These cases exist so the next person to
+    change it has to say which behaviour they meant.
+    """
+
+    def test_a_root_relative_key_resolves(self) -> None:
+        """The self-hosted case: the frontend serves `/logo.jpeg` out of `public/`."""
+        assert settings_service._logo_url_for("/logo.jpeg") == "/logo.jpeg"
+
+    def test_an_absolute_url_resolves(self) -> None:
+        assert (
+            settings_service._logo_url_for("https://cdn.example.org/logo.png")
+            == "https://cdn.example.org/logo.png"
+        )
+
+    def test_a_bare_object_key_stays_none(self) -> None:
+        """No bucket base to resolve it against — None beats a broken `<img src>`."""
+        assert settings_service._logo_url_for("schools/1/logo.png") is None
+
+    def test_blank_and_missing_stay_none(self) -> None:
+        assert settings_service._logo_url_for(None) is None
+        assert settings_service._logo_url_for("") is None
+        assert settings_service._logo_url_for("   ") is None
+
+
+class TestReligions:
+    """GET /settings/religions — the D39 Religion vocabulary (Meeting #2 item 8).
+
+    The point of the endpoint is that religion becomes a DROPDOWN without becoming a
+    foreign key: `student_profiles.religion` stays free text so rows imported from the
+    client's previous system survive. These tests pin the read contract.
+
+    NOTE ON ISOLATION: this suite runs against the real `sims` inside an
+    always-rolled-back transaction (see conftest), so the table already holds the rows
+    `013_meeting2_schema.sql` seeded. Nothing here may assume an empty starting state —
+    the tests add a row with a deliberately odd name and assert about THAT.
+    """
+
+    #: A name no real vocabulary will contain, and one that sorts first, so the
+    #: assertions below hold whatever the client has added to live since.
+    PROBE = "Aaa Test Faith"
+
+    def _add(self, db_session, name: str, code: str | None = None) -> None:
+        from datetime import datetime
+
+        db_session.add(
+            Religion(
+                name=name,
+                code_name=code,
+                createdon=datetime(2026, 1, 1, 0, 0, 0),
+                createdby="pytest",
+            )
+        )
+        db_session.commit()
+
+    def test_authenticated_any_role_may_read(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        self._add(db_session, self.PROBE, "AAA")
+        student = make_user(role=Role.STUDENT)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=student.id, role=Role.STUDENT)
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["items"]
+        mine = [r for r in items if r["name"] == self.PROBE]
+        assert len(mine) == 1
+        assert mine[0]["code_name"] == "AAA"
+        assert isinstance(mine[0]["id"], int)
+
+    def test_unauthenticated_401(self, client) -> None:
+        resp = client.get(RELIGIONS)
+        assert resp.status_code == 401
+        _assert_envelope(resp.json(), code="unauthenticated")
+
+    def test_sorted_by_name_not_by_id(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """The ids are the client's insertion order. A dropdown in insertion order is a
+        dropdown a human has to read all of to use.
+
+        The probe is inserted LAST, so it holds the highest id; if the endpoint sorted by
+        id it would come last, and its name sorts it first.
+        """
+        self._add(db_session, self.PROBE, "AAA")
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        )
+        assert resp.status_code == 200, resp.text
+        names = [r["name"] for r in resp.json()["items"]]
+        assert names == sorted(names)
+        assert names[0] == self.PROBE
+
+    def test_the_client_audit_columns_are_not_exposed(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """`createdon` / `createdby` are mapped on the model so it describes the real
+        table, but they are the client's bookkeeping and no screen shows them."""
+        self._add(db_session, self.PROBE)
+        principal = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            RELIGIONS, headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        )
+        assert resp.status_code == 200, resp.text
+        assert set(resp.json()["items"][0].keys()) == {"id", "name", "code_name"}
+
+    def test_there_is_no_write_verb(self, client, make_user, auth_headers) -> None:
+        """The vocabulary is client-owned. If a POST ever starts returning something
+        other than 405, someone has added a write path — and the table's non-house
+        shape (int PK, `createdby` as a username rather than a FK) was only accepted on
+        the understanding that this application would never write it."""
+        principal = make_user(role=Role.PRINCIPAL)
+        h = auth_headers(user_id=principal.id, role=Role.PRINCIPAL)
+        assert client.post(RELIGIONS, headers=h, json={"name": "X"}).status_code == 405
+        assert client.delete(f"{RELIGIONS}/1", headers=h).status_code in (404, 405)

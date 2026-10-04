@@ -41,10 +41,42 @@ connection string is hardcoded anywhere — `Settings` reads it from the env/.en
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import pytest
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Argon2id cost reduction FOR THE TEST PROCESS ONLY (added in Phase 8).
+# ──────────────────────────────────────────────────────────────────────────────
+# This block must stay ABOVE every `app.*` import in this file. `app.core.security`
+# builds its `PasswordHasher` at MODULE IMPORT time from the lru_cached Settings,
+# so the cost parameters are frozen the first time anything imports it. Setting
+# them here — before that import can happen — is the only point of control.
+#
+# WHY: production runs Argon2id at memory_cost=64 MiB / time_cost=3, which is
+# ~100ms per hash and correct for a password store. But `make_user` mints a real
+# hash for every user in every test, and the suite creates thousands of them, so
+# that single parameter accounted for the overwhelming majority of a ~18-minute
+# run. A test suite that slow stops being run, which costs far more safety than
+# hashing test fixtures cheaply.
+#
+# WHAT THIS DOES NOT WEAKEN: the algorithm is untouched (still Argon2id, still
+# the real `hash_password`/`verify_password` code path, still a genuine
+# `$argon2id$` hash in the DB), so login, lockout, rehash and password-reset
+# behaviour are exercised exactly as in production — only the work factor differs.
+# `tests/test_qa_foundation.py` pins the PRODUCTION defaults independently, so
+# this reduction cannot silently become a weakened production config.
+#
+# `setdefault` so an explicit export always wins, and `SIS_TEST_FULL_ARGON2=1`
+# runs the suite at production cost when you want to verify timing or the params
+# themselves. argon2-cffi requires memory_cost >= 8 * parallelism; 1 MiB with
+# parallelism 1 is far above that floor.
+if not os.environ.get("SIS_TEST_FULL_ARGON2"):
+    os.environ.setdefault("ARGON2_TIME_COST", "1")
+    os.environ.setdefault("ARGON2_MEMORY_COST", "1024")  # KiB (1 MiB)
+    os.environ.setdefault("ARGON2_PARALLELISM", "1")
 
 if TYPE_CHECKING:  # import only for type checkers; avoids hard runtime coupling
     from fastapi import FastAPI
@@ -54,9 +86,15 @@ if TYPE_CHECKING:  # import only for type checkers; avoids hard runtime coupling
     from app.config import Settings
 
 # The local default baked into Settings.database_url. If DATABASE_URL is unset the
-# app falls back to this; a test run against it would hit a Postgres nobody is
+# app falls back to this; a test run against it would hit a MariaDB nobody is
 # running, so we treat "unset or equal to this default" as "no test DB available".
-_LOCAL_DEFAULT_DB_URL = "postgresql+psycopg://sis:sis@localhost:5432/sis"
+#
+# IMPORTED, never re-typed. This guard previously hardcoded the OLD Postgres
+# default; once the app pivoted to MariaDB the strings no longer matched, so a
+# machine with no `.env` stopped recognising the fallback as "no DB" and tried a
+# real connection instead of skipping cleanly. Importing the constant makes that
+# class of drift impossible.
+from app.config import LOCAL_DEFAULT_DATABASE_URL as _LOCAL_DEFAULT_DB_URL  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -122,6 +160,35 @@ _hydrate_database_url_from_dotenv()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Rate limiting OFF by default for the suite (added in the hardening pass).
+# ──────────────────────────────────────────────────────────────────────────────
+# `core/ratelimit.py` counts FAILED auth attempts per client IP, and under
+# TestClient every request reports the same peer ("testclient"), so the whole
+# suite shares ONE bucket. The auth tests deliberately generate dozens of failures
+# (lockout, wrong password, forged refresh cookies) and would trip the limiter,
+# turning later tests' expected 401/423 into an unexpected 429.
+#
+# Set BEFORE anything constructs Settings, and via `setdefault` so an explicit
+# export still wins. The rate-limit tests re-enable it per-app by overriding the
+# `get_settings` dependency, which is the only place that reads the flag.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    """Clear the process-wide limiter around every test.
+
+    The limiter is a module singleton, so without this a test that enables
+    throttling would leak its counters into the next one.
+    """
+    from app.core.ratelimit import get_limiter
+
+    get_limiter().reset()
+    yield
+    get_limiter().reset()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # DB availability detection (drives skip-clean behaviour)
 # ──────────────────────────────────────────────────────────────────────────────
 def _configured_database_url() -> str | None:
@@ -173,6 +240,85 @@ def database_url() -> str:
     return url
 
 
+#: Tables `008_course_offerings.sql` guarantees. The ORM has moved to the D31 shape, so a
+#: database still on `007` cannot satisfy a single offering-backed test — it fails with
+#: hundreds of unrelated-looking errors instead of one honest one.
+_D31_REQUIRED_TABLES = ("course_offerings",)
+#: Tables `008` quarantines away (it RENAMES them to `*_legacy_pre_d31` rather than dropping
+#: them, so the cut-over `sims` passes). Their presence under the ORIGINAL name means the run is
+#: pointed at a pre-`008` database.
+_D31_FORBIDDEN_TABLES = ("classes", "class_subjects")
+
+#: D32 (`009_midterm_windows.sql`) adds COLUMNS rather than tables, so the table-level probe
+#: above cannot see it. Same argument for checking it: without the mid-term window columns
+#: every Phase 1-4 test fails on an `OperationalError: Unknown column`, which reads like a
+#: broken model rather than an unapplied migration. `table -> column` pairs.
+_D32_REQUIRED_COLUMNS = (
+    ("semesters", "midterm_submission_start"),
+    ("semesters", "midterm_submission_end"),
+    ("assessment_policies", "students_can_view_grades"),
+    ("report_card_snapshots", "kind"),
+)
+
+
+def _assert_d31_schema(eng) -> None:  # noqa: ANN001 - sqlalchemy Engine
+    """Fail the run — loudly, once — if the target database is not on `008` (D31).
+
+    This exists because the failure it prevents is SILENT: a database still on `007` fails
+    every offering test on a missing table, which reads exactly like a broken refactor. One
+    named error at session start is worth more than 500 misleading ones.
+
+    **The `sims` cut-over is DONE (2026-08-20)**, so `backend/.env`'s `sims` now SATISFIES this
+    check and needs no `DATABASE_URL` export. The guard is kept because it is cheap and it is
+    the only thing standing between a stale copy of the database and 500 misleading failures --
+    `sims_d31` and any pre-cut-over restore are both still reachable by exporting a DSN.
+
+    A hard failure, never a skip: the DB fixtures skip *green* when the database is
+    unreachable, so "skip" is the one verdict that could hide this.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(eng)
+    present = set(inspector.get_table_names())
+    missing = [t for t in _D31_REQUIRED_TABLES if t not in present]
+    lingering = [t for t in _D31_FORBIDDEN_TABLES if t in present]
+
+    # D32 column probe. Only run once the tables themselves are in place — on a pre-008
+    # database the column lookup would raise instead of reporting, burying the real cause.
+    missing_columns: list[str] = []
+    if not missing and not lingering:
+        for table, column in _D32_REQUIRED_COLUMNS:
+            if table not in present:
+                missing_columns.append(f"{table}.{column} (table absent)")
+                continue
+            if column not in {c["name"] for c in inspector.get_columns(table)}:
+                missing_columns.append(f"{table}.{column}")
+        if missing_columns:
+            pytest.exit(
+                "The configured test database is NOT on migration 009 (D32 mid-term "
+                "windows).\n"
+                f"  missing columns:  {missing_columns}\n"
+                "Apply it to the target:\n"
+                "  python db/mariadb/apply_sql.py db/mariadb/009_midterm_windows.sql",
+                returncode=1,
+            )
+        return
+    # `pytest.exit`, not `UsageError`/`fail`: raising from a fixture would repeat this
+    # message once per test (33 identical errors on the first probe), which buries the one
+    # line that matters. Aborting the session says it exactly once.
+    pytest.exit(
+        "The configured test database is NOT on migration 008 (D31 course offerings).\n"
+        f"  missing tables:   {missing or 'none'}\n"
+        f"  pre-008 tables:   {lingering or 'none'}\n"
+        "`sims` was cut over to 008 on 2026-08-20, so the default target should pass this\n"
+        "check. Seeing this means DATABASE_URL points somewhere else (a pre-008 restore, or\n"
+        "a stale copy), or the cut-over was rolled back. Apply 008 to the target:\n"
+        "  python db/mariadb/apply_sql.py db/mariadb/008_course_offerings.sql\n"
+        "Confirm with: python db/mariadb/verify_schema.py --expect 008",
+        returncode=1,
+    )
+
+
 @pytest.fixture(scope="session")
 def _engine(database_url: str):  # noqa: ANN202 - sqlalchemy Engine, kept lazy
     """Session-scoped engine bound to the real test DB. Only constructed when a
@@ -181,6 +327,7 @@ def _engine(database_url: str):  # noqa: ANN202 - sqlalchemy Engine, kept lazy
 
     eng = create_engine(database_url, pool_pre_ping=True, future=True)
     try:
+        _assert_d31_schema(eng)
         yield eng
     finally:
         eng.dispose()
@@ -211,7 +358,8 @@ def db_session(_engine) -> Iterator["Session"]:  # noqa: ANN001
     """A SQLAlchemy Session wrapped in an always-rolled-back outer transaction.
 
     Nothing this session (or the code under test) writes is ever committed to the
-    shared Supabase DB. See the module docstring for the full rationale.
+    target database. See the module docstring for the full rationale. (The mention of
+    Supabase here predates the MariaDB pivot; the target is now local MariaDB `sims`.)
     """
     from sqlalchemy.orm import Session
 
@@ -266,18 +414,32 @@ def _maybe_db_session(request: pytest.FixtureRequest) -> "Session | None":
     return request.getfixturevalue("db_session")
 
 
-@pytest.fixture
-def app(_maybe_db_session: "Session | None") -> Iterator["FastAPI"]:
-    """The FastAPI app built by 7.0a's `create_app()`.
+@pytest.fixture(scope="session")
+def _application() -> "FastAPI":
+    """Build the FastAPI app ONCE per test session (Phase 8 performance fix).
 
-    When a test DB is available, `get_db` is overridden to yield the transactional
-    rollback session so the code under test never commits to shared Supabase. When
-    no DB is configured, the override is skipped — DB-free routes (e.g. health)
-    still work; any route that actually calls `get_db` will fail loudly, which is
-    the correct signal to provide a DATABASE_URL.
+    ⚠️ THIS IS THE SINGLE LARGEST DETERMINANT OF SUITE RUNTIME. `create_app()`
+    costs ~1.3s — it registers 99 operations, and FastAPI builds a request/response
+    validator-serializer pair for each. Function-scoped, that was paid by every one
+    of the ~900 tests: ~20 minutes of the ~18-minute suite was route construction,
+    with the database at ~1ms per test and Argon2 a distant second. Session scope
+    pays it once.
 
-    Skips cleanly only if `app.main.create_app` is not importable yet (7.0a). When
-    7.0a landed, this fixture needed NO change — it imports the factory as-is.
+    (The progress tracker previously attributed the runtime to Argon2id. Measured:
+    Argon2 at production cost is ~96ms/hash, so it was real but minor. Both are
+    fixed — the cost reduction at the top of this file, and this fixture.)
+
+    SAFE TO SHARE because the app object holds no per-test state: the rate limiter
+    lives in a module singleton (reset by `_reset_rate_limiter`), the security-header
+    and logging middleware are stateless, and `net.py::_peer_rewrite_warned` is a
+    module global that was already process-wide. The only per-test mutation is the
+    `get_db` dependency override, which the `app` fixture applies and removes around
+    each test.
+
+    ⚠️ A test that needs DIFFERENT SETTINGS must build its own app rather than use
+    this fixture — settings are read by the factory (middleware) and cannot be
+    changed after construction. `tests/test_hardening.py::_build_app` is the pattern:
+    `create_app(settings)` plus a `get_settings` dependency override.
     """
     create_app = _import_create_app()
     if create_app is None:
@@ -285,10 +447,28 @@ def app(_maybe_db_session: "Session | None") -> Iterator["FastAPI"]:
             "app.main.create_app is not importable yet (sub-phase 7.0a not landed); "
             "skipping client/app-dependent tests cleanly."
         )
+    return create_app()
 
+
+@pytest.fixture
+def app(
+    _application: "FastAPI", _maybe_db_session: "Session | None"
+) -> Iterator["FastAPI"]:
+    """The session-built app, with this test's DB override applied.
+
+    When a test DB is available, `get_db` is overridden to yield the transactional
+    rollback session so the code under test never commits to the shared database.
+    When no DB is configured, the override is skipped — DB-free routes (e.g. health)
+    still work; any route that actually calls `get_db` will fail loudly, which is
+    the correct signal to provide a DATABASE_URL.
+
+    The override is REMOVED in teardown, so the shared app never carries one test's
+    session into the next: a leak there would be invisible (the next test would just
+    read a closed session) rather than loud, hence the unconditional `finally`.
+    """
     from app.core.deps import get_db
 
-    application = create_app()
+    application = _application
 
     if _maybe_db_session is not None:
         def _override_get_db() -> Iterator["Session"]:
@@ -362,6 +542,55 @@ def auth_headers(make_token) -> "callable":  # noqa: ANN001
         return {"Authorization": f"Bearer {make_token(**kwargs)}"}
 
     return _auth_headers
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Accept helper (added Sep 2026 — the login email the COLLEGE issues)
+# ──────────────────────────────────────────────────────────────────────────────
+def issued_login_email(prefix: str = "issued") -> str:
+    """A fresh address for `POST /applications/{id}/accept`.
+
+    ⚠️ `login_email` is REQUIRED on every accept, and it does **not** fall back to the
+    applicant's own address any more. The login is something the college hands out; an
+    applicant's contact email is not a credential. Tests used to send ``json={}`` and
+    let the server borrow `applications.email`, so they were quietly exercising that
+    fallback — this helper is what replaces it.
+
+    Unique per call on purpose: a clash with an existing user is a 409, and a shared
+    constant would make every second accept in a module fail for the wrong reason.
+    """
+    return f"{prefix}.{uuid.uuid4().hex[:10]}@bajc.edu.bz"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Student name helper (added D30 — the split-name cut-over)
+# ──────────────────────────────────────────────────────────────────────────────
+def split_name(display: str) -> dict[str, str | None]:
+    """Turn a display name into `StudentProfile` name kwargs.
+
+    `student_profiles.full_name` was dropped by `007_student_names.sql` (D30 §D10);
+    the parts are the stored truth and `StudentProfile.full_name` is now a computed
+    hybrid. Test graphs across the suite build students from a single display string
+    ("Ana Lopez", or a random `Stu abcd`) and then assert on ordering or on the
+    rendered name, so they need one place that does the split the same way the
+    migration did: first token → given name, last token → surname, the rest → middle.
+
+    A single-token name goes entirely to the surname, matching `005` §9 and the fact
+    that `lastname` is the NOT NULL half.
+
+    Not a plain fixture: these graphs are constructed inside other fixtures and in
+    class `__init__`s, where requesting a fixture is not possible.
+    """
+    parts = display.split()
+    if not parts:
+        raise ValueError("display name is empty")
+    if len(parts) == 1:
+        return {"first_name": None, "middle_name": None, "last_name": parts[0]}
+    return {
+        "first_name": parts[0],
+        "middle_name": " ".join(parts[1:-1]) or None,
+        "last_name": parts[-1],
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -468,33 +697,140 @@ def archive_seeded_active_year(db_session) -> "callable":  # noqa: ANN001
 
 
 @pytest.fixture
-def make_class_subject(db_session) -> "callable":  # noqa: ANN001
-    """Factory: create a Class (section) + ClassSubject offering referencing a given
-    subject, inside the rolled-back txn. Used to exercise the DELETE subject_in_use
-    guard (a subject taught in any section cannot be hard-deleted)."""
+def make_offering(db_session) -> "callable":  # noqa: ANN001
+    """Factory: create a `CourseOffering` for a given course, inside the rolled-back txn.
+
+    D31 collapsed the two-step "create a section, then attach a subject to it" into one
+    row, so this fixture creates one object where it used to create two. Every test that
+    needs an offering should come through here rather than constructing the model
+    directly: the identity `(course_id, semester_id, section_code)` is unique, so
+    hand-rolled fixtures collide with each other the moment two tests pick the same
+    course and term. A random `section_code` keeps them apart.
+    """
     import uuid as _uuid
 
     from sqlalchemy import select
 
-    from app.common.enums import AcademicYearStatus
-    from app.modules.classes.models import Class, ClassSubject
-    from app.modules.settings.models import AcademicYear
+    from app.modules.offerings.models import CourseOffering
+    from app.modules.settings.models import Semester
 
-    def _make(subject_id: "_uuid.UUID") -> ClassSubject:
-        # Any existing year is fine (active or archived) — the offering just needs a
-        # valid academic_year_id FK. Prefer the seeded active year.
-        year_id = db_session.scalar(select(AcademicYear.id).limit(1))
-        tag = _uuid.uuid4().hex[:8]
-        section = Class(
-            academic_year_id=year_id,
-            name=f"Test Section {tag}",
-            grade_level="Form 1",
+    def _make(
+        course_id: "_uuid.UUID",
+        *,
+        semester_id: "_uuid.UUID | None" = None,
+        section_code: str | None = None,
+        capacity: int | None = None,
+    ) -> CourseOffering:
+        # Any existing term is fine — prefer the active one, fall back to whatever the
+        # seed left behind, because several suites archive the active year first.
+        if semester_id is None:
+            semester_id = db_session.scalar(
+                select(Semester.id).where(Semester.is_active.is_(True))
+            ) or db_session.scalar(select(Semester.id).limit(1))
+        offering = CourseOffering(
+            course_id=course_id,
+            semester_id=semester_id,
+            section_code=section_code or _uuid.uuid4().hex[:6],
+            capacity=capacity,
         )
-        db_session.add(section)
-        db_session.flush()
-        offering = ClassSubject(class_id=section.id, subject_id=subject_id)
         db_session.add(offering)
         db_session.flush()
         return offering
+
+    return _make
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Grading-policy helpers (added 7.6 — Grades module tests)
+# ──────────────────────────────────────────────────────────────────────────────
+# The grade engine reads a resolved policy (schema §10.2a) and the year's bands
+# (§10.3). Both live in rows that tests must MUTATE rather than insert: the
+# `assessment_policies` singleton is pinned to id=1 and is already seeded, and a
+# test-created year has no grading scale of its own.
+@pytest.fixture
+def set_assessment_policy(db_session) -> "callable":  # noqa: ANN001
+    """Set fields on the school-default `assessment_policies` singleton (id=1).
+
+    Upserts rather than inserts, since the row is seeded and the PK is pinned by
+    a CHECK constraint. Returns the row. Rolled back with the test.
+    """
+    from sqlalchemy import select
+
+    from app.modules.settings.models import AssessmentPolicy
+
+    def _set(**fields: object) -> "AssessmentPolicy":
+        policy = db_session.scalar(select(AssessmentPolicy).where(AssessmentPolicy.id == 1))
+        if policy is None:
+            policy = AssessmentPolicy(id=1, absent_as_zero=False, allow_makeup=True, drop_lowest_count=0)
+            db_session.add(policy)
+        for name, value in fields.items():
+            setattr(policy, name, value)
+        db_session.flush()
+        return policy
+
+    return _set
+
+
+@pytest.fixture
+def student_grades_visible(set_assessment_policy):  # noqa: ANN001, ANN201
+    """Turn ON `assessment_policies.students_can_view_grades` for this test (D32, §4).
+
+    **The default is OFF**, which is the client's decision — a student sees no grade
+    surface unless the Dean publishes them. Every suite that exercises a student-facing
+    grade endpoint therefore has to opt in, and that is the point: the opt-in is visible
+    in the test, so nobody can quietly widen the default and have the suite stay green.
+
+    `tests/test_student_grade_visibility.py` owns the OFF case; everywhere else uses this.
+    """
+    return set_assessment_policy(students_can_view_grades=True)
+
+
+@pytest.fixture
+def make_grading_scale(db_session) -> "callable":  # noqa: ANN001
+    """Factory: create a GradingScale + bands for a given academic year.
+
+    `bands` takes `(letter, min_score, max_score, is_passing)` tuples, optionally with
+    a fifth element for `grade_point` (D30 §D5) — omitted means NULL, which is what
+    `calc.grade_point_for` reads as "this scale cannot price this letter".
+
+    **`_SHIPPED` is a deliberate PRIVATE COPY of the old 5-band A/B/C/D/F scale**, not
+    an import of the shipped default. D30 Phase 3 replaced that default with the BAJC
+    8-band scale, and importing it here would have re-lettered the arithmetic in every
+    letter assertion across the Grades, Reports and Dashboard suites — tests about
+    weighting and release filtering, which have nothing to say about BAJC's boundaries.
+    The shipped default is asserted where it belongs, in `test_settings.py`.
+    """
+    from decimal import Decimal
+
+    from app.modules.settings.models import GradingScale, GradingScaleBand
+
+    _SHIPPED = [
+        ("A", "90.00", "100.00", True),
+        ("B", "80.00", "89.99", True),
+        ("C", "70.00", "79.99", True),
+        ("D", "60.00", "69.99", True),
+        ("F", "0.00", "59.99", False),
+    ]
+
+    def _make(academic_year_id, *, pass_mark="60.00", bands=None) -> "GradingScale":  # noqa: ANN001
+        scale = GradingScale(academic_year_id=academic_year_id, pass_mark=Decimal(pass_mark))
+        db_session.add(scale)
+        db_session.flush()
+        for order, spec in enumerate(bands or _SHIPPED):
+            letter, low, high, passing = spec[:4]
+            grade_point = spec[4] if len(spec) > 4 else None
+            db_session.add(
+                GradingScaleBand(
+                    grading_scale_id=scale.id,
+                    letter=letter,
+                    min_score=Decimal(low),
+                    max_score=Decimal(high),
+                    grade_point=None if grade_point is None else Decimal(str(grade_point)),
+                    is_passing=passing,
+                    sort_order=order,
+                )
+            )
+        db_session.flush()
+        return scale
 
     return _make

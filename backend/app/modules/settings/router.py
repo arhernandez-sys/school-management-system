@@ -1,4 +1,4 @@
-"""Settings router (api-spec §5 Module 11) — the 18 settings endpoints.
+"""Settings router (api-spec §5 Module 11) — the settings endpoints.
 
 Thin transport layer: parse the request, delegate ALL business + DB logic to
 `service.py`, then shape the HTTP response. No DB access or transactions here.
@@ -10,9 +10,11 @@ Endpoints (all mount under `/api/v1` via app/main.py):
     POST   /settings/school/logo                   principal      -> LogoUploadResponse
   Academic structure:
     GET    /settings/active-term                   authenticated  -> ActiveTerm | 409
-    GET    /settings/academic-years                P/S            -> AcademicYearList
-    GET    /settings/semesters                     P/S            -> SemesterList
+    GET    /settings/academic-years                authenticated  -> AcademicYearList
+    GET    /settings/semesters                     authenticated  -> SemesterList
     POST   /settings/academic-years                principal      -> AcademicYearDetail (201)
+    POST   /settings/semesters                     Dean (P)       -> SemesterDetail (201)   [D30]
+    PATCH  /settings/semesters/{id}                 Dean (P)       -> SemesterDetail         [D30]
     PATCH  /settings/semesters/{id}/activate        principal      -> SemesterDetail
     POST   /settings/academic-years/{id}/archive    principal      -> ArchiveYearResponse (202)
   Grading scale:
@@ -33,6 +35,7 @@ Endpoints (all mount under `/api/v1` via app/main.py):
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, status
@@ -50,9 +53,11 @@ from app.modules.settings.schemas import (
     AcademicYearDetail,
     AcademicYearList,
     ArchiveYearResponse,
+    MidtermFreezeResponse,
     AssessmentPolicyRead,
     AssessmentPolicyUpdateRequest,
     GradingScaleRead,
+    ReligionList,
     GradingScaleUpdateRequest,
     GradingScaleUpdateResponse,
     LogoUploadResponse,
@@ -60,6 +65,8 @@ from app.modules.settings.schemas import (
     SchoolUpdateRequest,
     SemesterDetail,
     SemesterList,
+    SemesterUpdateRequest,
+    StandaloneSemesterCreateRequest,
     UserCreateRequest,
     UserCreateResponse,
     UserListItem,
@@ -73,7 +80,35 @@ _ERR = {"model": ErrorResponse}
 
 # Reusable role-gate dependencies (api-spec §3.4 permission matrix).
 _principal = require_role(Role.PRINCIPAL)
-_principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY)
+#: D43 — the Auditor is added for READ reach; the writes on this gate stay closed to
+#: them by the central read-only refusal, so the tuple does not need splitting.
+_principal_or_secretary = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
+
+
+# ── Audit log ───────────────────────────────────────────────────────────────────
+# `GET /settings/audit-log` LIVED HERE AND IS GONE (Sep 2026). It was the second door
+# onto `audit_log`, showing the same rows raw — dotted action key, `entity_type`, the
+# `entity_id` UUID, `summary` as JSON — while `GET /audit` shows them as sentences with
+# the module, the IP and the before/after §46 asks for.
+#
+# Two screens onto one table is a maintenance problem. What made it a CORRECTNESS problem
+# is the audience: this gate was `(PRINCIPAL, AUDITOR, SYSADMIN)`. D45 Phase 7 refused the
+# System Administrator on `/audit` deliberately and at length — that trail is mostly
+# academic records, and §48 is explicit that being an employee is not a reason to see
+# them — and this route handed them the same rows unrendered. `/settings` is on the
+# sysadmin's technical allowlist, so the central guard passed it: the guard was right and
+# the route predated the decision.
+#
+# `GET /audit` is the one door. Do not add a second.
+
+
+#: D45 §2 — account and role management. The Sysadmin joins the Dean and Registrar here
+#: because this IS the technical administrator's job (blueprint §2: "user accounts,
+#: permissions, backups, configuration"). The privileged-role guard inside
+#: `service.create_user` / `update_user` is unchanged and still Principal-only, so a
+#: Sysadmin can mint a lecturer login but cannot promote anyone to Dean — creating
+#: accounts and deciding who runs the college are different powers.
+_user_admins = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.SYSADMIN)
 
 
 # ── School profile / branding ───────────────────────────────────────────────────
@@ -89,6 +124,25 @@ def get_school(
 ) -> SchoolProfileRead:
     """Authenticated read — every role needs identity for report headers."""
     return service.get_school(db)
+
+
+@router.get(
+    "/religions",
+    response_model=ReligionList,
+    summary="Religion vocabulary (authenticated; D39, Meeting #2 item 8)",
+    responses={401: _ERR},
+)
+def list_religions(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> ReligionList:
+    """Authenticated read — the Secretary registering a student and the student
+    reviewing their own profile both need the same list.
+
+    GET is the ONLY verb this vocabulary has. The table is client-owned and this
+    application never writes it; see `settings/models.Religion`.
+    """
+    return service.list_religions(db)
 
 
 @router.put(
@@ -148,27 +202,39 @@ def get_active_term(
 @router.get(
     "/academic-years",
     response_model=AcademicYearList,
-    summary="All academic years + their semesters (P/S; api-spec §5.11)",
-    responses={401: _ERR, 403: _ERR},
+    summary="All academic years + their semesters (authenticated; api-spec §5.11)",
+    responses={401: _ERR},
 )
 def list_academic_years(
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(get_current_user),
 ) -> AcademicYearList:
+    """Readable by EVERY authenticated role, not just P/S.
+
+    This is the calendar every module's period picker is built from: `useYearFilter`
+    (staff `?year=` filter on Grades/Attendance/Classes/Students) and the student's
+    global year·semester switcher both read it. Gated to P/S, a teacher's picker got a
+    403, so `years` came back empty, no `academic_year_id` was sent, and the picker
+    silently vanished — while the MSW handler, which has no role gate, made it all look
+    fine in demo mode. Year names and dates are not sensitive (`/settings/active-term`
+    already exposes the current pair to everyone); the WRITES below stay principal-only,
+    which is where the actual authority lives.
+    """
     return AcademicYearList(items=service.list_academic_years(db))
 
 
 @router.get(
     "/semesters",
     response_model=SemesterList,
-    summary="Semesters, optionally filtered by year (P/S; api-spec §5.11)",
-    responses={401: _ERR, 403: _ERR},
+    summary="Semesters, optionally filtered by year (authenticated; api-spec §5.11)",
+    responses={401: _ERR},
 )
 def list_semesters(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(get_current_user),
 ) -> SemesterList:
+    """Authenticated — same reasoning as `/academic-years` above."""
     return SemesterList(
         items=service.list_semesters(db, academic_year_id=academic_year_id)
     )
@@ -191,6 +257,51 @@ def create_academic_year(
     return service.create_academic_year(db, actor=actor, payload=payload)
 
 
+@router.post(
+    "/semesters",
+    response_model=SemesterDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add one term to an existing year (Dean only; D30 §D3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def create_semester(
+    payload: StandaloneSemesterCreateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> SemesterDetail:
+    """Dean only (§D14). NEW IN D30 — before this the calendar came only from
+    `POST /settings/academic-years`, which hard-created exactly two terms, so BAJC's
+    Summer and Spring blocks had no route at all.
+
+    The term is created INACTIVE; activating is the separate `/activate` call, so
+    adding a future block never moves the school's current term as a side effect.
+    409 `year_archived` / `duplicate_semester_sequence`.
+    """
+    return service.create_semester(db, actor=actor, payload=payload)
+
+
+@router.patch(
+    "/semesters/{semester_id}",
+    response_model=SemesterDetail,
+    summary="Correct a term's name, kind, order or dates (Dean only; D30 §D3)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def update_semester(
+    semester_id: uuid.UUID,
+    payload: SemesterUpdateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> SemesterDetail:
+    """Dean only (§D14). There is deliberately NO delete endpoint: a term is the anchor
+    for every enrolment, assessment, attendance record and frozen snapshot in it, and
+    the FKs are RESTRICT. Correcting a term is the supported operation; removing one is
+    a data-migration decision, not a settings toggle.
+    """
+    return service.update_semester(
+        db, actor=actor, semester_id=semester_id, payload=payload
+    )
+
+
 @router.patch(
     "/semesters/{semester_id}/activate",
     response_model=SemesterDetail,
@@ -207,6 +318,38 @@ def activate_semester(
 
 
 @router.post(
+    "/semesters/{semester_id}/midterm-freeze",
+    response_model=MidtermFreezeResponse,
+    summary="Freeze mid-term report cards for a term (principal; D32, brief §6)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def freeze_midterm_grades(
+    semester_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> MidtermFreezeResponse:
+    """Dean only. Captures every enrolled student's report card for the term into
+    `report_card_snapshots` with `kind='midterm'`, so mid-term reports serve a frozen
+    document instead of recalculating from grades that have since moved.
+
+    **Idempotent** — re-running refreshes in place, which is what lets a Dean re-freeze
+    after correcting a mark.
+
+    409 `midterm_window_open` while the mid-term period is still running (freezing a
+    half-entered gradebook and calling it final would be worse than refusing);
+    422 `no_midterm_window` if the term has no mid-term period configured.
+
+    Pressing this is OPTIONAL: a mid-term report requested after the window closes
+    freezes itself on first read. The button exists so the Dean can choose the moment."""
+    written, frozen_at = service.freeze_midterm_grades(
+        db, actor=actor, semester_id=semester_id
+    )
+    return MidtermFreezeResponse(
+        snapshots_written=written, semester_id=semester_id, frozen_at=frozen_at
+    )
+
+
+@router.post(
     "/academic-years/{year_id}/archive",
     response_model=ArchiveYearResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -218,8 +361,9 @@ def archive_academic_year(
     db: Session = Depends(get_db),
     actor: User = Depends(_principal),
 ) -> ArchiveYearResponse:
-    """Principal. State transitions + idempotency guard implemented; snapshot
-    COMPUTATION is stubbed (TODO(7.6/7.8), see service). 409 year_already_archived
+    """Principal. Computes and writes `term_grade_snapshots` +
+    `report_card_snapshots` (schema §10.4), then applies the state transitions;
+    `snapshots_written` reports the term-grade rows frozen. 409 year_already_archived
     if already archived."""
     written, no_active = service.archive_academic_year(
         db, actor=actor, year_id=year_id
@@ -315,7 +459,7 @@ def list_users(
     is_active: Annotated[bool | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=120)] = None,
     db: Session = Depends(get_db),
-    _actor: User = Depends(_principal_or_secretary),
+    _actor: User = Depends(_user_admins),
 ) -> Page[UserListItem]:
     return service.list_users(
         db, params=params, role=role, is_active=is_active, search=search
@@ -332,7 +476,7 @@ def list_users(
 def create_user(
     payload: UserCreateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_user_admins),
 ) -> UserCreateResponse:
     """P/S may create teacher/student logins; assigning principal/secretary is
     Principal-only (403 role_change_forbidden). 409 duplicate_email. New users get
@@ -354,7 +498,7 @@ def update_user(
     user_id: uuid.UUID,
     payload: UserUpdateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_principal_or_secretary),
+    actor: User = Depends(_user_admins),
 ) -> UserListItem:
     """role/is_active are Principal-only; a Secretary cannot edit a Principal (403).
     Audited on role/active changes."""

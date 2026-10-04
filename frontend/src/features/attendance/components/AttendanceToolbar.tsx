@@ -1,13 +1,13 @@
-import { MenuItem, Stack, TextField } from '@mui/material';
-import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
-import { YearSelect } from '@shared/components';
+import { Box, MenuItem, Stack, TextField } from '@mui/material';
+import { schoolToday } from '@shared/utils/schoolDate';
+import { YearSelect, DateField } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
-import type { AttendanceSectionsResponse } from '../types';
+import type { AttendanceOfferingsResponse } from '../types';
 
 export interface AttendanceToolbarProps {
-  sections: AttendanceSectionsResponse['items'];
-  sectionId: string | null;
-  onSectionChange: (sectionId: string) => void;
+  offerings: AttendanceOfferingsResponse['items'];
+  offeringId: string | null;
+  onOfferingChange: (offeringId: string) => void;
   /** Date controls only appear on the register (summary is window-wide). */
   date?: string;
   onDateChange?: (date: string) => void;
@@ -22,21 +22,32 @@ export interface AttendanceToolbarProps {
 }
 
 /**
- * Year + section (+ optional date) pickers for attendance. Section is required; date
- * defaults to "today" (DEMO_TODAY) and is capped at today so future dates cannot be chosen
- * (FR-ATT-05) — the server also rejects them. Selections are lifted to the parent, which
- * persists them to the URL (?section_id=&date=).
+ * Year + offering (+ optional date) pickers for attendance. The offering is required; date
+ * defaults to the school-local today (`schoolToday()`, America/Belize — matching the
+ * backend's `school_today()`) and is capped there so future dates cannot be chosen
+ * (FR-ATT-05) — the server also rejects them with `future_date_not_allowed`. Selections
+ * are lifted to the parent, which persists them to the URL (?offering_id=&date=).
  *
- * Teacher / Form / Section narrowing filters used to live here for principal/secretary;
- * they now belong to the Grades module. The summary is scoped by Year + Class/homeroom only.
+ * The register is per OFFERING, so this picker lists the offerings the caller teaches. A
+ * student can be present in Biology and absent in Algebra on the same day.
+ *
+ * **D31 renamed the param**: `?section_id=` became `?offering_id=`. The old name was kept
+ * through D29 on the reasoning that "it addresses a `classes` row, which is what it always
+ * did" — and that is precisely why it had to change once the row became an offering.
+ *
+ * The option label is the offering's SERVER-DERIVED `label` (course code + section). It
+ * previously printed the homeroom's `name`, a column that no longer exists.
+ *
+ * Lecturer / Form / Section narrowing filters used to live here for the Dean and Registrar;
+ * they now belong to the Grades module. The summary is scoped by Year + Offering only.
  *
  * All controls use `size="small"` and top-align so the year picker lines up with the
- * class/homeroom field regardless of which fields reserve a helper-text row.
+ * offering field regardless of which fields reserve a helper-text row.
  */
 export function AttendanceToolbar({
-  sections,
-  sectionId,
-  onSectionChange,
+  offerings,
+  offeringId,
+  onOfferingChange,
   date,
   onDateChange,
   showDate = true,
@@ -47,6 +58,11 @@ export function AttendanceToolbar({
   onYearChange,
   yearsLoading = false,
 }: AttendanceToolbarProps) {
+  // Resolved once per render: both the fallback value and the `max` cap must be the
+  // REAL school-local today. This used to be the demo dataset's fixed 2025-10-15,
+  // which capped the picker in the past and made the current day unselectable.
+  const today = schoolToday();
+
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -66,33 +82,36 @@ export function AttendanceToolbar({
       <TextField
         select
         size="small"
-        label="Class / homeroom"
-        value={sectionId ?? ''}
-        onChange={(e) => onSectionChange(e.target.value)}
-        disabled={disabled || sections.length === 0}
-        sx={{ minWidth: 240 }}
-        helperText={sections.length === 0 ? 'No classes available' : ' '}
+        label="Course offering"
+        value={offeringId ?? ''}
+        onChange={(e) => onOfferingChange(e.target.value)}
+        disabled={disabled || offerings.length === 0}
+        sx={{ minWidth: 260 }}
+        helperText={offerings.length === 0 ? 'No course offerings available' : ' '}
       >
-        {sections.map((s) => (
-          <MenuItem key={s.id} value={s.id}>
-            {s.name} · {s.enrolled_count} students
+        {offerings.map((o) => (
+          <MenuItem key={o.offering.id} value={o.offering.id}>
+            {o.offering.label} · {o.enrolled_count} students
           </MenuItem>
         ))}
       </TextField>
 
       {showDate && onDateChange && (
-        <TextField
-          size="small"
-          label="Date"
-          type="date"
-          value={date ?? DEMO_TODAY}
-          onChange={(e) => onDateChange(e.target.value)}
-          disabled={disabled}
-          inputProps={{ max: DEMO_TODAY }}
-          InputLabelProps={{ shrink: true }}
-          helperText="Future dates are disabled"
-          sx={{ minWidth: 200 }}
-        />
+        <Box sx={{ minWidth: 200 }}>
+          {/* `maxDate` replaces the native `max` attribute — FR-ATT-05 forbids a future
+              register, and the picker greys those days out rather than only refusing on
+              submit. */}
+          <DateField
+            size="small"
+            label="Date"
+            value={date ?? today}
+            onChange={onDateChange}
+            disabled={disabled}
+            maxDate={today}
+            helperText="Future dates are disabled"
+            fullWidth
+          />
+        </Box>
       )}
     </Stack>
   );

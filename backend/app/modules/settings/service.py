@@ -10,20 +10,22 @@ fine-grained guards are security-critical):
   * Fine-grained guards (Secretary may not touch a Principal; only a Principal may
     assign/Change a privileged role) live here, next to the data.
 
-Two deliberately-stubbed integration points are flagged inline:
-  * TODO(OQ-DB5) — logo object-storage upload (Supabase bucket/anon-key not yet
-    provisioned). The endpoint shape + validation are real; the upload is stubbed.
-  * TODO(7.6/7.8) — year-archival snapshot COMPUTATION (term_grade_snapshots +
-    report_card_snapshots) belongs to the Grades (7.6) and Reports (7.8) engines,
-    which are not built. We perform the STATE TRANSITIONS + idempotency guard now
-    and write ZERO snapshots, leaving a clearly-marked hook.
+One deliberately-stubbed integration point is flagged inline:
+  * Logo object-storage UPLOAD (no object-storage bucket provisioned). The endpoint
+    shape + validation are real; only the byte upload is stubbed, and it returns None.
+    READING a configured logo is no longer stubbed — see `_logo_url_for` (D39).
+
+The year-archival snapshot freeze is **no longer stubbed** (2026-07-28): computation
+lives in `app/modules/reports/freeze.py` and is invoked by `archive_academic_year`
+before the state transitions. See that function's docstring for the ordering rule.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from math import ceil
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -32,6 +34,7 @@ from app.common.enums import AcademicYearStatus, Role
 from app.common.schemas import (
     AcademicYearRef,
     CurrentUser,
+    Page,
     SemesterRef,
 )
 from app.config import Settings as AppSettings
@@ -39,13 +42,18 @@ from app.core.errors import Conflict, Forbidden, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.security import generate_temp_password, hash_password
 from app.modules.auth.service import build_current_user
-from app.modules.classes.models import Class
+from app.modules.offerings.models import CourseOffering
+from app.modules.settings.grading_defaults import (
+    BAJC_GRADING_BANDS,
+    DEFAULT_PASS_MARK,
+)
 from app.modules.settings.models import (
     AcademicYear,
     AssessmentPolicy,
     AuditLog,
     GradingScale,
     GradingScaleBand,
+    Religion,
     SchoolProfile,
     Semester,
 )
@@ -58,9 +66,13 @@ from app.modules.settings.schemas import (
     AssessmentPolicyUpdateRequest,
     GradingBand,
     GradingScaleRead,
+    ReligionItem,
+    ReligionList,
     SchoolProfileRead,
     SchoolUpdateRequest,
     SemesterDetail,
+    SemesterUpdateRequest,
+    StandaloneSemesterCreateRequest,
     UserCreateRequest,
     UserListItem,
     UserUpdateRequest,
@@ -69,7 +81,12 @@ from app.modules.users.models import User, UserPreferences
 
 # Roles that are "privileged" — assigning or moving a user INTO these, or any role
 # *change*, is Principal-only (FR-SET-04, §5.11).
-_PRIVILEGED_ROLES = {Role.PRINCIPAL, Role.SECRETARY}
+#
+# D43 adds both new roles. An AUDITOR account can read every record in the college, and
+# an HOD can read a whole programme's; handing either out is exactly the kind of decision
+# this list exists to keep with the Dean. Note the direction of the rule — it gates being
+# moved INTO the role, which is the act that grants the reach.
+_PRIVILEGED_ROLES = {Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.HOD}
 
 # Allowed sort fields for the users list (whitelist — never interpolated, §6).
 _USER_SORT_FIELDS = {
@@ -87,6 +104,22 @@ _LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2 MiB cap (413 file_too_large)
 
 def _now() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _to_utc(value: datetime | None) -> datetime | None:
+    """Normalise an inbound datetime to aware-UTC before it is stored (D30 §D6).
+
+    The grade-submission deadline is the first datetime a CLIENT supplies, and a Dean
+    in Belize will naturally send `...T17:00:00-06:00`. The column is a MariaDB
+    `DATETIME`, so SQLAlchemy drops the offset on the way in -- storing 17:00 as though
+    it were UTC and moving the real cutoff six hours earlier. Convert first; a naive
+    value is taken as UTC, matching `core.timeutil.ensure_aware` on the way back out.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _audit(
@@ -112,16 +145,44 @@ def _audit(
 # ──────────────────────────────────────────────────────────────────────────────
 # School profile / branding (§5.11)
 # ──────────────────────────────────────────────────────────────────────────────
-def _logo_url_for(_key: str | None) -> str | None:
+def _logo_url_for(key: str | None) -> str | None:
     """Resolve a public logo URL from `logo_storage_key`.
 
-    TODO(OQ-DB5): the Supabase Storage bucket name + anon key are not yet
-    provisioned (OQ-FE-C pending). Until then there is no public base to compose,
-    so we return None even when a key exists. When storage lands, build:
-        f"{SUPABASE_STORAGE_PUBLIC_BASE}/{bucket}/{key}".
-    Do NOT invent a bucket name here.
+    **D39 — this used to return None unconditionally.** The original was written for
+    Supabase Storage: it waited on a bucket name + anon key to compose
+    `f"{SUPABASE_STORAGE_PUBLIC_BASE}/{bucket}/{key}"`, and returned None in the
+    meantime. The MariaDB pivot retired that plan, so the wait had no end — the school
+    logo never reached the report card or the transcript even though `school_profile`
+    had `/logo.jpeg` sitting in it, which is what Meeting #2 flagged as "*Logo".
+
+    There is no bucket to invent now: a self-hosted deployment serves its own logo.
+    So a key that is ALREADY a usable reference — an absolute URL, or a root-relative
+    path the frontend serves out of `public/` — is returned unchanged. Anything else is
+    a bare object key with no base to resolve it against, and still returns None rather
+    than emitting a broken `<img src>`.
     """
+    key = (key or "").strip()
+    if not key:
+        return None
+    if key.startswith(("http://", "https://", "/")):
+        return key
     return None
+
+
+def list_religions(db: Session) -> ReligionList:
+    """GET /settings/religions — the Religion vocabulary (D39, Meeting #2 item 8).
+
+    Authenticated read, no role gate: the Secretary registering a student and the
+    student reviewing their own profile both need the same list.
+
+    Sorted by NAME, not by id. The ids are the client's insertion order, which is not
+    an order a human scanning a dropdown expects.
+
+    This is the only endpoint the `religions` table has. It is a client-owned vocabulary
+    and this application does not write it — see `models.Religion`.
+    """
+    rows = db.scalars(select(Religion).order_by(Religion.name)).all()
+    return ReligionList(items=[ReligionItem.model_validate(r) for r in rows])
 
 
 def _school_or_404(db: Session) -> SchoolProfile:
@@ -142,6 +203,8 @@ def get_school(db: Session) -> SchoolProfileRead:
         address=profile.address,
         contact_email=profile.contact_email,
         contact_phone=profile.contact_phone,
+        post_graduation_access_days=profile.post_graduation_access_days,
+        attendance_alert_threshold=float(profile.attendance_alert_threshold),
     )
 
 
@@ -154,6 +217,12 @@ def update_school(
     profile.address = payload.address
     profile.contact_email = payload.contact_email
     profile.contact_phone = payload.contact_phone
+    # D39 (Meeting #2 item 6). Assigned unconditionally, like every other field on this
+    # PUT: the request is a full replacement, so an omitted value means "no expiry", not
+    # "leave the previous window in place".
+    profile.post_graduation_access_days = payload.post_graduation_access_days
+    # D45 §23. Same full-replacement rule as the rest of this PUT.
+    profile.attendance_alert_threshold = payload.attendance_alert_threshold
     profile.updated_by = actor.id
     _audit(db, actor=actor, action="school.update", entity_type="school_profile")
     db.commit()
@@ -163,6 +232,8 @@ def update_school(
         address=profile.address,
         contact_email=profile.contact_email,
         contact_phone=profile.contact_phone,
+        post_graduation_access_days=profile.post_graduation_access_days,
+        attendance_alert_threshold=float(profile.attendance_alert_threshold),
     )
 
 
@@ -190,14 +261,22 @@ def upload_logo(
 ) -> str | None:
     """POST /settings/school/logo (principal). Returns the resolved logo_url.
 
-    TODO(OQ-DB5) — STORAGE ADAPTER BOUNDARY. The Supabase Storage bucket + anon
-    key are not yet provisioned, so we do NOT perform a real upload here. We
-    validate the file (done by the router via `validate_logo_upload`), then leave
-    `logo_storage_key` untouched and return None. When storage lands, this is the
-    single function that uploads the bytes and writes `logo_storage_key`.
+    STORAGE ADAPTER BOUNDARY — there is still no upload. The file is validated (by the
+    router, via `validate_logo_upload`), audited, and then discarded; `logo_storage_key`
+    is left untouched. When a storage backend lands, this is the single function that
+    writes the bytes and sets the key.
+
+    **Returns None, deliberately, and not `_logo_url_for(profile.logo_storage_key)`.**
+    D39 taught `_logo_url_for` to resolve an already-usable key, which is right for the
+    READ paths — a school that has `/logo.jpeg` configured should see it on its report
+    cards. Reusing it here would have made a no-op upload answer with the school's
+    PREVIOUS logo, so the Dean would upload a new file, get a URL back, see a logo, and
+    conclude it had been saved. Returning None says plainly that nothing was stored.
     """
     validate_logo_upload(content_type=content_type, size_bytes=len(data))
-    profile = _school_or_404(db)
+    # Called for its 404: uploading a logo to a school that is not configured is an
+    # error, even though nothing is written. The row itself is not needed.
+    _school_or_404(db)
     # Intentionally NOT writing logo_storage_key — no bucket/key to compute yet.
     _audit(
         db,
@@ -207,7 +286,7 @@ def upload_logo(
         summary={"content_type": content_type, "size_bytes": len(data)},
     )
     db.commit()
-    return _logo_url_for(profile.logo_storage_key)
+    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -270,19 +349,19 @@ def list_semesters(
     stmt = select(Semester)
     if academic_year_id is not None:
         stmt = stmt.where(Semester.academic_year_id == academic_year_id)
-    stmt = stmt.order_by(Semester.academic_year_id, Semester.sequence)
+    # Chronological, newest year first, then term order within the year.
+    #
+    # This previously ordered by `Semester.academic_year_id` — a UUID, so across
+    # multiple years the terms came back in an arbitrary (and stable-looking, hence
+    # deceptive) order. With no `academic_year_id` this endpoint returns EVERY year's
+    # terms, and its only consumer is the report-card term picker, so "Semester 1" from
+    # some random year could sort ahead of the current one.
+    stmt = (
+        stmt.join(AcademicYear, Semester.academic_year_id == AcademicYear.id)
+        .order_by(AcademicYear.start_date.desc(), Semester.sequence)
+    )
     rows = db.execute(stmt).scalars().all()
     return [SemesterDetail.model_validate(s) for s in rows]
-
-
-# Default grading bands seeded for a new year (D11; mirrors app/db/seed.py).
-_DEFAULT_BANDS: tuple[tuple[str, str, str, bool, int], ...] = (
-    ("A", "90.00", "100.00", True, 1),
-    ("B", "80.00", "89.99", True, 2),
-    ("C", "70.00", "79.99", True, 3),
-    ("D", "60.00", "69.99", True, 4),
-    ("F", "0.00", "59.99", False, 5),
-)
 
 
 def create_academic_year(
@@ -290,10 +369,16 @@ def create_academic_year(
 ) -> AcademicYearDetail:
     """POST /settings/academic-years (principal).
 
-    Creates the year as ACTIVE + EXACTLY two semesters (D10) + seeds the year's
-    grading_scale and default bands (D11). The first semester (sequence=1) is set
-    active, clearing any prior active semester (one-active invariant). Creating a
-    second active year violates `uq_academic_years_one_active` → 409.
+    Creates the year as ACTIVE + its terms + seeds the year's grading_scale and
+    default bands (D11). The LOWEST-sequence term is set active, clearing any prior
+    active semester (one-active invariant). Creating a second active year violates
+    `uq_academic_years_one_active` → 409.
+
+    D30 (§D3): **one or more** terms, no longer exactly two. The old rule demanded
+    sequences of precisely `[1, 2]`, which is why BAJC's Summer and Spring blocks had
+    nowhere to go. Sequences must still be DISTINCT — `uq_semesters_year_seq` is
+    unchanged — and further terms can be added later through
+    `POST /settings/semesters`.
     """
     if payload.end_date <= payload.start_date:
         raise ValidationError(
@@ -301,12 +386,18 @@ def create_academic_year(
             fields={"end_date": ["Must be after start_date."]},
         )
 
-    sequences = sorted(s.sequence for s in payload.semesters)
-    if sequences != [1, 2]:
+    sequences = [s.sequence for s in payload.semesters]
+    if len(set(sequences)) != len(sequences):
         raise ValidationError(
-            "Provide exactly two semesters with sequence 1 and 2 (D10).",
-            fields={"semesters": ["Sequences must be exactly [1, 2]."]},
+            "Each term needs its own sequence number within the year.",
+            fields={"semesters": ["Sequence numbers must be distinct."]},
         )
+    for spec in payload.semesters:
+        if spec.end_date <= spec.start_date:
+            raise ValidationError(
+                f"Term '{spec.name}' must end after it starts.",
+                fields={"semesters": [f"'{spec.name}': end_date must be after start_date."]},
+            )
 
     # Pre-check the one-active invariant for a friendly 409 (the partial-unique
     # index is the real backstop, but pre-checking gives the documented code).
@@ -327,7 +418,6 @@ def create_academic_year(
         end_date=payload.end_date,
         status=AcademicYearStatus.ACTIVE,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(year)
     db.flush()  # assign year.id
@@ -340,23 +430,27 @@ def create_academic_year(
         .values(is_active=False)
     )
 
+    # The LOWEST sequence starts active — with N terms "sequence == 1" was no longer a
+    # safe stand-in for "the first one", and a year whose terms started at 2 would
+    # otherwise have been created with no active term at all.
+    first_sequence = min(sequences)
     for spec in sorted(payload.semesters, key=lambda s: s.sequence):
         db.add(
             Semester(
                 academic_year_id=year.id,
                 name=spec.name,
+                term_type=spec.term_type,
                 sequence=spec.sequence,
                 start_date=spec.start_date,
                 end_date=spec.end_date,
-                is_active=(spec.sequence == 1),
+                is_active=(spec.sequence == first_sequence),
             )
         )
 
     scale = GradingScale(
         academic_year_id=year.id,
-        pass_mark=Decimal("60.00"),
+        pass_mark=Decimal(DEFAULT_PASS_MARK),
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(scale)
     db.flush()  # assign scale.id
@@ -367,10 +461,11 @@ def create_academic_year(
                 letter=letter,
                 min_score=Decimal(lo),
                 max_score=Decimal(hi),
+                grade_point=Decimal(gp),
                 is_passing=passing,
                 sort_order=order,
             )
-            for (letter, lo, hi, passing, order) in _DEFAULT_BANDS
+            for (letter, lo, hi, gp, passing, order) in BAJC_GRADING_BANDS
         ]
     )
 
@@ -384,6 +479,221 @@ def create_academic_year(
     )
     db.commit()
     return _year_detail(db, year)
+
+
+def _semester_or_404(db: Session, semester_id: uuid.UUID) -> Semester:
+    semester = db.get(Semester, semester_id)
+    if semester is None:
+        raise NotFound("Semester not found.", code="not_found")
+    return semester
+
+
+def _assert_year_writable(db: Session, year_id: uuid.UUID) -> AcademicYear:
+    year = db.get(AcademicYear, year_id)
+    if year is None:
+        raise NotFound("Academic year not found.", code="not_found")
+    if year.status == AcademicYearStatus.ARCHIVED:
+        raise Conflict(
+            "Cannot change the terms of an archived year.", code="year_archived"
+        )
+    return year
+
+
+def _assert_sequence_free(
+    db: Session,
+    *,
+    academic_year_id: uuid.UUID,
+    sequence: int,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Pre-check `uq_semesters_year_seq` for the documented 409.
+
+    The unique index is the real backstop; this only turns a driver-level integrity
+    error into a named code the UI can act on.
+    """
+    stmt = select(Semester.id).where(
+        Semester.academic_year_id == academic_year_id,
+        Semester.sequence == sequence,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Semester.id != exclude_id)
+    if db.scalar(stmt) is not None:
+        raise Conflict(
+            f"Another term in this year already uses sequence {sequence}.",
+            code="duplicate_semester_sequence",
+        )
+
+
+def _assert_midterm_window(
+    start: datetime | None, end: datetime | None
+) -> tuple[datetime | None, datetime | None]:
+    """Validate the mid-term grading window and return it normalised to UTC (D32).
+
+    **Both or neither.** A start with no end can never elapse, so the revision rules
+    would hold every request back forever; an end with no start has nothing to measure
+    "the assessment existed before the period began" against, so rule 2 could not be
+    evaluated at all. Either half alone is a configuration that cannot produce a correct
+    answer, so it is rejected here rather than half-honoured later.
+
+    Mirrors `ck_semesters_midterm_window`, which is the backstop for a direct SQL edit;
+    this is the readable 422 a Dean actually sees.
+    """
+    start = _to_utc(start)
+    end = _to_utc(end)
+    if (start is None) != (end is None):
+        missing = "midterm_submission_end" if end is None else "midterm_submission_start"
+        raise ValidationError(
+            "The mid-term grading window needs both a start and an end date, or "
+            "neither.",
+            fields={missing: ["Required when the other mid-term date is set."]},
+        )
+    if start is not None and end is not None and end <= start:
+        raise ValidationError(
+            "midterm_submission_end must be after midterm_submission_start.",
+            fields={
+                "midterm_submission_end": ["Must be after midterm_submission_start."]
+            },
+        )
+    return start, end
+
+
+def create_semester(
+    db: Session, *, actor: User, payload: StandaloneSemesterCreateRequest
+) -> SemesterDetail:
+    """POST /settings/semesters (Dean only; D30 §D3, §D14).
+
+    NEW IN D30. There was deliberately no such endpoint before: the school's whole
+    calendar came from `POST /settings/academic-years`, which hard-created exactly two
+    terms, so adding BAJC's Summer or Spring block had no route at all.
+
+    The new term is created INACTIVE. Activating is a separate, deliberate action
+    (`PATCH /settings/semesters/{id}/activate`) because it moves the school-wide
+    current term and would otherwise happen as a side effect of adding a future block.
+
+    NOT VALIDATED, on purpose: that the term's dates fall inside the academic year's
+    range. BAJC's Summer block legitimately sits outside it — the sample report card
+    prints `Summer, July 2026 - August 2026` for the 2026-2027 year, which begins in
+    August. Rejecting that would reject the institution's own calendar.
+    """
+    _assert_year_writable(db, payload.academic_year_id)
+
+    if payload.end_date <= payload.start_date:
+        raise ValidationError(
+            "end_date must be after start_date.",
+            fields={"end_date": ["Must be after start_date."]},
+        )
+    _assert_sequence_free(
+        db, academic_year_id=payload.academic_year_id, sequence=payload.sequence
+    )
+    midterm_start, midterm_end = _assert_midterm_window(
+        payload.midterm_submission_start, payload.midterm_submission_end
+    )
+
+    semester = Semester(
+        academic_year_id=payload.academic_year_id,
+        name=payload.name.strip(),
+        term_type=payload.term_type,
+        sequence=payload.sequence,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        grade_submission_deadline=_to_utc(payload.grade_submission_deadline),
+        midterm_submission_start=midterm_start,
+        midterm_submission_end=midterm_end,
+        is_active=False,
+    )
+    db.add(semester)
+    db.flush()
+    _audit(
+        db,
+        actor=actor,
+        action="semester.create",
+        entity_type="semester",
+        entity_id=semester.id,
+        summary={"name": semester.name, "term_type": semester.term_type.value},
+    )
+    db.commit()
+    return SemesterDetail.model_validate(semester)
+
+
+def update_semester(
+    db: Session, *, actor: User, semester_id: uuid.UUID, payload: SemesterUpdateRequest
+) -> SemesterDetail:
+    """PATCH /settings/semesters/{id} (Dean only; D30 §D3, §D14).
+
+    Corrects a term's name, kind, order or dates. A term created with the wrong dates
+    was otherwise unfixable, since there is no delete path (see the router).
+
+    `academic_year_id` and `is_active` are not editable here — see
+    `SemesterUpdateRequest` for why. The date range is validated against the MERGED
+    values, not just the supplied ones, so moving only `start_date` past the existing
+    `end_date` is caught here rather than by `ck_semesters_dates` at the driver.
+    """
+    semester = _semester_or_404(db, semester_id)
+    _assert_year_writable(db, semester.academic_year_id)
+
+    start = payload.start_date or semester.start_date
+    end = payload.end_date or semester.end_date
+    if end <= start:
+        raise ValidationError(
+            "end_date must be after start_date.",
+            fields={"end_date": ["Must be after start_date."]},
+        )
+
+    if payload.sequence is not None and payload.sequence != semester.sequence:
+        _assert_sequence_free(
+            db,
+            academic_year_id=semester.academic_year_id,
+            sequence=payload.sequence,
+            exclude_id=semester.id,
+        )
+        semester.sequence = payload.sequence
+
+    if payload.name is not None:
+        semester.name = payload.name.strip()
+    if payload.term_type is not None:
+        semester.term_type = payload.term_type
+    # PRESENCE, not None-ness: `null` reopens a closed grade window, omitted leaves it
+    # alone. See `SemesterUpdateRequest` for why these fields are treated that way.
+    if "grade_submission_deadline" in payload.model_fields_set:
+        semester.grade_submission_deadline = _to_utc(payload.grade_submission_deadline)
+
+    # D32 — same presence semantics, but validated on the MERGED pair, so sending only
+    # `midterm_submission_end` is checked against the start already on the row rather
+    # than against nothing. Sending `null` for one half while the other keeps a value is
+    # what `_assert_midterm_window` rejects; clearing the window means sending both as
+    # `null`.
+    touches_midterm = bool(
+        {"midterm_submission_start", "midterm_submission_end"}
+        & payload.model_fields_set
+    )
+    if touches_midterm:
+        merged_start = (
+            payload.midterm_submission_start
+            if "midterm_submission_start" in payload.model_fields_set
+            else semester.midterm_submission_start
+        )
+        merged_end = (
+            payload.midterm_submission_end
+            if "midterm_submission_end" in payload.model_fields_set
+            else semester.midterm_submission_end
+        )
+        (
+            semester.midterm_submission_start,
+            semester.midterm_submission_end,
+        ) = _assert_midterm_window(merged_start, merged_end)
+
+    semester.start_date = start
+    semester.end_date = end
+
+    _audit(
+        db,
+        actor=actor,
+        action="semester.update",
+        entity_type="semester",
+        entity_id=semester.id,
+    )
+    db.commit()
+    return SemesterDetail.model_validate(semester)
 
 
 def activate_semester(
@@ -422,28 +732,69 @@ def activate_semester(
     return SemesterDetail.model_validate(semester)
 
 
+def freeze_midterm_grades(
+    db: Session, *, actor: User, semester_id: uuid.UUID
+) -> tuple[int, datetime]:
+    """POST /settings/semesters/{id}/midterm-freeze (Dean only; D32, brief §6).
+
+    Captures every enrolled student's report card for the term as a MID-TERM snapshot, so
+    later reads serve a frozen document instead of recalculating from grades that have
+    moved on. Returns `(rows_written, frozen_at)`.
+
+    **Idempotent.** Re-running refreshes in place on
+    `uq_report_card_snapshot (student_id, semester_id, kind)`. That is deliberate and
+    useful: a Dean who corrects a mark after freezing can re-freeze rather than being told
+    the term is already done.
+
+    **This is the explicit half of a two-part mechanism.** The other half is the lazy
+    freeze in `reports.service._midterm_report_card`, which captures on first read if the
+    window has closed and nobody pressed this button. Both exist because the backend has
+    no scheduler (`app/jobs/purge.py` says so explicitly) — the button gives the Dean
+    control over WHEN, and the fallback guarantees a report is never simply missing.
+
+    The window checks (409 `midterm_window_open`, 422 `no_midterm_window`) live in
+    `freeze_midterm` so both entry points enforce them identically.
+
+    Mirrors `archive_academic_year`: the computation lives in `reports.freeze` because a
+    snapshot IS a report card, produced by the same builder that serves
+    `/reports/report-card`. Imported lazily for the same circular-import reason.
+    """
+    from app.modules.reports.freeze import freeze_midterm
+
+    semester = _semester_or_404(db, semester_id)
+    written = freeze_midterm(db, actor=actor, semester=semester)
+    frozen_at = _now()
+    db.commit()
+    return written, frozen_at
+
+
 def archive_academic_year(
     db: Session, *, actor: User, year_id: uuid.UUID
 ) -> tuple[int, bool]:
     """POST /settings/academic-years/{id}/archive (principal). Returns
     (snapshots_written, no_active_year_remaining).
 
-    STATE TRANSITIONS implemented now (idempotent at request level):
-      * academic_years.status = 'archived' (+ archived_at)
-      * grading_scales.is_frozen = true (for this year's scale)
-      * classes.is_archived = true (for this year's sections)
-      * deactivate this year's semesters (so no_active_year_remaining is honest)
+    THE FREEZE (schema §10.4, FR-SET-07) runs first, then the state transitions:
+      1. compute + upsert `term_grade_snapshots` and `report_card_snapshots`
+         (delegated to `reports.freeze.freeze_academic_year`)
+      2. academic_years.status = 'archived' (+ archived_at)
+      3. grading_scales.is_frozen = true (for this year's scale)
+      4. classes.is_archived = true (for this year's sections)
+      5. deactivate this year's semesters (so no_active_year_remaining is honest)
     Already archived -> 409 year_already_archived (no double-write).
 
-    TODO(7.6/7.8) — SNAPSHOT COMPUTATION HOOK. The full freeze must also compute &
-    write `term_grade_snapshots` (per student/class_subject/semester, with frozen
-    subject_id + effective_policy) and `report_card_snapshots` (jsonb). Those
-    require the grade-computation engine (module 7.6 Grades) and the report-card
-    engine (module 7.8 Reports), which are NOT built. We therefore write ZERO
-    snapshots here and return snapshots_written=0. When 7.6/7.8 land, the snapshot
-    writer plugs in HERE, reconciling on the uq_term_snapshot / uq_report_card_
-    snapshot unique keys so a retried/partial batch never duplicates.
+    **Step 1 must precede step 2.** The report-card builder decides live-vs-frozen
+    from `archived_at`, so setting the flag first would make the freeze read the
+    snapshots it is meant to be creating and write nothing.
+
+    Snapshot computation lives in `reports.freeze` rather than here because a
+    snapshot IS a report card — it is produced by the same builder that serves
+    `/reports/report-card`, and duplicating that shaping logic would guarantee the
+    two drift apart. Imported lazily to avoid a circular import (Reports depends on
+    this module for the logo URL resolver).
     """
+    from app.modules.reports.freeze import freeze_academic_year
+
     year = db.get(AcademicYear, year_id)
     if year is None:
         raise NotFound("Academic year not found.", code="not_found")
@@ -454,7 +805,10 @@ def archive_academic_year(
             "This academic year is already archived.", code="year_already_archived"
         )
 
-    # ── State transitions ──────────────────────────────────────────────────────
+    # ── 1. Freeze, while the year is still live ────────────────────────────────
+    snapshots_written = freeze_academic_year(db, actor=actor, year=year)
+
+    # ── 2-5. State transitions ─────────────────────────────────────────────────
     year.status = AcademicYearStatus.ARCHIVED
     year.archived_at = _now()
     year.updated_by = actor.id
@@ -464,9 +818,15 @@ def archive_academic_year(
         .where(GradingScale.academic_year_id == year.id)
         .values(is_frozen=True)
     )
+    # D31: an offering is scoped to a SEMESTER, not to a year, so "archive this year's
+    # offerings" is now a subquery through `semesters` rather than a direct column match.
     db.execute(
-        update(Class)
-        .where(Class.academic_year_id == year.id)
+        update(CourseOffering)
+        .where(
+            CourseOffering.semester_id.in_(
+                select(Semester.id).where(Semester.academic_year_id == year.id)
+            )
+        )
         .values(is_archived=True)
     )
     # Deactivate this year's semesters so the school has no active term until a new
@@ -476,9 +836,6 @@ def archive_academic_year(
         .where(Semester.academic_year_id == year.id, Semester.is_active.is_(True))
         .values(is_active=False)
     )
-
-    # TODO(7.6/7.8): compute + upsert term_grade_snapshots & report_card_snapshots.
-    snapshots_written = 0
 
     no_active_year_remaining = (
         db.scalar(
@@ -664,6 +1021,9 @@ def update_grading_scale(
                 letter=b.letter,
                 min_score=Decimal(str(b.min_score)),
                 max_score=Decimal(str(b.max_score)),
+                # Omitted → NULL, which `calc.grade_point_for` reads as "this scale
+                # cannot answer" rather than as zero (D30 §D5).
+                grade_point=None if b.grade_point is None else Decimal(str(b.grade_point)),
                 is_passing=b.is_passing,
                 sort_order=b.sort_order,
             )
@@ -705,12 +1065,16 @@ def update_assessment_policy(
     policy.absent_as_zero = payload.absent_as_zero
     policy.allow_makeup = payload.allow_makeup
     policy.drop_lowest_count = payload.drop_lowest_count
+    policy.students_can_view_grades = payload.students_can_view_grades
     policy.updated_by = actor.id
     _audit(
         db,
         actor=actor,
         action="assessment_policy.update",
         entity_type="assessment_policy",
+        # D32 — who can see grades is an access-control decision, not a grading tweak, so
+        # the audit row records the value rather than just "the policy changed".
+        summary={"students_can_view_grades": payload.students_can_view_grades},
     )
     db.commit()
     return AssessmentPolicyRead.model_validate(policy)
@@ -804,7 +1168,6 @@ def create_user(
         is_active=True,
         must_change_password=True,
         created_by=actor.id,
-        updated_by=actor.id,
     )
     db.add(user)
     db.flush()  # assign id for the audit + response
@@ -947,3 +1310,11 @@ def update_account(
 
     db.commit()
     return build_current_user(db, user)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Audit log (D43)
+# ══════════════════════════════════════════════════════════════════════════════
+# `list_audit_log` LIVED HERE AND IS GONE (Sep 2026) with `GET /settings/audit-log`.
+# `app/modules/audit/` is the one reader of `audit_log`; see the note in
+# `settings/router.py` for why there is no longer a second one.

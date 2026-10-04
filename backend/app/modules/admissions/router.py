@@ -1,0 +1,651 @@
+"""Admissions router (D30 §D11, brief §9/§13).
+
+Thin transport; the service owns DB + transactions. Two routers are exported and mounted
+under `/api/v1`:
+
+  * `router`                       prefix `/applications`        — the admission record
+  * `credit_transfers_router`      prefix `/credit-transfers`     — decisions on ONE request
+  * `pending_applications_router`  prefix `/pending-applications` — SAVED-but-unsubmitted
+                                                                    forms (D38)
+
+The second router exists because a credit transfer is addressed by its OWN id once filed
+— the Dean works a queue across applications and should not have to know which application
+a request came from to rule on it. Creating one still hangs off the application, because
+that is what it is anchored to (brief §13). Same pattern as `assessment_grades_router`.
+
+**THE PERMISSION SPLIT** (§D14, confirmed with the client):
+
+  Registrar + Dean   file, edit, submit, review, accept, reject, defer, withdraw an
+                     application, send it back for documents, mark it eligible or enrolled;
+                     Section B education rows; the Section F checklist; filing and editing
+                     a credit transfer request
+  Dean only          APPROVE or DENY a credit transfer (brief §13 — the Dean assesses it)
+
+Students and Lecturers have no admissions access at all: an application is another
+person's PII, and a Lecturer has no reason to read it.
+
+Endpoints:
+  GET    /applications                              P/S   -> ApplicationPage
+  POST   /applications                              P/S   -> ApplicationDetail (201)
+  GET    /applications/{id}                         P/S   -> ApplicationDetail
+  PATCH  /applications/{id}                         P/S   -> ApplicationDetail
+  DELETE /applications/{id}                         P/S   -> 204 (soft)
+  POST   /applications/{id}/submit                  P/S   -> ApplicationDetail
+  POST   /applications/{id}/review                  P/S   -> ApplicationDetail
+  POST   /applications/{id}/accept                  P/S   -> ApplicationAcceptResponse (201)
+  POST   /applications/{id}/reject                  P/S   -> ApplicationDetail
+  POST   /applications/{id}/request-documents       P/S   -> ApplicationDetail
+  POST   /applications/{id}/eligible                P/S   -> ApplicationDetail
+  POST   /applications/{id}/defer                   P/S   -> ApplicationDetail
+  POST   /applications/{id}/enrolled                P/S   -> ApplicationDetail
+  POST   /applications/{id}/withdraw                P/S   -> ApplicationDetail
+  PUT    /applications/{id}/education               P/S   -> ApplicationDetail
+  PUT    /applications/{id}/documents               P/S   -> ApplicationDetail
+  GET    /applications/{id}/credit-transfers        P/S   -> list[CreditTransferRead]
+  POST   /applications/{id}/credit-transfers        P/S   -> CreditTransferRead (201)
+  GET    /credit-transfers                          P/S   -> list[CreditTransferRead]
+  PATCH  /credit-transfers/{id}                     P/S   -> CreditTransferRead
+  DELETE /credit-transfers/{id}                     P/S   -> 204
+  POST   /credit-transfers/{id}/decision            Dean  -> CreditTransferRead
+
+D38 — the pending form. Row-level scope: a Registrar reaches only what they filed, the
+Dean reaches everything. Someone else's row answers 404, never 403.
+
+  GET    /pending-applications                      P/S   -> PendingApplicationPage
+  POST   /pending-applications                      P/S   -> PendingApplicationDetail (201)
+  GET    /pending-applications/{id}                 P/S   -> PendingApplicationDetail
+  PATCH  /pending-applications/{id}                 P/S   -> PendingApplicationDetail
+  DELETE /pending-applications/{id}                 P/S   -> 204 (HARD)
+  POST   /pending-applications/{id}/submit          P/S   -> ApplicationDetail (201)
+
+The transitions are POSTs to named sub-paths rather than a PATCH of `status`, because each
+one does more than set a field — accept creates a user, a student and an ID — and a client
+that could write `status` directly would be able to skip all of it.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, Response, status as http_status
+from sqlalchemy.orm import Session
+
+from app.common.enums import ApplicationStatus, CreditTransferStatus, Role
+from app.common.schemas import ErrorResponse
+from app.core.deps import get_db, require_role
+from app.core.pagination import PageParams, page_params
+from app.modules.admissions import service
+from app.modules.admissions.schemas import (
+    ApplicationAcceptRequest,
+    ApplicationAcceptResponse,
+    ApplicationCreateRequest,
+    ApplicationDecisionNoteRequest,
+    ApplicationDetail,
+    ApplicationPage,
+    ApplicationUpdateRequest,
+    CreditTransferCreateRequest,
+    CreditTransferDecisionRequest,
+    CreditTransferRead,
+    CreditTransferUpdateRequest,
+    DocumentReplaceRequest,
+    EducationReplaceRequest,
+    PendingApplicationDetail,
+    PendingApplicationPage,
+    PendingApplicationWrite,
+)
+from app.modules.users.models import User
+
+router = APIRouter(prefix="/applications", tags=["admissions"])
+credit_transfers_router = APIRouter(prefix="/credit-transfers", tags=["admissions"])
+#: D38 — saved-but-unsubmitted forms (`application_temp`). Its own prefix so the
+#: literal `pending` can never be parsed as an application UUID; see the section below.
+pending_applications_router = APIRouter(
+    prefix="/pending-applications", tags=["admissions"]
+)
+
+_ERR = {"model": ErrorResponse}
+#: Registrar + Dean. Admission is administration (§D14).
+#: D43 — the Auditor reads admissions; every write here is refused centrally. The HOD
+#: is absent: admissions is the Registrar's, and a head has no part in it.
+_admissions = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR)
+#: The Dean alone decides a credit transfer (brief §13).
+_dean = require_role(Role.PRINCIPAL)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The application record
+# ──────────────────────────────────────────────────────────────────────────────
+@router.get(
+    "",
+    response_model=ApplicationPage,
+    summary="Admissions list (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_applications(
+    status: Annotated[ApplicationStatus | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    program_id: Annotated[uuid.UUID | None, Query()] = None,
+    params: PageParams = Depends(page_params),
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_admissions),
+) -> ApplicationPage:
+    """Ordered surname-first (§D10). `?status=submitted` is the decision queue."""
+    return service.list_applications(
+        db, params=params, status=status, search=search, program_id=program_id
+    )
+
+
+@router.post(
+    "",
+    response_model=ApplicationDetail,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="File an application (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def create_application(
+    payload: ApplicationCreateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """Files a DRAFT from the applicant's names alone; `submit=true` submits outright.
+
+    The names-only minimum is what makes the Sections A–G wizard interruption-safe — step
+    A files the draft, later steps PATCH it, and a closed tab loses nothing.
+    """
+    return service.create_application(db, actor=actor, payload=payload)
+
+
+@router.get(
+    "/{application_id}",
+    response_model=ApplicationDetail,
+    summary="One application, with its education rows, checklist and transfers",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """`blocking_issues` lists what still stands between this form and acceptance, so the
+    review screen can explain a disabled Accept button rather than the Registrar
+    discovering the reason by pressing it."""
+    return service.get_application(db, application_id=application_id)
+
+
+@router.patch(
+    "/{application_id}",
+    response_model=ApplicationDetail,
+    summary="Edit an application (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def update_application(
+    application_id: uuid.UUID,
+    payload: ApplicationUpdateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """Only the keys PRESENT in the body are applied, so a one-section PATCH cannot blank
+    the rest. 409 `application_decided` once accepted, denied or withdrawn."""
+    return service.update_application(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
+
+
+@router.delete(
+    "/{application_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    summary="Withdraw an application from the list — soft (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def delete_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> Response:
+    """Soft — an admissions record is kept. 409 on an ACCEPTED application: a student and
+    a login hang off it, and hiding it would leave that student untraceable."""
+    service.delete_application(db, actor=actor, application_id=application_id)
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+
+# ── Transitions ───────────────────────────────────────────────────────────────
+@router.post(
+    "/{application_id}/submit",
+    response_model=ApplicationDetail,
+    summary="Submit a draft (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def submit_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """422 `application_incomplete` lists EVERY missing thing at once, rather than making
+    the Registrar submit six times to find them."""
+    return service.submit_application(db, actor=actor, application_id=application_id)
+
+
+@router.post(
+    "/{application_id}/review",
+    response_model=ApplicationDetail,
+    summary="Move a submitted application under review (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def review_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """A triage state, so a queue can be worked without the only options being "decide
+    now" and "leave it"."""
+    return service.set_under_review(db, actor=actor, application_id=application_id)
+
+
+@router.post(
+    "/{application_id}/accept",
+    response_model=ApplicationAcceptResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Accept — creates the student, the login and the student ID (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def accept_application(
+    application_id: uuid.UUID,
+    payload: ApplicationAcceptRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationAcceptResponse:
+    """Decision #5 — the SINGLE action that admits a student.
+
+    One transaction: allocate the `YYYYMM###`, create the login, build the student from
+    Sections A–E, open the programme history, fill in the official-use block. The
+    temporary password is returned ONCE and only when the server generated it.
+    """
+    return service.accept_application(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
+
+
+@router.post(
+    "/{application_id}/reject",
+    response_model=ApplicationDetail,
+    summary="Reject an application (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def reject_application(
+    application_id: uuid.UUID,
+    payload: ApplicationDecisionNoteRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """Terminal, and not a delete: the college's refusal is part of the record.
+
+    D44 renamed this from `/deny`. The old path is NOT kept as an alias — this API has one
+    consumer, shipped from this repo, and a permanent second spelling of a route is a
+    permanent second thing to keep working.
+    """
+    return service.reject_application(
+        db, actor=actor, application_id=application_id, reason=payload.reason
+    )
+
+
+@router.post(
+    "/{application_id}/request-documents",
+    response_model=ApplicationDetail,
+    summary="Send back to the applicant for missing paperwork (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def request_documents(
+    application_id: uuid.UUID,
+    payload: ApplicationDecisionNoteRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. The one reversible state: `/review` brings it back when the papers arrive."""
+    return service.request_documents(
+        db, actor=actor, application_id=application_id, reason=payload.reason
+    )
+
+
+@router.post(
+    "/{application_id}/eligible",
+    response_model=ApplicationDetail,
+    summary="Mark as meeting the requirements — NOT a decision (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def mark_eligible(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. Separates "this applicant qualifies" from "the college is offering a place",
+    which matters whenever there are more qualified applicants than seats."""
+    return service.mark_eligible(db, actor=actor, application_id=application_id)
+
+
+@router.post(
+    "/{application_id}/defer",
+    response_model=ApplicationDetail,
+    summary="Hold the decision to a later intake (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def defer_application(
+    application_id: uuid.UUID,
+    payload: ApplicationDecisionNoteRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. TERMINAL — the applicant re-applies for the intake they are deferred to,
+    which the SSN duplicate guard permits precisely because this is terminal."""
+    return service.defer_application(
+        db, actor=actor, application_id=application_id, reason=payload.reason
+    )
+
+
+@router.post(
+    "/{application_id}/enrolled",
+    response_model=ApplicationDetail,
+    summary="Mark an accepted application as enrolled (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def mark_enrolled(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """D44. Closes the application behind a student who has actually registered. Does not
+    touch `student_profiles.status`, which is a different lifecycle."""
+    return service.mark_enrolled(db, actor=actor, application_id=application_id)
+
+
+@router.post(
+    "/{application_id}/withdraw",
+    response_model=ApplicationDetail,
+    summary="Record that the APPLICANT withdrew (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def withdraw_application(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """Distinct from `reject` — one is the applicant's choice, the other the college's."""
+    return service.withdraw_application(db, actor=actor, application_id=application_id)
+
+
+# ── Section B / Section F ──────────────────────────────────────────────────────
+@router.put(
+    "/{application_id}/education",
+    response_model=ApplicationDetail,
+    summary="Replace Section B's institution rows (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def replace_education(
+    application_id: uuid.UUID,
+    payload: EducationReplaceRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """A whole-set replace: the Registrar edits the table as a block, and `sort_order` is
+    renumbered server-side so the client never has to keep it consistent."""
+    return service.replace_education(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
+
+
+@router.put(
+    "/{application_id}/documents",
+    response_model=ApplicationDetail,
+    summary="Replace Section F's document checklist (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def replace_documents(
+    application_id: uuid.UUID,
+    payload: DocumentReplaceRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """Reconciled by id, not delete-and-reinsert: three of these rows may be cited by a
+    credit transfer, and those FKs are `ON DELETE SET NULL` — a blanket delete would strip
+    a pending transfer of its papers silently. 409 `document_in_use` says so instead."""
+    return service.replace_documents(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
+
+
+# ── Credit transfer, filed against an application ─────────────────────────────
+@router.get(
+    "/{application_id}/credit-transfers",
+    response_model=list[CreditTransferRead],
+    summary="Credit transfer requests on one application (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def list_application_credit_transfers(
+    application_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_admissions),
+) -> list[CreditTransferRead]:
+    return service.list_credit_transfers(db, application_id=application_id, status=None)
+
+
+@router.post(
+    "/{application_id}/credit-transfers",
+    response_model=CreditTransferRead,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="File a credit transfer request (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def create_credit_transfer(
+    application_id: uuid.UUID,
+    payload: CreditTransferCreateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> CreditTransferRead:
+    """**Admission only** (brief §13) — 409 once the application is decided, because by
+    then there is a student and the moment to ask has passed. The ≥75% floor is not
+    checked here: filing states a claim, the Dean assesses it."""
+    return service.create_credit_transfer(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Credit transfer, addressed by its own id
+# ──────────────────────────────────────────────────────────────────────────────
+@credit_transfers_router.get(
+    "",
+    response_model=list[CreditTransferRead],
+    summary="Credit transfer queue (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_credit_transfers(
+    status: Annotated[CreditTransferStatus | None, Query()] = None,
+    application_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_admissions),
+) -> list[CreditTransferRead]:
+    """`?status=pending` IS the Dean's work list — a filtered read, not a new table, the
+    same reasoning §D8 applies to the grade-revision queue."""
+    return service.list_credit_transfers(db, application_id=application_id, status=status)
+
+
+@credit_transfers_router.patch(
+    "/{transfer_id}",
+    response_model=CreditTransferRead,
+    summary="Edit a PENDING credit transfer request (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def update_credit_transfer(
+    transfer_id: uuid.UUID,
+    payload: CreditTransferUpdateRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> CreditTransferRead:
+    """409 once decided: changing the course or the equivalency under a ruling would make
+    the Dean's decision describe something else."""
+    return service.update_credit_transfer(
+        db, actor=actor, transfer_id=transfer_id, payload=payload
+    )
+
+
+@credit_transfers_router.delete(
+    "/{transfer_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    summary="Remove a PENDING credit transfer request (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def delete_credit_transfer(
+    transfer_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> Response:
+    """A HARD delete, unlike an application: an un-ruled request carries no history. A
+    decided one is kept, because it records what the Dean decided."""
+    service.delete_credit_transfer(db, actor=actor, transfer_id=transfer_id)
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+
+@credit_transfers_router.post(
+    "/{transfer_id}/decision",
+    response_model=CreditTransferRead,
+    summary="Approve or deny a credit transfer — DEAN ONLY",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def decide_credit_transfer(
+    transfer_id: uuid.UUID,
+    payload: CreditTransferDecisionRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_dean),
+) -> CreditTransferRead:
+    """Brief §13 — the Dean assesses and decides. Approval needs ≥75% content equivalency
+    and a tertiary institution on Section B; 422 names whichever rule failed."""
+    return service.decide_credit_transfer(
+        db, actor=actor, transfer_id=transfer_id, payload=payload
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D38 · PENDING forms — `/pending-applications`
+#
+# **Its own prefix, deliberately, rather than `/applications/pending`.** Under the
+# `/applications` router the literal segment would have to be declared before
+# `/{application_id}` or FastAPI would try to parse "pending" as a UUID and answer 422 —
+# a route-ordering trap that survives exactly until someone adds an endpoint above it.
+# A separate router cannot be broken that way, and it is the same pattern
+# `credit_transfers_router` already uses for the same reason.
+#
+# The role gate is the SAME `_admissions` as the applications router: filing an admission
+# form is administration. The per-row scope (a Registrar sees only what they filed, the
+# Dean sees everything) is enforced in the service, not here — it depends on the row.
+# ══════════════════════════════════════════════════════════════════════════════
+@pending_applications_router.get(
+    "",
+    response_model=PendingApplicationPage,
+    summary="Pending forms — own rows for a Registrar, ALL rows for the Dean",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_pending_applications(
+    search: Annotated[str | None, Query(max_length=100)] = None,
+    params: PageParams = Depends(page_params),
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationPage:
+    """Saved-but-unsubmitted forms. Each row carries `blocking_issues`, so the list can
+    say what a form still needs without anyone re-opening the wizard."""
+    return service.list_pending_applications(
+        db, actor=actor, params=params, search=search
+    )
+
+
+@pending_applications_router.post(
+    "",
+    response_model=PendingApplicationDetail,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Save a form as pending (Registrar + Dean)",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def create_pending_application(
+    payload: PendingApplicationWrite,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """The WHOLE form in one body, including Sections B and F.
+
+    Per-step saving came back on 11 Sep 2026 (every *Continue* saves), but the SHAPE did
+    not change: each *Continue* re-sends the whole form rather than the step it just
+    finished. That keeps this a single idempotent write — there is no partial state on
+    the server for a later step to contradict, and no ordering problem if two saves race.
+    """
+    return service.create_pending_application(db, actor=actor, payload=payload)
+
+
+@pending_applications_router.get(
+    "/{temp_id}",
+    response_model=PendingApplicationDetail,
+    summary="Re-open a pending form (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """404 — not 403 — for someone else's form. A 403 would confirm the row exists."""
+    return service.get_pending_application(db, actor=actor, temp_id=temp_id)
+
+
+@pending_applications_router.patch(
+    "/{temp_id}",
+    response_model=PendingApplicationDetail,
+    summary="Re-save a pending form (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def update_pending_application(
+    temp_id: uuid.UUID,
+    payload: PendingApplicationWrite,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> PendingApplicationDetail:
+    """Whole-form, not per-section: there is nothing on the server a full body could
+    clobber. `created_by` is never reassigned — it is the scope."""
+    return service.update_pending_application(
+        db, actor=actor, temp_id=temp_id, payload=payload
+    )
+
+
+@pending_applications_router.delete(
+    "/{temp_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    summary="Discard a pending form — HARD (own, or any for the Dean)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def delete_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> Response:
+    """Hard, unlike an application: there is no admissions record to keep — the form
+    either became an application or was abandoned."""
+    service.delete_pending_application(db, actor=actor, temp_id=temp_id)
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+
+@pending_applications_router.post(
+    "/{temp_id}/submit",
+    response_model=ApplicationDetail,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Promote a pending form into an application and submit it",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def submit_pending_application(
+    temp_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_admissions),
+) -> ApplicationDetail:
+    """One transaction: the temp row becomes an `applications` row, its two JSON arrays
+    become the real child rows, and the temp row is deleted.
+
+    Returns the **application**, not the pending form — the pending form no longer exists.
+    422 `application_incomplete` lists everything missing at once AND leaves the pending
+    row untouched, so a refused submit never costs the Registrar their typing."""
+    return service.submit_pending_application(db, actor=actor, temp_id=temp_id)

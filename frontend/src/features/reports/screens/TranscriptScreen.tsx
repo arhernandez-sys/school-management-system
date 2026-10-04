@@ -53,7 +53,7 @@ export function TranscriptScreen() {
     <Box>
       <PageHeader
         title="Transcript"
-        subtitle="A student's full multi-year academic record across all terms."
+        subtitle="A student's full multi-year academic record across all sessions."
       />
 
       <Stack className="sis-print-hide" sx={{ mb: 3 }}>

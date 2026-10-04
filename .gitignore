@@ -1,0 +1,12 @@
+
+
+# Probe bundles. `frontend/scratchpad/probe_*.mjs` each bundle the app with esbuild's
+# Node API into a temp CommonJS file next to themselves before requiring it. Six of them
+# were committed by accident on 10 Sep 2026 — 355k lines of generated output in one
+# commit — because the probes did not clean up and nothing here stopped them. The probes
+# now delete their own file; this is the second line of defence.
+frontend/scratchpad/.*.cjs
+
+# Probe screenshots. `shoot_dean.mjs` writes PNGs and standalone HTML here; they are
+# regenerable output, not source.
+frontend/scratchpad/shots/

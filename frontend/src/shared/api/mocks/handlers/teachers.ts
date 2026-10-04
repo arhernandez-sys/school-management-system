@@ -3,15 +3,17 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY_ISO,
-  classSubjectsOwnedByTeacher,
-  getSection,
-  getSubject,
+  getCourse,
+  getSemester,
   getTeacher,
   listTeachers,
+  demoHodTeacherIds,
+  offeringLabel,
+  offeringsForYear,
+  offeringsOwnedByTeacher,
   rosterFor,
-  sectionsOwnedByTeacher,
 } from '@shared/api/mocks/demo/dataset';
-import type { DemoClassSubject, DemoTeacher, DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoOffering, DemoTeacher, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
 
 /**
@@ -20,7 +22,9 @@ import { errorResponse, listParamsFrom } from './_helpers';
  * Backs the Teachers directory + detail + admin CRUD entirely against the shared
  * in-memory dataset (no backend). Response shapes mirror api-spec §5.4:
  *  - GET    /teachers            → Page[TeacherListItem]  (search + status + specialization)
- *  - GET    /teachers/{id}       → TeacherDetail          (profile + classes_taught + audit)
+ *  - GET    /teachers/{id}       → TeacherDetail          (profile + classes_taught + audit;
+ *                                  `?academic_year_id=` scopes classes_taught — D42 §2)
+ *  - GET    /teachers/{id}/years → {items: TeacherYear[]}  (years this lecturer taught in)
  *  - POST   /teachers            → TeacherDetail (201); optional create_login returns the
  *                                  one-time temporary_password on the wrapper envelope.
  *  - PATCH  /teachers/{id}       → TeacherDetail          (benign profile edits)
@@ -58,36 +62,85 @@ function toListItem(t: DemoTeacher) {
     status: t.status,
     subject_specializations: t.subject_specializations,
     /** Convenience count for the directory table (#assignments). */
-    assignment_count: classSubjectsOwnedByTeacher(t.id).length,
+    assignment_count: offeringsOwnedByTeacher(t.id).length,
   };
 }
 
-/** A class_subject the teacher is assigned to, resolved to section + subject refs. */
-function toClassTaught(cs: DemoClassSubject, teacherId: string) {
-  const section = getSection(cs.section_id);
-  const subject = getSubject(cs.subject_id);
+/**
+ * An offering the lecturer is assigned to.
+ *
+ * **D31** — three fields collapsed into the shared `OfferingRef`. It used to carry
+ * `class_ref` (id + name + `grade_level`) beside a separate `subject` ref, because a
+ * homeroom and the subject taught in it were two rows; they are one row now, so a second
+ * ref could only ever restate the first. `is_active` went with `class_subjects.is_active` —
+ * an offering's `is_archived` is the equivalent, and it is already on the ref's parent.
+ */
+function toClassTaught(offering: DemoOffering, teacherId: string) {
+  const course = getCourse(offering.course_id);
+  const semester = getSemester(offering.semester_id);
   return {
-    class_subject_id: cs.id,
-    class_ref: section
-      ? { id: section.id, name: section.name, grade_level: section.grade_level }
-      : null,
-    subject: subject ? { id: subject.id, name: subject.name, code: subject.code } : null,
-    is_lead: cs.lead_teacher_id === teacherId,
-    is_active: cs.is_active,
+    offering_id: offering.id,
+    offering: {
+      id: offering.id,
+      course: course
+        ? { id: course.id, name: course.name, code: course.code, credits: course.credits }
+        : { id: offering.course_id, name: 'Unknown course', code: null, credits: null },
+      semester: semester
+        ? {
+            id: semester.id,
+            name: semester.name,
+            sequence: semester.sequence,
+            is_active: semester.is_active,
+          }
+        : null,
+      section_code: offering.section_code,
+      label: offeringLabel(offering),
+    },
+    is_lead: offering.lead_teacher_id === teacherId,
   };
 }
 
-/** Distinct students across every section this teacher owns a subject in. */
+/**
+ * The offerings this lecturer teaches, optionally narrowed to ONE academic year (D42 §2).
+ *
+ * Reaches the year through the offering's semester, like `offeringsForYear` does — an
+ * offering carries no year of its own since D31.
+ */
+function offeringsTaught(teacherId: string, yearId?: string | null): DemoOffering[] {
+  const owned = offeringsOwnedByTeacher(teacherId);
+  if (!yearId) return owned;
+  const inYear = new Set(offeringsForYear(yearId).map((o) => o.id));
+  return owned.filter((o) => inYear.has(o.id));
+}
+
+/**
+ * The academic years this lecturer actually has an assignment in, newest first.
+ *
+ * Only the years they taught, never the school's whole calendar: a switcher position with
+ * nothing behind it reads as a broken screen rather than as a scoping rule. Mirrors
+ * `teachers/service.teacher_years`.
+ */
+function yearsTaughtBy(teacherId: string) {
+  const semesterIds = new Set(offeringsOwnedByTeacher(teacherId).map((o) => o.semester_id));
+  const yearIds = new Set(
+    D.semesters.filter((sem) => semesterIds.has(sem.id)).map((sem) => sem.academic_year_id),
+  );
+  return D.academic_years
+    .filter((y) => yearIds.has(y.id))
+    .sort((a, b) => b.name.localeCompare(a.name));
+}
+
+/** Distinct students across every offering this lecturer teaches. */
 function studentCountForTeacher(teacherId: string): number {
   const ids = new Set<string>();
-  for (const section of sectionsOwnedByTeacher(teacherId)) {
-    for (const student of rosterFor(section.id)) ids.add(student.id);
+  for (const offering of offeringsOwnedByTeacher(teacherId)) {
+    for (const student of rosterFor(offering.id)) ids.add(student.id);
   }
   return ids.size;
 }
 
-function toDetail(t: DemoTeacher) {
-  const owned = classSubjectsOwnedByTeacher(t.id);
+function toDetail(t: DemoTeacher, yearId?: string | null) {
+  const owned = offeringsTaught(t.id, yearId);
   return {
     id: t.id,
     user_id: t.user_id,
@@ -98,35 +151,45 @@ function toDetail(t: DemoTeacher) {
     status: t.status,
     subject_specializations: t.subject_specializations,
     has_login: t.user_id !== null,
-    classes_taught: owned.map((cs) => toClassTaught(cs, t.id)),
-    audit: { created_at: DEMO_TODAY_ISO, updated_at: DEMO_TODAY_ISO },
+    classes_taught: owned.map((off) => toClassTaught(off, t.id)),
+    // D39 `015` — null until the lecturer is actually edited, mirroring the server.
+    audit: { created_at: DEMO_TODAY_ISO, updated_at: t.updated_at ?? null },
     // Extended profile (optional; may be undefined for freshly created teachers).
     avatar_url: t.avatar_url,
     bio: t.bio,
     gender: t.gender,
-    education: t.education,
+    academic_qualification: t.academic_qualification,
     designation: t.designation,
     address: t.address,
     expertise: t.expertise,
+    // Employment record (D39, Meeting #2 item 10). `is_employed` is DERIVED from status
+    // here exactly as `service._sync_is_employed` derives it — the mock must not offer a
+    // way for the two to disagree that the real API does not have.
+    first_name: t.first_name,
+    last_name: t.last_name,
+    ssno: t.ssno,
+    licensenum: t.licensenum,
+    is_employed: t.status === 'active',
+    hire_date: t.hire_date ?? null,
+    end_date: t.end_date ?? null,
+    comments: t.comments,
     student_count: studentCountForTeacher(t.id),
   };
 }
 
-/** Active class_subjects (is_active) this teacher is assigned to — blocks deactivate/delete. */
-function activeAssignmentsOf(teacherId: string): DemoClassSubject[] {
-  return classSubjectsOwnedByTeacher(teacherId).filter((cs) => cs.is_active);
+/** Live offerings this lecturer teaches — blocks deactivate/delete. */
+function activeAssignmentsOf(teacherId: string): DemoOffering[] {
+  return offeringsOwnedByTeacher(teacherId).filter((o) => !o.is_archived);
 }
 
-function assignmentRefs(assignments: DemoClassSubject[]) {
-  return assignments.map((cs) => {
-    const section = getSection(cs.section_id);
-    const subject = getSubject(cs.subject_id);
-    return {
-      class_subject_id: cs.id,
-      class_name: section?.name ?? null,
-      subject_name: subject?.name ?? null,
-    };
-  });
+function assignmentRefs(assignments: DemoOffering[]) {
+  return assignments.map((offering) => ({
+    offering_id: offering.id,
+    // One derived label, where this used to print `class_name` · `subject_name` — two
+    // fields describing one thing.
+    label: offeringLabel(offering),
+    course_name: getCourse(offering.course_id)?.name ?? null,
+  }));
 }
 
 let teacherSeq = 100;
@@ -135,23 +198,45 @@ let teacherSeq = 100;
 
 export const teachersHandlers = [
   // GET /teachers — searchable directory (Page[TeacherListItem]). Teacher = RO; Student → 403.
-  http.get(`${API_BASE_URL}/teachers`, ({ request }) => {
+  http.get(`${API_BASE_URL}/teachers`, ({ request, cookies }) => {
     const url = new URL(request.url);
+    // D43 — the directory was unscoped for every role that could reach it, which was
+    // right while those were Dean / Registrar / Lecturer. An HOD is the first caller
+    // who must see a SUBSET, so the handler now reads the session like the others do.
+    const role = cookies['sis_mock_session'] ?? 'principal';
     const page = listTeachers({
       ...listParamsFrom(url),
       status: url.searchParams.get('status'),
       specialization: url.searchParams.get('specialization'),
       // Per-module year switcher: restrict to teachers assigned in the chosen year.
       academic_year_id: url.searchParams.get('academic_year_id'),
+      teacher_ids: role === 'hod' ? demoHodTeacherIds(role) : null,
     });
     return HttpResponse.json({ ...page, items: page.items.map(toListItem) });
   }),
 
-  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
-  http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
+  // GET /teachers/{id}/years — the academic years this lecturer taught in (D42 §2).
+  // Declared BEFORE the bare `/teachers/:teacherId` for the same reason the router
+  // declares it first: a reader scanning this list should see the specific path win.
+  http.get(`${API_BASE_URL}/teachers/:teacherId/years`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
-    return HttpResponse.json(toDetail(teacher));
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
+    return HttpResponse.json({
+      items: yearsTaughtBy(teacher.id).map((y) => ({
+        id: y.id,
+        name: y.name,
+        status: y.status,
+      })),
+    });
+  }),
+
+  // GET /teachers/{id} — TeacherDetail (profile + classes_taught + audit).
+  // `?academic_year_id=` scopes `classes_taught` to that year (D42 §2).
+  http.get(`${API_BASE_URL}/teachers/:teacherId`, ({ params, request }) => {
+    const teacher = resolveTeacher(String(params.teacherId));
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
+    const yearId = new URL(request.url).searchParams.get('academic_year_id');
+    return HttpResponse.json(toDetail(teacher, yearId));
   }),
 
   // POST /teachers — create profile; optional create_login provisions a linked account
@@ -165,6 +250,22 @@ export const teachersHandlers = [
       status?: DemoTeacher['status'];
       subject_specializations?: string[] | null;
       create_login?: { email: string; role: 'teacher' } | null;
+      // D40 — the full profile, so the one-screen lecturer form can send everything it
+      // shows. Until now create took six fields and the rest were edit-only, which meant
+      // the Dean typed a hire date into a form that silently dropped it.
+      first_name?: string | null;
+      last_name?: string | null;
+      gender?: DemoTeacher['gender'] | null;
+      bio?: string | null;
+      academic_qualification?: string | null;
+      designation?: string | null;
+      address?: string | null;
+      ssno?: string | null;
+      licensenum?: string | null;
+      hire_date?: string | null;
+      end_date?: string | null;
+      comments?: string | null;
+      expertise?: { area: string; level: number }[] | null;
     };
 
     const staffNumber = (body.staff_number ?? '').trim();
@@ -176,11 +277,19 @@ export const teachersHandlers = [
       });
     }
     if (D.teachers.some((t) => t.staff_number.toLowerCase() === staffNumber.toLowerCase())) {
-      return errorResponse(409, 'duplicate_staff_number', 'A teacher with this staff number already exists.');
+      return errorResponse(409, 'duplicate_staff_number', 'A lecturer with this staff number already exists.');
     }
     const email = (body.email ?? '').trim();
     if (email && D.teachers.some((t) => t.email.toLowerCase() === email.toLowerCase())) {
-      return errorResponse(409, 'duplicate_email', 'A teacher with this email already exists.');
+      return errorResponse(409, 'duplicate_email', 'A lecturer with this email already exists.');
+    }
+    // Mirrors `LICENSE_PATTERN` in teachers/schemas.py, exactly as the PATCH arm below
+    // does. A form that passes here and 422s against the real API is worse than no mock.
+    const licence = (body.licensenum ?? '').trim();
+    if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        licensenum: ['Letters, digits and hyphens only.'],
+      });
     }
 
     teacherSeq += 1;
@@ -223,6 +332,27 @@ export const teachersHandlers = [
       phone: (body.phone ?? '').trim(),
       subject_specializations: body.subject_specializations ?? [],
       status: body.status ?? 'active',
+      // D40 — every optional profile field, stored the way the PATCH arm stores them:
+      // blank becomes `undefined`, so an untouched field reads as absent rather than as
+      // an empty string the profile card would render as a mysteriously blank line.
+      first_name: (body.first_name ?? '').trim() || undefined,
+      last_name: (body.last_name ?? '').trim() || undefined,
+      gender: body.gender ?? undefined,
+      bio: (body.bio ?? '').trim() || undefined,
+      academic_qualification: (body.academic_qualification ?? '').trim() || undefined,
+      designation: (body.designation ?? '').trim() || undefined,
+      address: (body.address ?? '').trim() || undefined,
+      ssno: (body.ssno ?? '').trim() || undefined,
+      licensenum: licence || undefined,
+      hire_date: body.hire_date || undefined,
+      end_date: body.end_date || undefined,
+      comments: (body.comments ?? '').trim() || undefined,
+      expertise: (body.expertise ?? [])
+        .map((e) => ({
+          area: e.area.trim(),
+          level: Math.max(0, Math.min(100, Math.round(e.level))),
+        }))
+        .filter((e) => e.area.length > 0),
     };
     D.teachers.push(created);
 
@@ -235,7 +365,7 @@ export const teachersHandlers = [
   // PATCH /teachers/{id} — benign profile edits (NOT status; NOT role).
   http.patch(`${API_BASE_URL}/teachers/:teacherId`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const body = (await request.json()) as {
       full_name?: string;
       email?: string | null;
@@ -243,10 +373,18 @@ export const teachersHandlers = [
       subject_specializations?: string[] | null;
       bio?: string | null;
       gender?: DemoTeacher['gender'] | null;
-      education?: string | null;
+      academic_qualification?: string | null;
       designation?: string | null;
       address?: string | null;
       expertise?: { area: string; level: number }[] | null;
+      // D39. `is_employed` is deliberately absent, matching `TeacherUpdateRequest`.
+      first_name?: string | null;
+      last_name?: string | null;
+      ssno?: string | null;
+      licensenum?: string | null;
+      hire_date?: string | null;
+      end_date?: string | null;
+      comments?: string | null;
     };
 
     if (body.full_name !== undefined && body.full_name.trim().length === 0) {
@@ -261,7 +399,7 @@ export const teachersHandlers = [
         (t) => t.id !== teacher.id && t.email.toLowerCase() === email.toLowerCase(),
       )
     ) {
-      return errorResponse(409, 'duplicate_email', 'A teacher with this email already exists.');
+      return errorResponse(409, 'duplicate_email', 'A lecturer with this email already exists.');
     }
 
     if (body.full_name !== undefined) teacher.full_name = body.full_name.trim();
@@ -273,10 +411,36 @@ export const teachersHandlers = [
     // Extended profile edits (all optional; empty strings clear the field).
     if (body.bio !== undefined) teacher.bio = (body.bio ?? '').trim() || undefined;
     if (body.gender !== undefined) teacher.gender = body.gender ?? undefined;
-    if (body.education !== undefined) teacher.education = (body.education ?? '').trim() || undefined;
+    if (body.academic_qualification !== undefined)
+      teacher.academic_qualification = (body.academic_qualification ?? '').trim() || undefined;
     if (body.designation !== undefined)
       teacher.designation = (body.designation ?? '').trim() || undefined;
     if (body.address !== undefined) teacher.address = (body.address ?? '').trim() || undefined;
+    // D39 employment record. Same rule as the rest: absent leaves alone, blank clears.
+    if (body.first_name !== undefined)
+      teacher.first_name = (body.first_name ?? '').trim() || undefined;
+    if (body.last_name !== undefined)
+      teacher.last_name = (body.last_name ?? '').trim() || undefined;
+    if (body.ssno !== undefined) teacher.ssno = (body.ssno ?? '').trim() || undefined;
+    if (body.licensenum !== undefined) {
+      const licence = (body.licensenum ?? '').trim();
+      // Mirrors `LICENSE_PATTERN` in teachers/schemas.py. The mock validates because a
+      // form that passes here and 422s against the real API is worse than no mock.
+      if (licence && !/^[A-Za-z0-9-]{1,15}$/.test(licence)) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          licensenum: ['Letters, digits and hyphens only.'],
+        });
+      }
+      teacher.licensenum = licence || undefined;
+    }
+    if (body.hire_date !== undefined) teacher.hire_date = body.hire_date || undefined;
+    if (body.end_date !== undefined) teacher.end_date = body.end_date || undefined;
+    if (body.comments !== undefined)
+      teacher.comments = (body.comments ?? '').trim() || undefined;
+    // D39 `015` — this PATCH is the edit, so it is what stamps `updated_at`. Without it
+    // the demo would show "Last updated —" forever and the populated path would never
+    // be exercised.
+    teacher.updated_at = DEMO_TODAY_ISO;
     if (body.expertise !== undefined) {
       teacher.expertise = (body.expertise ?? [])
         .map((e) => ({
@@ -292,7 +456,7 @@ export const teachersHandlers = [
   // has active assignments is blocked (409 teacher_has_active_assignments).
   http.post(`${API_BASE_URL}/teachers/:teacherId/status`, async ({ params, request }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const body = (await request.json()) as { status: DemoTeacher['status'] };
 
     if (body.status === 'inactive') {
@@ -301,8 +465,8 @@ export const teachersHandlers = [
         return errorResponse(
           409,
           'teacher_has_active_assignments',
-          'This teacher is still assigned to active classes. Reassign those classes before deactivating.',
-          { assignments: assignmentRefs(active).map((a) => `${a.class_name} · ${a.subject_name}`) },
+          'This lecturer is still assigned to active offerings. Reassign those offerings before deactivating.',
+          { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
         );
       }
     }
@@ -313,14 +477,14 @@ export const teachersHandlers = [
   // DELETE /teachers/{id} — hard delete; blocked if assigned to any active class_subject.
   http.delete(`${API_BASE_URL}/teachers/:teacherId`, ({ params }) => {
     const teacher = resolveTeacher(String(params.teacherId));
-    if (!teacher) return errorResponse(404, 'not_found', 'Teacher not found.');
+    if (!teacher) return errorResponse(404, 'not_found', 'Lecturer not found.');
     const active = activeAssignmentsOf(teacher.id);
     if (active.length > 0) {
       return errorResponse(
         409,
         'teacher_has_active_assignments',
-        'This teacher is assigned to one or more active classes and cannot be deleted. Reassign or deactivate those classes first.',
-        { assignments: assignmentRefs(active).map((a) => `${a.class_name} · ${a.subject_name}`) },
+        'This lecturer is assigned to one or more active offerings and cannot be deleted. Reassign or deactivate those offerings first.',
+        { assignments: assignmentRefs(active).map((a) => `${a.label} · ${a.course_name}`) },
       );
     }
     D.teachers = D.teachers.filter((t) => t.id !== teacher.id);

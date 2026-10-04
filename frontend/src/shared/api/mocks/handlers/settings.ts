@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { API_BASE_URL } from '@shared/api/client';
 import { DEMO_DATASET, DEMO_IDS, getActiveSemester, getActiveYear } from '@shared/api/mocks/demo/dataset';
 import type { DemoUser } from '@shared/api/mocks/demo/dataset';
+import type { DemoSemester } from '@shared/api/mocks/demo/types';
 import { boolParam, errorResponse, listParamsFrom } from './_helpers';
 import { paginate } from '@shared/api/mocks/demo/dataset';
 
@@ -20,6 +21,29 @@ import { paginate } from '@shared/api/mocks/demo/dataset';
  */
 const D = DEMO_DATASET;
 
+/**
+ * Role gate for the academic-structure WRITES, mirroring `require_role(PRINCIPAL)` on
+ * the real router.
+ *
+ * ⚠️ WHY THIS EXISTS. This file used to apply no role checks at all, which hid a real
+ * defect for the whole project: `GET /settings/academic-years` was principal/secretary-
+ * only on the server, but `useYearFilter` — the staff `?year=` picker — runs on
+ * teacher-reachable screens (Grades, Attendance, Classes). Against the live backend a
+ * teacher got a 403, the picker silently emptied and no `academic_year_id` was sent;
+ * in demo everything looked perfect. The reads are now deliberately open to every
+ * authenticated role (that was the fix), so the gate belongs on the writes — and it is
+ * here so the demo can no longer certify an authz mismatch as working.
+ *
+ * The demo has no tokens; the acting role is the `sis_mock_session` cookie auth.ts sets.
+ */
+function assertPrincipal(cookies: Record<string, string>) {
+  const role = cookies['sis_mock_session'] ?? 'principal';
+  if (role !== 'principal') {
+    return errorResponse(403, 'forbidden', 'Only the principal can change the academic structure.');
+  }
+  return null;
+}
+
 function schoolProfileRead() {
   const p = D.school_profile;
   return {
@@ -28,6 +52,27 @@ function schoolProfileRead() {
     address: p.address,
     contact_email: p.email,
     contact_phone: p.phone,
+    post_graduation_access_days: p.post_graduation_access_days,
+  };
+}
+
+/**
+ * D30 §D3/§D6 — the term shape carries `term_type` and the grade-submission deadline,
+ * which is now WRITABLE by the Dean. Factored out because three handlers emit it.
+ */
+function semesterDetail(s: DemoSemester) {
+  return {
+    id: s.id,
+    academic_year_id: s.academic_year_id,
+    name: s.name,
+    term_type: s.term_type,
+    sequence: s.sequence,
+    start_date: s.start_date,
+    end_date: s.end_date,
+    grade_submission_deadline: s.grade_submission_deadline,
+    midterm_submission_start: s.midterm_submission_start,
+    midterm_submission_end: s.midterm_submission_end,
+    is_active: s.is_active,
   };
 }
 
@@ -42,14 +87,8 @@ function academicYearDetail(yearId: string) {
     archived_at: y.archived_at,
     semesters: D.semesters
       .filter((s) => s.academic_year_id === y.id)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        sequence: s.sequence,
-        start_date: s.start_date,
-        end_date: s.end_date,
-        is_active: s.is_active,
-      })),
+      .sort((a, b) => a.sequence - b.sequence)
+      .map(semesterDetail),
   };
 }
 
@@ -76,21 +115,101 @@ function userListItem(u: DemoUser) {
   };
 }
 
+/** Mirrors `settings/service._LOGO_ALLOWED_TYPES` / `_LOGO_MAX_BYTES` exactly. */
+const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+const LOGO_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
+
+// ⚠️ `demoAuditRows()` LIVED HERE AND IS GONE (Sep 2026). It synthesised a plausible
+// `audit_log` from the seeded entities so the deleted Audit Log screen had something to
+// render. `handlers/audit.ts` has its own hand-written entries, already in the shape the
+// server RENDERS rather than the shape it stores, which is the whole point of that
+// screen — so a second synthesiser here would only demo the view that was removed.
+
 export const settingsHandlers = [
+  // ⚠️ `GET /settings/audit-log` LIVED HERE AND IS GONE (Sep 2026). The one audit
+  // reader is `handlers/audit.ts`, over `GET /audit`. Two mock doors onto one table
+  // would have kept the deleted screen demoable, which is how a removed feature comes
+  // back.
+
   // ── School profile ────────────────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/settings/school`, () => HttpResponse.json(schoolProfileRead())),
+
+  /**
+   * GET /settings/religions — the D39 Religion vocabulary (Meeting #2 item 8).
+   *
+   * Sorted by NAME, mirroring `settings/service.list_religions`. The demo dataset's
+   * students carry religions beyond these two on purpose, so the "(as recorded)"
+   * fallback in `religionOptions` is exercised by simply opening a student in demo mode
+   * rather than only by a real legacy database.
+   */
+  http.get(`${API_BASE_URL}/settings/religions`, () =>
+    HttpResponse.json({
+      items: [...D.religions]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((r) => ({ id: r.id, name: r.name, code_name: r.code_name })),
+    }),
+  ),
   http.put(`${API_BASE_URL}/settings/school`, async ({ request }) => {
     const body = (await request.json()) as {
       name?: string;
       address?: string;
       contact_email?: string;
       contact_phone?: string;
+      post_graduation_access_days?: number | null;
     };
     if (body.name) D.school_profile.name = body.name;
     if (body.address !== undefined) D.school_profile.address = body.address ?? '';
     if (body.contact_email !== undefined) D.school_profile.email = body.contact_email ?? '';
     if (body.contact_phone !== undefined) D.school_profile.phone = body.contact_phone ?? '';
+    // D39 — assigned unconditionally on the PUT, like the server does: this is a full
+    // replacement, so an omitted value means "no expiry", not "keep the old window".
+    D.school_profile.post_graduation_access_days = body.post_graduation_access_days ?? null;
     return HttpResponse.json(schoolProfileRead());
+  }),
+
+  /**
+   * POST /settings/school/logo — multipart image upload (Dean only).
+   *
+   * **This handler was MISSING**, and the way it was missing is the point: with
+   * `onUnhandledRequest: 'bypass'` an unmatched request falls through to the NETWORK, so in
+   * demo mode the upload silently hit a server that is not there and failed with nothing on
+   * screen to say so. `scratchpad/check_msw_routes.mjs` is what found it, by diffing the
+   * registered routes against `openapi.json` — neither tsc nor eslint can see a missing
+   * route.
+   *
+   * The VALIDATION is real and mirrors `settings/service.validate_logo_upload`: 415 for a
+   * non-image, 413 past 2 MiB. Those two are the endpoint's live contract today.
+   *
+   * The STORAGE is not: object storage is unprovisioned (OQ-DB5), so the server validates,
+   * writes an audit row and returns `logo_url: null`. The mock returns the profile's
+   * CURRENT url unchanged for the same reason — echoing back a fake uploaded URL would
+   * certify a feature that does not exist, which is exactly the demo-vs-server divergence
+   * this project has already paid for twice.
+   */
+  http.post(`${API_BASE_URL}/settings/school/logo`, async ({ request, cookies }) => {
+    const role = cookies['sis_mock_session'] ?? 'principal';
+    if (role !== 'principal') {
+      return errorResponse(403, 'forbidden', 'Only the Dean can change the school logo.');
+    }
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!(file instanceof File)) {
+      return errorResponse(422, 'validation_error', 'An image file is required.', {
+        file: ['Field required'],
+      });
+    }
+    if (!LOGO_ALLOWED_TYPES.includes(file.type)) {
+      return errorResponse(
+        415,
+        'unsupported_media_type',
+        'Unsupported image type; use PNG, JPEG, WEBP, or SVG.',
+      );
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      return errorResponse(413, 'file_too_large', 'Logo file is too large (max 2 MiB).');
+    }
+    // Deliberately unchanged — see the storage note above.
+    return HttpResponse.json({ logo_url: D.school_profile.logo_url });
   }),
 
   // ── Active term ───────────────────────────────────────────────────────────────
@@ -98,7 +217,7 @@ export const settingsHandlers = [
     const year = getActiveYear();
     const semester = getActiveSemester();
     if (!year || !semester) {
-      return errorResponse(409, 'no_active_semester', 'No active academic term is configured.');
+      return errorResponse(409, 'no_active_semester', 'No active academic session is configured.');
     }
     return HttpResponse.json({
       academic_year: { id: year.id, name: year.name, status: year.status },
@@ -112,6 +231,10 @@ export const settingsHandlers = [
   }),
 
   // ── Academic years + semesters ──────────────────────────────────────────────────
+  // The two READS are intentionally ungated: they are open to every authenticated role
+  // on the real server too (widened 2026-07-29), because every period picker in the app
+  // is built from them — staff's `?year=` filter and the student's global year·semester
+  // switcher, which joins this response's `semesters` to /students/me/years.
   http.get(`${API_BASE_URL}/settings/academic-years`, () =>
     HttpResponse.json({ items: D.academic_years.map((y) => academicYearDetail(y.id)) }),
   ),
@@ -120,33 +243,253 @@ export const settingsHandlers = [
     const yearId = url.searchParams.get('academic_year_id');
     let rows = D.semesters;
     if (yearId) rows = rows.filter((s) => s.academic_year_id === yearId);
-    return HttpResponse.json({
-      items: rows.map((s) => ({
-        id: s.id,
-        name: s.name,
-        sequence: s.sequence,
-        start_date: s.start_date,
-        end_date: s.end_date,
-        is_active: s.is_active,
-      })),
-    });
+    return HttpResponse.json({ items: rows.map(semesterDetail) });
   }),
-  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params }) => {
+  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId/activate`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
     const target = D.semesters.find((s) => s.id === params.semesterId);
     if (!target) return errorResponse(404, 'not_found', 'Semester not found.');
     D.semesters.forEach((s) => {
       s.is_active = s.id === target.id;
     });
-    return HttpResponse.json({
-      id: target.id,
-      name: target.name,
-      sequence: target.sequence,
-      start_date: target.start_date,
-      end_date: target.end_date,
-      is_active: true,
-    });
+    return HttpResponse.json(semesterDetail(target));
   }),
-  http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params }) => {
+  // ── Create an academic year + its terms ──────────────────────────────────────
+  //
+  // This handler did not exist before D30, so demo mode 404'd on the "New academic
+  // year" button while the real backend answered 201 — the mirror image of the defect
+  // the file header describes. Added here because the N-term create dialog is the
+  // headline of §D3 and has to be demonstrable without a backend.
+  http.post(`${API_BASE_URL}/settings/academic-years`, async ({ request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as {
+      name: string;
+      start_date: string;
+      end_date: string;
+      semesters: Omit<
+        DemoSemester,
+        | 'id'
+        | 'academic_year_id'
+        | 'grade_submission_deadline'
+        | 'midterm_submission_start'
+        | 'midterm_submission_end'
+        | 'is_active'
+      >[];
+    };
+    if (body.end_date <= body.start_date) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    if (!body.semesters?.length) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        semesters: ['At least one session is required.'],
+      });
+    }
+    const sequences = body.semesters.map((t) => t.sequence);
+    if (new Set(sequences).size !== sequences.length) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        semesters: ['Sequence numbers must be distinct.'],
+      });
+    }
+    if (D.academic_years.some((y) => y.status === 'active')) {
+      return errorResponse(
+        409,
+        'active_year_exists',
+        'An active academic year already exists; archive it first.',
+      );
+    }
+
+    const yearId = `ay-new-${D.academic_years.length + 1}`;
+    D.academic_years.push({
+      id: yearId,
+      name: body.name,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      status: 'active',
+      archived_at: null,
+    });
+
+    // The LOWEST sequence starts active — with N terms, "sequence === 1" is no longer
+    // a safe stand-in for "the first one" (a year whose terms start at 2 would have
+    // been created with no active term at all).
+    const first = Math.min(...sequences);
+    D.semesters.forEach((s) => {
+      s.is_active = false;
+    });
+    body.semesters
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .forEach((t, i) => {
+        D.semesters.push({
+          id: `${yearId}-t${i + 1}`,
+          academic_year_id: yearId,
+          name: t.name,
+          term_type: t.term_type ?? 'semester',
+          sequence: t.sequence,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          grade_submission_deadline: null,
+          midterm_submission_start: null,
+          midterm_submission_end: null,
+          is_active: t.sequence === first,
+        });
+      });
+
+    // Seed the year's grading scale from the existing one, as the service does.
+    const template = D.grading_scales[0];
+    if (template) {
+      D.grading_scales.push({
+        academic_year_id: yearId,
+        pass_mark: template.pass_mark,
+        is_frozen: false,
+        bands: template.bands.map((b) => ({ ...b })),
+      });
+    }
+
+    return HttpResponse.json(academicYearDetail(yearId), { status: 201 });
+  }),
+
+  // ── D30 §D3 — add / correct ONE calendar term (Dean only) ─────────────────────
+  // New endpoints: before D30 the whole calendar came from creating a year, which made
+  // exactly two semesters, so BAJC's Summer and Spring blocks had no route at all.
+  http.post(`${API_BASE_URL}/settings/semesters`, async ({ request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const body = (await request.json()) as Omit<DemoSemester, 'id' | 'is_active'>;
+    const year = D.academic_years.find((y) => y.id === body.academic_year_id);
+    if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
+    if (year.status === 'archived') {
+      return errorResponse(409, 'year_archived', 'Cannot change the sessions of an archived year.');
+    }
+    if (body.end_date <= body.start_date) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    // D32 - both mid-term dates or neither, end after start (`_assert_midterm_window`).
+    const newMidStart = body.midterm_submission_start ?? null;
+    const newMidEnd = body.midterm_submission_end ?? null;
+    if ((newMidStart === null) !== (newMidEnd === null)) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        [newMidEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
+          'Required when the other mid-session date is set.',
+        ],
+      });
+    }
+    if (newMidStart !== null && newMidEnd !== null && newMidEnd <= newMidStart) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        midterm_submission_end: ['Must be after midterm_submission_start.'],
+      });
+    }
+    if (
+      D.semesters.some(
+        (s) => s.academic_year_id === year.id && s.sequence === body.sequence,
+      )
+    ) {
+      return errorResponse(
+        409,
+        'duplicate_semester_sequence',
+        `Another session in this year already uses sequence ${body.sequence}.`,
+      );
+    }
+    const created: DemoSemester = {
+      id: `sem-new-${D.semesters.length + 1}`,
+      academic_year_id: year.id,
+      name: body.name,
+      term_type: body.term_type ?? 'semester',
+      sequence: body.sequence,
+      start_date: body.start_date,
+      end_date: body.end_date,
+      // Optional at creation; absent means the term never closes (D30 §D6).
+      grade_submission_deadline: body.grade_submission_deadline ?? null,
+      // D32 - both or neither, validated above. Absent means no mid-term period.
+      midterm_submission_start: body.midterm_submission_start ?? null,
+      midterm_submission_end: body.midterm_submission_end ?? null,
+      // Created INACTIVE: adding a future block must not move the current term.
+      is_active: false,
+    };
+    D.semesters.push(created);
+    return HttpResponse.json(semesterDetail(created), { status: 201 });
+  }),
+
+  http.patch(`${API_BASE_URL}/settings/semesters/:semesterId`, async ({ params, request, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const term = D.semesters.find((s) => s.id === params.semesterId);
+    if (!term) return errorResponse(404, 'not_found', 'Semester not found.');
+    const body = (await request.json()) as Partial<DemoSemester>;
+    // Validated against the MERGED dates, so moving only `start_date` past the stored
+    // `end_date` is caught — same rule as the server.
+    const start = body.start_date ?? term.start_date;
+    const end = body.end_date ?? term.end_date;
+    if (end <= start) {
+      return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+        end_date: ['Must be after start_date.'],
+      });
+    }
+    if (
+      body.sequence !== undefined &&
+      body.sequence !== term.sequence &&
+      D.semesters.some(
+        (s) =>
+          s.id !== term.id &&
+          s.academic_year_id === term.academic_year_id &&
+          s.sequence === body.sequence,
+      )
+    ) {
+      return errorResponse(
+        409,
+        'duplicate_semester_sequence',
+        `Another session in this year already uses sequence ${body.sequence}.`,
+      );
+    }
+    if (body.name !== undefined) term.name = body.name;
+    if (body.term_type !== undefined) term.term_type = body.term_type;
+    if (body.sequence !== undefined) term.sequence = body.sequence;
+    // PRESENCE, not None-ness — mirroring the server's `model_fields_set` check. An
+    // explicit `null` REOPENS a closed grade window; omitting the key leaves it alone,
+    // so renaming a term cannot silently reopen it (D30 §D6).
+    if ('grade_submission_deadline' in body) {
+      term.grade_submission_deadline = body.grade_submission_deadline ?? null;
+    }
+    // D32 - same presence semantics, validated on the MERGED pair so PATCHing one half
+    // is checked against the other already on the row (`_assert_midterm_window`).
+    if ('midterm_submission_start' in body || 'midterm_submission_end' in body) {
+      const midStart =
+        'midterm_submission_start' in body
+          ? (body.midterm_submission_start ?? null)
+          : term.midterm_submission_start;
+      const midEnd =
+        'midterm_submission_end' in body
+          ? (body.midterm_submission_end ?? null)
+          : term.midterm_submission_end;
+      const halfSet = (midStart === null) !== (midEnd === null);
+      if (halfSet) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          [midEnd === null ? 'midterm_submission_end' : 'midterm_submission_start']: [
+            'Required when the other mid-session date is set.',
+          ],
+        });
+      }
+      if (midStart !== null && midEnd !== null && midEnd <= midStart) {
+        return errorResponse(422, 'validation_error', 'Some fields need attention.', {
+          midterm_submission_end: ['Must be after midterm_submission_start.'],
+        });
+      }
+      term.midterm_submission_start = midStart;
+      term.midterm_submission_end = midEnd;
+    }
+    term.start_date = start;
+    term.end_date = end;
+    return HttpResponse.json(semesterDetail(term));
+  }),
+
+  http.post(`${API_BASE_URL}/settings/academic-years/:yearId/archive`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
     const year = D.academic_years.find((y) => y.id === params.yearId);
     if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
     if (year.status === 'archived') {
@@ -176,6 +519,14 @@ export const settingsHandlers = [
         letter: String(b.letter ?? ''),
         min_score: Number(b.min_score ?? 0),
         max_score: Number(b.max_score ?? 0),
+        // Round-tripped, and absent/blank stays NULL rather than becoming 0 (D30 §D5).
+        // `Number(undefined)` is NaN and `Number(null)` is 0, so neither coercion is
+        // safe here — the backend stores NULL for "this scale cannot price this letter",
+        // and 0.00 is an F.
+        grade_point:
+          b.grade_point === null || b.grade_point === undefined || b.grade_point === ''
+            ? null
+            : Number(b.grade_point),
         is_passing: Boolean(b.is_passing ?? false),
         sort_order: Number(b.sort_order ?? 0),
       }));
@@ -193,6 +544,10 @@ export const settingsHandlers = [
     if (typeof body.allow_makeup === 'boolean') D.assessment_policy.allow_makeup = body.allow_makeup;
     if (typeof body.drop_lowest_count === 'number')
       D.assessment_policy.drop_lowest_count = body.drop_lowest_count;
+    // D32 - PUT is a full replace on the server, so an omitted field takes the schema
+    // default (false) rather than keeping the stored value. Mirrored, or the demo would
+    // certify a screen that quietly behaves differently against the real API.
+    D.assessment_policy.students_can_view_grades = body.students_can_view_grades ?? false;
     return HttpResponse.json({ ...D.assessment_policy });
   }),
 

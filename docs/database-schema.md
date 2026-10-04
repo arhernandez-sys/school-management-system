@@ -1,12 +1,24 @@
 # Database Schema — School Management System (SIS)
 
-> **Phase 4 — Database Design.** Owner: `database-engineer`. This document is the implementation-ready, normalized (≥3NF) PostgreSQL schema the Phase 5 (API) and Phase 7 (modules) engineers build on. It honors every locked decision in `progress-tracker.md` (D1–D24, D-Q4/Q6/Q9, DB1–DB17) and the models named in `architecture.md` (teacher↔(section,subject) ownership, user→student/teacher linkage, server-side refresh-token store, compute-on-read term grades + derive-on-read letters, archived-year grade freezing, server-side grade-release filter).
+> **Phase 4 — Database Design.** Owner: `database-engineer`. This document is the implementation-ready, normalized (≥3NF) PostgreSQL schema the Phase 5 (API) and Phase 7 (modules) engineers build on. It honors every locked decision in `complete-work.md` (D1–D24, D-Q4/Q6/Q9, DB1–DB17) and the models named in `architecture.md` (teacher↔(section,subject) ownership, user→student/teacher linkage, server-side refresh-token store, compute-on-read term grades + derive-on-read letters, archived-year grade freezing, server-side grade-release filter).
 >
 > It does **not** write application code (Phase 7) or the REST/OpenAPI contract (Phase 5). It defines tables, types, constraints, indexes, and the calculation model those phases implement against.
 >
 > **Target engine: PostgreSQL 15+** (managed, on Railway per D14). All types/features are Postgres-specific.
 
-_Last updated: 2026-06-26 — Phase 4.5 (D23 section model + D24 transcript rework)_
+> **D29 — SIXTH-FORM SUBJECT-CLASS MODEL (2026-08-06). Supersedes D23.** A `classes` row is
+> now one **SUBJECT CLASS** ("Math-1"), not a homeroom: exactly one live `class_subjects` row,
+> its own teachers, room, weekly meeting times, gradebook and roster. A student holds **many**
+> active `class_enrollments` — one per class they take.
+>
+> **Almost no DDL changed.** `class_enrollments` was already a plain join whose
+> `uq_enroll_active (class_id, student_id, semester_id)` permits one row per class, and
+> `attendance_records` is already keyed `(class_id, student_id, attendance_date)`. The "one
+> section per student" rule lived in *service code* (a transfer-on-enroll), not in the schema.
+> Only two things are new: **`class_meetings`** (§3.C) and **`student_profiles.year_group`**.
+> MariaDB DDL: `backend/db/mariadb/004_subject_class_model.sql`.
+
+_Last updated: 2026-08-06 — D29 subject-class model (supersedes the D23 section model)_
 
 ---
 
@@ -75,7 +87,7 @@ All instants are `timestamptz`, never naive `timestamp` — the app is region-fl
 
 | Domain | Mechanism | Rationale |
 |---|---|---|
-| `user_role` (principal/secretary/teacher/student) | **Native enum** | Fixed at 4 (A-ONE-ROLE); changes only via deploy. |
+| `user_role` (principal/secretary/teacher/student/**hod**/**auditor**) | **Native enum** | Fixed at 6 since D43 (A-ONE-ROLE); changes only via deploy. Widening is append-only — MariaDB stores the ordinal, so new labels must go on the END or existing rows change meaning. |
 | `attendance_status` (present/absent/late/excused) | **Native enum** | Fixed small set (D-Q4). |
 | `assessment_type` (quiz/test/exam/assignment) | **Native enum** | Fixed (FR-ASMT-01). |
 | `assessment_status` (draft/published/grading/graded) | **Native enum** | Fixed (FR-ASMT-04). |
@@ -97,7 +109,7 @@ Single-school (D8) but **multi-year by design** — transcripts are the multi-ye
 
 - A single `academic_years` table; **at most one row has `status='active'`** (partial unique index, §5). Two `semesters` per year (D10), exactly one active at a time.
 - **Every term-scoped entity carries a direct `semester_id` FK** (enrollments, assessments, attendance, term-grade snapshots). `semester → academic_year` is a FK, so year is derivable, but the direct semester reference keeps hot queries (gradebook, attendance-by-date) single-join.
-- **Classes (sections) are scoped to an academic year** ("Form 1A" in 2025 ≠ the 2026 row), so rosters, ownership, and capacity are year-specific and a closed year's sections become read-only without affecting the new year. The subjects taught in a section are modeled by `class_subjects` (D23, §3.C), which is therefore year-scoped transitively through its section.
+- **Classes are scoped to an academic year** ("Math-1" in 2025 ≠ the 2026 row), so rosters, ownership, capacity and timetable are year-specific and a closed year's classes become read-only without affecting the new year. A class's subject is modeled by `class_subjects` (**D29: exactly one**, §3.C) and its weekly slots by `class_meetings`, both therefore year-scoped transitively through the class.
 - **Archived years freeze** via snapshot rows (`term_grade_snapshots`, `report_card_snapshots`) written at archival time (§10.4). Live years compute-on-read; archived years read the frozen snapshot.
 
 ---
@@ -119,9 +131,10 @@ erDiagram
     academic_years ||--o{ classes : "scopes"
     academic_years ||--|| grading_scales : "has one"
     grading_scales ||--o{ grading_scale_bands : "has"
-    classes ||--o{ class_subjects : "offers"
+    classes ||--|| class_subjects : "teaches (exactly 1, D29)"
     subjects ||--o{ class_subjects : "taught as"
     class_subjects ||--o{ class_teachers : "assigned"
+    class_subjects ||--o{ class_meetings : "meets weekly"
     teacher_profiles ||--o{ class_teachers : "teaches"
     classes ||--o{ class_enrollments : "rosters"
     student_profiles ||--o{ class_enrollments : "enrolled"
@@ -172,7 +185,7 @@ erDiagram
 - **Documents:** `student_documents`, `report_card_snapshots`
 - **System/Settings:** `school_profile`, `audit_log`
 
-**Table count: 27.** (D23 adds `class_subjects` — the section↔subject join that owns assessments and teacher assignments; `classes.subject_id` is removed. `assessment_policies` remains the school-default grading-policy row; per-year/category/assessment overrides are columns on existing tables. See DB-14, DB-15.)
+**Table count: 28.** (**D29** adds `class_meetings` — the weekly slots that build every timetable. D23 added `class_subjects`, the class↔subject join that owns assessments and teacher assignments; under D29 it is exactly one row per class, and `classes.subject_id` stays removed. `assessment_policies` remains the school-default grading-policy row; per-year/category/assessment overrides are columns on existing tables. See DB-14, DB-15.)
 
 ---
 
@@ -286,6 +299,7 @@ Student academic/PII record (FR-STU-01). **Linked 0..1 to a `users` row** — th
 | `full_name` | `text` | no | — | |
 | `date_of_birth` | `date` | no | — | |
 | `gender` | `text` | yes | — | Free/lookup text; not a fixed enum (inclusivity) |
+| `year_group` | `text` | yes | — | **New in D29.** The student's OWN level, e.g. "Lower 6". Free text, not an enum — the school names its own levels, and an enum would force a migration to rename one. Was previously read off the student's homeroom (`classes.grade_level`); with no homeroom, the report-card header and the student-directory filter read it from here (FR-CLS-09) |
 | `enrollment_date` | `date` | no | — | (FR-STU-01) |
 | `status` | `student_status` | no | `'active'` | active/inactive/transferred/graduated/withdrawn (FR-STU-04) |
 | `guardian_name` | `text` | yes | — | Parent/guardian contact (A-NO-PARENT-PORTAL: contact data, not a login) |
@@ -349,12 +363,20 @@ Exactly 2 per year (D10); exactly one active at a time.
 | `sequence` | `smallint` | no | — | 1 or 2 |
 | `start_date` | `date` | no | — | |
 | `end_date` | `date` | no | — | |
+| `grade_submission_deadline` | `timestamptz` | yes | — | **D30 §D6 / D32-1 — the END-TERM grade-entry cutoff.** NULL = the term never closes. Enforced as 409 `grade_window_closed` in `grades/service.upsert_grades`. The column is not renamed; the plan doc §E says why. |
+| `midterm_submission_start` | `timestamptz` | yes | — | **D32 — the mid-term grading period opens.** |
+| `midterm_submission_end` | `timestamptz` | yes | — | **D32 — it closes.** Once passed, grade revisions unlock for work that predates `midterm_submission_start`, and the mid-term report card can be frozen. |
 | `is_active` | `boolean` | no | `false` | Exactly one true globally |
 | Mixins | | | | `TimestampMixin` |
 
 - **FK** `fk_semesters_year (academic_year_id) → academic_years(id) ON DELETE RESTRICT`
 - **Unique** `uq_semesters_year_seq (academic_year_id, sequence)`; **`uq_semesters_one_active` partial `UNIQUE ((is_active)) WHERE is_active`**
 - **Check** `ck_semesters_sequence CHECK (sequence IN (1,2))` (enforces the 2-semester model, D10); `ck_semesters_dates CHECK (end_date > start_date)`
+- **Check (D32)** `ck_semesters_midterm_window` — the two mid-term columns are **both NULL or both set with end > start**. Either half alone is a configuration that cannot produce a correct answer: a start with no end never elapses, and an end with no start has nothing to measure "existed before" against. The service raises the readable 422 first; this is the backstop against a direct SQL edit.
+
+> **D30 §D3 supersedes the "exactly 2 per year" note above** — `ck_semesters_sequence` was
+> dropped by `005_tertiary.sql` §6 and `term_type` added, because BAJC runs Summer and
+> Spring blocks alongside the numbered semesters.
 
 #### `subjects`
 School-wide subject catalog, year-independent.
@@ -369,16 +391,18 @@ School-wide subject catalog, year-independent.
 
 - **Unique** `uq_subjects_name` partial `WHERE deleted_at IS NULL`; `uq_subjects_code` partial `WHERE deleted_at IS NULL AND code IS NOT NULL`
 
-#### `classes` — the SECTION / homeroom (D23)
-A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subject-agnostic** (D23). A section owns a single student roster and recurs yearly as distinct rows. The subjects taught within it live in `class_subjects` (below). **`classes.subject_id` is removed** (D23): a section is no longer one subject.
+#### `classes` — the SUBJECT CLASS (D29)
+One **subject class** in a specific academic year (e.g. "Math-1"): one subject, its own teacher(s), room, weekly slot, gradebook and roster. Two parallel classes of the same subject (Math-1, Math-2) are two rows. It owns exactly one live `class_subjects` row (below); `classes.subject_id` stays absent, because every assessment, grade and teacher assignment in the system keys off `class_subject_id`.
+
+> **The one-subject invariant is enforced in the SERVICE, not the DB.** No unique index forbids a second `class_subjects` row, so pre-D29 multi-subject rows still load and read correctly; the API answers 409 `subject_already_set` on an attempt to add a second.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
 | `academic_year_id` | `uuid` | no | — | FK → academic_years (FR-CLS-06 scoping) |
-| `name` | `text` | no | — | Section name, e.g. "Form 1A" |
-| `grade_level` | `text` | no | — | e.g. "1" / "7" (FR-CLS-01) |
-| `section` | `text` | yes | — | e.g. "A" |
+| `name` | `text` | no | — | Class name, e.g. "Math-1" |
+| `grade_level` | `text` | no | — | The **year group the class is FOR**, e.g. "Lower 6" — a filter, not a roster. The student's own level is `student_profiles.year_group` |
+| `section` | `text` | yes | — | Division letter; usually NULL for a sixth-form subject class |
 | `capacity` | `smallint` | yes | — | **Advisory only** — warn-only (D-Q6); not a hard constraint |
 | `is_archived` | `boolean` | no | `false` | Set when the year archives (FR-CLS-06/08) |
 | Mixins | | | | `TimestampMixin`, `AuditMixin`, `SoftDeleteMixin` |
@@ -387,8 +411,8 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 - **Unique** `uq_classes_year_name` partial `UNIQUE (academic_year_id, name) WHERE deleted_at IS NULL`
 - **Check** `ck_classes_capacity CHECK (capacity IS NULL OR capacity > 0)` — capacity does **not** constrain roster size (D-Q6 warn-only); enforcement is application-layer advisory.
 
-#### `class_subjects` — Section↔Subject (D23) — **the gradebook/ownership unit**
-**New in D23.** A section teaches many subjects; this join is the row that **owns assessments, teacher assignments, assessment categories, and term grades**. Conceptually it is "the Math offering inside Form 1A." Shape chosen: a **surrogate-PK join row** (not a bare composite-PK link table) because it is itself a parent of `class_teachers`, `assessment_categories`, `assessments`, and `term_grade_snapshots` — a stable single-column `id` keeps those child FKs and indexes narrow, and lets a (section, subject) offering carry its own attributes (`is_active`).
+#### `class_subjects` — Class↔Subject — **the gradebook/ownership unit**
+**D29: exactly ONE live row per class** (it was 1:many under D23). This join is the row that **owns assessments, teacher assignments, assessment categories, term grades and now `class_meetings`**. It survives as its own table rather than collapsing into a `classes.subject_id` column precisely because all of those children key off it. Shape chosen: a **surrogate-PK join row** (not a bare composite-PK link table) because it is itself a parent of `class_teachers`, `assessment_categories`, `assessments`, and `term_grade_snapshots` — a stable single-column `id` keeps those child FKs and indexes narrow, and lets a (section, subject) offering carry its own attributes (`is_active`).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
@@ -401,7 +425,9 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 - **FK** `fk_class_subjects_class (class_id) → classes(id) ON DELETE RESTRICT` (a section with subject offerings that carry assessments/grades can't be hard-deleted — archive instead, FR-CLS-08); `fk_class_subjects_subject (subject_id) → subjects(id) ON DELETE RESTRICT`
 - **Unique** `uq_class_subjects_class_subject` partial `UNIQUE (class_id, subject_id) WHERE deleted_at IS NULL` — a subject appears at most once per section (re-addable after soft-delete)
 
-> **Why a join row, not `classes.subject_id`:** the Caribbean/Commonwealth model (D23) is one roster (the section) with many subjects taught inside it, each subject having its own teacher(s) and its own gradebook. `class_subjects` is that "subject taught in this section" unit. The student roster stays on the **section** (`class_enrollments`, below) — a student enrolls in Form 1A *once* and is thereby a member of every subject offered in it; we do **not** re-enroll students per subject (matches how a homeroom secondary school actually operates and keeps rostering single-step).
+> **Why a join row, not `classes.subject_id` — the D29 answer.** Under D23 the join existed because one section taught many subjects. Under D29 a class teaches exactly ONE subject, so the obvious simplification would be to fold it back into a `classes.subject_id` column — **and that is deliberately not done.** Every assessment, assessment category, teacher assignment, term-grade snapshot and (now) class meeting in the system keys off `class_subject_id`; collapsing the table would rewrite all of those FKs to buy one saved join. The row also carries its own `is_active`, which is what lets a past year's offerings be retired without touching history.
+>
+> **The roster is per CLASS** (`class_enrollments`, below): a student enrols in Math-1 *and* Biology-10 *and* English-5 as three separate rows. This is the university/CAPE pattern the school actually runs — students move between rooms per subject, and two students in the same year group can hold entirely different timetables.
 
 #### `class_teachers` — Teacher↔(Section,Subject) M:N (D16/D-Q9, rescoped by D23)
 **The single source of truth for teacher ownership** (architecture §3.2). **Rescoped by D23:** a teacher now owns a **(section, subject)** — i.e. a `class_subjects` row — not a whole section. The natural ownership check becomes **`assert_teacher_owns_class_subject(user, class_subject_id)`** ("does a `class_teachers` row exist for `(class_subject_id, user→teacher_profiles.id)`?"). Membership = ownership; **all assigned teachers (incl. co-teachers) get full edit rights** (D-Q9). Co-teachers attach as additional `class_teachers` rows on the same `class_subject`.
@@ -420,13 +446,15 @@ A **section/homeroom** in a specific academic year (e.g. "Form 1A") — **subjec
 
 > **Ownership rescoping (call-out):** the architecture doc names a `assert_teacher_owns_class(user, class_id)` helper. Under D23 the unit of ownership is the (section, subject) offering, so the DB-correct helper is **`assert_teacher_owns_class_subject(user, class_subject_id)`**. Grade/attendance/assessment writes resolve the `class_subject_id` from the assessment (grades) or are passed it directly. Attendance, which is per-section (homeroom, see §3.E), keeps a section-level check `assert_teacher_owns_section(user, class_id)` = "teacher owns **any** `class_subject` of this section" (any subject teacher of the homeroom may take the daily register). The architecture helper will be updated separately to match; the DB here is the source of truth for the relation.
 
-#### `class_enrollments` — Student↔Section M:N (D23: roster is per SECTION)
-Roster membership of a **section** (FR-CLS-02, FR-STU-05). **A student enrolls in ONE section** and is thereby in every subject taught in it — there is no per-subject enrollment (D23). Semester-scoped so mid-year moves are tracked per term.
+#### `class_enrollments` — Student↔Subject-Class M:N (D29: roster is per SUBJECT CLASS)
+Roster membership of a **subject class** (FR-CLS-02, FR-STU-05). **A student enrolls in EACH class individually and holds many active rows** — Freddy sits Math-1, Biology-10 and English-5 concurrently (D29). Semester-scoped so mid-term moves are tracked per term.
+
+> **Enrolling is purely ADDITIVE.** The service used to close a student's active enrollment elsewhere in the semester and report it as a `transfer`; under D29 that is data loss (adding Freddy to Biology would drop him from Math), so it was removed. A timetable clash is *reported*, not resolved.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
-| `class_id` | `uuid` | no | — | FK → classes (**the section**) |
+| `class_id` | `uuid` | no | — | FK → classes (**the subject class**) |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `semester_id` | `uuid` | no | — | FK → semesters (term scoping) |
 | `enrolled_at` | `timestamptz` | no | `now()` | |
@@ -434,9 +462,31 @@ Roster membership of a **section** (FR-CLS-02, FR-STU-05). **A student enrolls i
 | Mixins | | | | `TimestampMixin`, `AuditMixin` |
 
 - **FK** `fk_enroll_class (class_id) → classes(id) ON DELETE RESTRICT`; `fk_enroll_student (student_id) → student_profiles(id) ON DELETE RESTRICT`; `fk_enroll_semester (semester_id) → semesters(id) ON DELETE RESTRICT`
-- **Unique** `uq_enroll_active` partial `UNIQUE (class_id, student_id, semester_id) WHERE unenrolled_at IS NULL` (enrolled at most once per section/semester at a time; re-enrollment after removal allowed)
+- **Unique** `uq_enroll_active` partial `UNIQUE (class_id, student_id, semester_id) WHERE unenrolled_at IS NULL` (enrolled at most once **per class** per semester; many classes concurrently; re-enrollment after removal allowed). This index is why D29 needed no change here — it was never a one-row-per-student constraint.
 
 > **`class_enrollments` is the enforcement point of the assessment-first rule (§10), now via the section→class_subjects→assessment chain:** an `assessment_grade` may only exist for a (student, assessment) pair where the student has an active enrollment in the **section** that owns the assessment's `class_subject`, for that semester. Because enrollment is per-section and the assessment hangs off a `class_subject` of that same section, the provenance FK (`assessment_grades.enrollment_id`) resolves to the student's single section enrollment — see §5.
+
+#### `class_meetings` — the weekly schedule of a subject class (**new in D29**)
+One recurring weekly meeting: "Mon 08:00–09:30, Room A" (FR-SCH-01/02). A class has zero or more; zero means it is not yet timetabled, which is a normal state and is reported explicitly rather than hidden.
+
+**Anchored on `class_subject_id`, not `class_id`** — teachers own `class_subjects` (see `class_teachers`), so a teacher's timetable is one join off this table, and the rows stay meaningful for any pre-D29 multi-subject class where "when does it meet" is only answerable per subject.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | no | `gen_random_uuid()` | PK |
+| `class_subject_id` | `uuid` | no | — | FK → class_subjects |
+| `day_of_week` | `smallint` | no | — | ISO weekday, **1 = Mon … 5 = Fri**. Stored as an int, NOT a native enum, so `ORDER BY day_of_week, start_time` yields Mon→Fri for the grid (an enum would sort by label text) |
+| `start_time` | `time` | no | — | Free-form; there is no fixed period grid (stakeholder decision, 2026-08-06) |
+| `end_time` | `time` | no | — | |
+| `room` | `text` | yes | — | e.g. "Room A" / "Lab 1" |
+| Mixins | | | | `TimestampMixin`, `AuditMixin`, `SoftDeleteMixin` |
+
+- **FK** `fk_class_meetings_class_subject (class_subject_id) → class_subjects(id) ON DELETE CASCADE` — a meeting is a recurring calendar slot, not a record of anything that happened, so it dies with its offering (attendance is keyed by date, and references nothing here)
+- **Check** `ck_class_meetings_day_of_week CHECK (day_of_week BETWEEN 1 AND 5)` — the timetable is weekday-only; ISO numbering leaves room to relax this later without renumbering
+- **Check** `ck_class_meetings_time_order CHECK (end_time > start_time)`
+- **Index** `ix_class_meetings_class_subject (class_subject_id) WHERE deleted_at IS NULL`; `ix_class_meetings_day_start (day_of_week, start_time)`
+
+> **Overlaps are NOT constrained.** A teacher double-booked, a room double-booked, or a student enrolled into two overlapping classes are all **reported as warnings by the service and never rejected** (FR-SCH-06) — the same warn-only call already made for over-capacity enrollment (D-Q6). Hard-blocking would make an otherwise-valid week unsaveable: a room can legitimately be shared, and a clash is often fixed by the next edit. Overlap test is half-open (`a.start < b.end AND b.start < a.end`), so back-to-back meetings do not clash.
 
 ### 3.D — Assessment & Grading
 
@@ -611,7 +661,7 @@ Teacher-owned graded activities (FR-ASMT-01). **Created independently** of grade
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
-| `class_id` | `uuid` | no | — | FK → classes (**the section**) |
+| `class_id` | `uuid` | no | — | FK → classes (**the subject class**) |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `enrollment_id` | `uuid` | no | — | FK → class_enrollments (section provenance, mirrors grades) |
 | `semester_id` | `uuid` | no | — | FK → semesters (summary scoping, FR-ATT-06) |
@@ -677,20 +727,28 @@ Optional read-tracking for the unread-count bell (UI NotificationsBell, OQ-E). O
 - **Unique** `uq_student_documents_key (storage_key)`
 
 #### `report_card_snapshots`
-Frozen, generated report-card payload for a (student, semester) — written when a year archives (FR-SET-07) so historical report cards are immutable. **Live-year report cards are generated on read** (UI §7.8) and are *not* stored.
+A frozen, fully-rendered report-card payload. **Two kinds since D32** (`kind`):
+
+- **`endterm`** — written when a YEAR ARCHIVES (FR-SET-07), so historical report cards are immutable. Live-year end-term cards are still generated on read (UI §7.8) and are *not* stored.
+- **`midterm`** — written when a TERM's mid-term grading window closes, by the Dean's `POST /settings/semesters/{id}/midterm-freeze` or the lazy fallback on first read. A mid-term card is served back **verbatim** and never recalculates: recomputing it later would fold in post-midterm work and move a figure already issued.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
 | `id` | `uuid` | no | `gen_random_uuid()` | PK |
 | `student_id` | `uuid` | no | — | FK → student_profiles |
 | `semester_id` | `uuid` | no | — | FK → semesters |
+| `kind` | `enum('midterm','endterm')` | no | `'endterm'` | **D32.** The default is also the correct backfill: the year-archive freeze was the only writer that ever existed. |
 | `payload` | `jsonb` | no | — | Fully-rendered report card (subjects, scores, letters, attendance summary, term avg, school identity at freeze time) |
 | `storage_key` | `text` | yes | — | Optional pointer to a generated PDF (Q8/OQ-A, if server PDF is later adopted) |
 | `frozen_at` | `timestamptz` | no | `now()` | |
 | Mixins | | | | `TimestampMixin` |
 
 - **FK** both `ON DELETE RESTRICT`
-- **Unique** `uq_report_card_snapshot (student_id, semester_id)`
+- **Unique** `uq_report_card_snapshot (student_id, semester_id, kind)` — **widened by D32** (`009` §3). It was `(student_id, semester_id)`, which assumed one frozen card per student per term; the mid-term freeze and the year-archive freeze would then have collided on upsert and the second would have silently overwritten the first.
+
+> **Until D32 nothing READ this table.** `reports/freeze.py` wrote it and `reports/service`
+> rebuilt archived cards from `term_grade_snapshots` instead, so the one genuinely frozen
+> artefact was discarded on every read. The mid-term report path is its first reader.
 
 > **`jsonb` is deliberate:** a frozen report card is a *document*, not relational data to be joined — it captures a denormalized point-in-time view (school name/logo as they were). `jsonb` stores it faithfully and is GIN-indexable if ever needed. The one justified document-style denormalization.
 
@@ -728,6 +786,45 @@ Append-only event log for sensitive mutations beyond the inline `AuditMixin` (§
 - Append-only; pruned by retention (§8).
 
 > **Why `bigint identity` for the audit log only (the §1.2 exception):** an internal, append-only, insert-heavy table never exposed by id in a URL — the enumeration/PII argument for UUID doesn't apply, and a monotonic `bigint` gives perfect insert locality and natural chronological ordering for the highest-write table. A deliberate, documented divergence; every *business* table stays UUID.
+
+#### `application_temp` (D38)
+
+A **saved but UNSUBMITTED** admission form. The wizard writes it on every *Continue*, and
+`POST /pending-applications/{id}/submit` promotes it into `applications` and deletes it. Full
+rationale in **`complete-work.md`**; the authority on the column list is
+`ApplicationTemp` in `backend/app/modules/admissions/models.py`.
+
+> ⚠️ **Renamed 11 Sep 2026.** This table was `student_profile_temp` until then, which it never
+> was — the row describes an applicant who is not a student and may never become one. The
+> rename is `backend/db/mariadb/rename_application_temp.sql`, a bare `RENAME TABLE`: nothing
+> in the schema holds a foreign key pointing at this table, so there was nothing to repoint.
+> Its indexes and constraints were already named `*_apptemp_*` and came across untouched.
+
+> ⚠️ **The save model was reversed on 11 Sep 2026.** D38 wrote this row only at the end, on
+> *Save and close*; at the client's request every *Continue* now saves, and *Save and close*
+> is gone. The trade is that abandoned forms leave rows here — which the Pending forms list
+> exists to clear — against a Registrar no longer losing six sections of transcription to a
+> closed tab.
+
+Three properties are the reason it exists rather than another `applications.status`:
+
+- **`created_by` is the VISIBILITY, not just provenance.** A Registrar reaches only their own rows;
+  the Dean reaches all of them. `applications` is a shared record and has no such rule, and one table
+  cannot carry two ownership models. Enforced on *every* endpoint — someone else's row answers **404**,
+  never 403, since a 403 confirms the row exists and whose it is.
+- **Sections B and F ride as JSON** (`education_json`, `documents_json`, both `longtext` +
+  `json_valid` CHECK) instead of duplicating `application_education` / `application_documents`, which
+  are keyed by an application id a never-promoted form has not got.
+- **Hard-deleted** — no `deleted_at`. The row either became an application or was abandoned; there is
+  no admissions record to keep.
+
+Every *client-writable* column of `applications` is mirrored under the same spelling, so promotion is
+an attribute-for-attribute copy. The five the ACCEPT transition writes are deliberately absent
+(`date_accepted`, `student_code`, `decided_by_user_id`, `decided_at`, `student_id`) — a pending form
+has no decision and no student, so `student_id` would be an FK that could never be satisfied.
+
+> **`status` is `varchar(20)` DEFAULT `'pending'`, not the `applications.status` enum.** Adding a
+> `pending` member there would widen the vocabulary the decision queue is built on.
 
 ---
 
@@ -899,7 +996,7 @@ A `class` is a **section/homeroom** (subject-agnostic). `classes` 1—N `class_s
 
 ## 9. RBAC Data Structures
 
-**Representation: a single `user_role` enum column on `users`** — no role/permission join tables. Justified by locked decisions: **4 fixed roles, one role per user (A-ONE-ROLE), single tenant (D8)** (architecture §3.2 "no role/permission join tables needed for v1"). Permissions are a static code-level map (`shared/auth/permissions.ts` front; FastAPI `require_role` deps back) mirroring the requirements §2 matrix — they don't change at runtime, so they don't belong in tables.
+**Representation: a single `user_role` enum column on `users`** — no role/permission join tables. Justified by locked decisions: **6 fixed roles (D43), one role per user (A-ONE-ROLE), single tenant (D8)** (architecture §3.2 "no role/permission join tables needed for v1"). Permissions are a static code-level map (`shared/auth/permissions.ts` front; FastAPI `require_role` deps back) mirroring the requirements §2 matrix — they don't change at runtime, so they don't belong in tables.
 
 **One role per user — confirmed, with a flag.** The schema models exactly one role (matches A-ONE-ROLE). **Watch-item for the orchestrator:** a future "person who is both" (teacher who is also a guardian-with-login, or an admin who also teaches) would need a `user_roles` M:N table. For v1 it is correctly single-valued — noted in §12, not changed.
 
@@ -952,7 +1049,15 @@ term_numeric  = weighted_sum / weight_base   (NULL / “—” if weight_base = 
 With categories, the two-level rollup applies (grades → category %, categories → by `category.weight`); drop-lowest is applied **within** each category. `weight_base_used` is captured in the snapshot for explainability.
 
 ### 10.3 Derive-on-read letter (FR-GRD-03)
-The letter is **not stored at entry time**. Given `term_numeric` (or a single graded assessment's `pct*100`), select the band where `min_score ≤ value ≤ max_score` from the **active year's** `grading_scale_bands`; pass/fail compares against `pass_mark`. A scale change applies going forward automatically (Q7, FR-SET-06); the UI warns the admin (FR-SET-06).
+The letter is **not stored at entry time**. Given `term_numeric` (or a single graded assessment's `pct*100`), select a band from `grading_scale_bands`; pass/fail compares against `pass_mark`. A scale change applies going forward automatically (Q7, FR-SET-06); the UI warns the admin (FR-SET-06).
+
+> **OQ-DB2 RESOLVED (2026-07-28) — the lookup is HALF-OPEN on `min_score`.** Earlier revisions of this section said "select the band where `min_score ≤ value ≤ max_score`". That is **wrong** against the bands this system actually stores, which use `.99` ceilings (`A 90–100, B 80–89.99, …`): a strict two-sided test leaves unreachable holes, so `179.99/200 = 89.995` matched **no band**, returned an empty letter, and the gradebook rendered "Graded" where a "B" belonged.
+>
+> **The implemented rule** (`app/modules/grades/calc.py::letter_for`): clamp the value to `[0,100]`, round HALF_UP to 2dp, then take the **highest band whose `min_score <= value`**. `max_score` is **never consulted** — it is authoring/display metadata that the grading-scale screen still edits and stores. This is gap-proof by construction and convention-agnostic: it returns identical letters for the `.99` bands and for clean `[80,90)` bands, so re-entering the scale either way is safe.
+>
+> Rounding to 2dp happens **before** the lookup for both term numerics *and* per-cell percentages (`percentage_for`), which is what makes a single cell's letter deterministic.
+>
+> **Which year's bands.** "The active year's" is imprecise for a historical read. The implementation uses the **section's academic year's** scale, falling back to the active year's if that year has none. For a live year the two coincide (only one year is active); for an archived year the read comes from a snapshot anyway (§10.4), so a later scale edit cannot reletter history.
 
 ### 10.4 Archived-year freeze (FR-SET-07 — the exception to derive-on-read)
 When the Principal archives a year:
@@ -1008,7 +1113,7 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 - **`school_profile`:** the single `id=1` row with a placeholder name (Principal edits via FR-SET-01).
 - **`assessment_policies`:** the single `id=1` school-default row — `absent_as_zero=false`, `allow_makeup=true`, `drop_lowest_count=0` (DB-14 defaults; Principal edits under Settings → Grading, FR-SET-03). All year/category/assessment override columns seed/default to `NULL` (inherit).
 - **First `academic_years`** (`status='active'`) + its **two `semesters`** (`sequence` 1 & 2, one `is_active`) (D10, FR-SET-02).
-- **`grading_scales`** for that year (`pass_mark=60`) + **default `grading_scale_bands`:** A 90–100, B 80–89.99, C 70–79.99, D 60–69.99, F 0–59.99 (D11 default; editable). Use `.99` ceilings *or* model bands half-open `[min, next.min)` in the service so 0–100 tiles without overlap — document the chosen convention for the contiguity validator (§5, OQ-DB2).
+- **`grading_scales`** for that year (`pass_mark=60`) + **default `grading_scale_bands`:** A 90–100, B 80–89.99, C 70–79.99, D 60–69.99, F 0–59.99 (D11 default; editable). **Convention settled (OQ-DB2, 2026-07-28):** the seed's `.99` ceilings are kept in storage, and the service resolves letters **half-open on `min_score`** so 0–100 tiles with neither overlap nor gaps — see §10.3.
 - **`subjects`:** optionally seed common subjects, or leave for the Secretary.
 
 **Migration safety / locking (scale is modest, but the standard for Phase 7+ changes):**
@@ -1034,11 +1139,46 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 | DB-6 | **Compute-on-read term grades + derive-on-read letters; freeze on archival** into snapshot tables | Implements architecture §7.1/§8.5; snapshot (not materialized view) preserves the historical scale (§10.4). |
 | DB-7 | **Single-row `school_profile`** with `CHECK (id=1)` | Single tenant (D8). |
 | DB-8 | **Soft-delete only on history-bearing tables**, partial unique indexes for re-issuable natural keys | Preserve academic records (A-SOFT-DELETE) without blocking id reuse (§8). |
-| DB-9 | **Role = enum column, no RBAC join tables** | 4 fixed roles, one per user, single tenant (architecture §3.2) (§9). |
+### `program_heads` (D43)
+
+Who heads which programme — the HOD role's entire scope.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `program_id` | uuid FK → `programs` | ON DELETE CASCADE |
+| `teacher_id` | uuid FK → `teacher_profiles` | ON DELETE CASCADE |
+| `appointed_at` | datetime | Display/audit only — scope is never time-sliced |
+| audit columns | | `updated_at` NULL until edited (the 015 convention) |
+
+`UNIQUE (program_id, teacher_id)` — re-appointing is an upsert, not a second row, so the
+scope query can never double-count a programme. `KEY (teacher_id)` serves the hot path
+("which programmes does THIS lecturer head"), which the unique index cannot because
+`teacher_id` is its second column.
+
+**Many-to-many on purpose.** `teacher_profiles.headed_program_id` would have been smaller
+and wrong in both directions at a college this size: a lecturer can head two programmes,
+and a programme can have co-heads across a handover. Mirrors `class_teachers`, which
+solved the same shape for (offering, lecturer).
+
+**It hangs off `teacher_profiles`, not `users`**, because an HOD is a lecturer first and
+every scope it feeds is already expressed in terms of a teacher-profile id.
+
+**The role is still not enforced by this table**, but the SERVICE keeps the two in step:
+`PUT /programs/{id}/heads` promotes a newly-appointed lecturer to `hod` and demotes one
+whose last appointment is removed. Authorization continues to read `users.role` first and
+this table second — never this table alone — so a row written by hand (a direct SQL insert,
+a restore) grants nothing on its own. That is deliberate: the table records the
+appointment, the role grants the reach, and only the service is trusted to link them.
+
+DDL: `backend/db/mariadb/016_hod_auditor_roles.sql`.
+
+| DB-9 | **Role = enum column, no RBAC join tables** | 6 fixed roles since D43, one per user, single tenant (architecture §3.2) (§9). D43 kept the invariant deliberately: an HOD is a single role value that CARRIES lecturer powers, not a second role stacked on `teacher`, so no `user_roles` M:N table was needed (see `complete-work.md` OQ-DB3). |
 | DB-10 | **Server-layer enforcement list** (score≤max, no-future-date, band contiguity, ownership, archived-year read-only) | Cross-row/temporal/ownership rules a stored CHECK can't express; centralized & testable (§5). |
 | DB-11 | **`subject_specializations text[]`** on teacher (denormalized, GIN-indexed) | Display/search tag, not referential truth (which is the class graph) (§3.B). |
 | DB-12 | **`semester_id` denormalized onto term-scoped children** (enrollments, assessments, attendance) | Keeps hot queries single-join; year derivable via semester→year (§1.6). |
 | DB-13 | **`report_card_snapshots.payload jsonb`** | A frozen report card is a point-in-time document, not relational data (§3.G). |
+| DB-16 (D32) | **`assessment_policies.students_can_view_grades boolean NOT NULL DEFAULT false`** | Whether students may reach any grade surface at all (brief §4). It lands on the existing Dean-only singleton rather than in a new settings table because that is already the row the Dean edits, and a second singleton would need its own endpoint, screen and `id = 1` CHECK for one boolean. Enforced by `core.deps.require_student_grade_visibility` (403 `grades_hidden`) and echoed on `CurrentUser` so the SPA can hide the nav without being handed the staff-only settings endpoint. **The Registrar's removal is NOT this flag** — that is unconditional and lives in the role tuples on `grades/router.py`. |
 | DB-14 | **Configurable per-assessment grading policy + explicit grade `status`** (resolves OQ-DB1, supersedes hardcoded "absent = 0"). New single-row `assessment_policies` (school default) + nullable override columns on `academic_years`/`assessment_categories`/`assessments`; `grade_marker` → `grade_status` enum (pending/graded/absent/excused/exempt) + `makeup_score`; `term_grade_snapshots.effective_policy jsonb`. | Stakeholder resolved OQ-DB1 broader than asked: absent-as-zero, makeups, and drop-lowest are now configurable, resolved most-specific-wins (assessment→category→year→school) at compute-time and frozen at archival. `pending` distinguishes not-yet-graded (always excluded) from absent (policy-driven); `exempt`/`excused` always excluded. Compute-on-read + assessment-first model unchanged (§10, §3.D). |
 | DB-15 | **Class = multi-subject SECTION/homeroom; new `class_subjects` join (D23).** Removed `classes.subject_id`; a section is subject-agnostic with one roster. `class_subjects (class_id, subject_id)` is the gradebook/ownership unit — it parents `class_teachers` (rescoped to `class_subject_id`), `assessment_categories` (rescoped), `assessments` (rescoped, old `subject_id` denorm dropped), and `term_grade_snapshots` (rescoped to `class_subject_id`). Students enroll per **section** (`class_enrollments` unchanged). Ownership helper split into `assert_teacher_owns_class_subject` (grades/assessments) + `assert_teacher_owns_section` (attendance/announcements). | Caribbean/Commonwealth model (stakeholder D23, Belize secondary structure): one homeroom, many subjects taught within it each with its own teacher(s) and gradebook. Surrogate-PK join chosen over composite link because it parents four child tables and carries its own `is_active`/soft-delete. Term grade is now per-subject; report card aggregates all subjects in the section. Keeps ≥3NF (the join removes the prior section-conflated-with-subject anomaly). |
 | DB-16 | **Multi-year transcript support (D24)** — no new table. `term_grade_snapshots` regrained to (student, `class_subject`, semester) and given a **frozen `subject_id`**; student identity is the durable `student_profiles.id` spine; added `ix_term_snapshot_student (student_id)`. Transcript = union of archived per-subject snapshots + live-year compute, grouped year→semester→subject (§10.6). | A transcript is the multi-year academic record (FR/screen added in Phase 4.5). Frozen `subject_id` keeps historical lines stable across subject renames/retirements and soft-deleted offerings. No stored transcript/cumulative-GPA aggregate (v1 is 0–100+letter, not GPA) — compute-on-read for the live year mirrors the report-card stance and avoids staleness. |
@@ -1048,7 +1188,7 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 
 - **OQ-DB1 — ✅ RESOLVED (DB-14).** Stakeholder replaced the hardcoded "absent = 0" assumption with **configurable per-assessment grading policy** (`absent_as_zero`, `allow_makeup`, `drop_lowest_count`), an explicit grade `status` (pending/graded/absent/excused/exempt) so not-yet-graded is distinct from absent, and a most-specific-wins precedence chain frozen into the snapshot. Modeled in §1.5, §3.D, §10, §12.1 DB-14. *(Modeled per the coordinator's relayed resolution; if the orchestrator wants the absent/excused distinction or the precedence order confirmed by the stakeholder directly, flag it — see OQ-DB7.)*
 - **OQ-DB7 (new — policy semantics to confirm):** two modeling choices worth a stakeholder nod: (a) `excused` is treated as **always-excluded** (like exempt) rather than policy-driven — confirm that's intended, or whether `excused` should also obey `absent_as_zero`; (b) `drop_lowest_count` is applied **within each category** when categories are used (vs across the whole term) — confirm. Both are reversible config-semantics decisions, not schema changes.
-- **OQ-DB2 (grading-band convention):** store bands **half-open `[min, next.min)`** (service derives the upper bound) or **explicit inclusive `min/max` with `.99` ceilings**? Affects the contiguity validator and 90.0-vs-89.999 edges. Recommend half-open in the service (store `min_score` + ordering). Confirm.
+- **OQ-DB2 (grading-band convention) — ✅ RESOLVED 2026-07-28.** Stakeholder chose the hybrid: **storage keeps explicit `min_score` + `max_score` with `.99` ceilings** (no migration, the grading-scale screen keeps editing both fields, the contiguity validator is unchanged), and **the service resolves letters half-open on `min_score` alone**, never consulting `max_score`. See §10.3 for the implemented rule and why a strict two-sided test was an actual bug (89.995 matched no band). `max_score` is now formally authoring/display metadata.
 - **OQ-DB3 (one-role assumption — watch-item, not a change):** schema is single-role per user (A-ONE-ROLE, correct for v1). A future "teacher who is also a guardian/admin who teaches" would need a `user_roles` M:N table — **not** building it now.
 - **OQ-DB4 (attendance future-date — defense-in-depth):** enforce **FR-ATT-05** in the service only (chosen) or **also** add a `BEFORE INSERT/UPDATE` trigger? Recommend service-only for v1.
 - **OQ-DB5 (object storage target):** schema stores `storage_key`s, not blobs (logo, student documents, optional report-card PDFs). Confirm the object store (Railway volume / S3-compatible / Supabase Storage) for Phase 6/7 — does not affect this schema.
@@ -1057,4 +1197,4 @@ Both halves share the same shape `(academic_year, semester, subject, numeric_gra
 
 ---
 
-_End of Phase 4 database design (Phase 4.5 reworked for D23 section model + D24 transcript). Next: orchestrator review → update `progress-tracker.md` (log DB-1..DB-17; OQ-DB1 RESOLVED via DB-14; OQ-DB2..DB7 outstanding) → Phase 5 (API Design) builds the `/api/v1` contract against these tables._
+_End of Phase 4 database design (Phase 4.5 reworked for D23 section model + D24 transcript). Next: orchestrator review → update `complete-work.md` (log DB-1..DB-17; OQ-DB1 RESOLVED via DB-14; OQ-DB2..DB7 outstanding) → Phase 5 (API Design) builds the `/api/v1` contract against these tables._

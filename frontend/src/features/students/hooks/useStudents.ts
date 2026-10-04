@@ -10,9 +10,11 @@ import {
   deleteStudent,
   getMyStudentRecord,
   getStudent,
+  getStudentFilterOptions,
   getStudentAssessments,
   getStudentYears,
   listStudents,
+  nudgeRelease,
   setStudentStatus,
   updateStudent,
 } from '../api/studentsApi';
@@ -23,7 +25,10 @@ export const studentKeys = {
   all: ['students'] as const,
   list: (params: StudentsListParams) => [...studentKeys.all, 'list', params] as const,
   detail: (id: string) => [...studentKeys.all, 'detail', id] as const,
-  me: () => [...studentKeys.all, 'me'] as const,
+  // The year is part of the key: without it the switcher would serve the first year's
+  // cached profile for every subsequent year and look like it does nothing.
+  me: (academicYearId?: string | null) =>
+    [...studentKeys.all, 'me', academicYearId ?? null] as const,
   assessments: (id: string) => [...studentKeys.all, id, 'assessments'] as const,
   years: (id: string) => [...studentKeys.all, id, 'years'] as const,
 };
@@ -35,6 +40,42 @@ export function useStudentsList(params: StudentsListParams) {
     queryKey: studentKeys.list(params),
     queryFn: ({ signal }) => listStudents(params, signal),
     placeholderData: (prev) => prev, // keep the previous page visible during pagination
+  });
+}
+
+/**
+ * GET /students/filter-options — the religion dropdown's values (D32, brief §3).
+ *
+ * Long `staleTime`: the set of religions in the directory changes only when a student is
+ * admitted or edited, and re-fetching it on every mount of the list would be a request
+ * per navigation for data that is effectively reference data.
+ */
+export function useStudentFilterOptions() {
+  return useQuery({
+    queryKey: [...studentKeys.all, 'filter-options'],
+    queryFn: ({ signal }) => getStudentFilterOptions(signal),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * The FULL filtered result set, for printing (D32, brief §3).
+ *
+ * The brief's requirement is that the printout match what is on screen — but what is on
+ * screen is one PAGE of it, and "print all Male students" plainly means all of them, not
+ * the 25 currently visible. So the print view re-fetches the same filters with the page
+ * size raised.
+ *
+ * `enabled` gates it on the print dialog actually being open: the directory would
+ * otherwise fetch the entire student body on every visit to pre-warm a button most
+ * visitors never press.
+ */
+export function useStudentsForPrint(params: StudentsListParams, enabled: boolean) {
+  const printParams: StudentsListParams = { ...params, page: 1, page_size: 100 };
+  return useQuery({
+    queryKey: [...studentKeys.list(printParams), 'print'],
+    queryFn: ({ signal }) => listStudents(printParams, signal),
+    enabled,
   });
 }
 
@@ -57,12 +98,17 @@ export function useStudentYears(studentId: string | undefined) {
   });
 }
 
-/** GET /students/me — the acting student's own record. */
-export function useMyStudentRecord(enabled: boolean) {
+/**
+ * GET /students/me — the acting student's own record, optionally scoped to a year.
+ *
+ * `academicYearId` comes from the global year·semester switcher, so "My Profile" shows
+ * the section/grade the student sat in that year instead of always the current one.
+ */
+export function useMyStudentRecord(enabled: boolean, academicYearId?: string) {
   return useQuery({
-    queryKey: studentKeys.me(),
+    queryKey: studentKeys.me(academicYearId),
     enabled,
-    queryFn: ({ signal }) => getMyStudentRecord(signal),
+    queryFn: ({ signal }) => getMyStudentRecord(academicYearId, signal),
   });
 }
 
@@ -72,6 +118,24 @@ export function useStudentAssessments(studentId: string | undefined, yearId?: st
     queryKey: [...studentKeys.assessments(studentId ?? ''), yearId ?? null],
     enabled: Boolean(studentId),
     queryFn: ({ signal }) => getStudentAssessments(studentId as string, yearId, signal),
+  });
+}
+
+/**
+ * POST /assessments/{id}/nudge-release — remind the teacher to release grades.
+ *
+ * Invalidates the assessments tab so `last_nudged_at` is re-read from the server
+ * rather than patched in locally: the server is the only place the cooldown clock
+ * lives (it is derived from `audit_log`), so re-reading keeps the disabled state
+ * honest even across two admins acting at once.
+ */
+export function useNudgeRelease(studentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (assessmentId: string) => nudgeRelease(assessmentId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: studentKeys.assessments(studentId) });
+    },
   });
 }
 

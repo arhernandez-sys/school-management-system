@@ -1,4 +1,5 @@
 import { Box, Card, CardContent, Divider, Stack, Typography } from '@mui/material';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { alpha } from '@mui/material/styles';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
@@ -19,15 +20,23 @@ import {
   StatusBadge,
 } from '@shared/components';
 import type { StatCardColor } from '@shared/components';
+import { strings } from '@i18n/strings';
 import type { TeacherDetail } from '../types';
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy.
+  //
+  // The null check is NOT redundant with the NaN check below it. `updated_at` is now
+  // null until a record is actually edited (D39 `015`), and `new Date(null)` is not an
+  // invalid date — it is the Unix epoch, so this would have printed **01/01/1970** on
+  // every lecturer nobody had edited. (`new Date(undefined)` IS NaN; only null coerces.)
+  if (iso == null || iso === '') return '—';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
+  return Number.isNaN(d.getTime()) ? '—' : formatSchoolDate(d);
 }
 
 /** A single label/value row in the definition-list sections. */
@@ -64,24 +73,35 @@ export interface TeacherProfileSummaryProps {
  * alone — status carries a label, every stat/section carries text).
  */
 export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
-  const classCount = new Set(
-    teacher.classes_taught.map((c) => c.class_ref?.id).filter(Boolean),
-  ).size;
+  /**
+   * Offerings taught, and how many DISTINCT COURSES they cover.
+   *
+   * These two were `class_ref?.id` (distinct homerooms) and `subject?.id` (distinct
+   * subjects). D31 makes the first meaningless — one offering per row, so counting distinct
+   * offerings is just the row count — while the second stays a real, different number: a
+   * lecturer teaching three sections of Algebra covers ONE course.
+   */
+  const classCount = teacher.classes_taught.length;
   const subjectCount = new Set(
-    teacher.classes_taught.map((c) => c.subject?.id).filter(Boolean),
+    teacher.classes_taught.map((c) => c.offering.course.id),
   ).size;
 
   const personalRows: Array<{ label: string; value: ReactNode }> = [
     ...(teacher.gender ? [{ label: 'Gender', value: capitalize(teacher.gender) }] : []),
-    ...(teacher.education ? [{ label: 'Education', value: teacher.education }] : []),
+    // D39 (Meeting #2 item 10) — relabelled from 'Education' along with the column.
+    ...(teacher.academic_qualification
+      ? [{ label: 'Academic qualification', value: teacher.academic_qualification }]
+      : []),
     ...(teacher.designation ? [{ label: 'Designation', value: teacher.designation }] : []),
+    ...(teacher.ssno ? [{ label: 'Social security no.', value: teacher.ssno }] : []),
+    ...(teacher.licensenum ? [{ label: 'Licence no.', value: teacher.licensenum }] : []),
     ...(teacher.email ? [{ label: 'Email', value: teacher.email }] : []),
     ...(teacher.phone ? [{ label: 'Phone', value: teacher.phone }] : []),
   ];
 
   const stats: Array<{ label: string; value: number; color: StatCardColor; icon: ReactNode }> = [
-    { label: 'Classes', value: classCount, color: 'primary', icon: <ClassOutlinedIcon fontSize="small" /> },
-    { label: 'Subjects', value: subjectCount, color: 'secondary', icon: <MenuBookOutlinedIcon fontSize="small" /> },
+    { label: 'Offerings', value: classCount, color: 'primary', icon: <ClassOutlinedIcon fontSize="small" /> },
+    { label: 'Courses', value: subjectCount, color: 'secondary', icon: <MenuBookOutlinedIcon fontSize="small" /> },
     ...(typeof teacher.student_count === 'number'
       ? [
           {
@@ -118,7 +138,7 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
               {teacher.full_name}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {teacher.designation ?? 'Teacher'}
+              {teacher.designation ?? strings.terms.lecturer}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'center' }}>

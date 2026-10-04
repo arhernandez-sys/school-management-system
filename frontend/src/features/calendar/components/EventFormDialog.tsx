@@ -7,7 +7,7 @@ import {
   Switch,
   TextField,
 } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { FormDialog, DateField } from '@shared/components';
 import {
   CATEGORY_META,
   CATEGORY_OPTIONS,
@@ -172,24 +172,20 @@ export function EventFormDialog({
         </TextField>
 
         <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-          <TextField
+          <DateField
             label="Start date"
-            type="date"
             value={form.start_date}
-            onChange={(e) => set('start_date', e.target.value)}
+            onChange={(v) => set('start_date', v)}
             required
             fullWidth
-            InputLabelProps={{ shrink: true }}
             error={Boolean(fieldError('start_date'))}
             helperText={fieldError('start_date')}
           />
-          <TextField
+          <DateField
             label="End date (optional)"
-            type="date"
             value={form.end_date}
-            onChange={(e) => set('end_date', e.target.value)}
+            onChange={(v) => set('end_date', v)}
             fullWidth
-            InputLabelProps={{ shrink: true }}
             error={Boolean(fieldError('end_date'))}
             helperText={fieldError('end_date') ?? 'Leave blank for a single day'}
           />

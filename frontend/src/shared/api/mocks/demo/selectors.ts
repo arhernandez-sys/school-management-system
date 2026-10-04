@@ -15,19 +15,18 @@
  * derivation logic (roster ∪ grade-rows, letter bands, attendance rate) stays in one
  * place and screens stay consistent.
  */
-import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY } from './data';
+import { DEMO_DATASET, DEMO_IDS, DEMO_TODAY, DEMO_TODAY_ISO } from './data';
 import type {
   DemoAcademicYear,
   DemoAssessment,
   DemoAssessmentGrade,
-  DemoClassSubject,
+  DemoCourse,
   DemoEnrollment,
   DemoEvent,
   DemoListParams,
+  DemoOffering,
   DemoPage,
-  DemoSection,
   DemoStudent,
-  DemoSubject,
   DemoTeacher,
 } from './types';
 
@@ -37,14 +36,21 @@ const D = DEMO_DATASET;
 /**
  * Paginate + sort an already-filtered array. `sort` is "field" (asc) or "-field"
  * (desc); an `id` tiebreaker keeps pages stable. `page` is 1-based; `page_size`
- * clamps to [1, 100]. Returns the `Page[T]` envelope shape.
+ * clamps to [1, 200]. Returns the `Page[T]` envelope shape.
+ *
+ * **D43 — the ceiling was 100 here and 200 on the server.** `MAX_PAGE_SIZE` in
+ * `backend/app/core/pagination.py` is 200, so a request for 200 that the real API
+ * answers in full came back silently truncated in the demo. The print sheets ask for
+ * exactly 200, so the divergence showed up as a catalog sheet that printed 100 of 114
+ * courses under a heading saying "Course catalog" — the demo certifying behaviour the
+ * backend does not have, which is the failure mode this mock layer has produced before.
  */
 export function paginate<T extends Record<string, unknown>>(
   items: T[],
   params: DemoListParams = {},
 ): DemoPage<T> {
   const page = Math.max(1, params.page ?? 1);
-  const pageSize = Math.min(100, Math.max(1, params.page_size ?? 25));
+  const pageSize = Math.min(200, Math.max(1, params.page_size ?? 25));
 
   let sorted = items;
   if (params.sort) {
@@ -77,12 +83,48 @@ function textIncludes(haystack: string | null | undefined, needle: string): bool
 }
 
 // ── Lookups ─────────────────────────────────────────────────────────────────────
-export const getSubject = (id: string): DemoSubject | undefined => D.subjects.find((s) => s.id === id);
-export const getSection = (id: string): DemoSection | undefined => D.sections.find((s) => s.id === id);
+export const getCourse = (id: string): DemoCourse | undefined => D.courses.find((c) => c.id === id);
+export const getOffering = (id: string): DemoOffering | undefined =>
+  D.offerings.find((o) => o.id === id);
 export const getTeacher = (id: string): DemoTeacher | undefined => D.teachers.find((t) => t.id === id);
 export const getStudent = (id: string): DemoStudent | undefined => D.students.find((s) => s.id === id);
-export const getClassSubject = (id: string): DemoClassSubject | undefined =>
-  D.class_subjects.find((c) => c.id === id);
+export const getSemester = (id: string) => D.semesters.find((s) => s.id === id);
+
+/**
+ * The offering's LABEL — the ONE place the demo derives it, mirroring the server's
+ * `offerings/labels.offering_label`.
+ *
+ * `course_offerings` stores no name: the label is course code + section code, so it is
+ * computed. Deriving it here rather than storing it on the row is the whole reason a screen
+ * cannot show a different name than the API would — and it is why every handler returns
+ * `offeringRef(...)` instead of assembling its own string.
+ *
+ * ORDERING NOTE: never sort on this string. "MATH1110-2" sorts before "MATH1110-10". Sort on
+ * `course.code` then `section_code` — see `OFFERING_ORDER` below.
+ */
+export function offeringLabel(offering: DemoOffering | undefined): string {
+  if (!offering) return '';
+  const course = getCourse(offering.course_id);
+  const code = course?.code ?? '?';
+  return offering.section_code ? `${code}-${offering.section_code}` : code;
+}
+
+/** Comparator matching the server's `OFFERING_ORDER`: course code, then section code. */
+export function compareOfferings(a: DemoOffering, b: DemoOffering): number {
+  const ac = getCourse(a.course_id)?.code ?? '';
+  const bc = getCourse(b.course_id)?.code ?? '';
+  return (
+    ac.localeCompare(bc) ||
+    (a.section_code ?? '').localeCompare(b.section_code ?? '') ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+/** The academic year an offering belongs to — resolved THROUGH its semester (D31). */
+export function yearIdOfOffering(offeringId: string): string | undefined {
+  const offering = getOffering(offeringId);
+  return offering ? getSemester(offering.semester_id)?.academic_year_id : undefined;
+}
 
 export const getActiveSemester = () => D.semesters.find((s) => s.is_active);
 export const getActiveYear = () => D.academic_years.find((y) => y.status === 'active');
@@ -90,27 +132,33 @@ export const getActiveGradingScale = () =>
   D.grading_scales.find((g) => g.academic_year_id === DEMO_IDS.activeYearId);
 
 // ── Academic-year scoping (per-module year switcher) ────────────────────────────
-// Sections belong to exactly one academic year, so most section-keyed selectors are
-// automatically year-correct once roster/enrollment resolve the section's semester
-// (see rosterFor / activeEnrollmentFor below). These helpers filter the list
-// surfaces (students / teachers / classes / grades) by the selected year.
+// **D31 changed how a year is resolved.** A `classes` row carried `academic_year_id`, so the
+// year was one attribute access. An offering carries `semester_id` and nothing else, so the
+// year is a HOP through the semester — `offeringsForYear` below is the only place that hop
+// is spelled out, exactly as `offerings/queries.offerings_in_year` is on the server.
+//
+// The gain is what the hop buys: an offering can now say WHICH TERM it runs in, which is
+// what makes "the same course in Semester 1 and again in Semester 2" expressible at all.
 export const listAcademicYears = () =>
   [...D.academic_years].sort((a, b) => b.name.localeCompare(a.name));
-export function sectionsForYear(yearId: string): DemoSection[] {
-  return D.sections.filter((s) => s.academic_year_id === yearId);
+
+export function offeringsForYear(yearId: string): DemoOffering[] {
+  const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
+  return D.offerings.filter((o) => semIds.has(o.semester_id));
 }
 /** The Semester 1 id for a year (where the demo anchors that year's roster/grades). */
 export function primarySemesterIdForYear(yearId: string): string | undefined {
   return D.semesters.find((s) => s.academic_year_id === yearId && s.sequence === 1)?.id;
 }
-/** The semester a section's roster/attendance lives under (derived from its year). */
-export function semesterIdForSection(sectionId: string): string | undefined {
-  const sec = getSection(sectionId);
-  return sec ? primarySemesterIdForYear(sec.academic_year_id) : DEMO_IDS.activeSemesterId;
-}
-export function classSubjectsForYear(yearId: string): DemoClassSubject[] {
-  const secIds = new Set(sectionsForYear(yearId).map((s) => s.id));
-  return D.class_subjects.filter((c) => secIds.has(c.section_id));
+/**
+ * The semester an offering's roster/attendance lives under.
+ *
+ * This is now simply the offering's OWN semester. It used to resolve "the first semester of
+ * the section's year", which was a guess forced on it by a year-scoped row — and it was
+ * wrong for anything that actually happened in a second term.
+ */
+export function semesterIdForOffering(offeringId: string): string | undefined {
+  return getOffering(offeringId)?.semester_id ?? DEMO_IDS.activeSemesterId;
 }
 /** Students who have any enrollment in a section belonging to the given year. */
 export function studentIdsForYear(yearId: string): Set<string> {
@@ -120,7 +168,7 @@ export function studentIdsForYear(yearId: string): Set<string> {
 /** Teachers assigned to any offering in the given year. */
 export function teacherIdsForYear(yearId: string): Set<string> {
   const ids = new Set<string>();
-  for (const cs of classSubjectsForYear(yearId)) cs.teacher_ids.forEach((t) => ids.add(t));
+  for (const off of offeringsForYear(yearId)) off.teacher_ids.forEach((tid) => ids.add(tid));
   return ids;
 }
 /** The academic years a student has any enrollment in (newest first). */
@@ -135,11 +183,58 @@ export function yearsForStudent(studentId: string): DemoAcademicYear[] {
     .filter((y) => yearIds.has(y.id))
     .sort((a, b) => b.name.localeCompare(a.name));
 }
-/** The section a student was enrolled in for a given year (undefined if none). */
-export function sectionForStudentInYear(studentId: string, yearId: string): DemoSection | undefined {
+/**
+ * EVERY offering a student was enrolled in for a given year, in course-code order.
+ *
+ * Ended enrollments (`unenrolled_at` set) still count: for a PAST year that is the normal
+ * state, so filtering them out would empty every archived-year screen.
+ *
+ * A year now spans BOTH semesters' offerings, which is a real change in what this answers:
+ * a student who takes Algebra in Semester 1 and again in Semester 2 has TWO offerings here,
+ * not one row seen twice. That is the record, and collapsing them would hide a repeat.
+ */
+export function offeringsForStudentInYear(studentId: string, yearId: string): DemoOffering[] {
   const semIds = new Set(D.semesters.filter((s) => s.academic_year_id === yearId).map((s) => s.id));
-  const enr = D.enrollments.find((e) => e.student_id === studentId && semIds.has(e.semester_id));
-  return enr ? getSection(enr.section_id) : undefined;
+  const seen = new Map<string, DemoOffering>();
+  for (const e of D.enrollments) {
+    if (e.student_id !== studentId || !semIds.has(e.semester_id)) continue;
+    const off = getOffering(e.offering_id);
+    if (off && !seen.has(off.id)) seen.set(off.id, off);
+  }
+  return [...seen.values()].sort(compareOfferings);
+}
+
+/** The offerings a student is ACTIVELY enrolled in right now (the active semester). */
+export function currentOfferingsFor(studentId: string): DemoOffering[] {
+  const seen = new Map<string, DemoOffering>();
+  for (const e of D.enrollments) {
+    if (e.student_id !== studentId) continue;
+    if (e.semester_id !== DEMO_IDS.activeSemesterId || e.unenrolled_at) continue;
+    const off = getOffering(e.offering_id);
+    if (off && !seen.has(off.id)) seen.set(off.id, off);
+  }
+  return [...seen.values()].sort(compareOfferings);
+}
+
+/**
+ * Every offering a student sits — in `yearId` if given, else their live load.
+ *
+ * The one place the "which offerings, therefore which gradebooks" question is answered, so
+ * the assessments tab, My Grades and the report card cannot disagree.
+ *
+ * **D31 removed a whole hop.** This used to resolve the student's SECTIONS and then map each
+ * to its offerings through `class_subjects`; one offering per enrollment makes that a direct
+ * read, and the intermediate `classSubjectsForSections` helper is gone with it.
+ */
+export function offeringsForStudent(studentId: string, yearId?: string | null): DemoOffering[] {
+  return yearId ? offeringsForStudentInYear(studentId, yearId) : currentOfferingsFor(studentId);
+}
+
+/** The weekly meetings of one offering, in Mon→Fri / earliest-first order. */
+export function meetingsForOffering(offeringId: string) {
+  return D.offering_meetings
+    .filter((m) => m.offering_id === offeringId)
+    .sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time));
 }
 
 // ── Demo session scope (the login cookie carries only a role) ────────────────────
@@ -155,8 +250,67 @@ export const DEMO_REPRESENTATIVE_USER_ID: Record<string, string> = {
   principal: DEMO_IDS.principalUserId,
   secretary: 'user-secretary',
   teacher: 'user-teach-1', // Maria Reyes — leads several offerings
-  student: 'user-stu-1', // Ana Lopez — active, Form 1A
+  student: 'user-stu-1', // Freddy Lopez — active, first-year, MATH1110-01
+  // D43. A DIFFERENT person from the lecturer login on purpose: if both resolved to
+  // Maria, nothing on screen would distinguish "what a lecturer sees" from "what a head
+  // sees", and the demo would appear to prove a scoping rule it never exercised.
+  hod: 'user-teach-2',
+  auditor: 'user-auditor',
 };
+
+// ── HOD scope (D43) ─────────────────────────────────────────────────────────────
+/**
+ * The mock mirror of `backend/app/core/rbac.py`'s HOD helpers. Same derivation chain:
+ * `program_heads → program_courses → courses → offerings → class_teachers`.
+ *
+ * Every one of these returns an EMPTY array for a caller who heads nothing, and every
+ * caller must treat that as "sees nothing extra" — never as "no filter". Getting that
+ * backwards is what would turn an unconfigured head into a Dean, which is the single
+ * most damaging way this role can fail.
+ */
+export function demoHodProgramIds(role: string | null | undefined): string[] {
+  if (role !== 'hod') return [];
+  const userId = DEMO_REPRESENTATIVE_USER_ID.hod;
+  const teacher = D.teachers.find((t) => t.user_id === userId);
+  if (!teacher) return [];
+  return D.program_heads.filter((h) => h.teacher_id === teacher.id).map((h) => h.program_id);
+}
+
+/** Offerings of every course in the programme(s) this caller heads. */
+export function demoHodOfferingIds(role: string | null | undefined): string[] {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  const courseIds = new Set(
+    D.program_courses.filter((pc) => programIds.has(pc.program_id)).map((pc) => pc.course_id),
+  );
+  return D.offerings.filter((o) => courseIds.has(o.course_id)).map((o) => o.id);
+}
+
+/** Students reading for the programme(s) this caller heads. */
+export function demoHodStudentIds(role: string | null | undefined): string[] {
+  const programIds = new Set(demoHodProgramIds(role));
+  if (programIds.size === 0) return [];
+  return D.students
+    .filter((s) => s.program_id !== null && programIds.has(s.program_id))
+    .map((s) => s.id);
+}
+
+/** Lecturers assigned to any offering in the programme(s) this caller heads. */
+export function demoHodTeacherIds(role: string | null | undefined): string[] {
+  const offeringIds = new Set(demoHodOfferingIds(role));
+  if (offeringIds.size === 0) return [];
+  const ids = new Set<string>();
+  for (const o of D.offerings) {
+    if (offeringIds.has(o.id)) for (const t of o.teacher_ids) ids.add(t);
+  }
+  return [...ids];
+}
+
+/** The seeded lecturer profile a demo `hod` login stands in for — they teach too. */
+export function currentDemoHodTeacher(role: string | null | undefined): DemoTeacher | undefined {
+  if (role !== 'hod') return undefined;
+  return D.teachers.find((t) => t.user_id === DEMO_REPRESENTATIVE_USER_ID.hod);
+}
 
 /** The seeded student a demo `student` login stands in for (undefined for other roles). */
 export function currentDemoStudent(role: string | null | undefined): DemoStudent | undefined {
@@ -173,13 +327,49 @@ export function currentDemoTeacher(role: string | null | undefined): DemoTeacher
 // ── Students ────────────────────────────────────────────────────────────────────
 export interface ListStudentsParams extends DemoListParams {
   status?: string | null;
-  section_id?: string | null;
-  grade_level?: string | null;
-  /** teacher scope: restrict to students in sections this teacher owns any subject of. */
+  /** Narrow to the roster of ONE offering (D31: was `section_id`). */
+  offering_id?: string | null;
+  /** teacher scope: restrict to students in an offering this lecturer teaches. */
   teacher_id?: string | null;
-  /** year scope: restrict to students enrolled in a section of this academic year. */
+  /** D43 HOD scope: an explicit allow-list of student ids (their programme's). */
+  student_ids?: string[] | null;
+  /** year scope: restrict to students enrolled in an offering of this academic year. */
   academic_year_id?: string | null;
+  /**
+   * D32 (brief §3). Attribute filters on the STUDENT RECORD, not on their enrolment — so
+   * a graduated student still matches, which is what "print all Catholic students" means.
+   */
+  gender?: string | null;
+  religion?: string | null;
+  program_id?: string | null;
+  /** D40 — a fourth attribute filter, on the same terms as the three above. */
+  civil_status?: string | null;
 }
+/**
+ * D32 — the DISTINCT religions present on non-deleted students, sorted (brief §3).
+ *
+ * Backs `GET /students/filter-options`. Derived rather than hardcoded for the same reason
+ * the server derives it: religion is free text on the admissions form, so a fixed list
+ * would offer options that match nothing.
+ */
+export function studentReligions(): string[] {
+  return [...new Set(D.students.map((s) => s.religion).filter((r): r is string => Boolean(r)))].sort();
+}
+
+/**
+ * D40 — the DISTINCT civil statuses present on non-deleted students, sorted.
+ *
+ * Served beside `studentReligions` on `GET /students/filter-options`. The dropdown itself
+ * is the fixed `CIVIL_STATUSES` vocabulary; this is what the register holds BEYOND it, so
+ * a legacy value stays selectable instead of being a column the table prints and the
+ * filter cannot reach.
+ */
+export function studentCivilStatuses(): string[] {
+  return [
+    ...new Set(D.students.map((s) => s.civil_status).filter((c): c is string => Boolean(c))),
+  ].sort();
+}
+
 export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStudent> {
   let rows = D.students;
   // Year scope: for a past year, restrict to students enrolled that year. For the
@@ -189,24 +379,75 @@ export function listStudents(params: ListStudentsParams = {}): DemoPage<DemoStud
     rows = rows.filter((s) => ids.has(s.id));
   }
   if (params.teacher_id) {
-    const sectionIds = new Set(sectionsOwnedByTeacher(params.teacher_id).map((s) => s.id));
-    rows = rows.filter((s) => s.section_id && sectionIds.has(s.section_id));
+    // A student is in scope if ANY of their offerings is one this lecturer teaches.
+    const ownedIds = new Set(offeringsOwnedByTeacher(params.teacher_id).map((o) => o.id));
+    rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => ownedIds.has(o.id)));
+  }
+  if (params.student_ids) {
+    // D43 — the HOD's programme scope. An explicit allow-list rather than another
+    // `teacher_id`-style derivation, because a head's students come from
+    // `student_profiles.program_id`, NOT from shared enrolment: a first-year not yet
+    // enrolled in anything is still theirs, and an enrolment-based filter would drop
+    // exactly those students.
+    const allowed = new Set(params.student_ids);
+    rows = rows.filter((s) => allowed.has(s.id));
   }
   if (params.status) rows = rows.filter((s) => s.status === params.status);
-  if (params.section_id) rows = rows.filter((s) => s.section_id === params.section_id);
-  if (params.grade_level) {
-    rows = rows.filter((s) => {
-      const sec = s.section_id ? getSection(s.section_id) : undefined;
-      return sec?.grade_level === params.grade_level;
-    });
+  if (params.offering_id) {
+    const wanted = params.offering_id;
+    rows = rows.filter((s) => currentOfferingsFor(s.id).some((o) => o.id === wanted));
   }
+  // The level filter reads the STUDENT's own `year_of_study`. There is nothing on an
+  // offering to confuse it with any more — `grade_level` went with the homeroom.
+  if (params.year_of_study) rows = rows.filter((s) => s.year_of_study === params.year_of_study);
+  // D32 — all three AND with everything above, mirroring `students/service.list_students`.
+  // Religion is EXACT, never a substring: the options come from the distinct stored
+  // values, and a LIKE would only conflate two real ones ("Catholic" / "Roman Catholic").
+  if (params.gender) rows = rows.filter((s) => s.gender === params.gender);
+  if (params.religion) rows = rows.filter((s) => s.religion === params.religion);
+  // D40 — exact for the same reason, and the write path normalises so the stored
+  // values converge on the four canonical ones.
+  if (params.civil_status) rows = rows.filter((s) => s.civil_status === params.civil_status);
+  if (params.program_id) rows = rows.filter((s) => s.program_id === params.program_id);
   if (params.search) {
     const q = params.search;
-    rows = rows.filter((s) => textIncludes(s.full_name, q) || textIncludes(s.student_number, q));
+    // Matches the backend (students/service.py): the display string AND the parts,
+    // so "Perez Ana" — surname first, how a register is read — finds the student.
+    rows = rows.filter(
+      (s) =>
+        textIncludes(s.full_name, q) ||
+        textIncludes(s.first_name, q) ||
+        textIncludes(s.last_name, q) ||
+        textIncludes(s.student_number, q),
+    );
   }
+
+  // D30 §D10 — the register is ordered by SURNAME then given name, which `paginate`
+  // cannot express (it sorts on one field). Any name-ish sort key is resolved here
+  // and `paginate` is then asked for no sort at all; anything else falls through to
+  // its single-column path unchanged.
+  const sort = params.sort ?? 'last_name';
+  const desc = sort.startsWith('-');
+  const key = desc ? sort.slice(1) : sort;
+  if (['last_name', 'first_name', 'name', 'full_name'].includes(key)) {
+    const primary = key === 'first_name' ? 'first_name' : 'last_name';
+    const secondary = key === 'first_name' ? 'last_name' : 'first_name';
+    rows = [...rows].sort((a, b) => {
+      const cmp =
+        (a[primary] ?? '').localeCompare(b[primary] ?? '') ||
+        (a[secondary] ?? '').localeCompare(b[secondary] ?? '') ||
+        a.id.localeCompare(b.id);
+      return desc ? -cmp : cmp;
+    });
+    return paginate(rows as unknown as Array<Record<string, unknown>>, {
+      ...params,
+      sort: undefined,
+    }) as unknown as DemoPage<DemoStudent>;
+  }
+
   return paginate(rows as unknown as Array<Record<string, unknown>>, {
     ...params,
-    sort: params.sort ?? 'full_name',
+    sort,
   }) as unknown as DemoPage<DemoStudent>;
 }
 
@@ -216,9 +457,18 @@ export interface ListTeachersParams extends DemoListParams {
   specialization?: string | null;
   /** year scope: restrict to teachers assigned to an offering in this academic year. */
   academic_year_id?: string | null;
+  /** D43 HOD scope: an explicit allow-list of lecturer ids (their programme's). */
+  teacher_ids?: string[] | null;
 }
 export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeacher> {
   let rows = D.teachers;
+  if (params.teacher_ids) {
+    // D43 — "all the teachers under their program". An empty array narrows to nothing,
+    // which is the correct answer for a head with no appointment; it must never be read
+    // as "no filter".
+    const allowed = new Set(params.teacher_ids);
+    rows = rows.filter((t) => allowed.has(t.id));
+  }
   if (params.academic_year_id && params.academic_year_id !== DEMO_IDS.activeYearId) {
     const ids = teacherIdsForYear(params.academic_year_id);
     rows = rows.filter((t) => ids.has(t.id));
@@ -239,80 +489,129 @@ export function listTeachers(params: ListTeachersParams = {}): DemoPage<DemoTeac
   }) as unknown as DemoPage<DemoTeacher>;
 }
 
-// ── Subjects (catalog) ──────────────────────────────────────────────────────────
-export interface ListSubjectsParams extends DemoListParams {
+// ── Courses (catalog) ───────────────────────────────────────────────────────────
+export interface ListCoursesParams extends DemoListParams {
   is_active?: boolean | null;
+  /** Drop the active filter and return BOTH. Mirrors the server parameter — `is_active`
+   *  is an equality filter and has no value meaning "both". */
+  include_retired?: boolean;
 }
-export function listSubjects(params: ListSubjectsParams = {}): DemoPage<DemoSubject> {
-  let rows = D.subjects;
-  // Default is active-only (picker hides retired subjects) unless explicitly false.
+export function listCourses(params: ListCoursesParams = {}): DemoPage<DemoCourse> {
+  let rows = D.courses;
+  // Default is active-only (picker hides retired courses) unless explicitly false.
   const wantActive = params.is_active ?? true;
-  if (wantActive !== null) rows = rows.filter((s) => s.is_active === wantActive);
+  if (!params.include_retired && wantActive !== null) {
+    rows = rows.filter((c) => c.is_active === wantActive);
+  }
   if (params.search) {
     const q = params.search;
-    rows = rows.filter((s) => textIncludes(s.name, q) || textIncludes(s.code, q));
+    rows = rows.filter((c) => textIncludes(c.name, q) || textIncludes(c.code, q));
   }
   return paginate(rows as unknown as Array<Record<string, unknown>>, {
     ...params,
     sort: params.sort ?? 'name',
-  }) as unknown as DemoPage<DemoSubject>;
+  }) as unknown as DemoPage<DemoCourse>;
 }
 
-// ── Sections / ownership ────────────────────────────────────────────────────────
-export function classSubjectsForSection(sectionId: string): DemoClassSubject[] {
-  return D.class_subjects.filter((c) => c.section_id === sectionId);
-}
-export function sectionsOwnedByTeacher(teacherId: string): DemoSection[] {
-  const sectionIds = new Set(
-    D.class_subjects.filter((c) => c.teacher_ids.includes(teacherId)).map((c) => c.section_id),
-  );
-  return D.sections.filter((s) => sectionIds.has(s.id));
-}
-export function classSubjectsOwnedByTeacher(teacherId: string): DemoClassSubject[] {
-  return D.class_subjects.filter((c) => c.teacher_ids.includes(teacherId));
+// ── Offerings / ownership ───────────────────────────────────────────────────────
+export function offeringsOwnedByTeacher(teacherId: string): DemoOffering[] {
+  return D.offerings.filter((o) => o.teacher_ids.includes(teacherId));
 }
 
 /**
- * Roster (unenrolled_at IS NULL) of a section for that section's own semester.
- * Because a section belongs to exactly one academic year, resolving the semester
- * from the section makes this correct for BOTH the active and archived years.
+ * Roster (unenrolled_at IS NULL) of an offering, in the offering's OWN semester.
+ *
+ * The semester comes off the offering, so this is correct for the active year, an archived
+ * year, AND a second term of the current year — the case the previous version could not
+ * express, because it inferred "Semester 1 of the section's year".
  */
-export function rosterFor(sectionId: string): DemoStudent[] {
-  const semId = semesterIdForSection(sectionId);
+export function rosterFor(offeringId: string): DemoStudent[] {
+  const semId = semesterIdForOffering(offeringId);
   const ids = D.enrollments
-    .filter((e) => e.section_id === sectionId && e.semester_id === semId && !e.unenrolled_at)
+    .filter((e) => e.offering_id === offeringId && e.semester_id === semId && !e.unenrolled_at)
     .map((e) => e.student_id);
   return D.students.filter((s) => ids.includes(s.id));
 }
-export function activeEnrollmentFor(studentId: string, sectionId: string): DemoEnrollment | undefined {
-  const semId = semesterIdForSection(sectionId);
+export function activeEnrollmentFor(
+  studentId: string,
+  offeringId: string,
+): DemoEnrollment | undefined {
+  const semId = semesterIdForOffering(offeringId);
   return D.enrollments.find(
     (e) =>
       e.student_id === studentId &&
-      e.section_id === sectionId &&
+      e.offering_id === offeringId &&
       e.semester_id === semId &&
       !e.unenrolled_at,
   );
 }
-export function enrolledCount(sectionId: string): number {
-  return rosterFor(sectionId).length;
+export function enrolledCount(offeringId: string): number {
+  return rosterFor(offeringId).length;
 }
 
 // ── Assessments / grades ────────────────────────────────────────────────────────
-export function assessmentsForClassSubject(classSubjectId: string): DemoAssessment[] {
-  return D.assessments.filter((a) => a.class_subject_id === classSubjectId);
+export function assessmentsForOffering(offeringId: string): DemoAssessment[] {
+  return D.assessments.filter((a) => a.offering_id === offeringId);
 }
 export function gradesForAssessment(assessmentId: string): DemoAssessmentGrade[] {
   return D.assessment_grades.filter((g) => g.assessment_id === assessmentId);
 }
 
 /**
- * The gradebook read for a class_subject: roster (active enrollment) ∪ any student
- * who has a grade row for this offering (M3 — transferred students stay visible).
+ * The gradebook read for an offering: roster (active enrollment) ∪ any student who has a
+ * grade row for it (M3 — a student who switched sections stays visible).
  * Returns rows of { student, enrollment_id, is_active_member, cells[] }.
  */
-export function gradebookFor(classSubjectId: string): {
-  class_subject: DemoClassSubject | undefined;
+/**
+ * D32 mid-term revision eligibility, mirroring
+ * `backend/app/modules/grades/revisions.py::midterm_revision_eligible` (brief §1).
+ *
+ * Demo mode has to carry this rule too. The last two times a grading rule lived in only
+ * one of the two implementations, demo mode certified a screen the real backend refused.
+ *
+ * **ONE DELIBERATE DIVERGENCE.** The server reads `assessments.created_at` and
+ * `assessment_grades.graded_at`; the demo dataset has neither — it is a hand-authored
+ * fixture with no audit stamps. `assessment_date` stands in for both. That is the right
+ * proxy here: it is when the work happened, so an assessment dated before the window
+ * opened is exactly the "was part of the mid-term submission" case the rule is about, and
+ * it makes the two states visible in the marquee gradebook. It is NOT the rule the server
+ * applies, and the seed comment on `SEM_ACTIVE` says so.
+ */
+export function midtermRevisionEligible(
+  a: DemoAssessment,
+  g: DemoAssessmentGrade | undefined,
+): { eligible: boolean; reason: string | null } {
+  const sem = getSemester(a.semester_id);
+  if (!sem) return { eligible: false, reason: 'not_current_semester' };
+
+  const start = sem.midterm_submission_start;
+  const end = sem.midterm_submission_end;
+  if (!start || !end) return { eligible: false, reason: 'no_midterm_window' };
+
+  // DEMO_TODAY, not the real clock — same reason as `gradeWindow()` in the handler: the
+  // dataset is deterministic, and reading `Date.now()` would make the answer depend on
+  // when the demo happens to be opened.
+  const now = new Date(DEMO_TODAY_ISO).getTime();
+  if (now <= new Date(end).getTime()) {
+    return { eligible: false, reason: 'midterm_window_open' };
+  }
+
+  const openedAt = new Date(start).getTime();
+  const worked = a.assessment_date ? new Date(a.assessment_date).getTime() : null;
+  if (worked === null || worked >= openedAt) {
+    return { eligible: false, reason: 'assessment_after_window' };
+  }
+  if (!g) return { eligible: false, reason: 'not_graded' };
+  if (g.status !== 'graded' || g.score == null) {
+    return { eligible: false, reason: 'not_graded' };
+  }
+  if (!sem.is_active) return { eligible: false, reason: 'not_current_semester' };
+
+  return { eligible: true, reason: null };
+}
+
+export function gradebookFor(offeringId: string): {
+  offering: DemoOffering | undefined;
   assessments: DemoAssessment[];
   rows: Array<{
     student: DemoStudent;
@@ -325,16 +624,18 @@ export function gradebookFor(classSubjectId: string): {
       makeup_score: number | null;
       is_released: boolean;
       letter?: string;
+      can_request_revision: boolean;
+      revision_blocked_reason: string | null;
     }>;
     term_numeric: number | null;
     term_letter: string | null;
   }>;
 } {
-  const cs = getClassSubject(classSubjectId);
-  const asmts = assessmentsForClassSubject(classSubjectId);
+  const offering = getOffering(offeringId);
+  const asmts = assessmentsForOffering(offeringId);
   const asmtIds = new Set(asmts.map((a) => a.id));
 
-  const activeStudents = cs ? rosterFor(cs.section_id) : [];
+  const activeStudents = offering ? rosterFor(offering.id) : [];
   const gradedStudentIds = new Set(
     D.assessment_grades.filter((g) => asmtIds.has(g.assessment_id)).map((g) => g.student_id),
   );
@@ -344,12 +645,13 @@ export function gradebookFor(classSubjectId: string): {
 
   const rows = allStudents.map((student) => {
     const isActive = activeIds.has(student.id);
-    const enr = cs ? activeEnrollmentFor(student.id, cs.section_id) : undefined;
+    const enr = offering ? activeEnrollmentFor(student.id, offering.id) : undefined;
     const cells = asmts.map((a) => {
       const g = D.assessment_grades.find(
         (row) => row.assessment_id === a.id && row.student_id === student.id,
       );
       const released = g?.is_released ?? a.is_released;
+      const revision = midtermRevisionEligible(a, g);
       return {
         assessment_id: a.id,
         status: g?.status ?? ('pending' as DemoAssessmentGrade['status']),
@@ -359,9 +661,13 @@ export function gradebookFor(classSubjectId: string): {
         ...(g?.status === 'graded' && g.score != null
           ? { letter: letterFor((g.score / a.max_score) * 100) }
           : {}),
+        // D32. The handler zeroes this for non-Lecturer viewers — the selector has no
+        // caller identity, and the server's rule is "may YOU file one".
+        can_request_revision: revision.eligible,
+        revision_blocked_reason: revision.reason,
       };
     });
-    const term = computeTermGrade(student.id, classSubjectId);
+    const term = computeTermGrade(student.id, offeringId);
     return {
       student,
       enrollment_id: enr?.id ?? null,
@@ -372,19 +678,22 @@ export function gradebookFor(classSubjectId: string): {
     };
   });
 
-  return { class_subject: cs, assessments: asmts, rows };
+  return { offering, assessments: asmts, rows };
 }
 
 /**
- * Weighted term grade for (student, class_subject) in the active semester +
- * derived letter. Weighted by each assessment's `weight`; only `graded` rows count
- * (pending/excused/exempt excluded, api-spec §8.3). Returns { numeric, letter }.
+ * Weighted term grade for (student, offering) + derived letter. Weighted by each
+ * assessment's `weight`; only `graded` rows count (pending/excused/exempt excluded,
+ * api-spec §8.3). Returns { numeric, letter }.
+ *
+ * There is no separate "in the active semester" qualifier any more: an offering IS a term,
+ * so the assessments it holds are that term's by construction.
  */
 export function computeTermGrade(
   studentId: string,
-  classSubjectId: string,
+  offeringId: string,
 ): { numeric: number | null; letter: string | null; weight_base_used: number } {
-  const asmts = assessmentsForClassSubject(classSubjectId).filter((a) => a.status === 'graded');
+  const asmts = assessmentsForOffering(offeringId).filter((a) => a.status === 'graded');
   let weightedSum = 0;
   let weightBase = 0;
   for (const a of asmts) {
@@ -410,64 +719,289 @@ export function computeTermGrade(
   return { numeric, letter: letterFor(numeric), weight_base_used: weightBase };
 }
 
-/** Derive the letter grade for a 0..100 numeric against the active bands (D11). */
+/**
+ * Derive the letter grade for a 0..100 numeric against the active bands (D11).
+ *
+ * **HALF-OPEN on `min_score`** — the highest band whose floor the value clears, with
+ * `max_score` never consulted. This mirrors `calc.letter_for` (OQ-DB2), and D30 made it
+ * mandatory rather than merely tidy: the BAJC scale's ceilings are the integers the
+ * college prints (A- is 90-94), so the old `min <= v && v <= max` test left every
+ * fractional value between bands — a 94.5, an 89.7 — matching NO band and rendering
+ * blank where a letter belongs.
+ */
 export function letterFor(numeric: number): string {
   const scale = getActiveGradingScale();
   if (!scale) return '';
-  const band = scale.bands.find((b) => numeric >= b.min_score && numeric <= b.max_score);
-  return band?.letter ?? '';
+  const clamped = Math.min(Math.max(numeric, 0), 100);
+  const ordered = [...scale.bands].sort((a, b) => b.min_score - a.min_score);
+  const band = ordered.find((b) => clamped >= b.min_score);
+  // Below every floor is only reachable if the lowest band starts above 0.
+  return (band ?? ordered[ordered.length - 1])?.letter ?? '';
+}
+
+/** The 4.00-scale value of a letter, or null if the scale cannot price it (D30 §D5). */
+export function gradePointFor(letter: string | null): number | null {
+  if (!letter) return null;
+  const scale = getActiveGradingScale();
+  const wanted = letter.trim().toLowerCase();
+  const band = scale?.bands.find((b) => b.letter.trim().toLowerCase() === wanted);
+  return band?.grade_point ?? null;
+}
+
+/**
+ * Credit-weighted GPA, mirroring `calc.compute_gpa` (D30 §D5, decision #4).
+ *
+ * The denominator is ALL enrolled credits: an entry with no letter contributes 0 quality
+ * points and keeps its credits. Restricting it to graded courses is the divergence that
+ * would make demo mode print 3.50 where the real backend prints 2.10 — and this project
+ * has already paid twice for demo mode certifying a screen the server answered
+ * differently.
+ *
+ * `null` when no credits participated; the documents render that as an em dash rather
+ * than a 0.00 that would read as total failure.
+ */
+export function gpaFor(
+  entries: { credits: number | null; letter: string | null }[],
+): { gpa: number | null; total_credits: number } {
+  let credits = 0;
+  let quality = 0;
+  for (const entry of entries) {
+    const weight = entry.credits ?? 0;
+    if (weight <= 0) continue;
+    credits += weight;
+    quality += (gradePointFor(entry.letter) ?? 0) * weight;
+  }
+  if (credits <= 0) return { gpa: null, total_credits: 0 };
+  return { gpa: Math.round((quality / credits) * 100) / 100, total_credits: credits };
+}
+
+// ── Prerequisites (D30 §D4) ─────────────────────────────────────────────────────
+/**
+ * Every course this student has PASSED, outside `excludeSemesterId`.
+ *
+ * Mirrors `grades/service.completed_course_results` closely enough for the gate to
+ * agree with the server: a result counts only if the student sat the course in some
+ * OTHER term and passed it. Excluding the target term is what stops a course from
+ * satisfying its own prerequisite — enrolling into MATH1 and MATH2 together must not
+ * wave MATH2 through.
+ *
+ * Simpler than the server in one way, deliberately: demo mode has no frozen snapshots
+ * and one grading scale, so there is nothing to reconcile across years.
+ */
+export function passedCourseIds(studentId: string, excludeSemesterId: string): Set<string> {
+  const results = courseResultsFor(studentId, excludeSemesterId);
+  const passed = new Set<string>();
+  for (const [courseId, r] of results) if (r.passed) passed.add(courseId);
+  return passed;
+}
+
+/**
+ * Every course this student has a RESULT for, and whether it was a pass — mirrors
+ * `grades/service.completed_course_results` (D30 §D4).
+ *
+ * ⚠️ THE THREE-WAY DISTINCTION IS THE POINT, and `passedCourseIds` above could not
+ * express it: a `Set` of passes cannot tell "never took it" from "took it and failed",
+ * so the demo reported both as a flat "not passed". The server has always said
+ * *"Not yet taken."* or *"Taken but not passed (earned F)."* — and those are different
+ * conversations with a student. The client asked for exactly this distinction.
+ *
+ * A course with an enrolment but NO computable letter yields no result at all, not a
+ * failure — same as the server, which skips `term_letter === null` with the comment
+ * "nothing participated — not a result, not a failure". An ungraded course in progress
+ * must not read as a fail.
+ *
+ * The HIGHER numeric wins for a repeated course, which is how a transcript reads a
+ * retake.
+ */
+export function courseResultsFor(
+  studentId: string,
+  excludeSemesterId: string,
+): Map<string, { letter: string; numeric: number; passed: boolean }> {
+  const scale = getActiveGradingScale();
+  const out = new Map<string, { letter: string; numeric: number; passed: boolean }>();
+  for (const enr of D.enrollments) {
+    if (enr.student_id !== studentId) continue;
+    if (enr.semester_id === excludeSemesterId) continue;
+    const offering = getOffering(enr.offering_id);
+    if (!offering) continue;
+    const { numeric, letter } = computeTermGrade(studentId, offering.id);
+    if (numeric === null || !letter) continue;
+    const held = out.get(offering.course_id);
+    if (held && held.numeric >= numeric) continue;
+    const band = scale?.bands.find((b) => b.letter === letter);
+    out.set(offering.course_id, { letter, numeric, passed: Boolean(band?.is_passing) });
+  }
+  return out;
+}
+
+/**
+ * The unmet requirements standing between this student and this course. `[]` = clear.
+ *
+ * `all_program_courses` expands to every REQUIRED course in the programme (electives
+ * a student legitimately did not choose are not missing requirements), and applies
+ * only to students on that programme.
+ *
+ * Every demo student now carries a programme (D30 §D12), so the programme-scoped rules —
+ * including the `ALL COURSES` Internship gate — do fire here rather than being theoretical.
+ */
+export function unmetPrerequisites(
+  studentId: string,
+  courseId: string,
+  semesterId: string,
+): Array<{ code: string; reason: string }> {
+  const rules = D.course_prerequisites.filter((p) => p.course_id === courseId);
+  if (rules.length === 0) return [];
+
+  const student = D.students.find((s) => s.id === studentId);
+  const studentProgramId = (student as { program_id?: string | null } | undefined)?.program_id ?? null;
+  const applicable = rules.filter((r) => r.program_id === null || r.program_id === studentProgramId);
+  if (applicable.length === 0) return [];
+
+  const results = courseResultsFor(studentId, semesterId);
+  const issues: Array<{ code: string; reason: string }> = [];
+
+  /**
+   * ⚠️ The reason wording is the SERVER'S, verbatim — `prerequisites/service.
+   * check_eligibility` builds "Not yet taken." / "Taken but not passed (earned F)." and
+   * the offerings picker joins them as `CODE (reason without the full stop)`. This used
+   * to say a flat `'not passed'` for both cases, which is the one thing the client
+   * asked to be able to tell apart. Copying the string is deliberate: the two
+   * implementations disagreeing about the WORDS is how a screen gets signed off against
+   * a message the API never sends.
+   */
+  const record = (requiredId: string) => {
+    const result = results.get(requiredId);
+    if (result?.passed) return;
+    const course = getCourse(requiredId);
+    issues.push({
+      code: course?.code ?? '?',
+      reason:
+        result === undefined
+          ? 'Not yet taken'
+          : `Taken but not passed (earned ${result.letter})`,
+    });
+  };
+
+  for (const rule of applicable) {
+    if (rule.requirement_type === 'all_program_courses') {
+      D.program_courses
+        .filter(
+          (pc) =>
+            pc.program_id === rule.program_id &&
+            pc.course_id !== courseId &&
+            pc.is_required,
+        )
+        .forEach((pc) => record(pc.course_id));
+    } else if (rule.prerequisite_course_id) {
+      record(rule.prerequisite_course_id);
+    }
+  }
+  return issues;
 }
 
 // ── Attendance ──────────────────────────────────────────────────────────────────
-/** All attendance records for a section on a given date. */
-export function attendanceFor(sectionId: string, date: string) {
-  return D.attendance_records.filter((a) => a.section_id === sectionId && a.attendance_date === date);
+/** All attendance records for an offering on a given date. */
+export function attendanceFor(offeringId: string, date: string) {
+  return D.attendance_records.filter(
+    (a) => a.offering_id === offeringId && a.attendance_date === date,
+  );
 }
-/** Attendance summary (present/absent/late/excused + pct_present) for a section. */
-export function attendanceSummaryForSection(sectionId: string): {
+/** Attendance summary (present/absent/late/excused + pct_present) for an offering. */
+export function attendanceSummaryForOffering(offeringId: string): {
   present: number;
   absent: number;
   late: number;
   excused: number;
   pct_present: number;
 } {
-  const rows = D.attendance_records.filter((a) => a.section_id === sectionId);
+  const rows = D.attendance_records.filter((a) => a.offering_id === offeringId);
   const counts = { present: 0, absent: 0, late: 0, excused: 0 };
   for (const r of rows) counts[r.status] += 1;
   const total = rows.length || 1;
   return { ...counts, pct_present: Math.round((counts.present / total) * 1000) / 10 };
 }
+/**
+ * One student's OWN attendance rate (%) across every class they sit.
+ *
+ * Attendance is per offering, so a student has records in several. This averages over all
+ * of them — "my attendance" is the whole week, not one course's register. Late counts as
+ * present, matching `schoolAttendanceRate`.
+ */
+export function attendanceRateForStudent(studentId: string): number {
+  const rows = D.attendance_records.filter((r) => r.student_id === studentId);
+  if (rows.length === 0) return 0;
+  const present = rows.filter((r) => r.status === 'present' || r.status === 'late').length;
+  return Math.round((present / rows.length) * 1000) / 10;
+}
+
 /** School-wide attendance rate (%) over the recent window — Principal dashboard. */
 export function schoolAttendanceRate(): number {
-  const activeSecIds = new Set(sectionsForYear(DEMO_IDS.activeYearId).map((s) => s.id));
-  const rows = D.attendance_records.filter((r) => activeSecIds.has(r.section_id));
+  const activeOfferingIds = new Set(offeringsForYear(DEMO_IDS.activeYearId).map((o) => o.id));
+  const rows = D.attendance_records.filter((r) => activeOfferingIds.has(r.offering_id));
   if (rows.length === 0) return 0;
   const present = rows.filter((r) => r.status === 'present' || r.status === 'late').length;
   return Math.round((present / rows.length) * 1000) / 10;
 }
 
 // ── Announcements ───────────────────────────────────────────────────────────────
-/** Announcements targeted at a given user (role + section), non-expired, newest first. */
+/**
+ * Announcements targeted at a given user, live (published, unexpired), newest first.
+ *
+ * Mirrors the backend's `_audience_clause` + `_visible_clause`
+ * (`app/modules/announcements/service.py`). Kept deliberately close to it: this handler
+ * is the binding contract the frontend is developed against, so anywhere the two
+ * diverge is a bug the demo cannot show. Two such divergences were fixed here:
+ *
+ *  1. **No admin branch.** Principal and secretary fell through to "school-wide only",
+ *     so in demo they could not see the `students` / `teachers` / `class` notices they
+ *     themselves post — while the real backend shows admins everything admin-authored
+ *     (`_authored_by_admin()`). The audience filter on the feed was therefore untestable
+ *     for the two roles that have all four options.
+ *  2. **`published_at` was ignored**, so future-dated (scheduled) notices leaked into
+ *     the feed. The backend gates on `published_at <= now`.
+ *
+ * Authorship is also honoured now (`author_user_id === userId`), matching the backend's
+ * "an author always sees their own, whatever the audience" rule. Previously only the
+ * by-id handler patched that in.
+ */
 export function announcementsForUser(userId: string) {
   const user = D.users.find((u) => u.id === userId);
   if (!user) return [];
   const now = new Date(`${DEMO_TODAY}T23:59:59Z`).getTime();
-  // Resolve which sections this user is linked to (student via enrollment, teacher via ownership).
-  const linkedSectionIds = new Set<string>();
+  const isAdmin = user.role === 'principal' || user.role === 'secretary';
+  const adminUserIds = new Set(
+    D.users.filter((u) => u.role === 'principal' || u.role === 'secretary').map((u) => u.id),
+  );
+  // Which offerings is this user linked to (student via enrollment, lecturer via teaching)?
+  const linkedOfferingIds = new Set<string>();
   if (user.role === 'student') {
+    // An offering-targeted announcement reaches the student if it targets ANY of theirs.
     const stu = D.students.find((s) => s.user_id === userId);
-    if (stu?.section_id) linkedSectionIds.add(stu.section_id);
+    if (stu) for (const off of currentOfferingsFor(stu.id)) linkedOfferingIds.add(off.id);
   } else if (user.role === 'teacher') {
-    const teacher = D.teachers.find((t) => t.user_id === userId);
-    if (teacher) for (const sec of sectionsOwnedByTeacher(teacher.id)) linkedSectionIds.add(sec.id);
+    const teacher = D.teachers.find((tt) => tt.user_id === userId);
+    if (teacher) for (const off of offeringsOwnedByTeacher(teacher.id)) linkedOfferingIds.add(off.id);
   }
   return D.announcements
     .filter((a) => {
+      // ── visibility window ──
       if (a.expires_at && new Date(a.expires_at).getTime() <= now) return false;
+      if (new Date(a.published_at).getTime() > now) return false;
+      // ── targeting ──
+      if (a.author_user_id === userId) return true; // author always sees their own
       if (a.audience === 'all') return true;
+      if (isAdmin) {
+        // P/S see every notice an administrator broadcast, whatever its audience —
+        // including their own `students`/`teachers` broadcasts. They do NOT get a
+        // blanket override on teacher-authored class notices (backend has none either).
+        return adminUserIds.has(a.author_user_id);
+      }
       if (a.audience === 'students') return user.role === 'student';
       if (a.audience === 'teachers') return user.role === 'teacher';
-      if (a.audience === 'class') return a.section_id ? linkedSectionIds.has(a.section_id) : false;
+      // The `'class'` audience VALUE is unchanged (it is a shared wire enum member); the
+      // target it names is an offering.
+      if (a.audience === 'class')
+        return a.offering_id ? linkedOfferingIds.has(a.offering_id) : false;
       return false;
     })
     .sort((x, y) => y.published_at.localeCompare(x.published_at));
@@ -485,34 +1019,45 @@ export function unreadCountForUser(userId: string): number {
  */
 export function dashboardFor(role: string, userId?: string) {
   const semester = getActiveSemester();
-  if (role === 'principal' || role === 'secretary') {
+  // D43 — the Auditor gets the school-wide figures, identical to the Dean's. Grouped
+  // here rather than left to fall through: the tail of this function is the STUDENT
+  // shape, so an unmatched role silently received a student payload tagged with its own
+  // role name, and the page would have rendered an admin layout over student fields.
+  if (role === 'principal' || role === 'secretary' || role === 'auditor') {
     return {
       role,
       semester,
       stats: {
-        total_students: D.students.filter((s) => s.status === 'active').length,
+        total_students: D.students.filter((s) => s.status === 'Active').length,
         total_teachers: D.teachers.filter((t) => t.status === 'active').length,
-        total_classes: sectionsForYear(DEMO_IDS.activeYearId).length,
+        total_classes: offeringsForYear(DEMO_IDS.activeYearId).length,
         attendance_rate: schoolAttendanceRate(),
       },
-      enrollment_by_grade: enrollmentByGrade(),
+      enrollment_by_year_of_study: enrollmentByYearOfStudy(),
       grade_distribution: gradeDistribution(),
     };
   }
-  if (role === 'teacher') {
-    const teacher = userId ? D.teachers.find((t) => t.user_id === userId) : undefined;
-    const owned = teacher ? classSubjectsOwnedByTeacher(teacher.id).filter((c) => c.is_active) : [];
+  // A head lands on their own teaching, so this is the lecturer payload with an honest
+  // `role`, exactly as `backend/app/modules/dashboard/service.py` returns it.
+  if (role === 'teacher' || role === 'hod') {
+    const teacher = userId ? D.teachers.find((tt) => tt.user_id === userId) : undefined;
+    const owned = teacher
+      ? offeringsOwnedByTeacher(teacher.id).filter((o) => !o.is_archived)
+      : [];
     return {
       role,
       semester,
       stats: {
-        my_classes: new Set(owned.map((c) => c.section_id)).size,
-        my_class_subjects: owned.length,
+        // ONE number, not two. It used to report `my_classes` (distinct sections) AND
+        // `my_class_subjects` (offerings) — which were the same count the moment a class
+        // taught one subject, so the dashboard showed the same figure twice under two names.
+        my_offerings: owned.length,
         ungraded_items: owned.reduce(
-          (n, cs) =>
+          (n, off) =>
             n +
-            assessmentsForClassSubject(cs.id).filter((a) => a.status === 'published' || a.status === 'grading')
-              .length,
+            assessmentsForOffering(off.id).filter(
+              (a) => a.status === 'published' || a.status === 'grading',
+            ).length,
           0,
         ),
       },
@@ -525,22 +1070,29 @@ export function dashboardFor(role: string, userId?: string) {
     semester,
     stats: {
       term_average: null as number | null,
-      attendance_rate: stu?.section_id ? attendanceSummaryForSection(stu.section_id).pct_present : 0,
+      // Averaged across every offering the student sits, since attendance is taken per
+      // offering — a single course's rate would not be "my attendance".
+      attendance_rate: stu ? attendanceRateForStudent(stu.id) : 0,
     },
   };
 }
 
-export function enrollmentByGrade(): Array<{ grade_level: string; count: number }> {
+/**
+ * Active students per YEAR OF STUDY.
+ *
+ * Counts the student's own `year_of_study`. Bucketing by offering would count one student
+ * once per course they take, and there is no level on an offering to bucket by anyway.
+ */
+export function enrollmentByYearOfStudy(): Array<{ year_of_study: string; count: number }> {
   const map = new Map<string, number>();
   for (const s of D.students) {
-    if (s.status !== 'active' || !s.section_id) continue;
-    const sec = getSection(s.section_id);
-    if (!sec) continue;
-    map.set(sec.grade_level, (map.get(sec.grade_level) ?? 0) + 1);
+    if (s.status !== 'Active' || !s.year_of_study) continue;
+    map.set(s.year_of_study, (map.get(s.year_of_study) ?? 0) + 1);
   }
+  // 'First' before 'Second' — progression order, which alphabetical happens to give.
   return [...map.entries()]
-    .map(([grade_level, count]) => ({ grade_level, count }))
-    .sort((a, b) => a.grade_level.localeCompare(b.grade_level));
+    .map(([year_of_study, count]) => ({ year_of_study, count }))
+    .sort((a, b) => a.year_of_study.localeCompare(b.year_of_study));
 }
 
 // ── Calendar events ──────────────────────────────────────────────────────────────
@@ -573,9 +1125,9 @@ export function gradeDistribution(): Array<{ letter: string; count: number }> {
   const scale = getActiveGradingScale();
   const counts = new Map<string, number>();
   if (scale) for (const b of scale.bands) counts.set(b.letter, 0);
-  for (const cs of classSubjectsForYear(DEMO_IDS.activeYearId)) {
-    for (const stu of rosterFor(cs.section_id)) {
-      const { letter } = computeTermGrade(stu.id, cs.id);
+  for (const off of offeringsForYear(DEMO_IDS.activeYearId)) {
+    for (const stu of rosterFor(off.id)) {
+      const { letter } = computeTermGrade(stu.id, off.id);
       if (letter) counts.set(letter, (counts.get(letter) ?? 0) + 1);
     }
   }

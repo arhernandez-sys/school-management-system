@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role
+from app.common.enums import LECTURER_ROLES, Role
 from app.common.schemas import CurrentUser, UserPreferences
 from app.config import Settings
 from app.core.errors import (
@@ -36,6 +36,7 @@ from app.core.errors import (
     Unauthenticated,
     ValidationError,
 )
+from app.core.timeutil import ensure_aware
 from app.core.security import (
     create_access_token,
     generate_temp_password,
@@ -48,7 +49,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.auth.models import LoginAttempt, RefreshSession
-from app.modules.settings.models import AuditLog
+from app.modules.settings.models import AssessmentPolicy, AuditLog
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User, UserPreferences as UserPreferencesRow
@@ -76,6 +77,22 @@ def _preferences_for(db: Session, user: User) -> UserPreferences:
     return UserPreferences.model_validate(row)
 
 
+def students_can_view_grades(db: Session) -> bool:
+    """The Dean's student grade-visibility switch (D32, brief §4).
+
+    Lives here rather than in `settings.service` because `core.deps` and this module both
+    need it on the hot path, and importing `settings.service` from `core.deps` would pull
+    the whole Settings surface — including `reports.freeze` — into every authenticated
+    request. This reads one boolean off one row.
+
+    **Missing policy row → False**, i.e. hidden. The row is seeded and its absence is a
+    setup error, but a setup error must not be the thing that exposes grades.
+    """
+    return bool(
+        db.scalar(select(AssessmentPolicy.students_can_view_grades).where(AssessmentPolicy.id == 1))
+    )
+
+
 def build_current_user(db: Session, user: User) -> CurrentUser:
     """Assemble the CurrentUser payload, resolving profile ids + preferences.
 
@@ -92,7 +109,11 @@ def build_current_user(db: Session, user: User) -> CurrentUser:
                 StudentProfile.deleted_at.is_(None),
             )
         )
-    elif user.role == Role.TEACHER:
+    elif user.role in LECTURER_ROLES:
+        # D43 — `LECTURER_ROLES` is {TEACHER, HOD}, not just TEACHER. An HOD IS a
+        # lecturer with a `teacher_profiles` row, and this id is what the frontend uses
+        # to route "My profile" and to recognise its own rows. Left as `== Role.TEACHER`
+        # it would come back None and an HOD would look like an admin with no profile.
         teacher_profile_id = db.scalar(
             select(TeacherProfile.id).where(
                 TeacherProfile.user_id == user.id,
@@ -111,6 +132,7 @@ def build_current_user(db: Session, user: User) -> CurrentUser:
         student_profile_id=student_profile_id,
         teacher_profile_id=teacher_profile_id,
         preferences=_preferences_for(db, user),
+        students_can_view_grades=students_can_view_grades(db),
     )
 
 
@@ -209,8 +231,9 @@ def login(
     now = _now()
 
     # ── Lockout gate (FR-AUTH-07): refuse while locked, surface retry window. ──
-    if user.locked_until is not None and user.locked_until > now:
-        retry_after = int((user.locked_until - now).total_seconds())
+    locked_until = ensure_aware(user.locked_until)
+    if locked_until is not None and locked_until > now:
+        retry_after = int((locked_until - now).total_seconds())
         db.add(
             LoginAttempt(
                 email_attempted=ident,
@@ -322,8 +345,9 @@ def refresh(
     if (
         session.token_hash != sha256_hash(raw_cookie)
         or session.is_revoked
-        or session.expires_at <= now
-        or (now - session.last_used_at).total_seconds() > settings.session_idle_timeout
+        or ensure_aware(session.expires_at) <= now
+        or (now - ensure_aware(session.last_used_at)).total_seconds()
+        > settings.session_idle_timeout
     ):
         raise invalid
 

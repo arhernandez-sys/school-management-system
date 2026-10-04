@@ -35,20 +35,23 @@ import {
   type DetailTab,
 } from '@shared/components';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { canWrite } from '@shared/auth/permissions';
+import { canWrite, isLecturerRole } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteStudent,
+  useNudgeRelease,
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,
   useStudentYears,
   useUpdateStudent,
 } from './hooks/useStudents';
+import { RemindTeacherButton } from './components/RemindTeacherButton';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
+import { AcademicHistoryPanel } from './components/AcademicHistoryPanel';
 import {
   STUDENT_STATUS_LABEL as STATUS_LABEL,
   STUDENT_STATUS_OPTIONS as STATUS_OPTIONS,
@@ -98,6 +101,20 @@ export function StudentDetailPage() {
 
   const tabs = useMemo<DetailTab[]>(() => {
     if (!detail || !studentId) return [];
+    // D32 (brief §4) — "grade information from the registration screens" is THIS tab, and
+    // `GET /students/{id}/assessments` now 403s for the Registrar. Rendering it for them
+    // would show an error panel where a tab used to be, which is worse than no tab.
+    // D44 — was `role === 'principal' || role === 'teacher'`, which omitted `hod` and so
+    // hid the Grades & Assessments tab from a Head of Department that
+    // `students/router.py` explicitly grants it to. `isLecturerRole` is the helper D43
+    // introduced to kill exactly this `role === 'teacher'` bug class.
+    const canSeeGrades = user?.role === 'principal' || isLecturerRole(user?.role);
+    // D42 §4 — the Academic history tab is Dean/Registrar only. Its endpoint
+    // (`GET /students/{id}/academic-history`) is already `require_role(PRINCIPAL,
+    // SECRETARY)`, so a Lecturer opening this tab got a 403 error panel where content
+    // should be. The client asked for the tab to go for them, which is also what the
+    // server was already saying.
+    const canSeeAcademicHistory = user?.role === 'principal' || user?.role === 'secretary';
     return [
       {
         value: 'enrollment',
@@ -105,14 +122,32 @@ export function StudentDetailPage() {
         icon: <SchoolOutlinedIcon fontSize="small" />,
         render: () => <StudentEnrollmentPanel student={detail} yearName={yearName} />,
       },
-      {
-        value: 'grades',
-        label: 'Grades & Assessments',
-        icon: <GradingOutlinedIcon fontSize="small" />,
-        render: () => <GradesTab studentId={studentId} yearId={yearId} />,
-      },
+      ...(canSeeGrades
+        ? [
+            {
+              value: 'grades',
+              label: 'Grades & Assessments',
+              icon: <GradingOutlinedIcon fontSize="small" />,
+              render: () => <GradesTab studentId={studentId} yearId={yearId} />,
+            } as DetailTab,
+          ]
+        : []),
+      ...(canSeeAcademicHistory
+        ? [
+            {
+              // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
+              // cumulative GPA, and which courses count toward the current award. Derived on
+              // every read, and NOT year-scoped: an award spans years by definition, so the
+              // global year switcher deliberately does not narrow it.
+              value: 'academic',
+              label: 'Academic history',
+              icon: <SchoolOutlinedIcon fontSize="small" />,
+              render: () => <AcademicHistoryPanel studentId={studentId} />,
+            } as DetailTab,
+          ]
+        : []),
     ];
-  }, [detail, studentId, yearId, yearName]);
+  }, [detail, studentId, yearId, yearName, user?.role]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading student" />;
@@ -180,6 +215,22 @@ function termGradeText(group: StudentAssessmentGroup): string {
 function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }) {
   const query = useStudentAssessments(studentId, yearId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { user } = useAuth();
+  const nudge = useNudgeRelease(studentId);
+  const [nudgeError, setNudgeError] = useState<string | null>(null);
+  const [nudgeNotice, setNudgeNotice] = useState<string | null>(null);
+
+  /*
+   * Who may nudge. The endpoint is still `require_role(PRINCIPAL, SECRETARY)` — nudging
+   * asks a lecturer to release marks and exposes none — but D32 removed the Registrar
+   * from this TAB entirely (brief §4), so in practice only the Dean reaches the control.
+   * Narrowed here to match, rather than leaving a branch that can no longer be taken.
+   *
+   * Checked against the role directly rather than via `canWrite(role, 'grades')` — that
+   * helper is TRUE for teachers and FALSE for principals (teachers own grade entry), i.e.
+   * exactly inverted for this action. A teacher or student must never see this control.
+   */
+  const canNudge = user?.role === 'principal';
 
   if (query.isLoading) {
     return <LoadingState variant="table" rows={4} label="Loading assessments" />;
@@ -187,7 +238,8 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   if (query.isError) {
     return <ErrorState onRetry={() => void query.refetch()} />;
   }
-  const groups = query.data ?? [];
+  const groups = query.data?.items ?? [];
+  const cooldownSeconds = query.data?.nudge_cooldown_seconds ?? 0;
   if (groups.length === 0) {
     return (
       <EmptyState
@@ -198,16 +250,55 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
     );
   }
 
-  const selected = groups.find((g) => g.class_subject_id === selectedId) ?? null;
+  const handleNudge = (assessmentId: string) => {
+    setNudgeError(null);
+    nudge.mutate(assessmentId, {
+      onSuccess: (result) => {
+        const names = result.teachers.map((t) => t.full_name).join(', ');
+        setNudgeNotice(names ? `Reminder sent to ${names}.` : 'Reminder sent.');
+      },
+      onError: (err) => setNudgeError(apiErrorMessage(err, 'Could not send the reminder.')),
+    });
+  };
+
+  const feedback = (
+    <>
+      {nudgeError && (
+        <Alert severity="error" onClose={() => setNudgeError(null)} sx={{ mb: 2 }}>
+          {nudgeError}
+        </Alert>
+      )}
+      <Snackbar
+        open={Boolean(nudgeNotice)}
+        autoHideDuration={4000}
+        onClose={() => setNudgeNotice(null)}
+        message={nudgeNotice ?? ''}
+      />
+    </>
+  );
+
+  const selected = groups.find((g) => g.offering_id === selectedId) ?? null;
   if (selected) {
-    return <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />;
+    return (
+      <Box>
+        {feedback}
+        <SubjectAssessments
+          group={selected}
+          onBack={() => setSelectedId(null)}
+          canNudge={canNudge}
+          cooldownSeconds={cooldownSeconds}
+          onNudge={handleNudge}
+          pendingAssessmentId={nudge.isPending ? (nudge.variables ?? null) : null}
+        />
+      </Box>
+    );
   }
 
   return (
     <Grid container spacing={2}>
       {groups.map((group) => (
-        <Grid item xs={12} sm={6} key={group.class_subject_id}>
-          <SubjectCard group={group} onOpen={() => setSelectedId(group.class_subject_id)} />
+        <Grid item xs={12} sm={6} key={group.offering_id}>
+          <SubjectCard group={group} onOpen={() => setSelectedId(group.offering_id)} />
         </Grid>
       ))}
     </Grid>
@@ -243,7 +334,7 @@ function SubjectCard({ group, onOpen }: { group: StudentAssessmentGroup; onOpen:
   );
 }
 
-const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
+const BASE_ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
   {
     field: 'title',
     headerName: 'Assessment',
@@ -283,6 +374,9 @@ const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
       if (a.status === 'absent') return <StatusBadge label="Absent" kind="warning" />;
       if (a.status === 'excused' || a.status === 'exempt')
         return <StatusBadge label="Excused" kind="info" />;
+      // An unreleased graded row reads "Pending" here on purpose — that IS the
+      // student's view of it. The Remind-teacher column is what tells staff the
+      // mark exists but is being withheld.
       return <StatusBadge label="Pending" kind="neutral" />;
     },
   },
@@ -294,9 +388,17 @@ const ASSESSMENTS_PAGE_SIZE = 10;
 function SubjectAssessments({
   group,
   onBack,
+  canNudge,
+  cooldownSeconds,
+  onNudge,
+  pendingAssessmentId,
 }: {
   group: StudentAssessmentGroup;
   onBack: () => void;
+  canNudge: boolean;
+  cooldownSeconds: number;
+  onNudge: (assessmentId: string) => void;
+  pendingAssessmentId: string | null;
 }) {
   const [page, setPage] = useState(0);
   const name = group.subject?.name ?? 'Unknown subject';
@@ -304,6 +406,29 @@ function SubjectAssessments({
     page * ASSESSMENTS_PAGE_SIZE,
     page * ASSESSMENTS_PAGE_SIZE + ASSESSMENTS_PAGE_SIZE,
   );
+
+  // The action column closes over handlers, so unlike the static base columns it
+  // must be built inside the component. Only staff who may nudge get the column
+  // at all — a teacher or student never sees an empty extra column either.
+  const columns = useMemo<DataTableColumn<StudentAssessmentLine>[]>(() => {
+    if (!canNudge) return BASE_ASSESSMENT_COLUMNS;
+    return [
+      ...BASE_ASSESSMENT_COLUMNS,
+      {
+        field: 'last_nudged_at',
+        headerName: 'Release',
+        align: 'right',
+        render: (a) => (
+          <RemindTeacherButton
+            line={a}
+            cooldownSeconds={cooldownSeconds}
+            onNudge={onNudge}
+            pending={pendingAssessmentId === a.id}
+          />
+        ),
+      },
+    ];
+  }, [canNudge, cooldownSeconds, onNudge, pendingAssessmentId]);
 
   return (
     <Box>
@@ -324,7 +449,7 @@ function SubjectAssessments({
       </Stack>
       <DataTable<StudentAssessmentLine>
         caption={`Assessments for ${name}`}
-        columns={ASSESSMENT_COLUMNS}
+        columns={columns}
         rows={rows}
         getRowId={(a) => a.id}
         page={page}
@@ -349,7 +474,7 @@ function StudentActions({ student }: { student: StudentDetail }) {
     undefined,
   );
   const [statusOpen, setStatusOpen] = useState(false);
-  const [nextStatus, setNextStatus] = useState<StudentStatus>('active');
+  const [nextStatus, setNextStatus] = useState<StudentStatus>('Active');
   const [statusError, setStatusError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -362,10 +487,23 @@ function StudentActions({ student }: { student: StudentDetail }) {
   const handleEdit = (values: StudentWritePayload) => {
     setEditError(null);
     setEditFieldErrors(undefined);
-    // Section + student_number are immutable on edit; send only benign profile fields.
-    const { student_number: _sn, section_id: _sid, ...patch } = values;
+    // Enrollment + student_number are immutable on edit; send only benign profile
+    // fields. `offering_ids` is create-only server-side (PATCH rejects it), so stripping it
+    // here keeps the request valid rather than relying on the 422.
+    //
+    // D33 adds `program_id` to that list. The form already leaves it `undefined` on edit
+    // and `JSON.stringify` drops undefined keys, so this is belt-and-braces — but the
+    // server's `extra="forbid"` turns a leak into a 422 on an otherwise valid save, and a
+    // programme CHANGE has to move `student_program_history` with it (§D12).
+    const {
+      student_number: _sn,
+      offering_ids: _oids,
+      program_id: _pid,
+      ...patch
+    } = values;
     void _sn;
-    void _sid;
+    void _oids;
+    void _pid;
     updateMut.mutate(patch, {
       onSuccess: () => {
         setEditOpen(false);
@@ -410,7 +548,8 @@ function StudentActions({ student }: { student: StudentDetail }) {
           variant="outlined"
           onClick={() => {
             setStatusError(null);
-            setNextStatus(student.status === 'active' ? 'inactive' : 'active');
+            // D34 vocabulary: the toggle flips between the two LIVE states.
+            setNextStatus(student.status === 'Active' ? 'Inactive' : 'Active');
             setStatusOpen(true);
           }}
         >

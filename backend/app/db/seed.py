@@ -7,9 +7,10 @@ Creates, ONLY IF ABSENT (safe to re-run), the minimum rows the app needs to boot
                               (DB-14 defaults: absent_as_zero=false, allow_makeup=true,
                               drop_lowest_count=0).
   * `academic_years`        — one active year + its two `semesters` (D10; one active).
-  * `grading_scales`        — pass_mark=60 + default `grading_scale_bands`
-                              A 90-100, B 80-89.99, C 70-79.99, D 60-69.99, F 0-59.99
-                              (D11 defaults; editable in Settings).
+  * `grading_scales`        — pass_mark=70 + the BAJC 8-band `grading_scale_bands`
+                              A 95-100 (4.00) … C 70-74 (2.00), D 65-69 (1.00, FAIL),
+                              F 0-64 (0.00, FAIL). Defined once in
+                              `settings/grading_defaults.py`; editable in Settings.
   * one Principal `users`    — Argon2id-hashed temporary password, must_change_password.
 
 Run:  python -m app.db.seed   (from the backend/ dir, with the venv active)
@@ -40,6 +41,10 @@ from app.core.security import generate_temp_password, hash_password
 from app.db.session import SessionLocal
 
 # Import via the aggregator so every mapper is configured.
+from app.modules.settings.grading_defaults import (
+    BAJC_GRADING_BANDS,
+    DEFAULT_PASS_MARK,
+)
 from app.modules.settings.models import (
     AcademicYear,
     AssessmentPolicy,
@@ -50,16 +55,8 @@ from app.modules.settings.models import (
 )
 from app.modules.users.models import User
 
-# Default grading bands (D11). Half-open in spirit but stored with explicit
-# inclusive `.99` ceilings per the seed convention in schema §11 / OQ-DB2.
-_DEFAULT_BANDS: tuple[tuple[str, str, str, bool, int], ...] = (
-    # letter, min, max, is_passing, sort_order
-    ("A", "90.00", "100.00", True, 1),
-    ("B", "80.00", "89.99", True, 2),
-    ("C", "70.00", "79.99", True, 3),
-    ("D", "60.00", "69.99", True, 4),
-    ("F", "0.00", "59.99", False, 5),
-)
+# The shipped grading scale lives in ONE place now (D30 §D5) — it used to be
+# written out here AND in settings/service.py, kept in step by hand.
 
 
 def _seed_school_profile(db: Session) -> bool:
@@ -105,7 +102,7 @@ def _seed_academic_year(db: Session) -> tuple[bool, AcademicYear]:
                  is_active=False),
     ])
 
-    scale = GradingScale(academic_year_id=year.id, pass_mark=Decimal("60.00"))
+    scale = GradingScale(academic_year_id=year.id, pass_mark=Decimal(DEFAULT_PASS_MARK))
     db.add(scale)
     db.flush()  # assign scale.id
 
@@ -113,9 +110,10 @@ def _seed_academic_year(db: Session) -> tuple[bool, AcademicYear]:
         GradingScaleBand(
             grading_scale_id=scale.id, letter=letter,
             min_score=Decimal(lo), max_score=Decimal(hi),
+            grade_point=Decimal(gp),
             is_passing=passing, sort_order=order,
         )
-        for (letter, lo, hi, passing, order) in _DEFAULT_BANDS
+        for (letter, lo, hi, gp, passing, order) in BAJC_GRADING_BANDS
     ])
     return True, year
 

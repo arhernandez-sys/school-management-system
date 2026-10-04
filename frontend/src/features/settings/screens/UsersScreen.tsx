@@ -14,8 +14,8 @@ import {
 } from '@shared/components';
 import { useDebounce } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { Role } from '@shared/api/generated/model';
-import type { UserListItem } from '@shared/api/generated/model';
+import type { Role, UserListItem } from '@shared/api/generated/model';
+import { ROLE_OPTIONS } from '@shared/auth/roleLabels';
 import {
   useUsersList,
   useCreateUser,
@@ -237,10 +237,11 @@ export function UsersScreen() {
               sx={{ minWidth: 140 }}
             >
               <MenuItem value="">All roles</MenuItem>
-              <MenuItem value={Role.principal}>Principal</MenuItem>
-              <MenuItem value={Role.secretary}>Secretary</MenuItem>
-              <MenuItem value={Role.teacher}>Teacher</MenuItem>
-              <MenuItem value={Role.student}>Student</MenuItem>
+              {ROLE_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
             </TextField>
             <TextField
               select

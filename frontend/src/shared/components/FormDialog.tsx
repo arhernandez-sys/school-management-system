@@ -5,6 +5,8 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -15,6 +17,19 @@ import type { FormEvent, ReactNode } from 'react';
  * academic year). Presentational only: the caller renders the form fields as
  * children, owns RHF/local state + the submit handler, and passes submitting/error.
  * The dialog wires the <form> so Enter submits and Esc cancels (unless submitting).
+ *
+ * **D33 — FULL SCREEN ON A PHONE.** Below `sm` the dialog takes the whole viewport. A
+ * centred paper on a 390px screen wastes its margins on the one device that has none to
+ * spare, and a form long enough to scroll inside a floating box is much harder to use
+ * than the same form scrolling as a page. Every one of the ~134 call sites gets this
+ * without changing, which is the point of fixing it here rather than per-dialog.
+ *
+ * Two consequences are deliberate:
+ *
+ * * The action bar is **sticky to the bottom** when full screen, so Save never scrolls
+ *   out of reach on a long form.
+ * * `maxWidth` now accepts `lg`, for the sectioned forms that transcribe a paper
+ *   document (`StudentFormDialog`). It still has no effect while full screen.
  *
  * Accessibility: focus is trapped by MUI Dialog; a top-level error region uses
  * role="alert"; the submit button is the form's default action.
@@ -30,7 +45,7 @@ export interface FormDialogProps {
   submitting?: boolean;
   /** Disable submit for client-side invalid state. */
   submitDisabled?: boolean;
-  maxWidth?: 'xs' | 'sm' | 'md';
+  maxWidth?: 'xs' | 'sm' | 'md' | 'lg';
   onSubmit: () => void;
   onClose: () => void;
 }
@@ -48,6 +63,9 @@ export function FormDialog({
   onSubmit,
   onClose,
 }: FormDialogProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (submitting || submitDisabled) return;
@@ -60,9 +78,10 @@ export function FormDialog({
       onClose={submitting ? undefined : onClose}
       maxWidth={maxWidth}
       fullWidth
+      fullScreen={fullScreen}
       PaperProps={{ component: 'form', onSubmit: handleSubmit, noValidate: true }}
     >
-      <DialogTitle>{title}</DialogTitle>
+      <DialogTitle sx={{ pr: 2, wordBreak: 'break-word' }}>{title}</DialogTitle>
       <DialogContent>
         {error && (
           <Alert severity="error" role="alert" sx={{ mb: 2 }}>
@@ -71,7 +90,22 @@ export function FormDialog({
         )}
         {children}
       </DialogContent>
-      <DialogActions>
+      <DialogActions
+        sx={
+          fullScreen
+            ? {
+                // Keeps Save reachable on a long form without scrolling back down.
+                position: 'sticky',
+                bottom: 0,
+                bgcolor: 'background.paper',
+                borderTop: 1,
+                borderColor: 'divider',
+                px: 2,
+                py: 1.5,
+              }
+            : undefined
+        }
+      >
         <Button onClick={onClose} disabled={submitting}>
           {cancelLabel}
         </Button>

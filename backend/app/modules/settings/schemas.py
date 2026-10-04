@@ -14,7 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.common.enums import AcademicYearStatus, Role
+from app.common.enums import AcademicYearStatus, Role, TermType
 from app.common.schemas import (
     AcademicYearRef,
     SchoolIdentity,
@@ -25,9 +25,17 @@ from app.common.schemas import (
 # School profile / branding (§5.11 — School profile)
 # ──────────────────────────────────────────────────────────────────────────────
 class SchoolProfileRead(SchoolIdentity):
-    """GET /settings/school — SchoolIdentity plus nothing extra (identity is the
-    public read shape). `logo_url` is resolved from `logo_storage_key` + the
-    Supabase public base when a key is present (TODO(OQ-DB5), see service)."""
+    """GET /settings/school — the identity, plus the operator-set policy below.
+
+    `logo_url` is resolved from `logo_storage_key` by `service._logo_url_for`, which
+    D39 taught to return an already-usable key rather than always None.
+    """
+
+    #: Days a graduated student keeps grade / online access (D39, Meeting #2 item 6).
+    #: `None` = never expires; `0` = access ends on graduation day.
+    post_graduation_access_days: int | None = None
+    #: The attendance warning floor, as a percentage (D45 §23).
+    attendance_alert_threshold: float = 80.0
 
 
 class SchoolUpdateRequest(BaseModel):
@@ -36,6 +44,16 @@ class SchoolUpdateRequest(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     contact_email: str | None = Field(default=None, max_length=255)
     contact_phone: str | None = Field(default=None, max_length=50)
+    #: Days a graduated student keeps grade / online access (D39, Meeting #2 item 6).
+    #: `None` = never expires; `0` = access ends on graduation day. Capped at ten years:
+    #: past that it is indistinguishable from "never", and a mistyped 3650 should be
+    #: caught rather than stored.
+    post_graduation_access_days: int | None = Field(default=None, ge=0, le=3650)
+    #: D45 §23. Bounded 0-100 because it is a percentage; a threshold of 100 ("flag
+    #: anyone who ever missed a class") is a defensible policy, so the top of the range
+    #: is inclusive. Defaulted rather than optional so a PUT that omits it does not
+    #: silently reset the college's number to zero and flag nobody.
+    attendance_alert_threshold: float = Field(default=80.0, ge=0, le=100)
 
 
 class LogoUploadResponse(BaseModel):
@@ -60,10 +78,23 @@ class ActiveTerm(BaseModel):
 class SemesterDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    academic_year_id: UUID
     name: str
+    #: D30 §D3 — the KIND of calendar term. BAJC runs Summer and Spring blocks, not
+    #: just two symmetrical semesters.
+    term_type: TermType
     sequence: int
     start_date: date
     end_date: date
+    #: Brief §18 / D30 §D6 — the **END-TERM** grade-entry cutoff (D32-1).
+    #: **D42 §5 — RETIRED: still stored and still accepted on write, but no longer
+    #: enforced and no longer offered by the Dean's session form.** See
+    #: `Semester.grade_submission_deadline` in `settings/models.py`.
+    grade_submission_deadline: datetime | None = None
+    #: D32 — the mid-term grading window. Both `None` means the term has no mid-term
+    #: period, which disables mid-term revision gating and mid-term report cards for it.
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
     is_active: bool
 
 
@@ -91,24 +122,85 @@ class SemesterList(BaseModel):
 
 
 class SemesterCreateRequest(BaseModel):
+    """One term, as supplied nested inside `POST /settings/academic-years`.
+
+    D30: `sequence` is no longer capped at 2 — `005` §6 dropped
+    `ck_semesters_sequence`, because BAJC runs Summer and Spring blocks alongside the
+    numbered semesters. It is still 1-based and still unique within the year.
+    """
+
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
-    sequence: int = Field(ge=1, le=2)
+    term_type: TermType = TermType.SEMESTER
+    sequence: int = Field(ge=1, le=99)
     start_date: date
     end_date: date
+
+
+class StandaloneSemesterCreateRequest(SemesterCreateRequest):
+    """POST /settings/semesters (Dean only) — add ONE term to an existing year.
+
+    Before D30 there was deliberately no such endpoint: `POST /settings/academic-years`
+    hard-created exactly two terms and that was the whole of the school's calendar.
+    Adding a Summer or Spring block therefore had no route at all (§D3).
+    """
+
+    academic_year_id: UUID
+    #: Brief §18 / §D6. Optional at creation — a term with no deadline never closes,
+    #: which is the safe default: a wrongly-guessed deadline would lock lecturers out
+    #: of a term nobody has finished teaching.
+    grade_submission_deadline: datetime | None = None
+    #: D32 — the mid-term grading window. Optional, and for the same reason as the
+    #: deadline above: a term created without one simply has no mid-term period. Supply
+    #: BOTH or NEITHER; the service rejects a half-configured window with a 422.
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
+
+
+class SemesterUpdateRequest(BaseModel):
+    """PATCH /settings/semesters/{id} (Dean only). All fields optional.
+
+    `academic_year_id` is deliberately absent: moving a term between years would
+    silently re-file every enrolment, assessment and snapshot that keys off it.
+    `is_active` is absent too — that goes through `/activate`, which maintains the
+    one-active invariant.
+
+    **The three datetime fields are the ones where omitted and `null` differ** (§D6,
+    D32). Every other field here treats `None` as "leave alone", but reopening a closed
+    grade window — or clearing a mid-term period — is a real Dean action and it is
+    spelled `null`. The service therefore consults `model_fields_set` for these fields
+    rather than checking for `None`, so a PATCH that only renames a term cannot
+    silently reopen or erase anything.
+
+    The two mid-term fields must be cleared TOGETHER: sending `null` for one while the
+    other keeps a value is a 422, not a silent half-clear. See `update_semester`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    term_type: TermType | None = None
+    sequence: int | None = Field(default=None, ge=1, le=99)
+    start_date: date | None = None
+    end_date: date | None = None
+    grade_submission_deadline: datetime | None = None
+    midterm_submission_start: datetime | None = None
+    midterm_submission_end: datetime | None = None
 
 
 class AcademicYearCreateRequest(BaseModel):
-    """POST /settings/academic-years — service creates EXACTLY 2 semesters (D10).
+    """POST /settings/academic-years — creates the year and its terms.
 
-    The two provided semesters must carry sequence 1 and 2 (schema enforces
-    `sequence IN (1,2)` + the per-year uniqueness on sequence)."""
+    D30: **at least one** term, no longer exactly two (§D3). The old rule required
+    sequences to be precisely `[1, 2]`, which is why a Summer block could not be
+    recorded. Sequences must still be DISTINCT (the per-year unique index), and the
+    lowest one is the term made active.
+    """
 
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
     start_date: date
     end_date: date
-    semesters: list[SemesterCreateRequest] = Field(min_length=2, max_length=2)
+    semesters: list[SemesterCreateRequest] = Field(min_length=1, max_length=12)
 
 
 class ArchiveYearResponse(BaseModel):
@@ -118,17 +210,36 @@ class ArchiveYearResponse(BaseModel):
     no_active_year_remaining: bool
 
 
+class MidtermFreezeResponse(BaseModel):
+    """200 body of POST /settings/semesters/{id}/midterm-freeze (D32, brief §6)."""
+
+    #: Report cards captured or refreshed — one per student with a live enrolment in the
+    #: term. 0 means nobody was enrolled, not that the freeze failed.
+    snapshots_written: int
+    semester_id: UUID
+    frozen_at: datetime
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Grading scale (§5.11 — Grading scale; D11)
 # ──────────────────────────────────────────────────────────────────────────────
 class GradingBand(BaseModel):
     """A single contiguous band. Read + write share this shape; on write the
-    service validates contiguity over 0..100 (no gaps/overlaps, schema §5)."""
+    service validates contiguity over 0..100 (no gaps/overlaps, schema §5).
+
+    `grade_point` is the band's value on the 4.00 scale (D30 §D5) and is what makes
+    a credit-weighted GPA possible. It is OPTIONAL because a scale predating Phase 3
+    carries NULLs — notably the frozen scales of archived years, which must keep the
+    bands that were in force then (schema §10.4). It is nonetheless part of the WRITE
+    shape: without it the Dean editing a seeded scale would post the bands back
+    without their points and silently un-seed them.
+    """
 
     model_config = ConfigDict(from_attributes=True)
     letter: str = Field(min_length=1, max_length=8)
     min_score: float = Field(ge=0, le=100)
     max_score: float = Field(ge=0, le=100)
+    grade_point: float | None = Field(default=None, ge=0, le=4)
     is_passing: bool = True
     sort_order: int = Field(ge=0)
 
@@ -163,6 +274,9 @@ class AssessmentPolicyRead(BaseModel):
     absent_as_zero: bool
     allow_makeup: bool
     drop_lowest_count: int
+    #: D32 (brief §4). Dean-controlled; default false. Grouped with the grading policy
+    #: because it is the same singleton and the same Dean-only screen — see the model.
+    students_can_view_grades: bool = False
 
 
 class AssessmentPolicyUpdateRequest(BaseModel):
@@ -170,6 +284,10 @@ class AssessmentPolicyUpdateRequest(BaseModel):
     absent_as_zero: bool
     allow_makeup: bool
     drop_lowest_count: int = Field(ge=0)
+    #: Defaulted rather than required, so a client that predates D32 can still PUT this
+    #: object without silently re-enabling student visibility it never meant to touch.
+    #: The screen always sends it.
+    students_can_view_grades: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -234,3 +352,27 @@ class AccountUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     full_name: str | None = Field(default=None, min_length=1, max_length=200)
     preferences: PreferencesUpdate | None = None
+
+
+# ── Religion vocabulary (D39, Meeting #2 item 8) ────────────────────────────────
+class ReligionItem(BaseModel):
+    """One row of the Religion dropdown.
+
+    `code_name` (e.g. `SDA`) is carried alongside the name because the client's own
+    reports use it; nothing in this application writes it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    code_name: str | None = None
+
+
+class ReligionList(BaseModel):
+    """GET /settings/religions. Not paginated — this is a short vocabulary, and a
+    dropdown that pages is not a dropdown."""
+
+    items: list[ReligionItem] = Field(default_factory=list)
+
+
+# ── Audit log (D43) ────────────────────────────────────────────────────────────
