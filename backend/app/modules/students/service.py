@@ -1582,7 +1582,15 @@ def list_student_years(
 
 def list_my_years(db: Session, *, caller: User) -> StudentYearsResponse:
     """GET /students/me/years (student). Server-derived scope (§3.2) — the profile
-    comes from the token, never a param. 404 no_student_profile if unlinked, the
-    same contract as GET /students/me."""
-    student = _my_student_or_404(db, caller)
+    comes from the token, never a param. An unlinked login has no years: an empty
+    list, so the year switcher renders empty instead of erroring. (GET /students/me
+    keeps its 404 no_student_profile - there is no record to describe - and the
+    frontend renders that code as an empty profile.)"""
+    student = db.scalar(
+        select(StudentProfile).where(
+            StudentProfile.user_id == caller.id, StudentProfile.deleted_at.is_(None)
+        )
+    )
+    if student is None:
+        return StudentYearsResponse(items=[])
     return _years_response(db, student.id)

@@ -1,4 +1,4 @@
-import { api } from '@shared/api/client';
+import { ApiError, api } from '@shared/api/client';
 import type { Page } from '@shared/types/api';
 import type {
   NudgeReleaseResult,
@@ -71,12 +71,19 @@ export async function getStudentYears(id: string, signal?: AbortSignal): Promise
 export async function getMyStudentRecord(
   academicYearId?: string,
   signal?: AbortSignal,
-): Promise<StudentDetail> {
-  const res = await api.get<StudentDetail>('/students/me', {
-    params: academicYearId ? { academic_year_id: academicYearId } : undefined,
-    signal,
-  });
-  return res.data;
+): Promise<StudentDetail | null> {
+  try {
+    const res = await api.get<StudentDetail>('/students/me', {
+      params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+      signal,
+    });
+    return res.data;
+  } catch (err) {
+    // A login not yet linked to a student record has nothing to show. That is an empty
+    // page, not an error for the student; the 404 stays visible in devtools.
+    if (err instanceof ApiError && err.code === 'no_student_profile') return null;
+    throw err;
+  }
 }
 
 /**

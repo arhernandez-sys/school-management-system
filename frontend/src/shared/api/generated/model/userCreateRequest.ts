@@ -3,6 +3,11 @@
  * Do not edit manually.
  * Student Management Information System API
  * OpenAPI spec version: 1.0.0
+ *
+ * HAND-EDITED — `profile_id`. `npm run generate:api` is forbidden in this repo (see
+ * `schoolProfileRead.ts`). The field is real and lives on
+ * `settings/schemas.py::UserCreateRequest`: student / teacher / hod logins must name the
+ * unlinked profile they belong to, every other role must omit it.
  */
 import type { UserCreateRequestUsername } from './userCreateRequestUsername';
 import type { Role } from './role';
@@ -22,4 +27,5 @@ export interface UserCreateRequest {
   full_name: string;
   role: Role;
   temporary_password?: UserCreateRequestTemporaryPassword;
+  profile_id?: string | null;
 }

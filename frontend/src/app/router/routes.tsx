@@ -6,11 +6,10 @@ import { ForbiddenPage, NotFoundPage } from './ErrorPages';
 import { AppShell } from '@app/layout/AppShell';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { ROUTES } from '@shared/constants/routes';
-import { LoadingState } from '@shared/components';
+import { EmptyState, LoadingState } from '@shared/components';
 import type { ModuleKey } from '@shared/auth/permissions';
 
 import { LoginPage, ChangePasswordPage } from '@features/auth/routes';
-import { ModulePlaceholder } from '@shared/components/ModulePlaceholder';
 
 import type { ComponentType, ReactElement } from 'react';
 
@@ -108,7 +107,8 @@ function lazyOnly(element: ReactElement): ReactElement {
 /**
  * Role-aware "My Profile" (`/me`, ui-design-system §6), gated by the `profile` module:
  *  - teacher (with a linked teacher_profile_id) → their own {@link TeacherProfileView}
- *    in `self` mode (edit-profile only).
+ *    in `self` mode (their info card only, read-only).
+ *  - a lecturer with NO linked profile → an empty page.
  *  - student → their own {@link MyStudentProfilePage} (read-only identity + enrollment).
  *  - principal/secretary never reach here — `profile` is 'none' for them, so the module
  *    gate redirects to /forbidden (their account lives under Settings).
@@ -128,7 +128,15 @@ function MyProfilePage() {
   if (user?.role === 'student') {
     return <MyStudentProfilePage />;
   }
-  return <ModulePlaceholder module="profile" title="My Profile" />;
+  // A lecturer login not yet linked to a lecturer profile (and any other role that
+  // reaches `/me`) has no record to show: an empty page, not an error or a placeholder.
+  return (
+    <EmptyState
+      variant="page"
+      title="Nothing to show yet"
+      description="Your profile will appear here once it has been set up."
+    />
+  );
 }
 
 export const router = createBrowserRouter([

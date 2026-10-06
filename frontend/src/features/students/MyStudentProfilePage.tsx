@@ -36,10 +36,12 @@ export function MyStudentProfilePage() {
   }
   if (!detail) {
     return (
+      // Also what a login not yet linked to a student record sees: an empty page, not
+      // an error (`getMyStudentRecord` turns that 404 into null).
       <EmptyState
         variant="page"
-        title="No profile found"
-        description="We couldn't find a student profile linked to your account."
+        title="Nothing to show yet"
+        description="Your student profile will appear here once it has been set up."
       />
     );
   }

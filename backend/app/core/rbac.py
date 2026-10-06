@@ -37,20 +37,28 @@ from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
 
 
+#: Stands in for the profile id of a lecturer login that has no `teacher_profiles` row.
+#: The nil UUID is never generated, so it matches no `class_teachers` / `program_heads`
+#: row: such a login is simply a lecturer who teaches nothing.
+NO_TEACHER_PROFILE = uuid.UUID(int=0)
+
+
 def _teacher_profile_id(db: Session, user: User) -> uuid.UUID:
     """Resolve the authenticated lecturer's profile id from the principal (never from
-    the request — architecture §3.2 hard rule)."""
+    the request — architecture §3.2 hard rule).
+
+    A lecturer login with no linked profile gets `NO_TEACHER_PROFILE`, not an error.
+    Every caller uses this id only to FILTER reads by ownership, so their lists come back
+    empty - the screen shows "nothing here", not a failure - while the ownership asserts
+    below still find no row and answer 404 for any specific offering. This used to raise
+    NotFound, which turned every list a new, not-yet-linked lecturer opened into an error."""
     tid = db.scalar(
         select(TeacherProfile.id).where(
             TeacherProfile.user_id == user.id,
             TeacherProfile.deleted_at.is_(None),
         )
     )
-    if tid is None:
-        # A lecturer user with no profile cannot own anything → treat as not-found on
-        # the scoped resource (404-vs-403 discipline, api-spec §3.3).
-        raise NotFound("Resource not found.")
-    return tid
+    return NO_TEACHER_PROFILE if tid is None else tid
 
 
 def assert_teacher_owns_offering(

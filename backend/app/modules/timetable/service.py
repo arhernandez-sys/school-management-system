@@ -71,17 +71,6 @@ def _active_year_id(db: Session) -> uuid.UUID | None:
     return db.scalar(select(AcademicYear.id).where(AcademicYear.status == "active"))
 
 
-def _student_profile_or_404(db: Session, user: User) -> StudentProfile:
-    profile = db.scalar(
-        select(StudentProfile).where(
-            StudentProfile.user_id == user.id, StudentProfile.deleted_at.is_(None)
-        )
-    )
-    if profile is None:
-        raise NotFound("Student profile not found.", code="student_not_found")
-    return profile
-
-
 def _narrow_to_one_term(
     db: Session, pairs: list[tuple[uuid.UUID, uuid.UUID]]
 ) -> list[uuid.UUID]:
@@ -275,7 +264,14 @@ def my_timetable(
     year_id = academic_year_id or _active_year_id(db)
 
     if caller.role == Role.STUDENT:
-        profile = _student_profile_or_404(db, caller)
+        profile = db.scalar(
+            select(StudentProfile).where(
+                StudentProfile.user_id == caller.id, StudentProfile.deleted_at.is_(None)
+            )
+        )
+        if profile is None:
+            # A login not linked to a student record: an empty week, like P/S get.
+            return _build_view(db, offering_ids=[], academic_year_id=year_id)
         offering_ids = _student_offering_ids(
             db, student_id=profile.id, academic_year_id=year_id
         )

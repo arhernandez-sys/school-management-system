@@ -24,6 +24,11 @@ export interface SearchableSelectProps {
   loading?: boolean;
   fullWidth?: boolean;
   size?: 'small' | 'medium';
+  /** What the user types, for a picker whose options come from a server-side search
+   *  (the list is capped, so filtering only what was fetched would miss rows). */
+  onInputChange?: (text: string) => void;
+  /** Shown when nothing matches. */
+  noOptionsText?: string;
   sx?: AutocompleteProps<SearchableSelectOption, false, false, false>['sx'];
 }
 
@@ -59,6 +64,8 @@ export function SearchableSelect({
   fullWidth,
   size = 'small',
   sx,
+  onInputChange,
+  noOptionsText,
 }: SearchableSelectProps) {
   const items: SearchableSelectOption[] = allOption
     ? [{ value: '', label: allOption }, ...options]
@@ -78,6 +85,12 @@ export function SearchableSelect({
       // Selecting nothing (the clear button, or the "all" row) means the empty string,
       // which is what every caller's filter state already uses for "no choice".
       onChange={(_, option) => onChange(option?.value ?? '')}
+      // `reason === 'reset'` is MUI writing the chosen label back into the box, not the
+      // user typing - forwarding it would re-search for the selected row's own label.
+      onInputChange={
+        onInputChange ? (_, text, reason) => reason !== 'reset' && onInputChange(text) : undefined
+      }
+      noOptionsText={noOptionsText}
       getOptionLabel={(o) => o.label}
       isOptionEqualToValue={(a, b) => a.value === b.value}
       // Match on the label AND the hint: someone looking for a course types its code.

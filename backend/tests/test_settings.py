@@ -1351,12 +1351,23 @@ class TestUsersAdmin:
     ) -> None:
         """Secretary creates a teacher → 201, must_change_password=true, temp
         password echoed once, audit row written."""
+        from app.common.enums import TeacherStatus
+        from app.modules.teachers.models import TeacherProfile
+
         secretary = make_user(role=Role.SECRETARY)
+        # A lecturer login must name the profile it belongs to (profile_id).
+        profile = TeacherProfile(
+            staff_number=f"NT-{uuid.uuid4().hex[:8]}", full_name="New Teacher",
+            status=TeacherStatus.ACTIVE,
+        )
+        db_session.add(profile)
+        db_session.flush()
         new_email = f"newteacher_{uuid.uuid4().hex[:8]}@test.local"
         resp = client.post(
             USERS,
             headers=auth_headers(user_id=secretary.id, role=Role.SECRETARY),
-            json={"email": new_email, "full_name": "New Teacher", "role": "teacher"},
+            json={"email": new_email, "full_name": "New Teacher", "role": "teacher",
+                  "profile_id": str(profile.id)},
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()
@@ -1457,14 +1468,16 @@ class TestUsersAdmin:
     ) -> None:
         """Principal changes a user's role → 200 + audit row on the change."""
         principal = make_user(role=Role.PRINCIPAL)
+        # Into a role that takes no profile: moving into teacher now needs a linked
+        # lecturer profile (test_user_profile_link.py).
         target = make_user(role=Role.STUDENT)
         resp = client.patch(
             _user_path(target.id),
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"role": "teacher"},
+            json={"role": "auditor"},
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["role"] == "teacher"
+        assert resp.json()["role"] == "auditor"
         n_audit = db_session.scalar(
             select(func.count()).select_from(AuditLog).where(
                 AuditLog.action == "user.update",

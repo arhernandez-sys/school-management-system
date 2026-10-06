@@ -720,11 +720,12 @@ class TestMyAttendance:
             "present": 0, "absent": 0, "late": 0, "excused": 0, "pct_present": 0.0
         }
 
-    def test_student_without_a_profile_404(self, client, graph, make_user, auth_headers) -> None:
+    def test_student_without_a_profile_gets_empty(self, client, graph, make_user, auth_headers) -> None:
+        """An unlinked login sees an empty page, not an error."""
         user = make_user(role=Role.STUDENT)
         r = client.get(f"{AT}/me", headers=auth_headers(user_id=user.id, role=Role.STUDENT))
-        assert r.status_code == 404
-        _assert_envelope(r.json(), code="not_found")
+        assert r.status_code == 200, r.text
+        assert r.json()["history"] == []
 
     def test_summary_counts_late_as_present(self, client, graph) -> None:
         me, enr = graph.student(with_login=True)

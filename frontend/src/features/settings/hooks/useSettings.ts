@@ -4,7 +4,7 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
@@ -37,7 +37,9 @@ import { useResetUserPasswordApiV1AuthUsersUserIdResetPasswordPost } from '@shar
 import type {
   ListUsersApiV1SettingsUsersGetParams,
   GetGradingScaleApiV1SettingsGradingScaleGetParams,
+  Role,
 } from '@shared/api/generated/model';
+import { listLinkableProfiles } from '../api/linkableProfiles';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
 
@@ -193,7 +195,35 @@ export function useUsersList(params: ListUsersApiV1SettingsUsersGetParams) {
 
 function useInvalidateUsers() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+  return () => {
+    qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+    // A created login takes its profile out of the picker.
+    qc.invalidateQueries({ queryKey: ['settings', 'linkable-profiles'] });
+  };
+}
+
+/**
+ * The roles whose login must be linked to a profile, and which profile. Mirrors
+ * `_PROFILE_KIND` in `backend/app/modules/settings/service.py`: every scoped read for
+ * these roles starts from the caller's profile, so a login without one 404s.
+ */
+export const PROFILE_KIND_BY_ROLE: Partial<Record<Role, 'teacher' | 'student'>> = {
+  teacher: 'teacher',
+  hod: 'teacher',
+  student: 'student',
+};
+
+/** Unlinked profiles for the user form's picker; idle for a role that takes none. */
+export function useLinkableProfiles(role: Role, search: string, enabled: boolean) {
+  const takesProfile = Boolean(PROFILE_KIND_BY_ROLE[role]);
+  return useQuery({
+    // Keyed by the profile KIND, not the role: teacher and hod read the same rows.
+    queryKey: ['settings', 'linkable-profiles', PROFILE_KIND_BY_ROLE[role], search],
+    queryFn: ({ signal }) =>
+      listLinkableProfiles({ role, search: search || undefined }, signal),
+    enabled: enabled && takesProfile,
+    placeholderData: (prev) => prev,
+  });
 }
 
 export function useCreateUser() {

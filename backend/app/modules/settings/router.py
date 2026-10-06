@@ -25,6 +25,7 @@ Endpoints (all mount under `/api/v1` via app/main.py):
     PUT    /settings/assessment-policy             principal      -> AssessmentPolicyRead
   Users admin:
     GET    /settings/users                         P/S            -> Page[UserListItem]
+    GET    /settings/users/linkable-profiles       P/S            -> list[LinkableProfile]
     POST   /settings/users                         P/S*           -> UserCreateResponse (201)
     PATCH  /settings/users/{id}                     P/S* / P       -> UserListItem
   Account/preferences:
@@ -47,6 +48,7 @@ from app.core.deps import get_current_user, get_db, require_role
 from app.core.pagination import PageParams, page_params
 from app.modules.settings import service
 from app.modules.settings.schemas import (
+    LinkableProfile,
     AccountUpdateRequest,
     ActiveTerm,
     AcademicYearCreateRequest,
@@ -466,6 +468,26 @@ def list_users(
     )
 
 
+@router.get(
+    "/users/linkable-profiles",
+    response_model=list[LinkableProfile],
+    summary="Lecturer/student profiles with no login yet, for the user form",
+    responses={401: _ERR, 403: _ERR, 422: _ERR},
+)
+def list_linkable_profiles(
+    role: Annotated[Role, Query()],
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_user_admins),
+) -> list[LinkableProfile]:
+    """The picker behind "which lecturer / student is this login for?". `role` decides
+    the table: teacher and hod read `teacher_profiles`, student reads
+    `student_profiles`, every other role gets an empty list because it takes no
+    profile. Only rows with no login and not deleted; capped at 50, so the form
+    searches rather than scrolls."""
+    return service.list_linkable_profiles(db, role=role, search=search)
+
+
 @router.post(
     "/users",
     response_model=UserCreateResponse,
@@ -480,7 +502,11 @@ def create_user(
 ) -> UserCreateResponse:
     """P/S may create teacher/student logins; assigning principal/secretary is
     Principal-only (403 role_change_forbidden). 409 duplicate_email. New users get
-    must_change_password=true; a generated temp password is returned ONCE."""
+    must_change_password=true; a generated temp password is returned ONCE.
+
+    student / teacher / hod logins MUST name the profile they belong to
+    (`profile_id`, 422 profile_required) and it must have no login yet (409
+    profile_already_linked). Every other role takes none (422 profile_not_allowed)."""
     user, temp_password = service.create_user(db, actor=actor, payload=payload)
     return UserCreateResponse(
         user=UserListItem.model_validate(user),

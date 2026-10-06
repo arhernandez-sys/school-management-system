@@ -30,7 +30,7 @@ from math import ceil
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.common.enums import AcademicYearStatus, Role
+from app.common.enums import LECTURER_ROLES, AcademicYearStatus, Role
 from app.common.schemas import (
     AcademicYearRef,
     CurrentUser,
@@ -73,10 +73,13 @@ from app.modules.settings.schemas import (
     SemesterDetail,
     SemesterUpdateRequest,
     StandaloneSemesterCreateRequest,
+    LinkableProfile,
     UserCreateRequest,
     UserListItem,
     UserUpdateRequest,
 )
+from app.modules.students.models import StudentProfile
+from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User, UserPreferences
 
 # Roles that are "privileged" — assigning or moving a user INTO these, or any role
@@ -1116,6 +1119,103 @@ def list_users(
     return paginate(db, stmt, params, serialize=UserListItem.model_validate)
 
 
+#: Which profile table a role's login must be linked to. Every scoped read for these
+#: roles starts by resolving the caller's profile (`app.core.rbac._teacher_profile_id`,
+#: the student `/me` routes), and a login without one 404s on everything. Every role NOT
+#: listed here works on its role alone - principal, secretary, auditor and sysadmin
+#: never look a profile up.
+_PROFILE_KIND: dict[Role, str] = {
+    **{r: "teacher" for r in LECTURER_ROLES},
+    Role.STUDENT: "student",
+}
+
+
+def list_linkable_profiles(
+    db: Session, *, role: Role, search: str | None, limit: int = 50
+) -> list[LinkableProfile]:
+    """GET /settings/users/linkable-profiles. Live lecturer/student profiles with NO
+    login, for the user form's picker. An empty list for a role that takes no profile."""
+    kind = _PROFILE_KIND.get(role)
+    like = f"%{search.strip()}%" if search and search.strip() else None
+    if kind == "teacher":
+        stmt = select(TeacherProfile).where(
+            TeacherProfile.user_id.is_(None), TeacherProfile.deleted_at.is_(None)
+        )
+        if like:
+            stmt = stmt.where(
+                TeacherProfile.full_name.ilike(like)
+                | TeacherProfile.staff_number.ilike(like)
+                | TeacherProfile.email.ilike(like)
+            )
+        rows = db.scalars(stmt.order_by(TeacherProfile.full_name).limit(limit)).all()
+        return [
+            LinkableProfile(
+                id=t.id, kind="teacher", full_name=t.full_name,
+                number=t.staff_number, email=t.email,
+            )
+            for t in rows
+        ]
+    if kind == "student":
+        stmt = select(StudentProfile).where(
+            StudentProfile.user_id.is_(None), StudentProfile.deleted_at.is_(None)
+        )
+        if like:
+            stmt = stmt.where(
+                StudentProfile.full_name.ilike(like)
+                | StudentProfile.student_number.ilike(like)
+                | StudentProfile.email.ilike(like)
+            )
+        rows = db.scalars(
+            stmt.order_by(StudentProfile.last_name, StudentProfile.first_name).limit(limit)
+        ).all()
+        return [
+            LinkableProfile(
+                id=p.id, kind="student", full_name=p.full_name,
+                number=p.student_number, email=p.email,
+            )
+            for p in rows
+        ]
+    return []
+
+
+def _claim_profile(
+    db: Session, *, role: Role, profile_id: uuid.UUID | None
+) -> TeacherProfile | StudentProfile | None:
+    """Validate `profile_id` against `role` and return the row, locked, to link.
+
+    422 profile_required when the role needs one and none was sent; 422
+    profile_not_allowed when the role takes none; 404 when the id is unknown, deleted
+    or the wrong kind; 409 profile_already_linked when another login holds it. The
+    row lock plus the unique index on `user_id` close the double-link race."""
+    kind = _PROFILE_KIND.get(role)
+    if kind is None:
+        if profile_id is not None:
+            raise ValidationError(
+                f"The {role.value} role does not take a linked profile.",
+                code="profile_not_allowed",
+            )
+        return None
+    if profile_id is None:
+        raise ValidationError(
+            "Choose the lecturer or student profile this login belongs to.",
+            code="profile_required",
+            fields={"profile_id": ["Choose the profile this login belongs to."]},
+        )
+    model = TeacherProfile if kind == "teacher" else StudentProfile
+    profile = db.scalar(
+        select(model)
+        .where(model.id == profile_id, model.deleted_at.is_(None))
+        .with_for_update()
+    )
+    if profile is None:
+        raise NotFound("Profile not found.", code="not_found")
+    if profile.user_id is not None:
+        raise Conflict(
+            "That profile already has a login.", code="profile_already_linked"
+        )
+    return profile
+
+
 def create_user(
     db: Session, *, actor: User, payload: UserCreateRequest
 ) -> tuple[User, str | None]:
@@ -1151,6 +1251,9 @@ def create_user(
                 code="duplicate_username",
             )
 
+    # After the duplicate checks, so a clash on email still reads as a clash on email.
+    profile = _claim_profile(db, role=payload.role, profile_id=payload.profile_id)
+
     supplied = payload.temporary_password
     if supplied:
         plaintext = supplied
@@ -1171,6 +1274,8 @@ def create_user(
     )
     db.add(user)
     db.flush()  # assign id for the audit + response
+    if profile is not None:
+        profile.user_id = user.id
 
     _audit(
         db,
@@ -1178,7 +1283,10 @@ def create_user(
         action="user.create",
         entity_type="user",
         entity_id=user.id,
-        summary={"role": payload.role.value},
+        summary={
+            "role": payload.role.value,
+            "linked_profile_id": str(profile.id) if profile is not None else None,
+        },
     )
     del plaintext, supplied
     db.commit()
@@ -1225,6 +1333,26 @@ def update_user(
             "Only a Principal may assign the principal or secretary role.",
             code="role_change_forbidden",
         )
+
+    # A role change must not strand the login: moving it INTO a role that resolves a
+    # profile needs that profile already linked. Lecturer <-> HOD keeps the same
+    # teacher profile, so a promotion passes; auditor -> lecturer with nothing linked
+    # would 404 on every scoped read, so it is refused here instead.
+    if changing_role:
+        kind = _PROFILE_KIND.get(payload.role)  # type: ignore[arg-type]
+        if kind is not None:
+            model = TeacherProfile if kind == "teacher" else StudentProfile
+            linked = db.scalar(
+                select(model.id).where(
+                    model.user_id == target.id, model.deleted_at.is_(None)
+                )
+            )
+            if linked is None:
+                raise ValidationError(
+                    f"This login has no linked {'lecturer' if kind == 'teacher' else 'student'}"
+                    " profile, so it cannot take that role.",
+                    code="profile_required",
+                )
 
     if payload.username is not None and payload.username.strip():
         new_username = payload.username.strip()

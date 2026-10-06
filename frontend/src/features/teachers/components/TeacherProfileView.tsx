@@ -24,6 +24,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingState,
+  PageHeader,
   ProfileLayout,
   YearSelect,
   type DetailTab,
@@ -46,7 +47,7 @@ import type { TeacherClassTaught, TeacherDetail } from '../types';
  * gate, {@link TeacherProfileRoute}, or the role-aware `/me`) and used to shape the
  * header actions:
  *  - `manage`   — principal/secretary: full {@link TeacherActions} (edit + activate + delete).
- *  - `self`     — a teacher viewing their OWN profile: a single "Edit profile" affordance.
+ *  - `self`     — a lecturer viewing their OWN profile: the info card only, read-only.
  *  - `readonly` — a student viewing a subject teacher: no actions.
  *
  * ⚠️ The mode is a UX concern only. Ownership and subject-scoping are re-checked by the
@@ -147,6 +148,21 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
     );
   }
 
+  // A lecturer's own "My Profile" is their information and nothing more: no tabs, no
+  // year picker and no Edit button. The Edit button used to be here, but editing a
+  // lecturer record is the Dean's/Registrar's (`teachers/router.py` `_manage`), so it
+  // opened a form whose Save the server refused.
+  if (mode === 'self') {
+    return (
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <PageHeader title="My Profile" />
+        <Box sx={{ maxWidth: 720 }}>
+          <TeacherProfileSummary teacher={detail} />
+        </Box>
+      </Box>
+    );
+  }
+
   const breadcrumbs =
     mode === 'manage' ? (
       <Breadcrumbs aria-label="Breadcrumb">
@@ -161,9 +177,7 @@ export function TeacherProfileView({ teacherId, mode }: TeacherProfileViewProps)
 
   let actions: ReactNode;
   if (mode === 'manage') {
-    actions = <TeacherActions teacher={detail} variant="manage" />;
-  } else if (mode === 'self') {
-    actions = <TeacherActions teacher={detail} variant="self" />;
+    actions = <TeacherActions teacher={detail} />;
   }
 
   return (
@@ -268,23 +282,14 @@ function GradesTab({ classes }: { classes: TeacherClassTaught[] }) {
 }
 
 /**
- * Header actions. Two variants:
- *  - `manage` (principal/secretary) — edit, activate/deactivate, delete.
- *  - `self` (teacher on own profile) — ONLY "Edit profile" (no activate/deactivate/delete;
- *    a teacher must not deactivate or delete their own staff record).
+ * Header actions for `manage` (principal/secretary): edit, activate/deactivate, delete.
+ * A lecturer's own profile shows none (see the `self` branch above).
  *
  * The server re-checks authorization on every mutation (NFR-SEC-01); hiding the
  * destructive actions here is UX, not a security control.
  */
-function TeacherActions({
-  teacher,
-  variant = 'manage',
-}: {
-  teacher: TeacherDetail;
-  variant?: 'manage' | 'self';
-}) {
+function TeacherActions({ teacher }: { teacher: TeacherDetail }) {
   const navigate = useNavigate();
-  const isManage = variant === 'manage';
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [statusRefs, setStatusRefs] = useState<string[]>([]);
@@ -354,69 +359,61 @@ function TeacherActions({
           startIcon={<EditIcon />}
           onClick={() => navigate(`${ROUTES.teachers}/${teacher.id}/edit`)}
         >
-          {isManage ? 'Edit' : 'Edit profile'}
+          Edit
         </Button>
-        {isManage && (
-          <>
-            <Button
-              variant="outlined"
-              color={teacher.status === 'active' ? 'warning' : 'success'}
-              onClick={() => {
-                setStatusError(null);
-                setStatusRefs([]);
-                setStatusOpen(true);
-              }}
-            >
-              {teacher.status === 'active' ? 'Deactivate' : 'Activate'}
-            </Button>
-            <Button
-              variant="outlined"
-              color="error"
-              onClick={() => {
-                setDeleteError(null);
-                setDeleteRefs([]);
-                setDeleteOpen(true);
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        )}
+        <Button
+          variant="outlined"
+          color={teacher.status === 'active' ? 'warning' : 'success'}
+          onClick={() => {
+            setStatusError(null);
+            setStatusRefs([]);
+            setStatusOpen(true);
+          }}
+        >
+          {teacher.status === 'active' ? 'Deactivate' : 'Activate'}
+        </Button>
+        <Button
+          variant="outlined"
+          color="error"
+          onClick={() => {
+            setDeleteError(null);
+            setDeleteRefs([]);
+            setDeleteOpen(true);
+          }}
+        >
+          Delete
+        </Button>
       </Stack>
 
-      {isManage && (
-        <>
-          <ConfirmDialog
-            open={statusOpen}
-            title={teacher.status === 'active' ? 'Deactivate lecturer?' : 'Activate lecturer?'}
-            description={
-              teacher.status === 'active'
-                ? `Deactivate ${teacher.full_name}? They will no longer appear as active staff.`
-                : `Reactivate ${teacher.full_name}?`
-            }
-            warning={statusRefs.length > 0 ? refList(statusRefs) : undefined}
-            confirmLabel={teacher.status === 'active' ? 'Deactivate' : 'Activate'}
-            destructive={teacher.status === 'active'}
-            pending={statusMut.isPending}
-            error={statusError}
-            onConfirm={handleStatus}
-            onCancel={() => setStatusOpen(false)}
-          />
+      <ConfirmDialog
+        open={statusOpen}
+        title={teacher.status === 'active' ? 'Deactivate lecturer?' : 'Activate lecturer?'}
+        description={
+          teacher.status === 'active'
+            ? `Deactivate ${teacher.full_name}? They will no longer appear as active staff.`
+            : `Reactivate ${teacher.full_name}?`
+        }
+        warning={statusRefs.length > 0 ? refList(statusRefs) : undefined}
+        confirmLabel={teacher.status === 'active' ? 'Deactivate' : 'Activate'}
+        destructive={teacher.status === 'active'}
+        pending={statusMut.isPending}
+        error={statusError}
+        onConfirm={handleStatus}
+        onCancel={() => setStatusOpen(false)}
+      />
 
-          <ConfirmDialog
-            open={deleteOpen}
-            title="Delete lecturer?"
-            destructive
-            description={`Permanently delete ${teacher.full_name}? This cannot be undone.`}
-            warning={deleteRefs.length > 0 ? refList(deleteRefs) : undefined}
-            confirmLabel="Delete"
-            pending={deleteMut.isPending}
-            error={deleteError}
-            onConfirm={handleDelete}
-            onCancel={() => setDeleteOpen(false)}
-          />
-        </>
-      )}
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete lecturer?"
+        destructive
+        description={`Permanently delete ${teacher.full_name}? This cannot be undone.`}
+        warning={deleteRefs.length > 0 ? refList(deleteRefs) : undefined}
+        confirmLabel="Delete"
+        pending={deleteMut.isPending}
+        error={deleteError}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteOpen(false)}
+      />
 
       <Snackbar
         open={Boolean(toast)}

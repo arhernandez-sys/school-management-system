@@ -582,7 +582,9 @@ def get_my_attendance(
         )
     )
     if student is None:
-        raise NotFound("Student profile not found.", code="not_found")
+        # A login not linked to a student record has no attendance: an empty page, not
+        # an error (the same answer as a linked student with nothing marked yet).
+        return MyAttendanceResponse(summary=_summarize([]), history=[])
 
     year_id = academic_year_id
     if year_id is None:

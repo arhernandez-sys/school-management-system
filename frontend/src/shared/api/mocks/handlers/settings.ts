@@ -21,6 +21,13 @@ import { paginate } from '@shared/api/mocks/demo/dataset';
  */
 const D = DEMO_DATASET;
 
+/** Which profile a role's login links to - `_PROFILE_KIND` in settings/service.py. */
+const PROFILE_KIND: Record<string, 'teacher' | 'student' | undefined> = {
+  teacher: 'teacher',
+  hod: 'teacher',
+  student: 'student',
+};
+
 /**
  * Role gate for the academic-structure WRITES, mirroring `require_role(PRINCIPAL)` on
  * the real router.
@@ -572,6 +579,38 @@ export const settingsHandlers = [
     );
     return HttpResponse.json(page);
   }),
+  // Mirrors `list_linkable_profiles` in backend/app/modules/settings/service.py:
+  // profiles with no login, of the kind the role needs, capped at 50.
+  http.get(`${API_BASE_URL}/settings/users/linkable-profiles`, ({ request }) => {
+    const url = new URL(request.url);
+    const kind = PROFILE_KIND[url.searchParams.get('role') ?? ''];
+    const q = (url.searchParams.get('search') ?? '').trim().toLowerCase();
+    const hit = (...xs: Array<string | null | undefined>) =>
+      !q || xs.some((x) => (x ?? '').toLowerCase().includes(q));
+    if (kind === 'teacher') {
+      return HttpResponse.json(
+        D.teachers
+          .filter((t) => t.user_id === null && hit(t.full_name, t.staff_number, t.email))
+          .sort((a, b) => a.full_name.localeCompare(b.full_name))
+          .slice(0, 50)
+          .map((t) => ({
+            id: t.id, kind, full_name: t.full_name, number: t.staff_number, email: t.email,
+          })),
+      );
+    }
+    if (kind === 'student') {
+      return HttpResponse.json(
+        D.students
+          .filter((p) => p.user_id === null && hit(p.full_name, p.student_number, p.email))
+          .sort((a, b) => a.last_name.localeCompare(b.last_name))
+          .slice(0, 50)
+          .map((p) => ({
+            id: p.id, kind, full_name: p.full_name, number: p.student_number, email: p.email,
+          })),
+      );
+    }
+    return HttpResponse.json([]);
+  }),
   http.post(`${API_BASE_URL}/settings/users`, async ({ request }) => {
     const body = (await request.json()) as {
       email: string;
@@ -579,9 +618,33 @@ export const settingsHandlers = [
       full_name: string;
       role: DemoUser['role'];
       temporary_password?: string;
+      profile_id?: string | null;
     };
     if (D.users.some((u) => u.email.toLowerCase() === body.email.toLowerCase())) {
       return errorResponse(409, 'duplicate_email', 'A user with this email already exists.');
+    }
+    // Same rules as `_claim_profile`: student / lecturer / HOD logins must name an
+    // unlinked profile of their kind; every other role must not name one.
+    const kind = PROFILE_KIND[body.role];
+    let profile: { user_id: string | null } | undefined;
+    if (!kind) {
+      if (body.profile_id) {
+        return errorResponse(422, 'profile_not_allowed', `The ${body.role} role does not take a linked profile.`);
+      }
+    } else {
+      if (!body.profile_id) {
+        return errorResponse(422, 'profile_required', 'Choose the lecturer or student profile this login belongs to.', {
+          profile_id: ['Choose the profile this login belongs to.'],
+        });
+      }
+      profile =
+        kind === 'teacher'
+          ? D.teachers.find((t) => t.id === body.profile_id)
+          : D.students.find((p) => p.id === body.profile_id);
+      if (!profile) return errorResponse(404, 'not_found', 'Profile not found.');
+      if (profile.user_id !== null) {
+        return errorResponse(409, 'profile_already_linked', 'That profile already has a login.');
+      }
     }
     const newUser: DemoUser = {
       id: `user-new-${D.users.length + 1}`,
@@ -598,6 +661,7 @@ export const settingsHandlers = [
       default_page_size: 25,
     };
     D.users.push(newUser);
+    if (profile) profile.user_id = newUser.id;
     return HttpResponse.json(
       { user: userListItem(newUser), temporary_password: body.temporary_password ?? 'Temp-Pass-5678' },
       { status: 201 },
@@ -609,6 +673,21 @@ export const settingsHandlers = [
     const body = (await request.json()) as Partial<
       Pick<DemoUser, 'full_name' | 'username' | 'role' | 'is_active'>
     >;
+    // Same guard as `update_user`: moving a login INTO a profiled role needs its profile.
+    const kind = body.role !== undefined && body.role !== user.role ? PROFILE_KIND[body.role] : undefined;
+    if (kind) {
+      const linked =
+        kind === 'teacher'
+          ? D.teachers.some((t) => t.user_id === user.id)
+          : D.students.some((p) => p.user_id === user.id);
+      if (!linked) {
+        return errorResponse(
+          422,
+          'profile_required',
+          `This login has no linked ${kind === 'teacher' ? 'lecturer' : 'student'} profile, so it cannot take that role.`,
+        );
+      }
+    }
     if (body.full_name !== undefined) user.full_name = body.full_name;
     if (body.username !== undefined) user.username = body.username;
     if (body.role !== undefined) user.role = body.role;

@@ -113,6 +113,7 @@ export function UsersScreen() {
             full_name: values.full_name,
             role: values.role,
             temporary_password: values.temporary_password || null,
+            profile_id: values.profile_id || null,
           },
         },
         {

@@ -406,13 +406,13 @@ class TestListStudents:
         assert str(owned_student.id) in ids
         assert str(outsider.id) not in ids, "teacher must not see students outside own sections"
 
-    def test_list_teacher_with_no_profile_404(self, client, make_user, auth_headers) -> None:
-        """A teacher login with no teacher_profile owns nothing → the scope filter
-        resolves via _teacher_profile_id which raises NotFound (404)."""
+    def test_list_teacher_with_no_profile_is_empty(self, client, make_user, auth_headers) -> None:
+        """A teacher login with no teacher_profile owns nothing → an EMPTY page, not an
+        error (`_teacher_profile_id` returns an id that matches no offering)."""
         teacher_user = make_user(role=Role.TEACHER)  # no TeacherProfile row
         resp = client.get(STUDENTS, headers=auth_headers(user_id=teacher_user.id, role=Role.TEACHER))
-        assert resp.status_code == 404, resp.text
-        _assert_envelope(resp.json(), code="not_found")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["items"] == [] and resp.json()["total"] == 0
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1888,14 +1888,14 @@ class TestStudentYears:
         assert str(my_year.id) in ids
         assert str(their_year.id) not in ids
 
-    def test_me_years_no_profile_linked_404(self, client, make_user, auth_headers) -> None:
+    def test_me_years_no_profile_linked_is_empty(self, client, make_user, auth_headers) -> None:
         student_user = make_user(role=Role.STUDENT)  # no profile row
         resp = client.get(
             f"{STUDENTS}/me/years",
             headers=auth_headers(user_id=student_user.id, role=Role.STUDENT),
         )
-        assert resp.status_code == 404, resp.text
-        _assert_envelope(resp.json(), code="no_student_profile")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"items": []}
 
     def test_me_years_non_student_403(self, client, make_user, auth_headers) -> None:
         principal = make_user(role=Role.PRINCIPAL)

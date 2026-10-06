@@ -10,6 +10,7 @@ admin, account).
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -314,6 +315,24 @@ class UserCreateRequest(BaseModel):
     # When omitted, the service generates a strong temporary password and returns
     # it ONCE in the response (admin-provisioned, D5).
     temporary_password: str | None = Field(default=None, max_length=256)
+    # The lecturer or student profile this login belongs to. REQUIRED for the roles
+    # that resolve a profile on every scoped read (student, teacher, hod) and refused
+    # for every other role: a lecturer login with no profile 404s on its own students
+    # and offerings, which is the state this field exists to make impossible.
+    profile_id: UUID | None = None
+
+
+class LinkableProfile(BaseModel):
+    """One row of GET /settings/users/linkable-profiles: a lecturer or student profile
+    that has no login yet. Identity only — no academic data, because the sysadmin
+    provisions accounts too."""
+
+    id: UUID
+    kind: Literal["teacher", "student"]
+    full_name: str
+    #: staff_number for a lecturer, student_number for a student.
+    number: str
+    email: str | None = None
 
 
 class UserCreateResponse(BaseModel):
