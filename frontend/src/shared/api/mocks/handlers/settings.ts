@@ -119,7 +119,17 @@ function userListItem(u: DemoUser) {
     is_active: u.is_active,
     must_change_password: u.must_change_password,
     last_login_at: u.last_login_at,
+    linked_profile: linkedProfile(u.id),
   };
+}
+
+/** Mirrors `serialize_users`: the profile this login belongs to, teacher before student. */
+function linkedProfile(userId: string) {
+  const t = D.teachers.find((x) => x.user_id === userId);
+  if (t) return { id: t.id, kind: 'teacher', full_name: t.full_name, number: t.staff_number, email: t.email };
+  const p = D.students.find((x) => x.user_id === userId);
+  if (p) return { id: p.id, kind: 'student', full_name: p.full_name, number: p.student_number, email: p.email };
+  return null;
 }
 
 /** Mirrors `settings/service._LOGO_ALLOWED_TYPES` / `_LOGO_MAX_BYTES` exactly. */
@@ -672,10 +682,30 @@ export const settingsHandlers = [
     if (!user) return errorResponse(404, 'not_found', 'User not found.');
     const body = (await request.json()) as Partial<
       Pick<DemoUser, 'full_name' | 'username' | 'role' | 'is_active'>
-    >;
+    > & { profile_id?: string | null };
+    // Same as `update_user`: `profile_id` links the login to that profile, judged
+    // against the role it ends up with; re-sending the current one is a no-op.
+    const effectiveRole = body.role ?? user.role;
+    const effectiveKind = PROFILE_KIND[effectiveRole];
+    let newProfile: { user_id: string | null } | undefined;
+    if (body.profile_id) {
+      if (!effectiveKind) {
+        return errorResponse(422, 'profile_not_allowed', `The ${effectiveRole} role does not take a linked profile.`);
+      }
+      const pool: Array<{ id: string; user_id: string | null }> =
+        effectiveKind === 'teacher' ? D.teachers : D.students;
+      const current = pool.find((x) => x.user_id === user.id);
+      if (current?.id !== body.profile_id) {
+        newProfile = pool.find((x) => x.id === body.profile_id);
+        if (!newProfile) return errorResponse(404, 'not_found', 'Profile not found.');
+        if (newProfile.user_id !== null) {
+          return errorResponse(409, 'profile_already_linked', 'That profile already has a login.');
+        }
+      }
+    }
     // Same guard as `update_user`: moving a login INTO a profiled role needs its profile.
     const kind = body.role !== undefined && body.role !== user.role ? PROFILE_KIND[body.role] : undefined;
-    if (kind) {
+    if (kind && !newProfile) {
       const linked =
         kind === 'teacher'
           ? D.teachers.some((t) => t.user_id === user.id)
@@ -692,6 +722,11 @@ export const settingsHandlers = [
     if (body.username !== undefined) user.username = body.username;
     if (body.role !== undefined) user.role = body.role;
     if (body.is_active !== undefined) user.is_active = body.is_active;
+    if (newProfile) {
+      // A login belongs to one person: whatever it held before lets go.
+      for (const x of [...D.teachers, ...D.students]) if (x.user_id === user.id) x.user_id = null;
+      newProfile.user_id = user.id;
+    }
     return HttpResponse.json(userListItem(user));
   }),
 

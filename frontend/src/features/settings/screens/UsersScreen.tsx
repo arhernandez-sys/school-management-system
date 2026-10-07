@@ -102,6 +102,10 @@ export function UsersScreen() {
         full_name: values.full_name,
         username: values.username || null,
         ...(isPrincipal ? { role: values.role, is_active: values.is_active } : {}),
+        // Only a real change: omitted leaves the link alone server side.
+        ...(values.profile_id && values.profile_id !== editing.linked_profile?.id
+          ? { profile_id: values.profile_id }
+          : {}),
       };
       updateMut.mutate({ userId: editing.id, data }, { onSuccess: () => setFormOpen(false), onError });
     } else {
@@ -164,6 +168,22 @@ export function UsersScreen() {
       ),
     },
     { field: 'role', headerName: 'Role', render: (u) => <RoleChip role={u.role} /> },
+    {
+      field: 'linked_profile',
+      headerName: 'Linked to',
+      hideOnMobile: true,
+      render: (u) =>
+        u.linked_profile ? (
+          <>
+            <Typography variant="body2">{u.linked_profile.full_name}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {u.linked_profile.number}
+            </Typography>
+          </>
+        ) : (
+          '—'
+        ),
+    },
     {
       field: 'is_active',
       headerName: 'Status',

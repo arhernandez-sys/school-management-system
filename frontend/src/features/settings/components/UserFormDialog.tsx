@@ -17,7 +17,7 @@ export interface UserFormValues {
   role: Role;
   is_active: boolean;
   temporary_password: string;
-  /** The lecturer/student profile a new login belongs to; '' for roles that take none. */
+  /** The lecturer/student profile the login belongs to; '' for roles that take none. */
   profile_id: string;
 }
 
@@ -40,10 +40,14 @@ export interface UserFormDialogProps {
  * edit, email is immutable here and role/is_active are only editable with privileges;
  * a 403 role_change_forbidden or 409 duplicate_email is surfaced by the parent.
  *
- * A new Student, Lecturer or HOD login must be linked to the profile it belongs to,
- * picked from the profiles that have no login yet. Without that link the login has no
- * students, offerings or record of its own and every scoped screen 404s. The other roles
- * (Dean, Registrar, Auditor, System admin) work on the role alone and show no picker.
+ * A Student, Lecturer or HOD login must be linked to the profile it belongs to, picked
+ * from the profiles that have no login yet. Without that link the login has no students,
+ * offerings or record of its own and every scoped screen 404s. The other roles (Dean,
+ * Registrar, Auditor, System admin) work on the role alone and show no picker.
+ *
+ * Edit shows the same picker, starting on the profile the login holds now, so a login
+ * can be re-pointed at another person or linked for the first time. Changing it releases
+ * the old profile (server side).
  */
 export function UserFormDialog({
   open,
@@ -67,9 +71,25 @@ export function UserFormDialog({
   const debouncedSearch = useDebounce(profileSearch);
 
   const profileKind = PROFILE_KIND_BY_ROLE[role];
-  const needsProfile = !editing && Boolean(profileKind);
+  const needsProfile = Boolean(profileKind);
+  // The profile the login holds now, when it is the kind `forRole` needs. Lecturer <->
+  // HOD keeps it; a move to Student does not.
+  const currentLinkFor = (forRole: Role) => {
+    const link = user?.linked_profile;
+    return link && link.kind === PROFILE_KIND_BY_ROLE[forRole] ? link : null;
+  };
+  const currentLink = currentLinkFor(role);
+  // On create a profiled role always needs one; on edit only when the role is changing
+  // into it, so renaming a legacy unlinked login is not blocked (the server agrees).
+  const profileRequired = needsProfile && (!editing || role !== user?.role);
   const profilesQuery = useLinkableProfiles(role, debouncedSearch, open && needsProfile);
-  const profiles = profilesQuery.data ?? [];
+  // The picker lists only profiles with NO login, which excludes this login's own;
+  // add it back so the current link shows as the selected value.
+  const unlinked = profilesQuery.data ?? [];
+  const profiles =
+    currentLink && !unlinked.some((p) => p.id === currentLink.id)
+      ? [{ ...currentLink, email: currentLink.email ?? null }, ...unlinked]
+      : unlinked;
   const profileNoun = profileKind === 'student' ? 'student' : 'lecturer';
 
   const pickProfile = (id: string) => {
@@ -79,7 +99,7 @@ export function UserFormDialog({
     // The login is for this person, so start from their record. Still editable: the
     // login email can differ from the contact email on the profile.
     setFullName(p.full_name);
-    if (!email.trim() && p.email) setEmail(p.email);
+    if (!editing && !email.trim() && p.email) setEmail(p.email);
   };
 
   useEffect(() => {
@@ -90,7 +110,8 @@ export function UserFormDialog({
       setRole(user?.role ?? Role.teacher);
       setIsActive(user?.is_active ?? true);
       setTempPassword('');
-      setProfileId('');
+      const link = user?.linked_profile;
+      setProfileId(user && link && link.kind === PROFILE_KIND_BY_ROLE[user.role] ? link.id : '');
       setProfileSearch('');
     }
   }, [open, user]);
@@ -102,11 +123,9 @@ export function UserFormDialog({
       submitLabel={editing ? 'Save changes' : 'Create user'}
       submitting={submitting}
       submitDisabled={
-        editing
-          ? fullName.trim().length === 0
-          : email.trim().length === 0 ||
-            fullName.trim().length === 0 ||
-            (needsProfile && !profileId)
+        fullName.trim().length === 0 ||
+        (!editing && email.trim().length === 0) ||
+        (profileRequired && !profileId)
       }
       error={error}
       onClose={onClose}
@@ -128,9 +147,11 @@ export function UserFormDialog({
           label="Role"
           value={role}
           onChange={(e) => {
-            setRole(e.target.value as Role);
-            // A lecturer profile is not a student's, so a role change starts over.
-            setProfileId('');
+            const next = e.target.value as Role;
+            setRole(next);
+            // A lecturer profile is not a student's, so a role change starts over -
+            // unless the login already holds the kind the new role needs.
+            setProfileId(currentLinkFor(next)?.id ?? '');
             setProfileSearch('');
           }}
           fullWidth
@@ -156,14 +177,17 @@ export function UserFormDialog({
               hint: p.number,
             }))}
             loading={profilesQuery.isFetching}
-            required
+            required={profileRequired}
             fullWidth
             size="medium"
             noOptionsText={`No ${profileNoun} without a login matches. Create the ${profileNoun} first.`}
             error={Boolean(fieldErrors?.profile_id)}
             helperText={
               fieldErrors?.profile_id?.join(' ') ??
-              `Search by name or ${profileKind === 'student' ? 'student' : 'staff'} number. Only ${profileNoun}s who have no login yet are listed.`
+              (editing && !profileId
+                ? `This login is not linked to a ${profileNoun}, so it sees no records of its own. `
+                : '') +
+                `Search by name or ${profileKind === 'student' ? 'student' : 'staff'} number. Only ${profileNoun}s who have no login yet are listed.`
             }
           />
         )}

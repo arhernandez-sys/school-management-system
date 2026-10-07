@@ -294,6 +294,19 @@ class AssessmentPolicyUpdateRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 # User & role management (§5.11 — FR-SET-04)
 # ──────────────────────────────────────────────────────────────────────────────
+class LinkableProfile(BaseModel):
+    """One row of GET /settings/users/linkable-profiles: a lecturer or student profile
+    that has no login yet. Identity only — no academic data, because the sysadmin
+    provisions accounts too."""
+
+    id: UUID
+    kind: Literal["teacher", "student"]
+    full_name: str
+    #: staff_number for a lecturer, student_number for a student.
+    number: str
+    email: str | None = None
+
+
 class UserListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -304,6 +317,10 @@ class UserListItem(BaseModel):
     is_active: bool
     must_change_password: bool
     last_login_at: datetime | None = None
+    #: The lecturer / student profile this login belongs to, or None. Filled by the
+    #: service (`serialize_users`), never from the ORM row: the link lives on the
+    #: profile tables, not on `users`.
+    linked_profile: LinkableProfile | None = None
 
 
 class UserCreateRequest(BaseModel):
@@ -320,19 +337,6 @@ class UserCreateRequest(BaseModel):
     # for every other role: a lecturer login with no profile 404s on its own students
     # and offerings, which is the state this field exists to make impossible.
     profile_id: UUID | None = None
-
-
-class LinkableProfile(BaseModel):
-    """One row of GET /settings/users/linkable-profiles: a lecturer or student profile
-    that has no login yet. Identity only — no academic data, because the sysadmin
-    provisions accounts too."""
-
-    id: UUID
-    kind: Literal["teacher", "student"]
-    full_name: str
-    #: staff_number for a lecturer, student_number for a student.
-    number: str
-    email: str | None = None
 
 
 class UserCreateResponse(BaseModel):
@@ -352,6 +356,11 @@ class UserUpdateRequest(BaseModel):
     username: str | None = Field(default=None, max_length=255)
     role: Role | None = None
     is_active: bool | None = None
+    # Re-point the login at another lecturer / student profile with no login yet (or
+    # link one for the first time). Omitted = leave the link alone. Checked against the
+    # role the login will have AFTER this request, by the same rules as create; the
+    # profile it held before is released.
+    profile_id: UUID | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────

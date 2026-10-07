@@ -3,6 +3,10 @@
  * Do not edit manually.
  * Student Management Information System API
  * OpenAPI spec version: 1.0.0
+ *
+ * HAND-EDITED — `linked_profile`. `npm run generate:api` is forbidden in this repo (see
+ * `schoolProfileRead.ts`). The field is real: `settings/schemas.py::UserListItem`, filled
+ * by `settings/service.py::serialize_users`.
  */
 import type { UserListItemUsername } from './userListItemUsername';
 import type { Role } from './role';
@@ -17,4 +21,16 @@ export interface UserListItem {
   is_active: boolean;
   must_change_password: boolean;
   last_login_at?: UserListItemLastLoginAt;
+  /** The lecturer / student profile this login belongs to; null when it has none. */
+  linked_profile?: UserListItemLinkedProfile | null;
+}
+
+/** `settings/schemas.py::LinkableProfile`. */
+export interface UserListItemLinkedProfile {
+  id: string;
+  kind: 'teacher' | 'student';
+  full_name: string;
+  /** staff_number for a lecturer, student_number for a student. */
+  number: string;
+  email?: string | null;
 }

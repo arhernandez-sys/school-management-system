@@ -315,3 +315,101 @@ class TestUnlinkedLoginSeesEmptyPages:
         assert att["history"] == []
         me = client.get("/api/v1/students/me", headers=H)
         assert me.status_code == 404 and me.json()["error"]["code"] == "no_student_profile"
+
+
+class TestEditRelinksTheProfile:
+    """The edit form carries the same picker as create: an existing login can be linked
+    for the first time, or re-pointed at another profile with no login."""
+
+    def test_links_a_login_that_never_had_one(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        dean = make_user(role=Role.PRINCIPAL)
+        target = make_user(role=Role.TEACHER)
+        t = _teacher(db_session)
+        resp = client.patch(
+            f"{USERS}/{target.id}", headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL),
+            json={"profile_id": str(t.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["linked_profile"]["id"] == str(t.id)
+        db_session.refresh(t)
+        assert t.user_id == target.id
+
+    def test_relink_releases_the_old_profile(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        dean = make_user(role=Role.SECRETARY)
+        target = make_user(role=Role.STUDENT)
+        old = _student(db_session, user_id=target.id, name="Old Pupil")
+        new = _student(db_session, name="New Pupil")
+        resp = client.patch(
+            f"{USERS}/{target.id}", headers=auth_headers(user_id=dean.id, role=Role.SECRETARY),
+            json={"profile_id": str(new.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        db_session.refresh(old)
+        db_session.refresh(new)
+        assert old.user_id is None and new.user_id == target.id
+
+    def test_resending_the_current_profile_is_a_no_op(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        dean = make_user(role=Role.PRINCIPAL)
+        target = make_user(role=Role.TEACHER)
+        t = _teacher(db_session, user_id=target.id)
+        resp = client.patch(
+            f"{USERS}/{target.id}", headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL),
+            json={"full_name": "Renamed", "profile_id": str(t.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["linked_profile"]["id"] == str(t.id)
+
+    def test_role_change_with_a_profile_passes(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        """auditor -> lecturer was refused for want of a profile; naming one fixes it."""
+        dean = make_user(role=Role.PRINCIPAL)
+        target = make_user(role=Role.AUDITOR)
+        t = _teacher(db_session)
+        resp = client.patch(
+            f"{USERS}/{target.id}", headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL),
+            json={"role": "teacher", "profile_id": str(t.id)},
+        )
+        assert resp.status_code == 200, resp.text
+        db_session.refresh(t)
+        assert t.user_id == target.id
+
+    def test_refusals_match_create(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        dean = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=dean.id, role=Role.PRINCIPAL)
+        lecturer = make_user(role=Role.TEACHER)
+        mine = _teacher(db_session, user_id=lecturer.id)
+        taken = _teacher(db_session, user_id=make_user(role=Role.TEACHER).id)
+        stu = _student(db_session)
+        auditor = make_user(role=Role.AUDITOR)
+
+        r = client.patch(f"{USERS}/{lecturer.id}", headers=H, json={"profile_id": str(taken.id)})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "profile_already_linked"
+        r = client.patch(f"{USERS}/{lecturer.id}", headers=H, json={"profile_id": str(stu.id)})
+        assert r.status_code == 404, r.text
+        r = client.patch(f"{USERS}/{auditor.id}", headers=H, json={"profile_id": str(stu.id)})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "profile_not_allowed"
+        db_session.refresh(mine)
+        db_session.refresh(stu)
+        assert mine.user_id == lecturer.id and stu.user_id is None
+
+    def test_list_shows_the_link(
+        self, client, make_user, auth_headers, db_session
+    ) -> None:
+        dean = make_user(role=Role.PRINCIPAL)
+        target = make_user(role=Role.TEACHER)
+        t = _teacher(db_session, user_id=target.id)
+        page = client.get(
+            USERS, params={"search": target.email, "page_size": 5},
+            headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL),
+        ).json()
+        row = next(u for u in page["items"] if u["id"] == str(target.id))
+        assert row["linked_profile"]["number"] == t.staff_number

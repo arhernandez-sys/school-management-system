@@ -509,7 +509,7 @@ def create_user(
     profile_already_linked). Every other role takes none (422 profile_not_allowed)."""
     user, temp_password = service.create_user(db, actor=actor, payload=payload)
     return UserCreateResponse(
-        user=UserListItem.model_validate(user),
+        user=service.serialize_users(db, [user])[0],
         temporary_password=temp_password,
     )
 
@@ -527,9 +527,14 @@ def update_user(
     actor: User = Depends(_user_admins),
 ) -> UserListItem:
     """role/is_active are Principal-only; a Secretary cannot edit a Principal (403).
-    Audited on role/active changes."""
+    Audited on role/active changes.
+
+    `profile_id` re-points the login at another unlinked lecturer / student profile
+    (or links a login that never had one), checked against the role it ends up with:
+    422 profile_not_allowed, 404 wrong kind, 409 profile_already_linked, as on create.
+    The previously linked profile is released. Audited as `user.relink`."""
     user = service.update_user(db, actor=actor, target_id=user_id, payload=payload)
-    return UserListItem.model_validate(user)
+    return service.serialize_users(db, [user])[0]
 
 
 # ── Per-user account & preferences ──────────────────────────────────────────────

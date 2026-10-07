@@ -1116,7 +1116,9 @@ def list_users(
         )
     stmt = stmt.order_by(col.desc() if desc else col.asc(), User.id.asc())
 
-    return paginate(db, stmt, params, serialize=UserListItem.model_validate)
+    page = paginate(db, stmt, params, serialize=lambda u: u)
+    page.items = serialize_users(db, page.items)
+    return page
 
 
 #: Which profile table a role's login must be linked to. Every scoped read for these
@@ -1176,6 +1178,40 @@ def list_linkable_profiles(
             for p in rows
         ]
     return []
+
+
+def serialize_users(db: Session, users: list[User]) -> list[UserListItem]:
+    """UserListItem rows with `linked_profile` filled. Two queries for the whole page,
+    one per profile table, rather than two per user."""
+    ids = [u.id for u in users]
+    linked: dict[uuid.UUID, LinkableProfile] = {}
+    if ids:
+        for t in db.scalars(
+            select(TeacherProfile).where(
+                TeacherProfile.user_id.in_(ids), TeacherProfile.deleted_at.is_(None)
+            )
+        ):
+            linked[t.user_id] = LinkableProfile(
+                id=t.id, kind="teacher", full_name=t.full_name,
+                number=t.staff_number, email=t.email,
+            )
+        for p in db.scalars(
+            select(StudentProfile).where(
+                StudentProfile.user_id.in_(ids), StudentProfile.deleted_at.is_(None)
+            )
+        ):
+            # The login's role decides which link is the meaningful one; a login holds
+            # at most one of each, and a relink releases the other (`update_user`).
+            linked.setdefault(p.user_id, LinkableProfile(
+                id=p.id, kind="student", full_name=p.full_name,
+                number=p.student_number, email=p.email,
+            ))
+    out = []
+    for u in users:
+        item = UserListItem.model_validate(u)
+        item.linked_profile = linked.get(u.id)
+        out.append(item)
+    return out
 
 
 def _claim_profile(
@@ -1334,11 +1370,41 @@ def update_user(
             code="role_change_forbidden",
         )
 
+    # `profile_id` sent: link the login to that profile, judged against the role it
+    # will have after this request. Same rules as create (`_claim_profile`), except
+    # that re-sending the profile it already holds is a no-op rather than a 409.
+    new_profile: TeacherProfile | StudentProfile | None = None
+    released: list[TeacherProfile | StudentProfile] = []
+    if "profile_id" in payload.model_fields_set and payload.profile_id is not None:
+        effective_role = payload.role if changing_role else target.role
+        kind = _PROFILE_KIND.get(effective_role)  # type: ignore[arg-type]
+        model = TeacherProfile if kind == "teacher" else StudentProfile
+        current = (
+            db.scalar(
+                select(model).where(
+                    model.user_id == target.id, model.deleted_at.is_(None)
+                )
+            )
+            if kind is not None
+            else None
+        )
+        if current is None or current.id != payload.profile_id:
+            new_profile = _claim_profile(
+                db, role=effective_role, profile_id=payload.profile_id  # type: ignore[arg-type]
+            )
+            # A login belongs to one person: whatever it held before lets go.
+            for m in (TeacherProfile, StudentProfile):
+                released.extend(
+                    db.scalars(
+                        select(m).where(m.user_id == target.id).with_for_update()
+                    )
+                )
+
     # A role change must not strand the login: moving it INTO a role that resolves a
     # profile needs that profile already linked. Lecturer <-> HOD keeps the same
     # teacher profile, so a promotion passes; auditor -> lecturer with nothing linked
     # would 404 on every scoped read, so it is refused here instead.
-    if changing_role:
+    if changing_role and new_profile is None:
         kind = _PROFILE_KIND.get(payload.role)  # type: ignore[arg-type]
         if kind is not None:
             model = TeacherProfile if kind == "teacher" else StudentProfile
@@ -1378,8 +1444,27 @@ def update_user(
     if changing_active:
         target.is_active = payload.is_active  # type: ignore[assignment]
 
+    if new_profile is not None:
+        for old in released:
+            old.user_id = None
+        # Release first: the unique index on `user_id` would refuse two rows.
+        db.flush()
+        new_profile.user_id = target.id
+
     target.updated_by = actor.id
 
+    if new_profile is not None:
+        _audit(
+            db,
+            actor=actor,
+            action="user.relink",
+            entity_type="user",
+            entity_id=target.id,
+            summary={
+                "linked_profile_id": str(new_profile.id),
+                "released_profile_ids": [str(p.id) for p in released],
+            },
+        )
     if changing_role or changing_active:
         _audit(
             db,

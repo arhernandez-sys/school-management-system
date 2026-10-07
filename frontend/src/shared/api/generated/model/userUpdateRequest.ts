@@ -3,6 +3,10 @@
  * Do not edit manually.
  * Student Management Information System API
  * OpenAPI spec version: 1.0.0
+ *
+ * HAND-EDITED — `profile_id`. `npm run generate:api` is forbidden in this repo (see
+ * `schoolProfileRead.ts`). The field is real on `settings/schemas.py::UserUpdateRequest`:
+ * omitted leaves the link alone; a profile id re-points the login at it.
  */
 import type { UserUpdateRequestFullName } from './userUpdateRequestFullName';
 import type { UserUpdateRequestUsername } from './userUpdateRequestUsername';
@@ -18,4 +22,5 @@ export interface UserUpdateRequest {
   username?: UserUpdateRequestUsername;
   role?: UserUpdateRequestRole;
   is_active?: UserUpdateRequestIsActive;
+  profile_id?: string | null;
 }
