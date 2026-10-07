@@ -1,56 +1,48 @@
 import { useState } from 'react';
-import { Alert, AlertTitle, Box, Stack, TextField, Typography } from '@mui/material';
+import { Alert, AlertTitle, Box, Stack, TextField } from '@mui/material';
 import { FormDialog, DateField } from '@shared/components';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { useAcceptApplication } from '../hooks/useAdmissions';
-import type { AcceptResponse, ApplicationDetail } from '../types';
+import type { ApplicationDetail } from '../types';
 
 /**
- * Acceptance (decision #5) — the single action that creates the student, the login and the
- * `YYYYMM###` student ID.
+ * Acceptance — the college offers the applicant a place. **That is all it does (D46).**
  *
- * **It takes almost no input, on purpose.** The student is built from Sections A–E of the
- * application, not from fields typed here, so an accept can never quietly disagree with the
- * form it came from. The only inputs are things the FORM cannot answer: which academic year
- * to admit into, when the decision was actually made, and **the login email the college is
- * issuing**.
- *
- * ⚠️ THE LOGIN EMAIL IS ALWAYS REQUIRED HERE (client, Sep 2026), and it is not the
- * applicant's. It used to be optional, defaulting to whatever personal address the form
- * carried, and its absence was listed on the review screen as *"Outstanding before this
- * can be accepted — an email address is required to issue the student a login"*. That
- * read as a debt the APPLICANT owed. They owe nothing: the college issues the address, so
- * the question belongs at the moment the account is created, which is here.
- *
- * The temporary password comes back **once**. It is not re-fetchable, so the dialog stays
- * open on the result until the Registrar dismisses it rather than closing over the one
- * chance to write it down.
+ * ⚠️ D46 (client, Oct 2026) split what decision #5 had fused. Accepting used to create the
+ * student record, the login and the student ID in one step, which made every accepted
+ * applicant a student — in the list, enrollable on offerings — whether or not they ever
+ * registered. Now the student, the ID and the (optional) login are created by
+ * {@link EnrollDialog} when the applicant actually enrols. So there is no login field
+ * here any more.
  */
 export interface AcceptDialogProps {
   open: boolean;
   application: ApplicationDetail;
   onClose: () => void;
-  /** Called after a successful accept, once the result has been shown. */
-  onAccepted: (result: AcceptResponse) => void;
+  /** Called after a successful accept. */
+  onAccepted: (result: ApplicationDetail) => void;
 }
 
 export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptDialogProps) {
   const acceptMut = useAcceptApplication();
-  const [loginEmail, setLoginEmail] = useState('');
   const [dateAccepted, setDateAccepted] = useState('');
   const [comments, setComments] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<string[]>([]);
-  const [result, setResult] = useState<AcceptResponse | null>(null);
 
-  /**
-   * No filtering any more. This used to strip the email issue out of
-   * `blocking_issues` by matching its first few words — a client re-deriving a server
-   * rule from its prose, which breaks the moment the wording is edited. The rule is no
-   * longer an application-level issue at all, so there is nothing to strip.
-   */
   const blocked = application.blocking_issues;
-  const loginEmailMissing = loginEmail.trim() === '';
+
+  const reset = () => {
+    setDateAccepted('');
+    setComments('');
+    setError(null);
+    setIssues([]);
+  };
+
+  const close = () => {
+    reset();
+    onClose();
+  };
 
   const submit = () => {
     setError(null);
@@ -59,13 +51,15 @@ export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptD
       {
         id: application.id,
         body: {
-          login_email: loginEmail.trim() || null,
           date_accepted: dateAccepted || null,
           comments: comments.trim() || null,
         },
       },
       {
-        onSuccess: setResult,
+        onSuccess: (result) => {
+          onAccepted(result);
+          close();
+        },
         onError: (err) => {
           setError(apiErrorMessage(err));
           setIssues(fieldErrorsFrom(err)?.application ?? []);
@@ -74,74 +68,13 @@ export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptD
     );
   };
 
-  const close = () => {
-    if (result) onAccepted(result);
-    setResult(null);
-    setLoginEmail('');
-    setDateAccepted('');
-    setComments('');
-    setError(null);
-    setIssues([]);
-    onClose();
-  };
-
-  // ── The result view. Shown until dismissed, because the password is a one-off. ──
-  if (result) {
-    return (
-      <FormDialog
-        open={open}
-        title="Application accepted"
-        submitLabel="Done"
-        cancelLabel="Close"
-        onSubmit={close}
-        onClose={close}
-      >
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <Alert severity="success">
-            <AlertTitle>{result.application.full_name} is now a student</AlertTitle>
-            Student ID <strong>{result.student_number}</strong>
-            {result.login_email && (
-              <>
-                {' · '}login <strong>{result.login_email}</strong>
-              </>
-            )}
-          </Alert>
-
-          {result.temporary_password && (
-            <Alert severity="warning">
-              <AlertTitle>Temporary password — shown once</AlertTitle>
-              <Typography
-                component="code"
-                sx={{ fontFamily: 'monospace', fontSize: '1.1rem', fontWeight: 700 }}
-              >
-                {result.temporary_password}
-              </Typography>
-              <Typography variant="body2" sx={{ mt: 1 }}>
-                Give it to the student now. It is not stored in readable form and cannot be
-                shown again — they will be asked to change it at first sign-in.
-              </Typography>
-            </Alert>
-          )}
-
-          {result.transferred_course_codes.length > 0 && (
-            <Alert severity="info">
-              <AlertTitle>Credit carried in</AlertTitle>
-              {result.transferred_course_codes.join(', ')} — these count toward the award and
-              are excluded from the GPA, because a transfer grants credit rather than a grade.
-            </Alert>
-          )}
-        </Stack>
-      </FormDialog>
-    );
-  }
-
   return (
     <FormDialog
       open={open}
       title="Accept this application"
-      submitLabel="Accept and create the student"
+      submitLabel="Accept"
       submitting={acceptMut.isPending}
-      submitDisabled={blocked.length > 0 || loginEmailMissing}
+      submitDisabled={blocked.length > 0}
       error={error}
       maxWidth="sm"
       onClose={close}
@@ -159,9 +92,10 @@ export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptD
           </Alert>
         ) : (
           <Alert severity="info">
-            This creates <strong>{application.full_name}</strong>&apos;s student record, their
-            portal login and their student ID, and opens their programme history — all in one
-            step. The record is built from the application, so nothing here can contradict it.
+            This offers <strong>{application.full_name}</strong> a place. It does{' '}
+            <strong>not</strong> create a student record, a student ID or a login. Those are created
+            when they <strong>enrol</strong>. Until then they won&apos;t appear in the student list
+            and can&apos;t be added to an offering.
           </Alert>
         )}
 
@@ -175,29 +109,6 @@ export function AcceptDialog({ open, application, onClose, onAccepted }: AcceptD
           </Alert>
         )}
 
-        <TextField
-          label="Login email the college is issuing"
-          value={loginEmail}
-          onChange={(e) => setLoginEmail(e.target.value)}
-          fullWidth
-          required
-          autoFocus
-          type="email"
-          error={loginEmailMissing}
-          placeholder="student@belmopancomp.edu.bz"
-          helperText={
-            loginEmailMissing
-              ? 'Required — this becomes the student\'s sign-in address.'
-              : 'This becomes the student\'s sign-in address. It is the college\'s, not their personal one.'
-          }
-        />
-        {application.email && (
-          <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-            {/* Shown for reference, never used as the login: a contact address is not a
-                credential, and D39 removed the form\'s own claim that it would become one. */}
-            Their personal address, for contact only: {application.email}
-          </Typography>
-        )}
         <DateField
           label="Date accepted"
           value={dateAccepted}

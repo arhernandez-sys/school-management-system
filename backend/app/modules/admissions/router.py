@@ -32,12 +32,12 @@ Endpoints:
   DELETE /applications/{id}                         P/S   -> 204 (soft)
   POST   /applications/{id}/submit                  P/S   -> ApplicationDetail
   POST   /applications/{id}/review                  P/S   -> ApplicationDetail
-  POST   /applications/{id}/accept                  P/S   -> ApplicationAcceptResponse (201)
+  POST   /applications/{id}/accept                  P/S   -> ApplicationDetail
   POST   /applications/{id}/reject                  P/S   -> ApplicationDetail
   POST   /applications/{id}/request-documents       P/S   -> ApplicationDetail
   POST   /applications/{id}/eligible                P/S   -> ApplicationDetail
   POST   /applications/{id}/defer                   P/S   -> ApplicationDetail
-  POST   /applications/{id}/enrolled                P/S   -> ApplicationDetail
+  POST   /applications/{id}/enrolled                P/S   -> ApplicationEnrollResponse (201)
   POST   /applications/{id}/withdraw                P/S   -> ApplicationDetail
   PUT    /applications/{id}/education               P/S   -> ApplicationDetail
   PUT    /applications/{id}/documents               P/S   -> ApplicationDetail
@@ -78,10 +78,11 @@ from app.core.pagination import PageParams, page_params
 from app.modules.admissions import service
 from app.modules.admissions.schemas import (
     ApplicationAcceptRequest,
-    ApplicationAcceptResponse,
     ApplicationCreateRequest,
     ApplicationDecisionNoteRequest,
     ApplicationDetail,
+    ApplicationEnrollRequest,
+    ApplicationEnrollResponse,
     ApplicationPage,
     ApplicationUpdateRequest,
     CreditTransferCreateRequest,
@@ -244,9 +245,8 @@ def review_application(
 
 @router.post(
     "/{application_id}/accept",
-    response_model=ApplicationAcceptResponse,
-    status_code=http_status.HTTP_201_CREATED,
-    summary="Accept — creates the student, the login and the student ID (Registrar + Dean)",
+    response_model=ApplicationDetail,
+    summary="Accept — the admission decision only; creates no student (Registrar + Dean)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def accept_application(
@@ -254,13 +254,9 @@ def accept_application(
     payload: ApplicationAcceptRequest,
     db: Session = Depends(get_db),
     actor: User = Depends(_admissions),
-) -> ApplicationAcceptResponse:
-    """Decision #5 — the SINGLE action that admits a student.
-
-    One transaction: allocate the `YYYYMM###`, create the login, build the student from
-    Sections A–E, open the programme history, fill in the official-use block. The
-    temporary password is returned ONCE and only when the server generated it.
-    """
+) -> ApplicationDetail:
+    """D46 — records the offer and the official-use block. No login, no student record, no
+    student ID: an accepted applicant is not a student until `/enrolled`."""
     return service.accept_application(
         db, actor=actor, application_id=application_id, payload=payload
     )
@@ -344,18 +340,24 @@ def defer_application(
 
 @router.post(
     "/{application_id}/enrolled",
-    response_model=ApplicationDetail,
-    summary="Mark an accepted application as enrolled (Registrar + Dean)",
+    response_model=ApplicationEnrollResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    summary="Enrol an accepted applicant — creates the student, the ID and optionally the login (Registrar + Dean)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
-def mark_enrolled(
+def enroll_application(
     application_id: uuid.UUID,
+    payload: ApplicationEnrollRequest,
     db: Session = Depends(get_db),
     actor: User = Depends(_admissions),
-) -> ApplicationDetail:
-    """D44. Closes the application behind a student who has actually registered. Does not
-    touch `student_profiles.status`, which is a different lifecycle."""
-    return service.mark_enrolled(db, actor=actor, application_id=application_id)
+) -> ApplicationEnrollResponse:
+    """D46 — the single action that makes a student. One transaction: optionally create
+    the login, allocate the `YYYYMM###` from the enrollment month, build the student from
+    Sections A–E, open the programme history, close the application. The temporary
+    password is returned ONCE and only when the server generated it."""
+    return service.enroll_application(
+        db, actor=actor, application_id=application_id, payload=payload
+    )
 
 
 @router.post(

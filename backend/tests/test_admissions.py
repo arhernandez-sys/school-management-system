@@ -26,15 +26,15 @@ import uuid
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.common.enums import Role
+from app.common.enums import ApplicationStatus, Role
 from app.core.timeutil import school_today
 from app.modules.admissions.models import Application
 from app.modules.programs.models import Program
 from app.modules.students.models import StudentProfile, StudentProgramHistory
 from app.modules.users.models import User
-from tests.conftest import issued_login_email
+from tests.conftest import admit, issued_login_email
 
 pytestmark = pytest.mark.requires_db
 
@@ -410,91 +410,41 @@ class TestSectionF:
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestAcceptance:
+    """D46 — accept is the admission DECISION and creates nothing."""
+
     def _submitted(self, client, graph) -> str:
         return _file(client, graph, submit=True).json()["id"]
 
-    def test_accept_creates_student_login_and_number(self, client, graph, db_session) -> None:
-        """Decision #5 — the SINGLE action that admits a student."""
+    def test_accept_creates_no_student_no_login_no_number(
+        self, client, graph, db_session
+    ) -> None:
+        """⚠️ D46 reverses decision #5. An accepted applicant who never registers must not
+        be a student anywhere — in the list, or enrollable on an offering."""
+        app_id = self._submitted(client, graph)
+        users_before = db_session.scalar(select(func.count()).select_from(User))
+        r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "accepted"
+        assert body["student_id"] is None and body["student_code"] is None
+        assert body["date_accepted"] == school_today().isoformat()
+
+        db_session.expire_all()
+        assert db_session.scalar(
+            select(StudentProfile).where(StudentProfile.application_id == uuid.UUID(app_id))
+        ) is None
+        assert db_session.scalar(select(func.count()).select_from(User)) == users_before
+
+    def test_login_fields_are_no_longer_accepted(self, client, graph) -> None:
+        """`extra="forbid"`: a client still sending the old login fields is told, rather
+        than having a login it thinks it created silently dropped."""
         app_id = self._submitted(client, graph)
         r = client.post(
             f"{A}/{app_id}/accept",
             headers=graph.S,
             json={"login_email": issued_login_email()},
         )
-        assert r.status_code == 201, r.text
-        body = r.json()
-
-        # The number was issued server-side (§D9). D44 — `YYYY-NNNNN`, was `YYYYMM###`:
-        # the MONTH left the format, so the prefix is the year alone.
-        assert re.fullmatch(r"\d{4}-\d{5}", body["student_number"]), body
-        assert body["student_number"].startswith(school_today().strftime("%Y-"))
-        # A generated password comes back exactly ONCE.
-        assert body["temporary_password"]
-        assert body["application"]["status"] == "accepted"
-        assert body["application"]["student_code"] == body["student_number"]
-
-        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
-        assert student is not None
-        assert student.student_number == body["student_number"]
-        # Built FROM the application, so an accept cannot disagree with the form.
-        assert student.first_name == "Presley"
-        assert student.program_id == graph.program.id
-        assert student.application_id == uuid.UUID(app_id)
-
-        login = db_session.get(User, student.user_id)
-        assert login is not None
-        assert login.role == Role.STUDENT
-        assert login.must_change_password is True
-
-    def test_accept_opens_the_programme_history_on_day_one(
-        self, client, graph, db_session
-    ) -> None:
-        """History starts at admission, not at the first change — otherwise a student who
-        never changes programme has no record of when they started it."""
-        app_id = self._submitted(client, graph)
-        body = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).json()
-        rows = db_session.scalars(
-            select(StudentProgramHistory).where(
-                StudentProgramHistory.student_id == uuid.UUID(body["student_id"])
-            )
-        ).all()
-        assert len(rows) == 1
-        assert rows[0].program_id == graph.program.id
-        assert rows[0].ended_at is None  # the OPEN row
-
-    def test_both_fk_directions_are_linked(self, client, graph, db_session) -> None:
-        """The pair is circular in the schema and only one transaction makes it safe:
-        `student_profiles.user_id` needs the user first, and `applications.student_id`
-        needs the student."""
-        app_id = self._submitted(client, graph)
-        body = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).json()
-        db_session.expire_all()
-        app_row = db_session.get(Application, uuid.UUID(app_id))
-        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
-        assert app_row.student_id == student.id
-        assert student.application_id == app_row.id
-
-    def test_a_supplied_password_is_never_echoed(self, client, graph) -> None:
-        """Same discipline as `POST /settings/users`: only a SERVER-generated secret is
-        returned, and only once."""
-        app_id = self._submitted(client, graph)
-        body = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={
-                "login_email": issued_login_email(),
-                "temporary_password": "Kn0wnPassw0rd!",
-            },
-        ).json()
-        assert body["temporary_password"] is None
+        assert r.status_code == 422, r.text
 
     def test_a_draft_cannot_be_accepted(self, client, graph) -> None:
         app_id = _file_draft(client, graph).json()["id"]
@@ -504,122 +454,235 @@ class TestAcceptance:
 
     def test_accepting_twice_is_409(self, client, graph) -> None:
         app_id = self._submitted(client, graph)
-        first = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        )
-        assert first.status_code == 201, first.text
-        # A second accept is refused on STATUS, before the login rule is even reached --
-        # hence the empty body: an accepted application is not re-openable by supplying
-        # better inputs.
+        assert client.post(f"{A}/{app_id}/accept", headers=graph.S, json={}).status_code == 200
         r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_accepted")
 
-    def test_a_duplicate_login_email_is_409_and_writes_nothing(
-        self, client, graph, db_session, make_user
-    ) -> None:
-        """The whole accept is one transaction: a clash on the LAST step must not leave a
-        student, a burnt student number or a half-linked application behind."""
-        taken = make_user(role=Role.STUDENT, full_name="Already Here")
-        app_id = _file(client, graph, submit=True).json()["id"]
-
-        before = db_session.scalar(
-            select(Application.student_id).where(Application.id == uuid.UUID(app_id))
-        )
-        # The clash is now in what the Registrar TYPES, not in what the form carried:
-        # since the accept no longer borrows `applications.email`, an address already in
-        # `users` can only arrive here.
-        r = client.post(
-            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": taken.email}
-        )
-        assert r.status_code == 409
-        _assert_envelope(r.json(), code="duplicate_email")
-
-        db_session.expire_all()
-        app_row = db_session.get(Application, uuid.UUID(app_id))
-        assert before is None and app_row.student_id is None
-        assert app_row.status.value == "submitted"  # not left half-decided
-
-    def test_an_application_with_no_email_of_its_own_still_accepts(
-        self, client, graph
-    ) -> None:
-        """The applicant's own address is irrelevant to the login, so a form that carries
-        none is not a special case any more -- it accepts exactly like any other."""
-        app_id = _file(client, graph, email=None).json()["id"]
-        client.post(f"{A}/{app_id}/submit", headers=graph.S)
-        r = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={"login_email": f"issued.{graph.tag}@bajc.edu.bz"},
-        )
-        assert r.status_code == 201, r.text
-        assert r.json()["login_email"] == f"issued.{graph.tag}@bajc.edu.bz"
-
-    def test_the_login_email_is_required_and_is_a_field_error(
-        self, client, graph
-    ) -> None:
-        """⚠️ Client, Sep 2026 -- *"the email that is going to be used is one the
-        school will provide, not their personal one"*.
-
-        This replaces `test_no_email_anywhere_is_a_blocking_issue`, which asserted the
-        opposite shape: the rule used to be an application-level issue listed under
-        *Outstanding before this can be accepted*, which read as a debt the APPLICANT
-        owed. It is an input to this action, so it comes back on the `login_email`
-        field -- and it is required even when the form carries a perfectly good address.
-        """
-        app_id = self._submitted(client, graph)
-        r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
-        assert r.status_code == 422, r.text
-        error = r.json()["error"]
-        assert error["code"] == "login_email_required"
-        assert error["fields"] == {"login_email": ["Required."]}
-        # Not smuggled back in under the old key.
-        assert "application" not in error["fields"]
-
-    def test_the_applicants_own_address_is_never_borrowed(
-        self, client, graph, db_session
-    ) -> None:
-        """The fallback is gone: a contact detail must not become a credential because
-        nobody typed anything."""
-        app_id = self._submitted(client, graph)
-        form_email = client.get(f"{A}/{app_id}", headers=graph.S).json()["email"]
-        assert form_email  # the graph's applicant does give one
-
-        issued = issued_login_email()
-        body = client.post(
-            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": issued}
-        ).json()
-        assert body["login_email"] == issued
-
-        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
-        login = db_session.get(User, student.user_id)
-        assert login.email == issued != form_email
-
     def test_the_dean_may_also_accept(self, client, graph) -> None:
         """Registrar + Dean, per §D14 — the Dean is not locked out of administration."""
         app_id = self._submitted(client, graph)
-        r = client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.P,
-            json={"login_email": issued_login_email()},
-        )
-        assert r.status_code == 201, r.text
+        assert client.post(f"{A}/{app_id}/accept", headers=graph.P, json={}).status_code == 200
 
     def test_a_lecturer_may_not_accept(self, client, graph) -> None:
         app_id = self._submitted(client, graph)
         assert client.post(f"{A}/{app_id}/accept", headers=graph.T, json={}).status_code == 403
 
-    def test_the_year_of_study_becomes_the_students_level(self, client, graph, db_session) -> None:
-        """So the report-card header and the student list have something to print from day
-        one rather than a blank `year_of_study`."""
-        app_id = self._submitted(client, graph)
-        body = client.post(
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestEnrolment:
+    """D46 — enrolment is the single action that makes a STUDENT."""
+
+    def _accepted(self, client, graph) -> str:
+        app_id = _file(client, graph, submit=True).json()["id"]
+        r = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert r.status_code == 200, r.text
+        return app_id
+
+    def _enrol(self, client, graph, app_id, **body):
+        return client.post(f"{A}/{app_id}/enrolled", headers=graph.S, json=body)
+
+    def test_enrol_creates_student_login_and_number(self, client, graph, db_session) -> None:
+        app_id = self._accepted(client, graph)
+        r = self._enrol(client, graph, app_id, login_email=issued_login_email())
+        assert r.status_code == 201, r.text
+        body = r.json()
+
+        # The number was issued server-side (§D9). D46 — `YYYYMM###`, no dash.
+        assert re.fullmatch(r"\d{9}", body["student_number"]), body
+        assert body["student_number"].startswith(school_today().strftime("%Y%m"))
+        # A generated password comes back exactly ONCE.
+        assert body["temporary_password"]
+        assert body["application"]["status"] == "enrolled"
+        assert body["application"]["student_code"] == body["student_number"]
+
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert student is not None
+        assert student.student_number == body["student_number"]
+        assert student.status.value == "Active"
+        # Built FROM the application, so an enrolment cannot disagree with the form.
+        assert student.first_name == "Presley"
+        assert student.program_id == graph.program.id
+        assert student.application_id == uuid.UUID(app_id)
+
+        login = db_session.get(User, student.user_id)
+        assert login is not None
+        assert login.role == Role.STUDENT
+        assert login.must_change_password is True
+
+    def test_the_login_is_optional(self, client, graph, db_session) -> None:
+        """Client, Oct 2026: the login can be created and linked later through
+        Settings → Users, which only offers profiles that exist."""
+        app_id = self._accepted(client, graph)
+        r = self._enrol(client, graph, app_id)
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["login_email"] is None and body["temporary_password"] is None
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert student is not None and student.user_id is None
+
+    def test_a_blank_login_email_means_no_login(self, client, graph, db_session) -> None:
+        app_id = self._accepted(client, graph)
+        body = self._enrol(client, graph, app_id, login_email="   ").json()
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert student.user_id is None
+
+    def test_the_enrolled_student_can_then_be_given_a_login(
+        self, client, graph, db_session
+    ) -> None:
+        """The later half of the optional-login path: the enrolled student's profile is
+        LINKABLE, and Settings → Users creates the login against it. A student login
+        REQUIRES a `profile_id`, so a login can never be issued to an applicant who is
+        merely accepted — there is no profile to point it at."""
+        app_id = self._accepted(client, graph)
+        body = self._enrol(client, graph, app_id).json()
+
+        linkable = client.get(
+            "/api/v1/settings/users/linkable-profiles",
+            headers=graph.P,
+            params={"role": "student", "search": body["student_number"]},
+        )
+        assert linkable.status_code == 200, linkable.text
+        assert body["student_id"] in {p["id"] for p in linkable.json()}
+
+        email = issued_login_email("later")
+        made = client.post(
+            "/api/v1/settings/users",
+            headers=graph.P,
+            json={
+                "email": email,
+                "full_name": "Presley Later",
+                "role": "student",
+                "profile_id": body["student_id"],
+            },
+        )
+        assert made.status_code == 201, made.text
+        db_session.expire_all()
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert db_session.get(User, student.user_id).email == email
+
+    def test_the_number_comes_from_the_ENROLLMENT_date(self, client, graph, db_session) -> None:
+        """Client, Oct 2026: the enrollment date goes in the student number — not the
+        acceptance date, which may be in an earlier year."""
+        app_id = _file(client, graph, submit=True).json()["id"]
+        client.post(
             f"{A}/{app_id}/accept",
             headers=graph.S,
-            json={"login_email": issued_login_email()},
+            json={"date_accepted": "2030-11-20"},
+        )
+        body = self._enrol(client, graph, app_id, enrollment_date="2031-01-12").json()
+        assert re.fullmatch(r"203101\d{3}", body["student_number"]), body
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert student.enrollment_date == date(2031, 1, 12)
+        assert body["application"]["date_accepted"] == "2030-11-20"
+
+    def test_enrol_opens_the_programme_history_on_day_one(
+        self, client, graph, db_session
+    ) -> None:
+        """History starts at enrolment, not at the first change — otherwise a student who
+        never changes programme has no record of when they started it."""
+        app_id = self._accepted(client, graph)
+        body = self._enrol(client, graph, app_id, enrollment_date="2031-01-12").json()
+        rows = db_session.scalars(
+            select(StudentProgramHistory).where(
+                StudentProgramHistory.student_id == uuid.UUID(body["student_id"])
+            )
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].program_id == graph.program.id
+        assert rows[0].started_at == date(2031, 1, 12)
+        assert rows[0].ended_at is None  # the OPEN row
+
+    def test_both_fk_directions_are_linked(self, client, graph, db_session) -> None:
+        """The pair is circular in the schema and only one transaction makes it safe."""
+        app_id = self._accepted(client, graph)
+        body = self._enrol(client, graph, app_id).json()
+        db_session.expire_all()
+        app_row = db_session.get(Application, uuid.UUID(app_id))
+        student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
+        assert app_row.student_id == student.id
+        assert student.application_id == app_row.id
+
+    def test_a_supplied_password_is_never_echoed(self, client, graph) -> None:
+        """Same discipline as `POST /settings/users`: only a SERVER-generated secret is
+        returned, and only once."""
+        app_id = self._accepted(client, graph)
+        body = self._enrol(
+            client,
+            graph,
+            app_id,
+            login_email=issued_login_email(),
+            temporary_password="Kn0wnPassw0rd!",
         ).json()
+        assert body["temporary_password"] is None
+
+    def test_only_an_accepted_application_can_be_enrolled(self, client, graph) -> None:
+        app_id = _file(client, graph, submit=True).json()["id"]
+        r = self._enrol(client, graph, app_id)
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="application_not_accepted")
+
+    def test_enrolling_twice_is_409(self, client, graph) -> None:
+        app_id = self._accepted(client, graph)
+        assert self._enrol(client, graph, app_id).status_code == 201
+        r = self._enrol(client, graph, app_id)
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="application_not_accepted")
+
+    def test_a_duplicate_login_email_is_409_and_writes_nothing(
+        self, client, graph, db_session, make_user
+    ) -> None:
+        """The whole enrolment is one transaction: a clash must not leave a student, a
+        burnt student number or a half-linked application behind."""
+        taken = make_user(role=Role.STUDENT, full_name="Already Here")
+        app_id = self._accepted(client, graph)
+        r = self._enrol(client, graph, app_id, login_email=taken.email)
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="duplicate_email")
+
+        db_session.expire_all()
+        app_row = db_session.get(Application, uuid.UUID(app_id))
+        assert app_row.student_id is None
+        assert app_row.status.value == "accepted"  # still waiting to enrol
+        assert db_session.scalar(
+            select(StudentProfile).where(StudentProfile.application_id == app_row.id)
+        ) is None
+
+    def test_the_applicants_own_address_is_never_borrowed(
+        self, client, graph, db_session
+    ) -> None:
+        """No fallback: a contact detail must not become a credential because nobody
+        typed anything. Omitted = no login at all, not the applicant's address."""
+        app_id = self._accepted(client, graph)
+        form_email = client.get(f"{A}/{app_id}", headers=graph.S).json()["email"]
+        assert form_email  # the graph's applicant does give one
+        body = self._enrol(client, graph, app_id).json()
+        assert body["login_email"] is None
+        assert db_session.scalar(select(User).where(User.email == form_email)) is None
+
+    def test_a_pre_D46_row_with_a_student_is_refused(self, client, graph, db_session) -> None:
+        """An application accepted under the old one-step rule already has a student; a
+        second profile for the same person is refused."""
+        app_id = self._accepted(client, graph)
+        first = self._enrol(client, graph, app_id).json()
+        row = db_session.get(Application, uuid.UUID(app_id))
+        row.status = ApplicationStatus.ACCEPTED  # simulate the old shape
+        db_session.commit()
+        r = self._enrol(client, graph, app_id)
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="application_has_student")
+        assert db_session.get(StudentProfile, uuid.UUID(first["student_id"])) is not None
+
+    def test_a_lecturer_may_not_enrol(self, client, graph) -> None:
+        app_id = self._accepted(client, graph)
+        r = client.post(f"{A}/{app_id}/enrolled", headers=graph.T, json={})
+        assert r.status_code == 403
+
+    def test_the_year_of_study_becomes_the_students_level(
+        self, client, graph, db_session
+    ) -> None:
+        app_id = self._accepted(client, graph)
+        body = self._enrol(client, graph, app_id).json()
         student = db_session.get(StudentProfile, uuid.UUID(body["student_id"]))
         assert student.year_of_study == "First"
 
@@ -674,17 +737,45 @@ class TestDenyWithdrawDelete:
         assert row is not None and row.deleted_at is not None
         assert client.get(f"{A}/{app_id}", headers=graph.S).status_code == 404
 
-    def test_an_accepted_application_cannot_be_deleted(self, client, graph) -> None:
-        """A student and a login hang off it; hiding it would leave them untraceable."""
+    def test_an_enrolled_application_cannot_be_deleted(self, client, graph) -> None:
+        """A student hangs off it; hiding it would leave them with no traceable admission."""
         app_id = _file(client, graph, submit=True).json()["id"]
-        client.post(
-            f"{A}/{app_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        )
+        assert admit(client, graph.S, app_id).status_code == 201
         r = client.delete(f"{A}/{app_id}", headers=graph.S)
         assert r.status_code == 409
-        _assert_envelope(r.json(), code="application_accepted")
+        _assert_envelope(r.json(), code="application_has_student")
+
+    def test_an_accepted_application_CAN_be_deleted(self, client, graph) -> None:
+        """D46 — acceptance creates nothing, so there is nothing to strand."""
+        app_id = _file(client, graph, submit=True).json()["id"]
+        client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert client.delete(f"{A}/{app_id}", headers=graph.S).status_code == 204
+
+    def test_an_accepted_applicant_may_still_withdraw(self, client, graph, db_session) -> None:
+        """D46 (client, Oct 2026) — an application can be backed out after acceptance."""
+        app_id = _file(client, graph, submit=True).json()["id"]
+        client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        r = client.post(f"{A}/{app_id}/withdraw", headers=graph.S)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "withdrawn"
+        assert db_session.scalar(
+            select(StudentProfile).where(StudentProfile.application_id == uuid.UUID(app_id))
+        ) is None
+
+    def test_an_accepted_application_may_be_deferred(self, client, graph) -> None:
+        app_id = _file(client, graph, submit=True).json()["id"]
+        client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        r = client.post(f"{A}/{app_id}/defer", headers=graph.S, json={"reason": "Jan intake"})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "deferred"
+
+    def test_an_enrolled_application_cannot_be_withdrawn(self, client, graph) -> None:
+        """Leaving after enrolment is a STUDENT status change, not an admissions one."""
+        app_id = _file(client, graph, submit=True).json()["id"]
+        admit(client, graph.S, app_id)
+        r = client.post(f"{A}/{app_id}/withdraw", headers=graph.S)
+        assert r.status_code == 409
+        _assert_envelope(r.json(), code="application_decided")
 
 
 # ════════════════════════════════════════════════════════════════════════════

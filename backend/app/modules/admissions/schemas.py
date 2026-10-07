@@ -291,25 +291,42 @@ class ApplicationDecisionNoteRequest(BaseModel):
 
 
 class ApplicationAcceptRequest(BaseModel):
-    """POST /applications/{id}/accept — creates the student, the login and the ID.
+    """POST /applications/{id}/accept — the admission DECISION, and nothing more (D46).
 
-    Decision #5: acceptance is the SINGLE action that does all three. Nothing here is a
-    student field; the student is built from Sections A–E, so an accept cannot quietly
-    disagree with the application it came from.
+    D46 split what decision #5 had fused: accepting an application no longer creates a
+    student, a login or a student number. Those belong to enrolment
+    (`ApplicationEnrollRequest`), because an accepted applicant who never registers must
+    not be a student anywhere — not in the list, not on a roster.
     """
 
     model_config = ConfigDict(extra="forbid")
-    #: Which year the student is admitted INTO. Defaults to the active academic year;
+    #: Which year the applicant is admitted INTO. Defaults to the active academic year;
     #: named explicitly when admitting into a year that is not the current one.
     academic_year_id: UUID | None = None
     #: Defaults to `school_today()`. Overridable because a form is often keyed in days
     #: after the decision was actually made, and the record should say when it was made.
     date_accepted: date | None = None
-    #: The login email. Defaults to the applicant's own `email`; required when they gave
-    #: none, since a student with no login cannot use the portal.
+    comments: str | None = None
+
+
+class ApplicationEnrollRequest(BaseModel):
+    """POST /applications/{id}/enrolled — the accepted applicant registers (D46).
+
+    This is now the action that creates the student: number, profile, programme history.
+    Nothing here is a student field; the student is built from Sections A–E, so an
+    enrolment cannot quietly disagree with the application it came from.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    #: Defaults to `school_today()`. It is the student's `enrollment_date` AND the month
+    #: the `YYYYMM###` student number takes its year and month from.
+    enrollment_date: date | None = None
+    #: OPTIONAL (client, Oct 2026). The address the college issues. Omitted = the student
+    #: is enrolled with no login, and one is created and linked later through
+    #: Settings → Users, which only offers profiles that exist — i.e. enrolled students.
     login_email: str | None = Field(default=None, max_length=254)
-    #: Supply to set a known password; omit and the server generates one and returns it
-    #: ONCE, the same contract as `POST /settings/users`.
+    #: Only meaningful with `login_email`. Supply to set a known password; omit and the
+    #: server generates one and returns it ONCE, the same contract as `POST /settings/users`.
     temporary_password: str | None = Field(default=None, max_length=256)
     comments: str | None = None
 
@@ -345,7 +362,8 @@ class ApplicationListItem(BaseModel):
     phone: str | None = None
     date_accepted: date | None = None
     student_code: str | None = None
-    #: Set once accepted. The admissions list uses it to link straight to the student.
+    #: Set once ENROLLED (D46 — no longer at acceptance). The admissions list uses it to
+    #: link straight to the student.
     student_id: UUID | None = None
     created_at: datetime
     #: How many of the credit transfers filed with this application are still undecided —
@@ -428,18 +446,19 @@ class ApplicationDetail(ApplicationListItem):
     form_issues: list[str] = Field(default_factory=list)
 
 
-class ApplicationAcceptResponse(BaseModel):
-    """201 body of the accept transition."""
+class ApplicationEnrollResponse(BaseModel):
+    """201 body of the enrol transition (D46 — this used to be the ACCEPT response)."""
 
     application: ApplicationDetail
     student_id: UUID
     student_number: str
-    #: Returned ONCE, and only when the server generated it — never echoed back when the
-    #: Registrar supplied one. Same discipline as `POST /settings/users`.
-    temporary_password: str | None = None
+    #: None when no login was asked for — the student is enrolled without one.
     login_email: str | None = None
+    #: Returned ONCE, and only when the server generated it — never echoed back when the
+    #: Registrar supplied one, and None when no login was created at all.
+    temporary_password: str | None = None
     #: Approved credit transfers that were carried onto the new student record, by course
-    #: code. Reported because it is the one part of acceptance that changes what the
+    #: code. Reported because it is the one part of enrolment that changes what the
     #: student still has to study, and it is otherwise invisible.
     transferred_course_codes: list[str] = Field(default_factory=list)
 

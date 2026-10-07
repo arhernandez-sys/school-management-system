@@ -27,8 +27,8 @@ import { errorResponse, listParamsFrom } from './_helpers';
  *     on approval;
  *   * **credit transfer at ADMISSION only** — 409 once the application is decided;
  *   * **the Dean alone decides a transfer** — 403 for anyone else;
- *   * acceptance creating a student, a login and a `YYYYMM###`, and returning the temporary
- *     password ONCE.
+ *   * D46 — acceptance as the decision ONLY, and ENROLMENT creating the student, the
+ *     student number and (optionally) a login, returning the temporary password ONCE.
  *
  * `Math.random()` is never used: the dataset is deterministic by design, so ids come from
  * counters and the student number from `DEMO_TODAY` plus a sequence.
@@ -334,12 +334,16 @@ function applyWritable(app: DemoApplication, body: Record<string, unknown>): voi
   app.updated_at = `${DEMO_TODAY}T12:00:00Z`;
 }
 
-/** `YYYYMM###`, allocated from the seeded rows so a second accept does not collide. */
-function allocateStudentNumber(): string {
-  const prefix = DEMO_TODAY.slice(0, 7).replace('-', '');
+/**
+ * `YYYYMM###` (D46, no dash) for the month of `on` — the ENROLLMENT date. Mirrors
+ * `numbering.allocate_student_number`; allocated from the seeded rows so a second enrolment
+ * does not collide.
+ */
+function allocateStudentNumber(on: string): string {
+  const prefix = on.slice(0, 7).replace('-', '');
   const taken = D.students
     .map((s) => s.student_number)
-    .filter((n) => n.startsWith(prefix))
+    .filter((n) => n.startsWith(prefix) && n.length === 9)
     .map((n) => Number(n.slice(6)))
     .filter((n) => !Number.isNaN(n));
   const next = (taken.length ? Math.max(...taken) : 0) + 1;
@@ -520,11 +524,13 @@ export const admissionsHandlers = [
     if (denied) return denied;
     const app = find(String(params.applicationId));
     if (!app) return errorResponse(404, 'not_found', 'Application not found.');
-    if (app.status === 'accepted') {
+    // D46 — mirrors `delete_application`: refused only when a STUDENT hangs off it. A
+    // merely accepted application has none any more.
+    if (app.status === 'enrolled' || app.student_id) {
       return errorResponse(
         409,
-        'application_accepted',
-        'This application has been accepted and a student record exists for it.',
+        'application_has_student',
+        "A student record exists for this application. Change the student's status instead.",
       );
     }
     D.applications.splice(D.applications.indexOf(app), 1);
@@ -586,7 +592,10 @@ export const admissionsHandlers = [
         if (denied) return denied;
         const app = find(String(params.applicationId));
         if (!app) return errorResponse(404, 'not_found', 'Application not found.');
-        if (!DECIDABLE.includes(app.status)) {
+        // D46 — an ACCEPTED application may still be deferred (not rejected): acceptance
+        // creates nothing, so there is nothing to strand. Mirrors `defer_application`.
+        const allowed = DECIDABLE.includes(app.status) || (verb === 'defer' && app.status === 'accepted');
+        if (!allowed) {
           return errorResponse(
             409,
             'application_not_decidable',
@@ -661,39 +670,13 @@ export const admissionsHandlers = [
     return HttpResponse.json(detail(app));
   }),
 
-  // D44 — accepted AND registered. Closes the application behind the student record.
-  http.post(`${API_BASE_URL}/applications/:applicationId/enrolled`, ({ params, cookies }) => {
-    const denied = assertAdmissions(cookies);
-    if (denied) return denied;
-    const app = find(String(params.applicationId));
-    if (!app) return errorResponse(404, 'not_found', 'Application not found.');
-    if (app.status !== 'accepted') {
-      return errorResponse(
-        409,
-        'application_not_accepted',
-        `Only an accepted application can be marked enrolled (this one is ${app.status}).`,
-      );
-    }
-    if (!app.student_id) {
-      return errorResponse(
-        409,
-        'application_no_student',
-        'This application has no student record, so it cannot be marked enrolled.',
-      );
-    }
-    app.status = 'enrolled';
-    return HttpResponse.json(detail(app));
-  }),
-
   http.post(`${API_BASE_URL}/applications/:applicationId/withdraw`, ({ params, cookies }) => {
     const denied = assertAdmissions(cookies);
     if (denied) return denied;
     const app = find(String(params.applicationId));
     if (!app) return errorResponse(404, 'not_found', 'Application not found.');
-    if (app.status === 'accepted') {
-      return errorResponse(409, 'application_accepted', 'This application has already been accepted.');
-    }
-    if (isDecided(app)) {
+    // D46 — allowed from ACCEPTED: an applicant offered a place may still back out.
+    if (isDecided(app) && app.status !== 'accepted') {
       return errorResponse(409, 'application_decided', `This application is already ${app.status}.`);
     }
     app.status = 'withdrawn';
@@ -702,7 +685,9 @@ export const admissionsHandlers = [
     return HttpResponse.json(detail(app));
   }),
 
-  // ── POST /applications/{id}/accept — the whole point (decision #5) ──────────
+  // ── POST /applications/{id}/accept — the DECISION only (D46) ────────────────
+  // Mirrors `accept_application`: no student, no login, no number. Those are created by
+  // `/enrolled`. `extra="forbid"` on the server, so the old login fields are a 422 here too.
   http.post(`${API_BASE_URL}/applications/:applicationId/accept`, async ({ params, request, cookies }) => {
     const denied = assertAdmissions(cookies);
     if (denied) return denied;
@@ -711,31 +696,24 @@ export const admissionsHandlers = [
     if (app.status === 'accepted') {
       return errorResponse(409, 'application_accepted', 'This application has already been accepted.');
     }
-    if (app.status !== 'submitted' && app.status !== 'under_review') {
+    if (!DECIDABLE.includes(app.status)) {
       return errorResponse(
         409,
         'application_not_decidable',
-        `Only a submitted or under-review application can be accepted (this one is ${app.status}).`,
+        `Only a submitted, under-review or eligible application can be accepted (this one is ${app.status}).`,
       );
     }
-
-    const body = (await request.json().catch(() => ({}))) as {
-      login_email?: string | null;
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown> & {
       date_accepted?: string | null;
       comments?: string | null;
-      temporary_password?: string | null;
     };
-    // ⚠️ NO FALLBACK TO THE APPLICANT'S OWN ADDRESS (Sep 2026), and no filtering of the
-    // issue list by matching its prose. The login is the address the college issues, so
-    // it is required here and reported as a FIELD error — mirrors `accept_application`.
-    const loginEmail = (body.login_email ?? '').trim();
-    if (!loginEmail) {
-      return errorResponse(
-        422,
-        'login_email_required',
-        'A login email is required. This is the address the college issues to the student, not their personal one.',
-        { login_email: ['Required.'] },
-      );
+    const unknown = Object.keys(body).filter(
+      (k) => !['academic_year_id', 'date_accepted', 'comments'].includes(k),
+    );
+    if (unknown.length > 0) {
+      return errorResponse(422, 'validation_error', 'Unexpected fields.', Object.fromEntries(
+        unknown.map((k) => [k, ['Extra inputs are not permitted']]),
+      ));
     }
     const issues = acceptanceIssues(app);
     if (issues.length > 0) {
@@ -743,15 +721,59 @@ export const admissionsHandlers = [
         application: issues,
       });
     }
-    if (D.users.some((u) => u.email === loginEmail)) {
+    app.status = 'accepted';
+    app.date_accepted = body.date_accepted || DEMO_TODAY;
+    app.academic_year_id = app.academic_year_id ?? DEMO_IDS.activeYearId;
+    app.enrolment_status = app.enrolment_status ?? app.enrollment_load;
+    app.decided_by_user_id = DEMO_IDS.principalUserId;
+    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
+    if (body.comments) {
+      app.comments = app.comments ? `${app.comments}\n${body.comments}` : body.comments;
+    }
+    return HttpResponse.json(detail(app));
+  }),
+
+  // ── POST /applications/{id}/enrolled — creates the STUDENT (D46) ────────────
+  // Mirrors `enroll_application`: number from the ENROLLMENT date, record from Sections
+  // A-E, programme history, and an OPTIONAL login.
+  http.post(`${API_BASE_URL}/applications/:applicationId/enrolled`, async ({ params, request, cookies }) => {
+    const denied = assertAdmissions(cookies);
+    if (denied) return denied;
+    const app = find(String(params.applicationId));
+    if (!app) return errorResponse(404, 'not_found', 'Application not found.');
+    if (app.status !== 'accepted') {
+      return errorResponse(
+        409,
+        'application_not_accepted',
+        `Only an accepted application can be enrolled (this one is ${app.status}).`,
+      );
+    }
+    if (app.student_id) {
+      return errorResponse(
+        409,
+        'application_has_student',
+        'A student record already exists for this application.',
+      );
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      enrollment_date?: string | null;
+      login_email?: string | null;
+      comments?: string | null;
+      temporary_password?: string | null;
+    };
+    // Optional, and NO fallback to the applicant's own address: blank = no login.
+    const loginEmail = (body.login_email ?? '').trim() || null;
+    if (loginEmail && D.users.some((u) => u.email === loginEmail)) {
       return errorResponse(409, 'duplicate_email', 'A user with this email already exists.');
     }
 
-    const acceptedOn = body.date_accepted || DEMO_TODAY;
-    const studentNumber = allocateStudentNumber();
+    const enrolledOn = body.enrollment_date || DEMO_TODAY;
+    const studentNumber = allocateStudentNumber(enrolledOn);
     const userId = nextId('user-stu');
     const studentId = nextId('stu');
 
+    if (loginEmail) {
     D.users.push({
       id: userId,
       email: loginEmail,
@@ -766,9 +788,10 @@ export const admissionsHandlers = [
       date_format: null,
       default_page_size: 25,
     });
+    }
     D.students.push({
       id: studentId,
-      user_id: userId,
+      user_id: loginEmail ? userId : null,
       student_number: studentNumber,
       first_name: app.first_name,
       middle_name: app.middle_name,
@@ -780,10 +803,10 @@ export const admissionsHandlers = [
       // every unrecognised value — including a capitalised `'Female'` — to 'male'. That is
       // the browser-side half of the bug the live data already had.
       gender: canonicalGender(app.gender) ?? 'female',
-      // D32 - acceptance copies the application's religion onto the student, mirroring
+      // D32 - enrolment copies the application's religion onto the student, mirroring
       // `admissions/service.py:263`. This is the only path that ever populates it.
       religion: app.religion ?? null,
-      enrollment_date: acceptedOn,
+      enrollment_date: enrolledOn,
       status: 'Active',
       // The declared year IS the level — the application and the profile now speak the same
       // `enum('First','Second')`, so this is a straight carry rather than a coercion.
@@ -796,7 +819,7 @@ export const admissionsHandlers = [
       guardian_email: '',
       address: [app.street, app.city_town_village, app.district].filter(Boolean).join(', '),
       phone: app.phone ?? '',
-      // D33 — acceptance carries the WHOLE of Sections A-E across, mirroring
+      // D33 — enrolment carries the WHOLE of Sections A-E across, mirroring
       // `admissions/service.py`. Before this only religion made the trip, so an accepted
       // applicant's next of kin and financier were on the frozen application and nowhere
       // on the live record the Registrar actually edits.
@@ -836,25 +859,20 @@ export const admissionsHandlers = [
       doc_id: null,
     });
     if (app.program_id) {
-      // History opens at admission, not at the first change (§D12).
+      // History opens at enrolment, not at the first change (§D12).
       D.student_program_history.push({
         id: nextId('sph'),
         student_id: studentId,
         program_id: app.program_id,
-        started_at: acceptedOn,
+        started_at: enrolledOn,
         ended_at: null,
         reason: 'Admitted',
       });
     }
 
-    app.status = 'accepted';
+    app.status = 'enrolled';
     app.student_id = studentId;
     app.student_code = studentNumber;
-    app.date_accepted = acceptedOn;
-    app.academic_year_id = app.academic_year_id ?? DEMO_IDS.activeYearId;
-    app.enrolment_status = app.enrolment_status ?? app.enrollment_load;
-    app.decided_by_user_id = DEMO_IDS.principalUserId;
-    app.decided_at = `${DEMO_TODAY}T12:00:00Z`;
     if (body.comments) {
       app.comments = app.comments ? `${app.comments}\n${body.comments}` : body.comments;
     }
@@ -870,10 +888,10 @@ export const admissionsHandlers = [
         application: detail(app),
         student_id: studentId,
         student_number: studentNumber,
-        // Only a SERVER-generated secret comes back, and only once — same discipline as
-        // `POST /settings/users`.
-        temporary_password: body.temporary_password ? null : 'DemoTemp1!',
         login_email: loginEmail,
+        // Only a SERVER-generated secret comes back, and only once — and none at all
+        // when no login was created.
+        temporary_password: loginEmail && !body.temporary_password ? 'DemoTemp1!' : null,
         transferred_course_codes: transferred,
       },
       { status: 201 },

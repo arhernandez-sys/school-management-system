@@ -160,16 +160,16 @@ function displayName(
 }
 
 /**
- * `YYYYMM###` for demo mode (D30 §D9).
+ * `YYYYMM###` for demo mode (D30 §D9), for the ENROLLMENT month (D46) — mirrors the
+ * server's `allocate_student_number(on=enrollment_date)`.
  *
  * Deliberately NOT a faithful copy of the server's sequence table — there is no
  * concurrency to protect against in a single browser tab. It scans the numbers
  * already issued this month and takes the next one, which is enough for the demo to
  * show the right SHAPE and the right increment while staying obviously local.
  */
-function allocateStudentNumber(): string {
-  const now = new Date();
-  const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+function allocateStudentNumber(enrollmentDate: string): string {
+  const ym = enrollmentDate.slice(0, 7).replace('-', '');
   const used = D.students
     .map((s) => s.student_number)
     .filter((n) => n.startsWith(ym) && n.length === 9)
@@ -647,7 +647,7 @@ export const studentsHandlers = [
     const created: DemoStudent = {
       id: `stu-new-${D.students.length + 1}`,
       user_id: null,
-      student_number: body.student_number || allocateStudentNumber(),
+      student_number: body.student_number || allocateStudentNumber(body.enrollment_date),
       first_name: body.first_name,
       middle_name: body.middle_name ?? null,
       last_name: body.last_name,

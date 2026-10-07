@@ -255,22 +255,31 @@ export interface ApplicationCreatePayload extends ApplicationWritePayload {
   submit?: boolean;
 }
 
+/** D46 — the admission DECISION only. No login, no student: those come at enrolment. */
 export interface AcceptPayload {
   academic_year_id?: string | null;
   date_accepted?: string | null;
-  /** Defaults to the applicant's own email; required when they gave none. */
+  comments?: string | null;
+}
+
+/** D46 — enrolment creates the student. The login is OPTIONAL. */
+export interface EnrollPayload {
+  /** Defaults to today. It is the student's enrollment date AND the year in their number. */
+  enrollment_date?: string | null;
+  /** The address the college issues. Omit to enrol without a login (link one later). */
   login_email?: string | null;
   temporary_password?: string | null;
   comments?: string | null;
 }
 
-export interface AcceptResponse {
+export interface EnrollResponse {
   application: ApplicationDetail;
   student_id: string;
   student_number: string;
+  /** Null when the student was enrolled without a login. */
+  login_email: string | null;
   /** Shown ONCE, and only when the server generated it. Never re-fetchable. */
   temporary_password: string | null;
-  login_email: string | null;
   transferred_course_codes: string[];
 }
 

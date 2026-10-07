@@ -1,6 +1,6 @@
 """Server-side allocation of the two human-readable IDs this system issues (D44).
 
-    student_profiles.student_number   `YYYY-NNNNN`      e.g. 2026-00012
+    student_profiles.student_number   `YYYYMM###`       e.g. 202610012   (D46: back from YYYY-NNNNN)
     applications.application_number   `APP-YYYY-NNNNN`  e.g. APP-2026-00125
 
 WHY THIS MODULE IS SHARED
@@ -25,6 +25,17 @@ WHY BOTH FORMATS CHANGED (D44)
 
     Applications had no human-readable ID at all — they were addressed by uuid, which is
     unusable over a telephone.
+
+⚠️ STUDENTS WENT BACK TO `YYYYMM###` (D46, client, Oct 2026)
+
+    The client confirmed the student ID is `YYYYMM###` — no dash, year + month + three
+    digits — and that the month is the ENROLLMENT month. So the student scope allocates from
+    `student_ym` again, the pre-D44 YYYYMM counters, which resumes them where they stopped
+    rather than reissuing a number one of the 46 pre-D44 students already holds. The
+    year-keyed `student` scope is now the retired one; nothing allocates from it, and the
+    handful of `YYYY-NNNNN` numbers it issued are kept by the students who hold them.
+    The month bucket holds 999; a 1000th enrolment in one month is refused rather than
+    widening the format silently.
 
 HOW IT IS MADE SAFE
 
@@ -71,11 +82,14 @@ from app.core.timeutil import school_today
 #: means something is wrong that a retry loop should not paper over.
 _MAX_ATTEMPTS = 5
 
-#: `scope` values. `student_ym` also exists on disk — the retired pre-D44 YYYYMM
-#: namespace, carried across by `017_sims10_reconcile.sql` §1 for provenance. It is
-#: deliberately absent here: nothing should ever allocate from it again.
-SCOPE_STUDENT = "student"
+#: `scope` values. D46 — students allocate from `student_ym` (keys `YYYYMM`) again, the
+#: pre-D44 namespace `017_sims10_reconcile.sql` §1 carried across. The D44 year-keyed
+#: `student` scope stays on disk for provenance and is never allocated from again.
+SCOPE_STUDENT = "student_ym"
 SCOPE_APPLICATION = "application"
+
+#: `###` — the per-month counter is three digits wide.
+_STUDENT_MONTH_CAPACITY = 999
 
 
 def year_key(on: date | None = None) -> str:
@@ -85,6 +99,12 @@ def year_key(on: date | None = None) -> str:
     """
     day = on or school_today()
     return f"{day.year:04d}"
+
+
+def month_key(on: date | None = None) -> str:
+    """`YYYYMM` for the school-local month, e.g. `202610`. School-local, not UTC."""
+    day = on or school_today()
+    return f"{day.year:04d}{day.month:02d}"
 
 
 def _next_sequence(db: Session, scope: str, key: str) -> int:
@@ -118,13 +138,19 @@ def _allocate(
     taken,
     exhausted_code: str,
     exhausted_message: str,
+    key_fn=year_key,
+    capacity: int | None = None,
 ) -> str:
     """Shared allocate-and-retry loop. `fmt(key, seq)` builds the candidate; `taken(x)`
-    says whether it is already in use."""
-    key = year_key(on)
+    says whether it is already in use; `key_fn(on)` picks the bucket the counter resets
+    in; `capacity` is the largest sequence the format can hold."""
+    key = key_fn(on)
 
     for _ in range(_MAX_ATTEMPTS):
-        candidate = fmt(key, _next_sequence(db, scope, key))
+        seq = _next_sequence(db, scope, key)
+        if capacity is not None and seq > capacity:
+            break
+        candidate = fmt(key, seq)
         if not taken(candidate):
             return candidate
 
@@ -132,7 +158,10 @@ def _allocate(
 
 
 def allocate_student_number(db: Session, *, on: date | None = None) -> str:
-    """Issue the next `YYYY-NNNNN` for the school-local year.
+    """Issue the next `YYYYMM###` for the school-local month of `on` (D46).
+
+    `on` is the ENROLLMENT date — the client's rule is that the student ID carries the
+    month the student enrolled, not the month they were accepted.
 
     Call inside the transaction that creates the student, BEFORE the flush that inserts
     it — the sequence row and the student row then commit together, so a failed
@@ -161,13 +190,15 @@ def allocate_student_number(db: Session, *, on: date | None = None) -> str:
         db,
         scope=SCOPE_STUDENT,
         on=on,
-        fmt=lambda key, seq: f"{key}-{seq:05d}",
+        fmt=lambda key, seq: f"{key}{seq:03d}",
         taken=_taken,
         exhausted_code="student_number_exhausted",
         exhausted_message=(
-            "Could not allocate a student number for this year; the sequence collided "
-            "with existing numbers repeatedly."
+            "Could not allocate a student number for this month: either 999 have been "
+            "issued already, or the sequence collided with existing numbers repeatedly."
         ),
+        key_fn=month_key,
+        capacity=_STUDENT_MONTH_CAPACITY,
     )
 
 

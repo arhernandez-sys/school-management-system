@@ -562,6 +562,30 @@ def issued_login_email(prefix: str = "issued") -> str:
     return f"{prefix}.{uuid.uuid4().hex[:10]}@bajc.edu.bz"
 
 
+def admit(
+    client,
+    headers: dict[str, str],
+    app_id: str,
+    *,
+    accept: dict | None = None,
+    enroll: dict | None = None,
+):
+    """Accept, then enrol — the D46 two-step that now produces a student.
+
+    Before D46 a single `/accept` created the student, and most of the suite used it for
+    that. Acceptance is now the decision only, so a test that needs the STUDENT goes
+    through both. Asserts the accept succeeded so a failure is reported at the step that
+    failed; returns the raw `/enrolled` response so the caller asserts on it.
+    """
+    accepted = client.post(
+        f"/api/v1/applications/{app_id}/accept", headers=headers, json=accept or {}
+    )
+    assert accepted.status_code == 200, accepted.text
+    return client.post(
+        f"/api/v1/applications/{app_id}/enrolled", headers=headers, json=enroll or {}
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Student name helper (added D30 — the split-name cut-over)
 # ──────────────────────────────────────────────────────────────────────────────

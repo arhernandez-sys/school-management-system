@@ -241,9 +241,11 @@ STUDENT_NAME_ORDER = (
 
 
 # D44 — `StudentNumberSequence` was here, mapping `student_number_sequences`. The student
-# ID format changed from `YYYYMM###` to `YYYY-NNNNN` and applications gained a counter of
+# ID format changed from `YYYYMM###` to `YYYY-NNNNN` (reverted by D46) and applications gained a counter of
 # their own, so the table's `year_month char(6)` primary key — which encoded the retired
 # format in the schema — was generalised to `number_sequences(scope, seq_key, last_seq)`.
+# ⚠️ D46 (Oct 2026) took the student ID back to `YYYYMM###` at the client's word; the
+# generalised table stays, and students allocate from its `student_ym` scope again.
 # The model now lives in `app/common/models.py`, because it serves two modules and belongs
 # to neither; the allocators are in `app/common/numbering.py`.
 #

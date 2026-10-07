@@ -512,7 +512,7 @@ the single biggest thing this build got right relative to the plan.
 
 | Rule | Status |
 |---|---|
-| Student ID numbering | ⚪ **Divergent** — `YYYYMM###` built, blueprint says `YYYY-NNNNN`. Needs a ruling. |
+| Student ID numbering | ⚪ **Divergent by ruling** — `YYYYMM###` (enrollment month), confirmed by the client 6 Oct 2026 (D46); blueprint says `YYYY-NNNNN`. |
 | Academic year structure | ✅ Approved and built |
 | Semester naming | ✅ Approved and built (`summer` / `semester` / `spring`) |
 | Credit limits | 🔴 **Open** — nothing built |

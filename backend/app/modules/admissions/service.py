@@ -11,13 +11,15 @@ Owns DB access + transactions; the router stays thin.
   * **Change** a student's programme later — **Dean only**, and that lives in the students
     module (§D12): it re-derives a degree plan and decides what carries over.
 
-**THE LIFECYCLE.** `draft → submitted → accepted | denied`, plus `withdrawn` for an
-applicant who pulls out and `under_review` as an optional staging state. Only `submitted`
-and `under_review` can be accepted; the transitions are checked here rather than trusted
-from the client, because "accept" creates a user account and a student record.
+**THE LIFECYCLE.** `draft → submitted → accepted → enrolled`, with `rejected`,
+`deferred` and `withdrawn` as the other exits and `under_review` / `documents_pending` /
+`eligible` as staging states. The transitions are checked here rather than trusted from
+the client, because "enrol" creates a student record.
 
-**ACCEPTANCE IS ONE TRANSACTION** and it is the only thing in the system that creates a
-student, a login and a student ID together (decision #5). See `accept_application`.
+**D46 — ACCEPT IS THE DECISION, ENROL MAKES THE STUDENT.** Acceptance records the offer and
+nothing else; an accepted applicant is not a student anywhere. Enrolment is the one
+transaction that creates the student number, the student record and — optionally — the
+login. See `accept_application` / `enroll_application`.
 """
 
 from __future__ import annotations
@@ -51,7 +53,8 @@ from app.modules.admissions.models import (
 )
 from app.modules.admissions.schemas import (
     ApplicationAcceptRequest,
-    ApplicationAcceptResponse,
+    ApplicationEnrollRequest,
+    ApplicationEnrollResponse,
     ApplicationCreateRequest,
     ApplicationDetail,
     ApplicationListItem,
@@ -99,6 +102,13 @@ _DECIDABLE = (
     ApplicationStatus.UNDER_REVIEW,
     ApplicationStatus.ELIGIBLE,
 )
+
+#: What the D44 SSN duplicate guard refuses a second application against: every OPEN
+#: status, plus ACCEPTED. D46 — acceptance no longer creates a student, so the
+#: student-profile SSN check below no longer covers an accepted applicant; without this an
+#: accepted applicant could file a second application and be accepted twice.
+#: ACCEPTED stays in `DECIDED_APPLICATION_STATUSES` (it is still not editable).
+_DUPLICATE_BLOCKING_STATUSES = OPEN_APPLICATION_STATUSES | {ApplicationStatus.ACCEPTED}
 
 #: Statuses that may move to UNDER_REVIEW. `SUBMITTED` is the original path;
 #: `DOCUMENTS_PENDING` is the return trip once the applicant sends the missing paperwork.
@@ -600,7 +610,7 @@ def _assert_no_open_application(
     # one of the few places NOT to reach for HEX()/BINARY.
     stmt = select(Application).where(
         Application.ssno == ssno,
-        Application.status.in_(OPEN_APPLICATION_STATUSES),
+        Application.status.in_(_DUPLICATE_BLOCKING_STATUSES),
         Application.deleted_at.is_(None),
     )
     if exclude_id is not None:
@@ -749,16 +759,17 @@ def update_application(
 def delete_application(db: Session, *, actor: User, application_id: uuid.UUID) -> None:
     """DELETE /applications/{id} — SOFT (Registrar + Dean).
 
-    An admissions record is kept even when filed in error. An ACCEPTED application is
-    refused outright: a student record and a login already hang off it, and hiding the
-    application would leave that student with no traceable admission.
+    An admissions record is kept even when filed in error. An application with a student
+    behind it is refused outright: hiding it would leave that student with no traceable
+    admission. Since D46 that is ENROLLED (or a pre-D46 accepted row that already built
+    one) — a merely ACCEPTED application has no student and may be deleted.
     """
     row = _application_or_404(db, application_id)
-    if row.status == ApplicationStatus.ACCEPTED:
+    if row.status == ApplicationStatus.ENROLLED or row.student_id is not None:
         raise Conflict(
-            "This application has been accepted and a student record exists for it. "
+            "A student record exists for this application. "
             "Change the student's status instead.",
-            code="application_accepted",
+            code="application_has_student",
         )
     row.deleted_at = _now()
     row.updated_by = actor.id
@@ -945,10 +956,12 @@ def defer_application(
     matches what an application IS: a request for a place in a particular intake.
     """
     row = _application_or_404(db, application_id)
-    if row.status not in _DECIDABLE:
+    # D46 — ACCEPTED may be deferred too: acceptance creates nothing any more, so an
+    # applicant offered a place who asks to start in a later intake is held here.
+    if row.status not in _DECIDABLE and row.status != ApplicationStatus.ACCEPTED:
         raise Conflict(
-            f"Only a submitted, under-review or eligible application can be deferred "
-            f"(this one is {row.status.value}).",
+            f"Only a submitted, under-review, eligible or accepted application can be "
+            f"deferred (this one is {row.status.value}).",
             code="application_not_decidable",
         )
     row.status = ApplicationStatus.DEFERRED
@@ -961,55 +974,20 @@ def defer_application(
     return _detail(db, row)
 
 
-def mark_enrolled(
-    db: Session, *, actor: User, application_id: uuid.UUID
-) -> ApplicationDetail:
-    """POST /applications/{id}/enrolled — accepted AND registered (D44).
-
-    Only from ACCEPTED, and only once the student record actually exists. `student_id` is
-    the check rather than the status alone: acceptance is what creates the student
-    (`accept_application`), so an accepted application with no `student_id` is a row that
-    got its status by some path that did not go through there, and marking it enrolled
-    would assert a registration nobody can point at.
-
-    Closes the application. It does NOT touch `student_profiles.status`, which has its own
-    vocabulary (`Registered`/`Unregistered`/`DropOut`) and its own lifecycle — the student
-    record outlives the application by years, and letting an admissions transition write to
-    it would be the two-enums-one-fact mistake D30 §B4 already found here once.
-    """
-    row = _application_or_404(db, application_id)
-    if row.status != ApplicationStatus.ACCEPTED:
-        raise Conflict(
-            f"Only an accepted application can be marked enrolled "
-            f"(this one is {row.status.value}).",
-            code="application_not_accepted",
-        )
-    if row.student_id is None:
-        raise Conflict(
-            "This application has no student record, so it cannot be marked enrolled.",
-            code="application_no_student",
-        )
-    row.status = ApplicationStatus.ENROLLED
-    row.updated_by = actor.id
-    _audit(db, actor=actor, action="application.enrolled", entity_id=row.id)
-    db.commit()
-    return _detail(db, row)
-
-
 def withdraw_application(
     db: Session, *, actor: User, application_id: uuid.UUID
 ) -> ApplicationDetail:
     """POST /applications/{id}/withdraw — the APPLICANT pulled out (Registrar + Dean).
 
-    Distinct from `deny`, which is the college saying no. Both are terminal, and the
+    Distinct from `reject`, which is the college saying no. Both are terminal, and the
     difference matters to anyone reading the admissions record later.
+
+    D46 — allowed from ACCEPTED too. Acceptance no longer creates a student, so an applicant
+    who is offered a place and never registers is backed out here, and nothing is left
+    behind. Once ENROLLED it is refused: a student exists, and leaving is a student status.
     """
     row = _application_or_404(db, application_id)
-    if row.status == ApplicationStatus.ACCEPTED:
-        raise Conflict(
-            "This application has already been accepted.", code="application_accepted"
-        )
-    if row.is_decided:
+    if row.is_decided and row.status != ApplicationStatus.ACCEPTED:
         raise Conflict(
             f"This application is already {row.status.value}.", code="application_decided"
         )
@@ -1023,35 +1001,21 @@ def withdraw_application(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# THE ACCEPTANCE FLOW (decision #5)
+# THE ADMISSION DECISION, THEN ENROLMENT (D46)
 # ──────────────────────────────────────────────────────────────────────────────
 def accept_application(
     db: Session, *, actor: User, application_id: uuid.UUID, payload: ApplicationAcceptRequest
-) -> ApplicationAcceptResponse:
-    """POST /applications/{id}/accept — the single action that admits a student.
+) -> ApplicationDetail:
+    """POST /applications/{id}/accept — the college offers a place. That is ALL (D46).
 
-    In ONE transaction it:
-
-      1. allocates the `YYYYMM###` student number (§D9) — inside this transaction, so a
-         failure rolls the sequence back and burns no number;
-      2. creates the `users` login with `must_change_password`, returning a generated
-         temporary password ONCE;
-      3. creates `student_profiles` from Sections A–E — the student is BUILT FROM the
-         application, never from separate fields on this request, so an accept cannot
-         quietly disagree with the form it came from;
-      4. opens the first `student_program_history` row, so the programme has a history
-         from the very first day rather than from the first change;
-      5. links both directions (`applications.student_id`, `student_profiles.application_id`)
-         and fills in the official-use block.
-
-    **Order matters.** The user is inserted before the student because
-    `student_profiles.user_id` references it; the student is flushed before the
-    application's `student_id` is set because that FK points the other way. The pair is
-    circular in the schema and only a single transaction makes it safe.
+    ⚠️ D46 (client, Oct 2026) split decision #5. Accepting used to create the login, the
+    student number and the student record in one step, which made every accepted applicant
+    a student — in the list, enrollable on offerings — whether or not they ever turned up.
+    Now acceptance records the decision and the official-use block, and
+    `enroll_application` creates the student when they actually register.
 
     Errors: 409 `application_not_decidable` / `application_accepted`, 422
-    `application_incomplete` (with every reason listed), 409 `duplicate_email`, 409
-    `student_number_exhausted`.
+    `application_incomplete` (with every reason listed).
     """
     row = _application_or_404(db, application_id)
 
@@ -1061,26 +1025,9 @@ def accept_application(
         )
     if row.status not in _DECIDABLE:
         raise Conflict(
-            f"Only a submitted or under-review application can be accepted "
+            f"Only a submitted, under-review or eligible application can be accepted "
             f"(this one is {row.status.value}).",
             code="application_not_decidable",
-        )
-
-    # ⚠️ NO FALLBACK TO `row.email` (client, Sep 2026). The login is the address the
-    # SCHOOL issues, so it is asked for here and nowhere else. Defaulting to the
-    # applicant's personal address made a contact detail into a credential by omission —
-    # exactly what D39 removed from the form's own help text, where it had promised "this
-    # becomes your login" about an application that may be refused.
-    #
-    # Reported as a FIELD error on `login_email`, not as an application-level issue: the
-    # thing that is incomplete is this dialog, not the applicant's form.
-    login_email = (payload.login_email or "").strip()
-    if not login_email:
-        raise ValidationError(
-            "A login email is required. This is the address the college issues to the "
-            "student, not their personal one.",
-            code="login_email_required",
-            fields={"login_email": ["Required."]},
         )
 
     issues = acceptance_issues(db, row)
@@ -1098,42 +1045,109 @@ def accept_application(
         )
     _assert_year_exists(db, year_id)
 
-    accepted_on = payload.date_accepted or school_today()
-
-    # 1 ── the login ──────────────────────────────────────────────────────────
-    duplicate = db.scalar(
-        select(User.id).where(User.email == login_email, User.deleted_at.is_(None))
+    row.status = ApplicationStatus.ACCEPTED
+    row.date_accepted = payload.date_accepted or school_today()
+    row.academic_year_id = year_id
+    row.enrolment_status = (
+        row.enrolment_status or (row.enrollment_load.value if row.enrollment_load else None)
     )
-    if duplicate is not None:
+    _append_comment(row, payload.comments)
+    row.decided_by_user_id = actor.id
+    row.decided_at = _now()
+    row.updated_by = actor.id
+
+    _audit(
+        db,
+        actor=actor,
+        action="application.accept",
+        entity_id=row.id,
+        summary={"program_id": str(row.program_id) if row.program_id else None},
+    )
+    db.commit()
+    return _detail(db, row)
+
+
+def enroll_application(
+    db: Session, *, actor: User, application_id: uuid.UUID, payload: ApplicationEnrollRequest
+) -> ApplicationEnrollResponse:
+    """POST /applications/{id}/enrolled — the accepted applicant registers (D46).
+
+    This is now the single action that makes a STUDENT. In ONE transaction it:
+
+      1. optionally creates the `users` login with `must_change_password`, returning a
+         generated temporary password ONCE. Optional (client, Oct 2026): without one the
+         student is enrolled with no login, and Settings → Users creates and links it
+         later — that screen only offers profiles that exist, so a login can never be
+         issued to someone who is merely accepted;
+      2. allocates the `YYYYMM###` student number from the ENROLLMENT month (§D9, D46) — inside
+         this transaction, so a failure rolls the sequence back and burns no number;
+      3. creates `student_profiles` from Sections A–E — the student is BUILT FROM the
+         application, never from fields on this request;
+      4. opens the first `student_program_history` row on the enrollment date;
+      5. links both directions (`applications.student_id`, `student_profiles.application_id`)
+         and closes the application as ENROLLED.
+
+    **Order matters.** The user is inserted before the student because
+    `student_profiles.user_id` references it; the student is flushed before the
+    application's `student_id` is set because that FK points the other way.
+
+    Errors: 409 `application_not_accepted` / `application_has_student`, 409
+    `duplicate_email`, 409 `student_number_exhausted`.
+    """
+    row = _application_or_404(db, application_id)
+    if row.status != ApplicationStatus.ACCEPTED:
         raise Conflict(
-            "A user with this email already exists.", code="duplicate_email"
+            f"Only an accepted application can be enrolled "
+            f"(this one is {row.status.value}).",
+            code="application_not_accepted",
+        )
+    # Only a row accepted BEFORE D46 can be here: acceptance used to build the student.
+    # A second profile for the same applicant is the one outcome to refuse outright.
+    if row.student_id is not None:
+        raise Conflict(
+            "A student record already exists for this application.",
+            code="application_has_student",
         )
 
-    if payload.temporary_password:
-        plaintext = payload.temporary_password
-        echo: str | None = None  # never echo a secret the caller chose
-    else:
-        plaintext = generate_temp_password()
-        echo = plaintext
+    enrolled_on = payload.enrollment_date or school_today()
 
-    login = User(
-        email=login_email,
-        password_hash=hash_password(plaintext),
-        role=Role.STUDENT,
-        full_name=row.full_name,
-        is_active=True,
-        must_change_password=True,
-        created_by=actor.id,
-    )
-    db.add(login)
-    db.flush()
+    # 1 ── the login, if one was asked for ────────────────────────────────────
+    # ⚠️ NO FALLBACK TO `row.email` (client, Sep 2026). The login is the address the
+    # SCHOOL issues; the applicant's personal address is a contact detail. Blank = none.
+    login_email = (payload.login_email or "").strip() or None
+    login: User | None = None
+    echo: str | None = None
+    if login_email is not None:
+        duplicate = db.scalar(
+            select(User.id).where(User.email == login_email, User.deleted_at.is_(None))
+        )
+        if duplicate is not None:
+            raise Conflict(
+                "A user with this email already exists.", code="duplicate_email"
+            )
+        if payload.temporary_password:
+            plaintext = payload.temporary_password
+        else:
+            plaintext = generate_temp_password()
+            echo = plaintext  # never echo a secret the caller chose
+        login = User(
+            email=login_email,
+            password_hash=hash_password(plaintext),
+            role=Role.STUDENT,
+            full_name=row.full_name,
+            is_active=True,
+            must_change_password=True,
+            created_by=actor.id,
+        )
+        db.add(login)
+        db.flush()
 
-    # 2 ── the student number ─────────────────────────────────────────────────
-    student_number = allocate_student_number(db, on=accepted_on)
+    # 2 ── the student number, from the ENROLLMENT date ───────────────────────
+    student_number = allocate_student_number(db, on=enrolled_on)
 
     # 3 ── the student, built from the application ────────────────────────────
     student = StudentProfile(
-        user_id=login.id,
+        user_id=login.id if login is not None else None,
         student_number=student_number,
         first_name=row.first_name,
         middle_name=row.middle_name,
@@ -1148,14 +1162,12 @@ def accept_application(
         # them. The frontend compares case-SENSITIVELY and does not forgive it: the
         # `<select>` renders blank and the profile card shows the wrong label.
         gender=normalise_gender(row.gender),
-        enrollment_date=accepted_on,
+        enrollment_date=enrolled_on,
         status=StudentStatus.ACTIVE,
         phone=row.phone,
         ssno=row.ssno,
         religion=row.religion,
-        # D40 — normalised on the copy for exactly the reason `gender` is (see above):
-        # an application written before the dropdown shipped still holds whatever was
-        # typed, and copying it verbatim would spread the drift into the register.
+        # D40 — normalised on the copy for exactly the reason `gender` is (see above).
         civil_status=normalise_civil_status(row.civil_status),
         street=row.street,
         city_town_village=row.city_town_village,
@@ -1192,27 +1204,17 @@ def accept_application(
             StudentProgramHistory(
                 student_id=student.id,
                 program_id=row.program_id,
-                started_at=accepted_on,
+                started_at=enrolled_on,
                 reason="Admitted",
                 created_by=actor.id,
             )
         )
 
-    # 5 ── the official-use block ─────────────────────────────────────────────
-    row.status = ApplicationStatus.ACCEPTED
+    # 5 ── link, and close the application ────────────────────────────────────
+    row.status = ApplicationStatus.ENROLLED
     row.student_id = student.id
     row.student_code = student_number
-    row.date_accepted = accepted_on
-    row.academic_year_id = year_id
-    row.enrolment_status = (
-        row.enrolment_status or (row.enrollment_load.value if row.enrollment_load else None)
-    )
-    if payload.comments:
-        row.comments = (
-            f"{row.comments}\n{payload.comments}".strip() if row.comments else payload.comments
-        )
-    row.decided_by_user_id = actor.id
-    row.decided_at = _now()
+    _append_comment(row, payload.comments)
     row.updated_by = actor.id
 
     transferred = db.execute(
@@ -1227,17 +1229,18 @@ def accept_application(
     _audit(
         db,
         actor=actor,
-        action="application.accept",
+        action="application.enrolled",
         entity_id=row.id,
         summary={
             "student_id": str(student.id),
             "student_number": student_number,
             "program_id": str(row.program_id) if row.program_id else None,
+            "login_created": login is not None,
         },
     )
     db.commit()
 
-    return ApplicationAcceptResponse(
+    return ApplicationEnrollResponse(
         application=_detail(db, row),
         student_id=student.id,
         student_number=student_number,

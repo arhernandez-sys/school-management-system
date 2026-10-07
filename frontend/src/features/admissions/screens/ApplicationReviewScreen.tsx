@@ -29,6 +29,7 @@ import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { ROUTES } from '@shared/constants/routes';
 import { AcceptDialog } from '../components/AcceptDialog';
+import { EnrollDialog } from '../components/EnrollDialog';
 import { CreditTransferPanel } from '../components/CreditTransferPanel';
 import {
   useApplication,
@@ -36,7 +37,6 @@ import {
   useRequestDocuments,
   useMarkEligible,
   useDeferApplication,
-  useMarkEnrolled,
   useReviewApplication,
   useSubmitApplication,
   useWithdrawApplication,
@@ -97,10 +97,10 @@ export function ApplicationReviewScreen() {
   const documentsMut = useRequestDocuments();
   const eligibleMut = useMarkEligible();
   const deferMut = useDeferApplication();
-  const enrolledMut = useMarkEnrolled();
   const withdrawMut = useWithdrawApplication();
 
   const [acceptOpen, setAcceptOpen] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
   /**
    * D44 — ONE dialog for the three transitions that carry a note (reject, defer, send
    * back for documents), rather than three near-identical ones. `noteAction` says which is
@@ -136,6 +136,12 @@ export function ApplicationReviewScreen() {
   const isReviewable = app.status === 'submitted' || app.status === 'under_review';
   const isDecided = isDecidedApplication(app.status);
   const canAccept = isDecidable && app.blocking_issues.length === 0;
+  /**
+   * D46 — acceptance creates nothing, so an accepted applicant who never registers can
+   * still be backed out (withdrawn) or held to a later intake (deferred). Mirrors
+   * `admissions/service.withdraw_application` / `defer_application`.
+   */
+  const isAccepted = app.status === 'accepted';
 
   /**
    * D44 — THE EDIT AFFORDANCE. The server has always allowed a PATCH right up until a
@@ -268,10 +274,17 @@ export function ApplicationReviewScreen() {
         </Alert>
       )}
 
-      {app.status === 'accepted' && (
+      {/* D46 — accepted is NOT a student yet: no record, no ID, no login until enrolment. */}
+      {isAccepted && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Accepted{app.date_accepted ? ` on ${app.date_accepted}` : ''}. Not a student yet —
+          they won&apos;t appear in the student list or on offerings until they{' '}
+          <strong>enrol</strong>.
+        </Alert>
+      )}
+      {app.status === 'enrolled' && app.student_code && (
         <Alert severity="success" sx={{ mb: 2 }}>
-          Accepted{app.date_accepted ? ` on ${app.date_accepted}` : ''}. Student ID{' '}
-          <strong>{app.student_code}</strong>.
+          Enrolled. Student ID <strong>{app.student_code}</strong>.
         </Alert>
       )}
 
@@ -343,21 +356,16 @@ export function ApplicationReviewScreen() {
               </Button>
             </>
           )}
-          {/* D44 — the last step: the student the acceptance created has registered. */}
-          {app.status === 'accepted' && app.student_id && (
-            <Button
-              variant="contained"
-              disabled={enrolledMut.isPending}
-              onClick={() =>
-                enrolledMut.mutate(app.id, {
-                  onError: (err) => setError(apiErrorMessage(err)),
-                })
-              }
-            >
-              Mark enrolled
-            </Button>
+          {/* D46 — the last step, and the one that creates the student. */}
+          {isAccepted && (
+            <>
+              <Button variant="contained" color="success" onClick={() => setEnrollOpen(true)}>
+                Enrol student
+              </Button>
+              <Button onClick={() => setNoteAction('defer')}>Defer</Button>
+            </>
           )}
-          {!isDecided && (
+          {(!isDecided || isAccepted) && (
             <Button
               color="inherit"
               disabled={withdrawMut.isPending}
@@ -368,7 +376,7 @@ export function ApplicationReviewScreen() {
               Applicant withdrew
             </Button>
           )}
-          {isDecided && app.status !== 'accepted' && (
+          {isDecided && !isAccepted && (
             <Typography variant="body2" color="text.secondary">
               This application is {APPLICATION_STATUS_LABEL[app.status].toLowerCase()} and is
               now a record. Decisions are kept, not reversed.
@@ -516,6 +524,12 @@ export function ApplicationReviewScreen() {
         application={app}
         onClose={() => setAcceptOpen(false)}
         onAccepted={() => void query.refetch()}
+      />
+      <EnrollDialog
+        open={enrollOpen}
+        application={app}
+        onClose={() => setEnrollOpen(false)}
+        onEnrolled={() => void query.refetch()}
       />
 
       {/* D44 — ONE dialog for reject / defer / request-documents. All three append a note

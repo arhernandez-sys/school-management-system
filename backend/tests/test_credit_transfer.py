@@ -23,7 +23,7 @@ from datetime import date
 
 import pytest
 
-from tests.conftest import issued_login_email
+from tests.conftest import admit
 from sqlalchemy import select, text
 
 from app.common.enums import Role
@@ -227,12 +227,8 @@ class TestFiling:
 class TestAdmissionOnly:
     def test_a_transfer_cannot_be_filed_after_acceptance(self, client, graph) -> None:
         """**THE POLICY'S TIMING CLAUSE** (brief §13): credit transfer is applied for at
-        entrance only. Once accepted there is a student, and the moment has passed."""
-        client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        )
+        entrance only. Once accepted the decision is taken, and the moment has passed."""
+        client.post(f"{A}/{graph.application_id}/accept", headers=graph.S, json={})
         r = graph.file_transfer()
         assert r.status_code == 409
         _assert_envelope(r.json(), code="application_decided")
@@ -248,11 +244,7 @@ class TestAdmissionOnly:
         graph.file_transfer()
         detail = client.get(f"{A}/{graph.application_id}", headers=graph.S).json()
         assert any("awaiting the Dean" in issue for issue in detail["blocking_issues"])
-        r = client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        )
+        r = client.post(f"{A}/{graph.application_id}/accept", headers=graph.S, json={})
         assert r.status_code == 422
         _assert_envelope(r.json(), code="application_incomplete")
 
@@ -267,10 +259,8 @@ class TestAdmissionOnly:
         detail = client.get(f"{A}/{graph.application_id}", headers=graph.S).json()
         assert detail["blocking_issues"] == []
         assert client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).status_code == 201
+            f"{A}/{graph.application_id}/accept", headers=graph.S, json={}
+        ).status_code == 200
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -538,9 +528,9 @@ class TestTheQueue:
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestApprovedTransfersReachTheStudent:
-    def test_acceptance_reports_the_transferred_courses(self, client, graph) -> None:
-        """The one part of acceptance that changes what the student still has to study, so
-        it is reported rather than left invisible."""
+    def test_enrolment_reports_the_transferred_courses(self, client, graph) -> None:
+        """The one part of enrolment that changes what the student still has to study, so
+        it is reported rather than left invisible. (D46 — moved from acceptance.)"""
         graph.add_tertiary_institution()
         transfer_id = graph.file_transfer().json()["id"]
         client.post(
@@ -548,21 +538,13 @@ class TestApprovedTransfersReachTheStudent:
             headers=graph.P,
             json={"status": "approved", "content_equivalency_pct": 90},
         )
-        body = client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).json()
+        body = admit(client, graph.S, graph.application_id).json()
         assert body["transferred_course_codes"] == [graph.course.code]
 
     def test_a_denied_transfer_is_not_reported_as_transferred(self, client, graph) -> None:
         transfer_id = graph.file_transfer().json()["id"]
         client.post(f"{CT}/{transfer_id}/decision", headers=graph.P, json={"status": "denied"})
-        body = client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).json()
+        body = admit(client, graph.S, graph.application_id).json()
         assert body["transferred_course_codes"] == []
 
     def test_the_prerequisite_gate_sees_an_approved_transfer(
@@ -582,11 +564,7 @@ class TestApprovedTransfersReachTheStudent:
             headers=graph.P,
             json={"status": "approved", "content_equivalency_pct": 90},
         )
-        body = client.post(
-            f"{A}/{graph.application_id}/accept",
-            headers=graph.S,
-            json={"login_email": issued_login_email()},
-        ).json()
+        body = admit(client, graph.S, graph.application_id).json()
 
         db_session.expire_all()
         granted = _approved_transfer_course_ids(

@@ -1102,8 +1102,9 @@ def create_student(
 
     if payload.student_number is None:
         # Allocated inside THIS transaction, before the insert below, so a failed
-        # registration rolls the sequence back with it and no number is burnt.
-        student_number = allocate_student_number(db)
+        # registration rolls the sequence back with it and no number is burnt. D46 — the
+        # `YYYYMM` is the ENROLLMENT month, the same rule enrolment from admissions follows.
+        student_number = allocate_student_number(db, on=payload.enrollment_date)
     else:
         student_number = payload.student_number.strip()
         _assert_number_unique(db, student_number)

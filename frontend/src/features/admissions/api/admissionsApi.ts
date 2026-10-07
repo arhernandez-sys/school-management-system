@@ -1,7 +1,8 @@
 import { api } from '@shared/api/client';
 import type {
   AcceptPayload,
-  AcceptResponse,
+  EnrollPayload,
+  EnrollResponse,
   ApplicationCreatePayload,
   ApplicationDetail,
   ApplicationListItem,
@@ -118,9 +119,15 @@ export async function deferApplication(
   return res.data;
 }
 
-/** D44 — accepted AND registered. Closes the application behind the student record. */
-export async function markEnrolled(id: string): Promise<ApplicationDetail> {
-  const res = await api.post<ApplicationDetail>(`/applications/${id}/enrolled`);
+/**
+ * D46 — the accepted applicant registers. This is what CREATES the student: number,
+ * record, programme history, and (optionally) the login.
+ */
+export async function enrollApplication(
+  id: string,
+  body: EnrollPayload,
+): Promise<EnrollResponse> {
+  const res = await api.post<EnrollResponse>(`/applications/${id}/enrolled`, body);
   return res.data;
 }
 
@@ -129,11 +136,12 @@ export async function withdrawApplication(id: string): Promise<ApplicationDetail
   return res.data;
 }
 
+/** D46 — the admission decision only. Creates no student and no login. */
 export async function acceptApplication(
   id: string,
   body: AcceptPayload,
-): Promise<AcceptResponse> {
-  const res = await api.post<AcceptResponse>(`/applications/${id}/accept`, body);
+): Promise<ApplicationDetail> {
+  const res = await api.post<ApplicationDetail>(`/applications/${id}/accept`, body);
   return res.data;
 }
 

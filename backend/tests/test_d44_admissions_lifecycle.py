@@ -35,7 +35,6 @@ import uuid
 
 import pytest
 
-from tests.conftest import issued_login_email
 
 from app.common.enums import (
     DECIDED_APPLICATION_STATUSES,
@@ -247,17 +246,10 @@ class TestEligibleIsNotADecision:
         assert eligible.status_code == 200, eligible.text
         assert eligible.json()["status"] == "eligible"
 
-        # Accepting it, though, still needs one -- the two checks stay different.
-        refused = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
-        assert refused.status_code == 422, refused.text
-        assert refused.json()["error"]["code"] == "login_email_required"
-
-        # ...and supplying one at that moment is all it takes. Nothing about the
-        # application had to change, which is the whole point of moving the rule.
-        accepted = client.post(
-            f"{A}/{app_id}/accept", headers=graph.S, json={"login_email": issued_login_email()}
-        )
-        assert accepted.status_code == 201, accepted.text
+        # ⚠️ D46 — acceptance no longer issues a login at all, so it needs no address
+        # either. The login moved to ENROLMENT, where it is optional.
+        accepted = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert accepted.status_code == 200, accepted.text
 
     def test_an_incomplete_application_cannot_be_marked_eligible(
         self, client, graph
@@ -305,26 +297,28 @@ class TestEnrolled:
         self, client, graph
     ) -> None:
         app_id = _file(client, graph)["id"]
-        r = client.post(f"{A}/{app_id}/enrolled", headers=graph.S)
+        r = client.post(f"{A}/{app_id}/enrolled", headers=graph.S, json={})
         assert r.status_code == 409
         assert r.json()["error"]["code"] == "application_not_accepted"
 
     def test_accept_then_enrol(self, client, graph) -> None:
+        """D46 — accept creates nothing; enrolment creates the student."""
         app_id = _file(client, graph)["id"]
-        accepted = client.post(
-            f"{A}/{app_id}/accept",
+        accepted = client.post(f"{A}/{app_id}/accept", headers=graph.S, json={})
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["student_id"] is None
+
+        r = client.post(
+            f"{A}/{app_id}/enrolled",
             headers=graph.S,
             json={"login_email": f"newstudent.{graph.tag}@example.bz"},
         )
-        assert accepted.status_code == 201, accepted.text
-
-        r = client.post(f"{A}/{app_id}/enrolled", headers=graph.S)
-        assert r.status_code == 200, r.text
-        assert r.json()["status"] == "enrolled"
-        # The student record is untouched: it has its own lifecycle vocabulary.
-        assert r.json()["student_id"] is not None
+        assert r.status_code == 201, r.text
+        assert r.json()["application"]["status"] == "enrolled"
+        assert r.json()["application"]["student_id"] == r.json()["student_id"]
 
 
+# ════════════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════════════
 class TestSsnDuplicateGuard:
     def test_a_second_application_on_an_open_one_is_refused(self, client, graph) -> None:
@@ -340,6 +334,19 @@ class TestSsnDuplicateGuard:
         assert error["code"] == "duplicate_ssn"
         # The message names the open application, so the Registrar can go straight to it.
         assert first.json()["application_number"] in error["message"]
+
+    def test_an_ACCEPTED_application_still_blocks_a_second_one(self, client, graph) -> None:
+        """D46 — acceptance no longer creates a student, so the student-profile SSN check
+        cannot catch an accepted applicant any more. Without `accepted` in the blocking
+        set, they could file again and be accepted twice."""
+        ssno = _ssn()
+        first_id = client.post(
+            A, headers=graph.S, json=graph.body(ssno=ssno, submit=True)
+        ).json()["id"]
+        assert client.post(f"{A}/{first_id}/accept", headers=graph.S, json={}).status_code == 200
+        again = client.post(A, headers=graph.S, json=graph.body(ssno=ssno))
+        assert again.status_code == 409, again.text
+        assert again.json()["error"]["code"] == "duplicate_ssn"
 
     @pytest.mark.parametrize("closer", ["reject", "defer", "withdraw"])
     def test_re_registration_is_allowed_once_the_first_is_closed(

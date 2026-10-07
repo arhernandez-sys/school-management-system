@@ -11,6 +11,7 @@ import type {
   CreditTransferWritePayload,
   DocumentRow,
   EducationRow,
+  EnrollPayload,
   PendingApplicationWritePayload,
   PendingApplicationsListParams,
 } from '../types';
@@ -134,13 +135,23 @@ export function useMarkEligible() {
 }
 
 /**
- * Marking an application enrolled does not change the STUDENT record — that has its own
- * lifecycle vocabulary — so unlike `useAcceptApplication` this does not need to invalidate
- * the students caches.
+ * D46 — enrolment is what creates the STUDENT (and optionally the login), so the students
+ * caches are invalidated alongside — without that the new student is missing from the list
+ * the Registrar navigates to straight afterwards. The Users screen's "link a profile"
+ * picker is invalidated too: a student enrolled without a login is now linkable.
  */
-export function useMarkEnrolled() {
+export function useEnrollApplication() {
   const apply = useApplyApplication();
-  return useMutation({ mutationFn: (id: string) => api.markEnrolled(id), onSuccess: apply });
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: EnrollPayload }) =>
+      api.enrollApplication(id, body),
+    onSuccess: (res) => {
+      apply(res.application);
+      void qc.invalidateQueries({ queryKey: ['students'], exact: false });
+      void qc.invalidateQueries({ queryKey: ['settings', 'linkable-profiles'] });
+    },
+  });
 }
 
 export function useWithdrawApplication() {
@@ -149,20 +160,15 @@ export function useWithdrawApplication() {
 }
 
 /**
- * Acceptance also touches STUDENTS — it creates one — so the students caches are
- * invalidated alongside. Without that the new student is missing from the list the
- * Registrar navigates to straight afterwards.
+ * D46 — acceptance is the decision only. It creates no student, so unlike
+ * `useEnrollApplication` it leaves the students caches alone.
  */
 export function useAcceptApplication() {
   const apply = useApplyApplication();
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: string; body: AcceptPayload }) =>
       api.acceptApplication(id, body),
-    onSuccess: (res) => {
-      apply(res.application);
-      void qc.invalidateQueries({ queryKey: ['students'], exact: false });
-    },
+    onSuccess: apply,
   });
 }
 
