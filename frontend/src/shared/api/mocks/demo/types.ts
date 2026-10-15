@@ -384,6 +384,7 @@ export interface DemoStudent {
    */
   email: string | null;
   transferred_from: string | null;
+  completion_date: string | null;
   graduation_date: string | null;
   dropout_date: string | null;
   dropout_reason: string | null;

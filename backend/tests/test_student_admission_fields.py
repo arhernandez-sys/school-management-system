@@ -62,6 +62,7 @@ FULL_FORM: dict = {
     # field to `login_email`; `TestRead` below pins that the two stay distinct.
     "email": "ana.perez@student.bajc.edu.bz",
     "transferred_from": "Corozal Community College",
+    "completion_date": "2026-05-29",
     "graduation_date": "2026-06-19",
     # NAIVE on purpose: the column is a MariaDB DATETIME, so a trailing `Z` is
     # accepted on the way in and simply absent on the way back out.

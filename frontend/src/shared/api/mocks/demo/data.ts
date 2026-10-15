@@ -813,6 +813,8 @@ for (let i = 0; i < 45; i += 1) {
     transferred_from: status === 'Transferred' ? 'Belize High School' : null,
     // D45 — Alumni carries one too: the access window reads this column, and an Alumni
     // row with a NULL date would never expire.
+    // Graduated is reachable only through Completed, so every graduate has both dates.
+    completion_date: status === 'Graduated' || status === 'Alumni' ? '2026-05-29' : null,
     graduation_date: status === 'Graduated' || status === 'Alumni' ? '2026-06-19' : null,
     dropout_date: status === 'Dropout' ? '2026-03-02T00:00:00Z' : null,
     dropout_reason: status === 'Dropout' ? 'Relocated abroad mid-semester.' : null,

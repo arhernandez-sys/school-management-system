@@ -24,7 +24,7 @@
 export const strings = {
   app: {
     name: 'SIMS',
-    fullName: 'Student Management Information System',
+    fullName: 'Student Information Management System',
     schoolName: 'Belize Adventist Junior College',
     skipToContent: 'Skip to main content',
   },

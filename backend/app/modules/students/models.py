@@ -159,6 +159,10 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     #: `transferedfrom`; house snake_case applies to NEW identifiers, and the misspelling
     #: was not worth casting in a column name (`011` §1 records the mapping).
     transferred_from: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    #: Stamped by `change_student_status` on a move to `Completed` (coursework done, award
+    #: not yet conferred), and editable after. Printed as "Date of Completion" on the
+    #: transcript (client request, 14 Oct 2026). `add_completion_date.sql` adds it.
+    completion_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     #: Stamped by `change_student_status` on a move to `graduated`, and editable after.
     graduation_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     #: Stamped by `change_student_status` on a move to `DropOut`, and editable after.

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { MenuItem, Stack, TextField } from '@mui/material';
 import { FormDialog, DateField } from '@shared/components';
 import type { AssessmentType } from '@shared/types/enums';
+import { TYPE_LABEL } from '../statusMeta';
 import type { AssessmentCategory, AssessmentListItem } from '../hooks/useAssessments';
 
 export interface AssessmentFormValues {
@@ -26,23 +27,40 @@ export interface AssessmentFormDialogProps {
   onClose: () => void;
 }
 
-const TYPE_OPTIONS: ReadonlyArray<{ value: AssessmentType; label: string }> = [
-  { value: 'quiz', label: 'Quiz' },
-  { value: 'test', label: 'Test' },
-  { value: 'exam', label: 'Exam' },
-  { value: 'assignment', label: 'Assignment' },
+/** The client's list, in the client's order (14 Oct 2026). `exam` is legacy — not offered. */
+const TYPE_OPTIONS: readonly AssessmentType[] = [
+  'quiz',
+  'class_work',
+  'project',
+  'test',
+  'research',
+  'journal',
+  'assignment',
+  'simulation',
+  'case_study',
+  'group_work',
+  'final_project',
+  'final_exam',
+  'timely_class_attendance',
+  'chapel_attendance',
 ];
 
 const NONE_CATEGORY = '__none__';
 
 /**
  * Create / edit an assessment DEFINITION (assessment-first, API-9). Grade entry is a
- * separate module — this only captures title, type, optional category, date, max score
- * and weight. Local controlled state; the parent owns the mutation and passes
+ * separate module — this only captures title, type, optional category, date (required),
+ * max score and weight. Local controlled state; the parent owns the mutation and passes
  * submitting/error plus any server field errors (422) surfaced inline.
  *
  * Status is NOT edited here — lifecycle transitions go through the dedicated status
  * action on the list (POST /assessments/{id}/status, api-spec §5.6 / API-16).
+ *
+ * **Weight is read-only** (client request, 14 Oct 2026). It is the assessment's share
+ * WITHIN its category (or within the course when no category is weighted): the grade is a
+ * weighted mean, so with every assessment at the default 1 they all count equally, and the
+ * categories' own weights decide how much each group is worth. New assessments get 1; an
+ * existing one keeps whatever it was saved with.
  */
 export function AssessmentFormDialog({
   open,
@@ -79,14 +97,15 @@ export function AssessmentFormDialog({
   const maxScoreValid = maxScore.trim() !== '' && Number.isFinite(maxScoreNum) && maxScoreNum > 0;
   const weightValid = weight.trim() !== '' && Number.isFinite(weightNum) && weightNum >= 0;
   const titleValid = title.trim().length > 0;
-  const canSubmit = titleValid && maxScoreValid && weightValid;
+  const dateValid = date.trim() !== '';
+  const canSubmit = titleValid && dateValid && maxScoreValid && weightValid;
 
   const handleSubmit = () => {
     onSubmit({
       title: title.trim(),
       type,
       category_id: categoryId === NONE_CATEGORY ? null : categoryId,
-      assessment_date: date.trim() === '' ? null : date,
+      assessment_date: date,
       max_score: maxScoreNum,
       weight: weightNum,
     });
@@ -131,10 +150,14 @@ export function AssessmentFormDialog({
           helperText={typeErrors?.join(' ')}
         >
           {TYPE_OPTIONS.map((opt) => (
-            <MenuItem key={opt.value} value={opt.value}>
-              {opt.label}
+            <MenuItem key={opt} value={opt}>
+              {TYPE_LABEL[opt]}
             </MenuItem>
           ))}
+          {/* An assessment saved with a type no longer offered keeps showing it. */}
+          {!TYPE_OPTIONS.includes(type) && (
+            <MenuItem value={type}>{TYPE_LABEL[type] ?? type} (as recorded)</MenuItem>
+          )}
         </TextField>
 
         <TextField
@@ -158,7 +181,15 @@ export function AssessmentFormDialog({
           ))}
         </TextField>
 
-        <DateField label="Date (optional)" value={date} onChange={setDate} fullWidth />
+        <DateField
+          label="Date"
+          value={date}
+          onChange={setDate}
+          required
+          fullWidth
+          error={Boolean(fieldErrors?.assessment_date)}
+          helperText={fieldErrors?.assessment_date?.join(' ') ?? 'Required'}
+        />
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
           <TextField
@@ -176,11 +207,13 @@ export function AssessmentFormDialog({
             label="Weight"
             type="number"
             value={weight}
-            onChange={(e) => setWeight(e.target.value)}
             fullWidth
-            inputProps={{ min: 0, step: 'any' }}
-            error={Boolean(weightErrors) || (weight.trim() !== '' && !weightValid)}
-            helperText={weightErrors?.join(' ') ?? 'Relative weight in the session grade.'}
+            InputProps={{ readOnly: true }}
+            error={Boolean(weightErrors)}
+            helperText={
+              weightErrors?.join(' ') ??
+              'Read-only. Its share within its category — at 1, all assessments count equally.'
+            }
           />
         </Stack>
       </Stack>

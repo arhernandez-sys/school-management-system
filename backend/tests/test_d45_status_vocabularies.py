@@ -173,6 +173,41 @@ class TestAlumniIsNotAHole:
         db_session.expire_all()
         assert db_session.get(StudentProfile, student.id).graduation_date is not None
 
+    def test_moving_to_completed_stamps_a_completion_date(
+        self, client, db_session, make_user, auth_headers
+    ) -> None:
+        """The transcript's "Date of Completion" (14 Oct 2026): stamped on entry to
+        Completed, kept through Graduated, and never overwritten once set — a corrected
+        date survives a later status shuffle."""
+        from datetime import date
+
+        from tests.test_students import _make_student
+
+        student = _make_student(db_session, status=StudentStatus.ACTIVE)
+        student.completion_date = None
+        db_session.flush()
+        dean = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=dean.id, role=Role.PRINCIPAL)
+
+        def move(to: str):
+            return client.post(
+                f"{STUDENTS}/{student.id}/status", headers=H, json={"status": to}
+            )
+
+        assert move("Completed").status_code == 200
+        db_session.expire_all()
+        stamped = db_session.get(StudentProfile, student.id).completion_date
+        assert stamped is not None
+
+        # A hand-corrected date is not overwritten by leaving and re-entering Completed.
+        db_session.get(StudentProfile, student.id).completion_date = date(2020, 5, 1)
+        db_session.flush()
+        assert move("Active").status_code == 200
+        assert move("Completed").status_code == 200
+        assert move("Graduated").status_code == 200
+        db_session.expire_all()
+        assert db_session.get(StudentProfile, student.id).completion_date == date(2020, 5, 1)
+
     def test_the_window_covers_alumni(self, db_session) -> None:
         """Asserted on the predicate rather than over HTTP: reproducing an expired window
         end-to-end needs a graduate login, a configured school profile and a clock, and the

@@ -451,7 +451,15 @@ function buildTranscript(student: DemoStudent) {
   const transcriptProgram = D.programs.find((pr) => pr.id === student.program_id);
 
   return {
-    student: studentRef(student),
+    // Mirrors `reports/service.get_transcript`'s `TranscriptStudentRef`.
+    student: {
+      ...studentRef(student),
+      gender: student.gender,
+      address: student.address,
+      date_of_entry: student.enrollment_date,
+      date_of_completion: student.completion_date,
+      date_of_graduation: student.graduation_date,
+    },
     school: schoolIdentity(),
     // D39 (Meeting #2 item 7) — mirrors `reports/service._program_code_for` /
     // `_program_name_for`; null for a student with no programme registration.

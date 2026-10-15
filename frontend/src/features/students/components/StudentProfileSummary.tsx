@@ -180,6 +180,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
     // Each is dropped when empty, so a plain registration shows none of them and a
     // transfer / graduate / drop-out shows exactly the ones that apply to it.
     { label: 'Transferred from', value: student.transferred_from },
+    { label: 'Completed', value: student.completion_date },
     { label: 'Graduated', value: student.graduation_date },
     { label: 'Left on', value: student.dropout_date?.slice(0, 10) ?? null },
     { label: 'Reason for leaving', value: student.dropout_reason },

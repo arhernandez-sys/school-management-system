@@ -72,6 +72,7 @@ from app.modules.reports.schemas import (
     StudentPickerPage,
     Transcript,
     TranscriptSemester,
+    TranscriptStudentRef,
     TranscriptSubjectRow,
     TranscriptYear,
 )
@@ -1082,7 +1083,14 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
 
     cumulative = calc.compute_gpa(all_gpa_entries)
     return Transcript(
-        student=_student_ref(db, student),
+        student=TranscriptStudentRef(
+            **_student_ref(db, student).model_dump(),
+            gender=student.gender,
+            address=student.address,
+            date_of_entry=student.enrollment_date,
+            date_of_completion=student.completion_date,
+            date_of_graduation=student.graduation_date,
+        ),
         school=_school(db),
         program_code=_program_code_for(db, student),
         program_name=_program_name_for(db, student),

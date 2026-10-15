@@ -165,8 +165,20 @@ export interface TranscriptYear {
   semesters: TranscriptSemester[];
 }
 
+/** The transcript header's student (client format, 14 Oct 2026). */
+export interface TranscriptStudentRef extends StudentRef {
+  gender: string | null;
+  address: string | null;
+  /** `student_profiles.enrollment_date`. */
+  date_of_entry: string | null;
+  /** `student_profiles.completion_date` — set on a move to Completed. */
+  date_of_completion: string | null;
+  /** `student_profiles.graduation_date` — set on a move to Graduated. */
+  date_of_graduation: string | null;
+}
+
 export interface Transcript {
-  student: StudentRef;
+  student: TranscriptStudentRef;
   school: SchoolIdentity;
   /**
    * The programme the transcript is issued against (D39, Meeting #2 item 7).

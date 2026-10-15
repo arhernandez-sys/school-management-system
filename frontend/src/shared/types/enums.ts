@@ -119,7 +119,31 @@ export type TeacherStatus = 'active' | 'inactive';
 
 export type AcademicYearStatus = 'active' | 'archived';
 
-export type AssessmentType = 'quiz' | 'test' | 'exam' | 'assignment';
+/**
+ * Assessment types. The first fourteen are the client's list (14 Oct 2026) and are what
+ * the "Type" dropdown offers. `exam` is the legacy fourth type: no longer offered, but
+ * kept so assessments already saved as `exam` still type-check and render their label.
+ *
+ * FRONTEND ONLY for now — the backend's `AssessmentType` enum still accepts only
+ * quiz / test / exam / assignment, so saving one of the new types is refused (422) until
+ * the server side is extended to match these values.
+ */
+export type AssessmentType =
+  | 'quiz'
+  | 'class_work'
+  | 'project'
+  | 'test'
+  | 'research'
+  | 'journal'
+  | 'assignment'
+  | 'simulation'
+  | 'case_study'
+  | 'group_work'
+  | 'final_project'
+  | 'final_exam'
+  | 'timely_class_attendance'
+  | 'chapel_attendance'
+  | 'exam';
 
 export type AssessmentStatus = 'draft' | 'published' | 'grading' | 'graded';
 

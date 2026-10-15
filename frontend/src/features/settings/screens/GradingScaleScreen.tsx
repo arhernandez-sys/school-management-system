@@ -30,6 +30,7 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { useGradingScale, useUpdateGradingScale } from '../hooks/useSettings';
 import { apiErrorMessage, hasErrorCode } from '@shared/api/errorMessages';
 import type { GradingBand } from '@shared/api/generated/model';
+import { PassMarkExemptions } from '../components/PassMarkExemptions';
 
 /**
  * Grading scale (api-spec §11, FR-SET-06). Principal edits the active year's bands +
@@ -383,6 +384,8 @@ export function GradingScaleScreen() {
           Bands must be contiguous and cover the full 0–100 range with no gaps or overlaps.
           Changing the scale affects the letter grades derived from scores going forward.
         </Typography>
+
+        <PassMarkExemptions bands={query.data.bands} canEdit={canEdit} />
       </Stack>
 
       <Snackbar

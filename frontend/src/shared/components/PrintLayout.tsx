@@ -32,6 +32,12 @@ export interface PrintLayoutProps {
   contactLines?: Array<string | null | undefined>;
   /** Optional right-aligned meta (issue date, student number). */
   meta?: ReactNode;
+  /**
+   * Replaces the standard letterhead (logo · name · title · contact · meta) entirely.
+   * For a document with its own prescribed layout — the transcript follows the client's
+   * template. `schoolName` / `documentTitle` are still required for the defaults.
+   */
+  header?: ReactNode;
   children: ReactNode;
   /** Label for the print button. */
   printLabel?: string;
@@ -58,6 +64,7 @@ export function PrintLayout({
   logoUrl,
   contactLines,
   meta,
+  header,
   children,
   printLabel = 'Print / Save as PDF',
 }: PrintLayoutProps) {
@@ -84,38 +91,44 @@ export function PrintLayout({
           borderRadius: 2,
         }}
       >
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-            {logoUrl && (
-              <Box
-                component="img"
-                src={logoUrl}
-                alt=""
-                sx={{ height: 56, width: 56, objectFit: 'contain' }}
-              />
-            )}
-            <Box>
-              <Typography variant="h3" component="h1">
-                {schoolName}
-              </Typography>
-              <Typography variant="subtitle1" color="text.secondary">
-                {documentTitle}
-              </Typography>
-              {contact.length > 0 && (
-                <Typography variant="caption" color="text.secondary" component="div">
-                  {contact.join(' · ')}
-                </Typography>
+        {header ?? (
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{ alignItems: 'center', justifyContent: 'space-between' }}
+          >
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+              {logoUrl && (
+                <Box
+                  component="img"
+                  src={logoUrl}
+                  alt=""
+                  sx={{ height: 56, width: 56, objectFit: 'contain' }}
+                />
               )}
-            </Box>
+              <Box>
+                <Typography variant="h3" component="h1">
+                  {schoolName}
+                </Typography>
+                <Typography variant="subtitle1" color="text.secondary">
+                  {documentTitle}
+                </Typography>
+                {contact.length > 0 && (
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    {contact.join(' · ')}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
+            {meta && (
+              <Box sx={{ textAlign: 'right' }}>
+                <Typography variant="body2" color="text.secondary" component="div">
+                  {meta}
+                </Typography>
+              </Box>
+            )}
           </Stack>
-          {meta && (
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="body2" color="text.secondary" component="div">
-                {meta}
-              </Typography>
-            </Box>
-          )}
-        </Stack>
+        )}
 
         <Divider sx={{ my: 2 }} />
 

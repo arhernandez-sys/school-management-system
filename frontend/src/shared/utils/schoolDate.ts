@@ -51,6 +51,30 @@ export function schoolDateOf(instant: Date): string {
 }
 
 /**
+ * The school day before a `YYYY-MM-DD` date — the previous WEEKDAY, so Monday's is the
+ * Friday before (and a Saturday or Sunday also reaches back to Friday).
+ *
+ * Pure calendar arithmetic in UTC on a date-only value, so no timezone can shift it.
+ */
+export function previousSchoolDay(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const day = new Date(Date.UTC(y!, m! - 1, d!));
+  do {
+    day.setUTCDate(day.getUTCDate() - 1);
+  } while (day.getUTCDay() === 0 || day.getUTCDay() === 6);
+  return day.toISOString().slice(0, 10);
+}
+
+/**
+ * The dates the attendance register may be recorded for: today and the previous school
+ * day (client request, 14 Oct 2026). On 14/10/2026 that is 13/10 and 14/10; on a Monday
+ * it is the Friday before and the Monday itself — the weekend in between stays closed.
+ */
+export function attendanceRecordableDates(today: string = schoolToday()): string[] {
+  return [previousSchoolDay(today), today];
+}
+
+/**
  * A date as `dd/mm/yyyy` — the format the school asked for (D39, Meeting #2 item 1).
  *
  * WHY THIS EXISTS: fifteen call sites each had their own `fmt` helper calling
@@ -104,6 +128,19 @@ export function formatSchoolDayMonth(value: string | Date | null | undefined): s
   // Only trim when it really is a `dd/mm/yyyy`; a passthrough of unparseable input must
   // survive intact rather than being sliced into nonsense.
   return /^\d{2}\/\d{2}\/\d{4}$/.test(full) ? full.slice(0, 5) : full;
+}
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A date as `02-Aug-2021` — the transcript header's format (client template, 14 Oct
+ * 2026). Built on `formatSchoolDate`, so it accepts the same inputs and passes
+ * unparseable ones through unchanged.
+ */
+export function formatSchoolDateDayMonYear(value: string | Date | null | undefined): string {
+  const full = formatSchoolDate(value);
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(full);
+  return m ? `${m[1]}-${MONTH_ABBR[Number(m[2]) - 1]}-${m[3]}` : full;
 }
 
 /**

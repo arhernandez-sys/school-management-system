@@ -268,6 +268,7 @@ function studentDetail(s: DemoStudent, yearId?: string | null, viewerRole?: stri
     email: s.email,
     student_id_original: s.student_id_original,
     transferred_from: s.transferred_from,
+    completion_date: s.completion_date,
     graduation_date: s.graduation_date,
     dropout_date: s.dropout_date,
     dropout_reason: s.dropout_reason,
@@ -429,6 +430,7 @@ interface StudentWriteBody {
   email?: string | null;
   student_id_original?: number | null;
   transferred_from?: string | null;
+  completion_date?: string | null;
   graduation_date?: string | null;
   dropout_date?: string | null;
   dropout_reason?: string | null;
@@ -695,6 +697,7 @@ export const studentsHandlers = [
       email: body.email ?? null,
       student_id_original: body.student_id_original ?? null,
       transferred_from: body.transferred_from ?? null,
+      completion_date: body.completion_date ?? null,
       graduation_date: body.graduation_date ?? null,
       dropout_date: body.dropout_date ?? null,
       dropout_reason: body.dropout_reason ?? null,
@@ -796,6 +799,7 @@ export const studentsHandlers = [
     if (body.transferred_from !== undefined) {
       student.transferred_from = body.transferred_from || null;
     }
+    if (body.completion_date !== undefined) student.completion_date = body.completion_date || null;
     if (body.graduation_date !== undefined) student.graduation_date = body.graduation_date || null;
     if (body.dropout_date !== undefined) student.dropout_date = body.dropout_date || null;
     if (body.dropout_reason !== undefined) student.dropout_reason = body.dropout_reason || null;
@@ -841,6 +845,9 @@ export const studentsHandlers = [
     // state, so re-registering a graduate keeps the graduation on file.
     // D45 — Alumni is a post-award state too, and `graduation_date` is what the
     // post-graduation access window reads. An Alumni row with a NULL date never expires.
+    if (next === 'Completed' && !student.completion_date) {
+      student.completion_date = DEMO_TODAY;
+    }
     if ((next === 'Graduated' || next === 'Alumni') && !student.graduation_date) {
       student.graduation_date = DEMO_TODAY;
     }

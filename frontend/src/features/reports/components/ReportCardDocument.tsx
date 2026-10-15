@@ -50,7 +50,8 @@ export interface ReportCardDocumentProps {
   variant?: 'mid-semester' | 'end-of-semester';
 }
 
-/** The label block under the letterhead: Student ID · Name · Program · Semester · Period · Block. */
+/** The label block under the letterhead: Student ID · Name · Program · Session · Period.
+ *  `Block` was removed at the client's request (14 Oct 2026) — no longer used. */
 function LabelBlock({ data }: { data: ReportCard }) {
   const rows: Array<[string, string]> = [
     ['Student ID', data.student.student_number],
@@ -60,7 +61,6 @@ function LabelBlock({ data }: { data: ReportCard }) {
     // printed: the session name is genuinely useful and costs nothing.
     ['Session', data.semester.name],
     ['Period', data.period ?? '—'],
-    ['Block', data.block ?? '-'],
   ];
   return (
     <Box
@@ -90,7 +90,6 @@ function LabelBlock({ data }: { data: ReportCard }) {
 
 export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
   const {
-    student,
     school,
     semester,
     subjects,
@@ -118,14 +117,8 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
       // D39 — the letterhead. `ReportSchool` has carried address/phone/email all along
       // and the document printed none of them.
       contactLines={[school.address, school.phone, school.email]}
-      meta={
-        <>
-          <div>Student No. {student.student_number}</div>
-          {/* D29: the letterhead names the student's LEVEL. A sixth-former sits many
-              subject classes, so there is no single class name to print here. */}
-          {student.year_of_study && <div>{student.year_of_study}</div>}
-        </>
-      }
+      // No `meta`: the letterhead's Student No. and level were removed at the client's
+      // request (14 Oct 2026) — the Student ID is already in the label block below.
     >
       <Typography variant="h4" component="h2" sx={{ textAlign: 'center', mb: 1 }}>
         {heading}
@@ -269,7 +262,7 @@ export function ReportCardDocument({ data, variant }: ReportCardDocumentProps) {
                 sx={{ alignItems: 'center', justifyContent: { sm: 'flex-end' } }}
               >
                 <Typography variant="h5" component="span">
-                  {term_average != null ? term_average.toFixed(1) : '—'}
+                  {term_average != null ? term_average.toFixed(2) : '—'}
                 </Typography>
                 {term_average_letter && (
                   <Typography variant="h6" component="span" sx={{ fontWeight: 600 }}>

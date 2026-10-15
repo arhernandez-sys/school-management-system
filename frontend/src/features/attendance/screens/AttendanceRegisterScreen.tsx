@@ -17,7 +17,7 @@ import {
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { schoolToday } from '@shared/utils/schoolDate';
+import { attendanceRecordableDates, schoolToday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import {
   useAttendanceRegister,
@@ -28,8 +28,12 @@ import { AttendanceToolbar } from '../components/AttendanceToolbar';
 import { AttendanceStatusToggle } from '../components/AttendanceStatusToggle';
 import { ATTENDANCE_STATUS_META, DEFAULT_STATUS } from '../attendanceStatus';
 
-/** Local, editable copy of each row's status keyed by student id. */
-type Draft = Record<string, AttendanceStatus>;
+/**
+ * Local, editable copy of each row's status keyed by student id. `null` = not entered
+ * yet — the client asked that nothing be pre-selected, so an unrecorded student starts
+ * blank and Save refuses until every row has a status.
+ */
+type Draft = Record<string, AttendanceStatus | null>;
 
 function formatRecordedAt(iso: string): string {
   // D39 (Meeting #2 item 1) — dd/mm/yyyy.
@@ -38,9 +42,11 @@ function formatRecordedAt(iso: string): string {
 
 /**
  * Attendance entry sheet (design-system §7.6) — tablet-first daily register for one
- * (offering, date). All rows default to Present (FR-ATT-02); the lecturer taps to change
- * a status, can "Mark all present", sees running counts, and Saves via PUT /attendance
- * (upsert, FR-ATT-03). Future dates are blocked (FR-ATT-05). P/S land here read-only and
+ * (offering, date). Unrecorded rows start with NO status selected (client request,
+ * 14 Oct 2026 — replaces FR-ATT-02's "default Present"); the lecturer taps each one or
+ * uses "Mark all present", sees running counts, and Saves via PUT /attendance (upsert,
+ * FR-ATT-03). Save is refused while any row is blank. Only today and the previous school
+ * day can be chosen — future dates (FR-ATT-05) and older ones are closed. P/S land here read-only and
  * are steered to the Summary tab (they view-all, they do not record).
  *
  * Selection persists to the URL (?offering_id=&date=) so the sheet is shareable/reloadable.
@@ -51,7 +57,10 @@ export function AttendanceRegisterScreen() {
   // Defaults to the school-local today (America/Belize), matching the backend's
   // `school_today()`. Previously the demo dataset's fixed 2025-10-15, so against the
   // real API the register opened on a date months in the past.
-  const date = searchParams.get('date') ?? schoolToday();
+  const requestedDate = searchParams.get('date') ?? schoolToday();
+  // A URL or a typed value can still name a closed date — fall back to today rather
+  // than load (and offer to save) a register outside the window.
+  const date = attendanceRecordableDates().includes(requestedDate) ? requestedDate : schoolToday();
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
   const offeringsQuery = useAttendanceOfferings(yearId);
@@ -73,6 +82,8 @@ export function AttendanceRegisterScreen() {
   const [draft, setDraft] = useState<Draft>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Set when Save was pressed with blank rows; drives the alert and row outlines. */
+  const [showMissing, setShowMissing] = useState(false);
 
   const canRecord = registerQuery.data?.can_record ?? offeringsQuery.data?.can_record ?? false;
 
@@ -95,32 +106,39 @@ export function AttendanceRegisterScreen() {
     }
   }, [offeringId, offeringsQuery.data, setSearchParams]);
 
-  // Seed the editable draft from the loaded register (unrecorded → default Present).
+  // Seed the editable draft from the loaded register (unrecorded → blank, not Present).
   useEffect(() => {
     if (registerQuery.data) {
       const seeded: Draft = {};
       for (const entry of registerQuery.data.entries) {
-        seeded[entry.student.id] = entry.status ?? DEFAULT_STATUS;
+        seeded[entry.student.id] = entry.status ?? null;
       }
       setDraft(seeded);
+      setShowMissing(false);
     }
   }, [registerQuery.data]);
 
   const entries = registerQuery.data?.entries ?? [];
 
   const counts = useMemo(() => {
-    const c = { present: 0, absent: 0, late: 0, excused: 0 };
+    const c = { present: 0, absent: 0, late: 0, excused: 0, missing: 0 };
     for (const entry of entries) {
-      const status = draft[entry.student.id] ?? DEFAULT_STATUS;
-      c[status] += 1;
+      const status = draft[entry.student.id] ?? null;
+      if (status === null) c.missing += 1;
+      else c[status] += 1;
     }
     return c;
   }, [entries, draft]);
 
+  // The warning clears itself once the last blank row is filled in.
+  useEffect(() => {
+    if (counts.missing === 0) setShowMissing(false);
+  }, [counts.missing]);
+
   const isDirty = useMemo(() => {
     if (!registerQuery.data) return false;
     return registerQuery.data.entries.some(
-      (entry) => (entry.status ?? DEFAULT_STATUS) !== (draft[entry.student.id] ?? DEFAULT_STATUS),
+      (entry) => (entry.status ?? null) !== (draft[entry.student.id] ?? null),
     );
   }, [registerQuery.data, draft]);
 
@@ -147,13 +165,18 @@ export function AttendanceRegisterScreen() {
   const handleSave = () => {
     if (!offeringId) return;
     setError(null);
+    if (counts.missing > 0) {
+      setShowMissing(true);
+      return;
+    }
     saveMut.mutate(
       {
         offering_id: offeringId,
         date,
         entries: entries.map((e) => ({
           student_id: e.student.id,
-          status: draft[e.student.id] ?? DEFAULT_STATUS,
+          // Non-null: the guard above refuses the save while any row is blank.
+          status: draft[e.student.id] as AttendanceStatus,
         })),
       },
       {
@@ -170,9 +193,10 @@ export function AttendanceRegisterScreen() {
     if (!registerQuery.data) return;
     setDraft(
       Object.fromEntries(
-        registerQuery.data.entries.map((e) => [e.student.id, e.status ?? DEFAULT_STATUS] as const),
+        registerQuery.data.entries.map((e) => [e.student.id, e.status ?? null] as const),
       ),
     );
+    setShowMissing(false);
   };
 
   // ── UI states ────────────────────────────────────────────────────────────────
@@ -229,6 +253,13 @@ export function AttendanceRegisterScreen() {
         </Alert>
       )}
 
+      {showMissing && counts.missing > 0 && (
+        <Alert severity="warning" role="alert" sx={{ mb: 2 }}>
+          Some students' attendance has not been entered ({counts.missing} of {entries.length}).
+          Choose a status for every highlighted student before saving.
+        </Alert>
+      )}
+
       {registerQuery.isLoading && <LoadingState variant="table" rows={6} />}
       {registerQuery.isError && (
         <ErrorState
@@ -249,7 +280,7 @@ export function AttendanceRegisterScreen() {
           {canRecord && (
             <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'center' }}>
               <Typography variant="body2" color="text.secondary">
-                All present by default.
+                Choose a status for every student.
               </Typography>
               <Button size="small" onClick={markAllPresent} disabled={entries.length === 0}>
                 Mark all present
@@ -287,9 +318,10 @@ export function AttendanceRegisterScreen() {
                       </Box>
                       <Box sx={{ width: { xs: '100%', md: 'auto' }, flexShrink: 0 }}>
                         <AttendanceStatusToggle
-                          value={draft[entry.student.id] ?? DEFAULT_STATUS}
+                          value={draft[entry.student.id] ?? null}
                           onChange={(status) => setStatus(entry.student.id, status)}
                           disabled={!canRecord || saveMut.isPending}
+                          error={showMissing && (draft[entry.student.id] ?? null) === null}
                           ariaLabel={`Attendance status for ${entry.student.full_name}`}
                         />
                       </Box>
@@ -328,6 +360,9 @@ export function AttendanceRegisterScreen() {
                     label={`${counts[meta.value]} ${meta.label}`}
                   />
                 ))}
+                {counts.missing > 0 && (
+                  <Chip color="warning" size="small" label={`${counts.missing} Not entered`} />
+                )}
               </Stack>
               <Stack direction="row" spacing={1}>
                 <Button onClick={handleCancel} disabled={!isDirty || saveMut.isPending}>

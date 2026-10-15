@@ -51,6 +51,8 @@ export interface DateFieldProps {
   /** `YYYY-MM-DD` bounds, matching the native `min` / `max` these replaced. */
   minDate?: string;
   maxDate?: string;
+  /** Greys out individual days inside min..max. Receives the wire `YYYY-MM-DD`. */
+  shouldDisableDate?: (value: string) => boolean;
   size?: 'small' | 'medium';
   name?: string;
   autoFocus?: boolean;
@@ -77,6 +79,7 @@ export function DateField({
   helperText,
   minDate,
   maxDate,
+  shouldDisableDate,
   size,
   name,
   autoFocus = false,
@@ -91,6 +94,9 @@ export function DateField({
       disabled={disabled}
       minDate={parseWire(minDate, WIRE_DATE) ?? undefined}
       maxDate={parseWire(maxDate, WIRE_DATE) ?? undefined}
+      shouldDisableDate={
+        shouldDisableDate ? (day) => shouldDisableDate(formatWire(day, WIRE_DATE)) : undefined
+      }
       slotProps={{
         textField: {
           required,

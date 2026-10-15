@@ -93,6 +93,9 @@ class _AdmissionProfileFields(BaseModel):
     #: which is `users.email` and is still read-only on `StudentDetail.login_email`.
     email: str | None = Field(default=None, max_length=254)
     transferred_from: str | None = Field(default=None, max_length=250)
+    #: Auto-stamped by `change_student_status` on the move to `Completed`; editable here
+    #: afterwards, like `graduation_date`.
+    completion_date: date | None = None
     #: Auto-stamped by `change_student_status` on the move to `graduated`, and editable
     #: here afterwards — a Registrar correcting a date must not have to change the status
     #: twice to do it.

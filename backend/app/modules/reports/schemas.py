@@ -203,8 +203,29 @@ class TranscriptYear(BaseModel):
     semesters: list[TranscriptSemester] = Field(default_factory=list)
 
 
+class TranscriptStudentRef(ReportStudentRef):
+    """The student as the transcript header prints them (client format, 14 Oct 2026).
+
+    Wider than `ReportStudentRef` because only the transcript prints these four: it is
+    the document that leaves the building, and the client's template asks for Gender,
+    Address, Date of Entry and Date of Graduation beside the name.
+
+    `date_of_completion` is `student_profiles.completion_date`, stamped on the move to
+    `Completed`. NULL for students who reached Completed before that column existed.
+    """
+
+    gender: str | None = None
+    address: str | None = None
+    #: `student_profiles.enrollment_date` — the day they were enrolled (D46).
+    date_of_entry: date | None = None
+    #: `student_profiles.completion_date` — stamped on a move to Completed.
+    date_of_completion: date | None = None
+    #: `student_profiles.graduation_date` — stamped on a move to Graduated.
+    date_of_graduation: date | None = None
+
+
 class Transcript(BaseModel):
-    student: ReportStudentRef
+    student: TranscriptStudentRef
     school: ReportSchool
     #: The programme the transcript is issued against — CODE and NAME (D39, Meeting #2
     #: item 7, "Add program in Transcript"). `ReportCard` has carried `program_code`

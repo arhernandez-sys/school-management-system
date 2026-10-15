@@ -11,8 +11,10 @@ import {
   Typography,
 } from '@mui/material';
 import { PrintLayout, CollapsibleSection, EmptyState } from '@shared/components';
-import { formatSchoolDate } from '@shared/utils/schoolDate';
-import type { Transcript, TranscriptSemester } from '../types';
+import type { ReactNode } from 'react';
+import { formatSchoolDateDayMonYear } from '@shared/utils/schoolDate';
+import { genderLabel } from '@shared/types/enums';
+import type { SchoolIdentity, Transcript, TranscriptSemester } from '../types';
 
 /**
  * TranscriptDocument — the printable multi-year transcript (design-system §7.10).
@@ -32,6 +34,73 @@ import type { Transcript, TranscriptSemester } from '../types';
  */
 export interface TranscriptDocumentProps {
   data: Transcript;
+}
+
+/**
+ * The letterhead, in the client's template (14 Oct 2026): logo, then the school name in
+ * bold over its address / email / phone one per line, and "TRANSCRIPT OF GRADES" on the
+ * right. `address` is printed with `pre-line`, so line breaks stored in the school
+ * profile become separate lines, as on the template.
+ */
+function TranscriptLetterhead({ school }: { school: SchoolIdentity }) {
+  return (
+    <Stack
+      direction={{ xs: 'column', sm: 'row' }}
+      spacing={2}
+      sx={{ alignItems: { sm: 'flex-start' }, justifyContent: 'space-between' }}
+    >
+      <Stack direction="row" spacing={3} sx={{ alignItems: 'center' }}>
+        {school.logo_url && (
+          <Box
+            component="img"
+            src={school.logo_url}
+            alt=""
+            sx={{ height: 110, width: 110, objectFit: 'contain', flexShrink: 0 }}
+          />
+        )}
+        <Box>
+          <Typography component="h1" sx={{ fontWeight: 700, fontSize: '1rem' }}>
+            {school.name}
+          </Typography>
+          {school.address && (
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+              {school.address}
+            </Typography>
+          )}
+          {school.email && <Typography variant="body2">Email: {school.email}</Typography>}
+          {school.phone && <Typography variant="body2">Tel: {school.phone}</Typography>}
+        </Box>
+      </Stack>
+      <Typography
+        component="h2"
+        sx={{ fontSize: '1.6rem', fontWeight: 400, letterSpacing: 0.5, whiteSpace: 'nowrap' }}
+      >
+        TRANSCRIPT OF GRADES
+      </Typography>
+    </Stack>
+  );
+}
+
+/** One `Label: value` line of the student block. */
+function Field({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: ReactNode;
+  strong?: boolean;
+}) {
+  return (
+    <Typography variant="body2">
+      <Box component="span" sx={{ fontWeight: 700 }}>
+        {label}:
+      </Box>{' '}
+      <Box component="span" sx={{ fontWeight: strong ? 700 : 400 }}>
+        {value}
+      </Box>
+    </Typography>
+  );
 }
 
 function SemesterBlock({ semester }: { semester: TranscriptSemester }) {
@@ -125,41 +194,43 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
   // D39 removed the cumulative-average block and the per-row Letter column, so
   // `cumulative_average` and `total_credits` are no longer read here. Both remain on the
   // `Transcript` type and in the API payload — this document simply stopped printing them.
-  const { student, school, issued_at, years, cumulative_gpa, program_code, program_name } = data;
+  // `issued_at` is no longer printed: the client's template has no issue line.
+  const { student, school, years, cumulative_gpa, program_code, program_name } = data;
+  const date = (value: string | null) => (value ? formatSchoolDateDayMonYear(value) : '');
 
   return (
     <PrintLayout
       schoolName={school.name}
       documentTitle="Academic Transcript"
       logoUrl={school.logo_url}
-      // D39 — the letterhead, so the issuing institution is contactable from the paper.
-      contactLines={[school.address, school.phone, school.email]}
-      meta={
-        <>
-          <div>Student No. {student.student_number}</div>
-          <div>Issued {formatSchoolDate(issued_at)}</div>
-        </>
-      }
+      header={<TranscriptLetterhead school={school} />}
     >
-      {/* Student header */}
-      <Stack spacing={0.5} sx={{ mb: 2 }}>
-        <Typography variant="h4" component="h2">
-          {student.full_name}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          DOB {formatSchoolDate(student.date_of_birth)} · Status: {student.status}
-          {student.year_of_study ? ` · ${student.year_of_study}` : ''}
-        </Typography>
-        {/* D39 (Meeting #2 item 7) — the programme. Without it the course list is
-            uninterpretable to a receiving institution: the same BIOL1102 sits in a
-            teaching degree and a science one. Code and name together, and the whole line
-            is omitted rather than printing "—" when the student has no registration. */}
-        {(program_code || program_name) && (
-          <Typography variant="body2" color="text.secondary">
-            Programme: {[program_code, program_name].filter(Boolean).join(' — ')}
-          </Typography>
-        )}
-      </Stack>
+      {/* Student header — the client's template (14 Oct 2026), plus Student ID. Every
+          value comes from SIMS; an empty one prints blank rather than a placeholder. */}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+          columnGap: 4,
+          rowGap: 1,
+          mb: 3,
+        }}
+      >
+        <Stack spacing={0.5}>
+          <Field label="Student's Name" value={student.full_name} strong />
+          <Field label="Student ID" value={student.student_number} strong />
+          <Field label="Date of Birth" value={date(student.date_of_birth)} />
+          <Field label="Gender" value={genderLabel(student.gender) ?? ''} />
+          <Field label="Address" value={student.address ?? ''} />
+        </Stack>
+        <Stack spacing={0.5}>
+          {/* D39 (Meeting #2 item 7) — the programme; the template prints its NAME. */}
+          <Field label="Programme" value={program_name ?? program_code ?? ''} />
+          <Field label="Date of Entry" value={date(student.date_of_entry)} />
+          <Field label="Date of Completion" value={date(student.date_of_completion)} />
+          <Field label="Date of Graduation" value={date(student.date_of_graduation)} />
+        </Stack>
+      </Box>
 
       {years.length === 0 ? (
         <EmptyState
@@ -195,7 +266,11 @@ export function TranscriptDocument({ data }: TranscriptDocumentProps) {
 
           <Divider />
 
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', justifyContent: 'flex-end' }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: 'baseline', justifyContent: 'flex-end' }}
+          >
             <Typography variant="subtitle1">Cumulative GPA</Typography>
             <Typography variant="h4" component="span">
               {cumulative_gpa != null ? cumulative_gpa.toFixed(2) : '—'}

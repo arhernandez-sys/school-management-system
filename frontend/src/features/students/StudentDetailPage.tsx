@@ -590,7 +590,11 @@ function StudentActions({ student }: { student: StudentDetail }) {
               fullWidth
               size="small"
             >
-              {STATUS_OPTIONS.filter((st) => st !== student.status).map((st) => (
+              {/* The selected value always stays an option. After applying, the student
+                  refetches with the NEW status while the dialog is still fading out — so
+                  filtering on `student.status` alone removed the chosen option mid-fade
+                  and MUI warned "out-of-range value". */}
+              {STATUS_OPTIONS.filter((st) => st !== student.status || st === nextStatus).map((st) => (
                 <MenuItem key={st} value={st}>
                   {STATUS_LABEL[st]}
                 </MenuItem>

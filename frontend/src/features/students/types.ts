@@ -146,6 +146,9 @@ export interface StudentAdmissionFields {
   email: string | null;
   /** The institution a transfer student came from (client column: `transferedfrom`). */
   transferred_from: string | null;
+  /** Auto-stamped when the status becomes `Completed`; editable afterwards. Printed as
+   *  "Date of Completion" on the transcript. */
+  completion_date: string | null;
   /** Auto-stamped when the status becomes `graduated`; editable afterwards. */
   graduation_date: string | null;
   /** Auto-stamped when the status becomes `DropOut`; editable afterwards. */

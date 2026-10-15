@@ -851,6 +851,7 @@ export const admissionsHandlers = [
       origin: 'admissions',
       student_id_original: null,
       transferred_from: null,
+      completion_date: null,
       graduation_date: null,
       dropout_date: null,
       dropout_reason: null,

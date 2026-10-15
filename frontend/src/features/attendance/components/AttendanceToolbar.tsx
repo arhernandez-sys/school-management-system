@@ -1,5 +1,5 @@
 import { Box, MenuItem, Stack, TextField } from '@mui/material';
-import { schoolToday } from '@shared/utils/schoolDate';
+import { attendanceRecordableDates, schoolToday } from '@shared/utils/schoolDate';
 import { YearSelect, DateField } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
 import type { AttendanceOfferingsResponse } from '../types';
@@ -62,6 +62,10 @@ export function AttendanceToolbar({
   // REAL school-local today. This used to be the demo dataset's fixed 2025-10-15,
   // which capped the picker in the past and made the current day unselectable.
   const today = schoolToday();
+  // Client request (14 Oct 2026): past dates are closed too — only today and the
+  // previous school day (the Friday, when today is Monday) can be picked.
+  const recordable = attendanceRecordableDates(today);
+  const earliest = recordable[0];
 
   return (
     <Stack
@@ -100,15 +104,18 @@ export function AttendanceToolbar({
         <Box sx={{ minWidth: 200 }}>
           {/* `maxDate` replaces the native `max` attribute — FR-ATT-05 forbids a future
               register, and the picker greys those days out rather than only refusing on
-              submit. */}
+              submit. `minDate` + `shouldDisableDate` close the past as well, leaving only
+              today and the previous school day (so a Monday's weekend stays greyed). */}
           <DateField
             size="small"
             label="Date"
             value={date ?? today}
             onChange={onDateChange}
             disabled={disabled}
+            minDate={earliest}
             maxDate={today}
-            helperText="Future dates are disabled"
+            shouldDisableDate={(d) => !recordable.includes(d)}
+            helperText="Today or the previous school day only"
             fullWidth
           />
         </Box>

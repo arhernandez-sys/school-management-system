@@ -237,6 +237,20 @@ function fromDetail(detail: ApplicationDetail | PendingApplicationDetail): Draft
 /** Empty string → null, so clearing a field CLEARS it rather than storing `""`. */
 const orNull = (value: string) => (value.trim() === '' ? null : value.trim());
 
+/** Social Security numbers are 9 digits; the field accepts digits only. */
+const SSNO_LENGTH = 9;
+const ssnoDigits = (value: string) => value.replace(/\D/g, '').slice(0, SSNO_LENGTH);
+
+/**
+ * Left-pads a Social Security no. with zeros to 9 digits (client request, 14 Oct 2026):
+ * typing `123` stores `000000123`. Blank stays blank — padding nothing would invent a
+ * number the applicant never gave.
+ */
+const padSsno = (value: string) => {
+  const digits = ssnoDigits(value);
+  return digits === '' ? '' : digits.padStart(SSNO_LENGTH, '0');
+};
+
 /**
  * The WHOLE form, every section at once.
  *
@@ -254,7 +268,7 @@ function wholeFormPayload(draft: Draft): ApplicationWritePayload {
     last_name: draft.last_name.trim(),
     school_year: orNull(draft.school_year),
     date_of_birth: orNull(draft.date_of_birth),
-    ssno: orNull(draft.ssno),
+    ssno: orNull(padSsno(draft.ssno)),
     gender: orNull(draft.gender),
     civil_status: orNull(draft.civil_status),
     religion: orNull(draft.religion),
@@ -759,12 +773,17 @@ export function ApplicationWizardScreen() {
               <TextField
                 label="Social Security no."
                 value={draft.ssno}
-                onChange={(e) => set('ssno', e.target.value)}
+                onChange={(e) => set('ssno', ssnoDigits(e.target.value))}
+                // Pad when the field is left, so the applicant SEES 000000123 before
+                // saving; the payload pads again in case Save is reached without a blur.
+                onBlur={() => set('ssno', padSsno(draft.ssno))}
                 required
                 fullWidth
-                inputProps={{ maxLength: 9 }}
+                inputProps={{ maxLength: SSNO_LENGTH, inputMode: 'numeric' }}
                 error={Boolean(fieldErrors.ssno)}
-                helperText={fieldErrors.ssno?.join(' ')}
+                helperText={
+                  fieldErrors.ssno?.join(' ') ?? '9 digits — shorter numbers are padded with zeros.'
+                }
               />
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>

@@ -1054,6 +1054,7 @@ ADMISSION_PROFILE_FIELDS: tuple[str, ...] = (
     "student_id_original",
     "email",
     "transferred_from",
+    "completion_date",
     "graduation_date",
     "dropout_date",
     "dropout_reason",
@@ -1376,6 +1377,11 @@ def change_student_status(
         # same hole `POST_AWARD_STATUSES` closes at the other end.
         if after in POST_AWARD_STATUSES and student.graduation_date is None:
             student.graduation_date = school_today()
+        # The transcript's "Date of Completion" (client request, 14 Oct 2026). Same rule as
+        # above: stamped on entry, only when empty. GRADUATED is reachable only through
+        # COMPLETED, so every graduate from now on carries both dates.
+        if after == StudentStatus.COMPLETED and student.completion_date is None:
+            student.completion_date = school_today()
         if after == StudentStatus.DROPOUT and student.dropout_date is None:
             student.dropout_date = _now()
         # The reason travels with the state it explains. `reason` is already recorded on

@@ -487,16 +487,19 @@ export function TeacherFormScreen() {
                   : undefined)
               }
             >
-              {/* `teacher_profiles.gender` is a real MariaDB enum, unlike the student's —
-                  the column was created with no legacy data behind it, so these three are
-                  the whole vocabulary and there is no "(as recorded)" case to carry.
+              {/* `teacher_profiles.gender` is a real MariaDB enum (male/female/other),
+                  but the client asked for "Other" to be removed from the dropdown — it
+                  is no longer offered. A lecturer already saved as 'other' still shows
+                  it "(as recorded)", so the select never renders blank for them.
 
                   No blank row: on edit the field is required, and an option that submits
                   an empty value would defeat that from inside the control. A lecturer
                   with nothing on file simply opens blank. */}
               <MenuItem value="male">Male</MenuItem>
               <MenuItem value="female">Female</MenuItem>
-              <MenuItem value="other">Other</MenuItem>
+              {draft.gender === 'other' && (
+                <MenuItem value="other">Other (as recorded)</MenuItem>
+              )}
             </TextField>
           </Row>
 

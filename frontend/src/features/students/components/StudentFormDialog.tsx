@@ -188,6 +188,7 @@ export function StudentFormDialog({
   // ── D34 · the rest of the client's columns ──────────────────────────────────
   const [studentIdOriginal, setStudentIdOriginal] = useState('');
   const [transferredFrom, setTransferredFrom] = useState('');
+  const [completionDate, setCompletionDate] = useState('');
   const [graduationDate, setGraduationDate] = useState('');
   const [dropoutDate, setDropoutDate] = useState('');
   const [dropoutReason, setDropoutReason] = useState('');
@@ -238,6 +239,7 @@ export function StudentFormDialog({
     setEmail(student?.email ?? '');
     setStudentIdOriginal(student?.student_id_original == null ? '' : String(student.student_id_original));
     setTransferredFrom(student?.transferred_from ?? '');
+    setCompletionDate(student?.completion_date ?? '');
     setGraduationDate(student?.graduation_date ?? '');
     // `dropout_date` is a datetime on the wire; the input is a plain date, so only the
     // date half round-trips through this form. The time is preserved when untouched
@@ -323,6 +325,7 @@ export function StudentFormDialog({
       email: orNull(email),
       student_id_original: studentIdOriginal.trim() === '' ? null : Number(studentIdOriginal),
       transferred_from: orNull(transferredFrom),
+      completion_date: orNull(completionDate),
       graduation_date: orNull(graduationDate),
       // Only re-sent when the DATE half changed, so a stamped time survives an edit that
       // did not touch this field (see the note in the reset effect).
@@ -849,12 +852,19 @@ export function StudentFormDialog({
             helperText="Where this record came from."
           />
         </Row>
-        {/* Both dates are STAMPED AUTOMATICALLY when the status changes to `graduated` or
-            `DropOut` (see `change_student_status`), so they are here to CORRECT rather
-            than to set — which is why neither is offered on the create form's blank
-            record and neither is required. */}
+        {/* These dates are STAMPED AUTOMATICALLY when the status changes to `Completed`,
+            `graduated` or `DropOut` (see `change_student_status`), so they are here to
+            CORRECT rather than to set — which is why none is offered on the create form's
+            blank record and none is required. */}
         {editing && (
           <Row>
+            <DateField
+              label="Completion date"
+              value={completionDate}
+              onChange={setCompletionDate}
+              fullWidth
+              helperText="Set automatically when the status becomes Completed."
+            />
             <DateField
               label="Graduation date"
               value={graduationDate}
