@@ -66,6 +66,42 @@ function sessionRole(cookies: Record<string, string>): string {
   return cookies['sis_mock_session'] ?? 'principal';
 }
 
+/** Does the demo caller teach this offering? (The real `assert_teacher_owns_offering`.) */
+function callerTeaches(role: string, offering: DemoOffering): boolean {
+  const teacher = currentDemoTeacher(role) ?? currentDemoHodTeacher(role);
+  return Boolean(teacher && offering.teacher_ids.includes(teacher.id));
+}
+
+/** The server's `actionable_by_caller`: teacher ownership, P/S always. */
+function actionableBy(role: string, offering: DemoOffering): boolean {
+  return role === 'principal' || role === 'secretary' || callerTeaches(role, offering);
+}
+
+function categoryNameTaken(offeringId: string, name: string, excludeId?: string): boolean {
+  const key = name.trim().toLowerCase();
+  return D.assessment_categories.some(
+    (c) => c.offering_id === offeringId && c.id !== excludeId && c.name.toLowerCase() === key,
+  );
+}
+
+/**
+ * Category writes: the offering's lecturer or the Dean (`_assert_can_write_categories`).
+ * Returns the offering, or the error response to send.
+ */
+function categoryWriteTarget(role: string, offeringId: string) {
+  if (role !== 'principal' && role !== 'teacher' && role !== 'hod') {
+    return errorResponse(403, 'forbidden', 'You do not have permission to perform this action.');
+  }
+  const offering = getOffering(offeringId);
+  if (!offering || (role !== 'principal' && !callerTeaches(role, offering))) {
+    return errorResponse(404, 'offering_not_found', 'Offering not found.');
+  }
+  if (yearArchived(offering)) {
+    return errorResponse(409, 'year_archived', 'The academic year is archived.');
+  }
+  return offering;
+}
+
 // ── Response shapers (snake_case wire format) ──────────────────────────────────
 function courseRef(courseId: string) {
   const c = getCourse(courseId);
@@ -469,10 +505,15 @@ export const offeringsHandlers = [
   }),
 
   // ── GET /offerings/{id} — detail ────────────────────────────────────────────────
-  http.get(`${API_BASE_URL}/offerings/:offeringId`, ({ params }) => {
+  http.get(`${API_BASE_URL}/offerings/:offeringId`, ({ params, cookies }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
-    return HttpResponse.json(offeringDetail(offering));
+    // Per-caller, like the server: an HOD opening a programme offering they do not teach
+    // must not be told they may write to it.
+    return HttpResponse.json({
+      ...offeringDetail(offering),
+      actionable_by_caller: actionableBy(sessionRole(cookies), offering),
+    });
   }),
 
   // ── PATCH /offerings/{id} — section code · capacity · archive ───────────────────
@@ -1001,48 +1042,71 @@ export const offeringsHandlers = [
     return HttpResponse.json(offeringDetail(offering));
   }),
 
-  // ── GET|POST /offerings/{id}/categories — assessment weighting groups ──────────
+  // ── /offerings/{id}/categories — assessment weighting groups ────────────────────
   //
-  // Re-pathed from `/classes/{class_id}/subjects/{cs_id}/categories`, which threaded a
-  // homeroom id AND a class_subject id to reach ONE gradebook's categories.
+  // Mirrors `assessments/service.py`: anyone who can open the offering reads; the
+  // offering's lecturer or the Dean writes; the list carries the D45 §24 100% verdict;
+  // a duplicate name (case-insensitive) is a 409; delete DETACHES its assessments.
   http.get(`${API_BASE_URL}/offerings/:offeringId/categories`, ({ params }) => {
     const offering = getOffering(String(params.offeringId));
     if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
-    const items = D.assessment_categories.filter((c) => c.offering_id === offering.id);
-    return HttpResponse.json({ items });
+    const items = D.assessment_categories
+      .filter((c) => c.offering_id === offering.id)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    // Summed in hundredths: 20 + 15 + 25 + 30 + 10 must be exactly 100, as the server's
+    // Decimal sum makes it.
+    const weightTotal = items.reduce((t, c) => t + Math.round(c.weight * 100), 0) / 100;
+    const uncategorized = assessmentsForOffering(offering.id).filter((a) => !a.category_id).length;
+    return HttpResponse.json({
+      items,
+      weight_total: weightTotal,
+      weight_total_ok: items.length > 0 && weightTotal === 100 && uncategorized === 0,
+      uncategorized_assessment_count: uncategorized,
+    });
   }),
 
-  http.post(`${API_BASE_URL}/offerings/:offeringId/categories`, async ({ params, request }) => {
-    const offering = getOffering(String(params.offeringId));
-    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
-    const body = (await request.json()) as {
-      name?: string;
-      weight?: number;
-      drop_lowest_count?: number;
-    };
-    if (!body.name?.trim()) {
-      return errorResponse(422, 'validation_error', 'A category name is required.', {
-        name: ['Required'],
-      });
-    }
-    const created = {
-      id: `cat-new-${D.assessment_categories.length + 1}`,
-      offering_id: offering.id,
-      name: body.name.trim(),
-      weight: body.weight ?? 1,
-      drop_lowest_count: body.drop_lowest_count ?? 0,
-    };
-    D.assessment_categories.push(created);
-    return HttpResponse.json(created, { status: 201 });
-  }),
+  http.post(
+    `${API_BASE_URL}/offerings/:offeringId/categories`,
+    async ({ params, request, cookies }) => {
+      const target = categoryWriteTarget(sessionRole(cookies), String(params.offeringId));
+      if (target instanceof Response) return target;
+      const body = (await request.json()) as {
+        name?: string;
+        weight?: number;
+        drop_lowest_count?: number;
+      };
+      const name = body.name?.trim() ?? '';
+      if (!name) {
+        return errorResponse(422, 'validation_error', 'A category name is required.', {
+          name: ['Required'],
+        });
+      }
+      if (categoryNameTaken(target.id, name)) {
+        return errorResponse(
+          409,
+          'duplicate_category_name',
+          'A category with this name already exists.',
+        );
+      }
+      const created = {
+        id: `cat-new-${Date.now().toString(36)}`,
+        offering_id: target.id,
+        name,
+        weight: body.weight ?? 1,
+        drop_lowest_count: body.drop_lowest_count ?? 0,
+      };
+      D.assessment_categories.push(created);
+      return HttpResponse.json(created, { status: 201 });
+    },
+  ),
 
   http.patch(
     `${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`,
-    async ({ params, request }) => {
-      const offering = getOffering(String(params.offeringId));
-      if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    async ({ params, request, cookies }) => {
+      const target = categoryWriteTarget(sessionRole(cookies), String(params.offeringId));
+      if (target instanceof Response) return target;
       const category = D.assessment_categories.find(
-        (c) => c.id === String(params.categoryId) && c.offering_id === offering.id,
+        (c) => c.id === String(params.categoryId) && c.offering_id === target.id,
       );
       if (!category) return errorResponse(404, 'not_found', 'Category not found.');
       const body = (await request.json()) as {
@@ -1050,7 +1114,17 @@ export const offeringsHandlers = [
         weight?: number;
         drop_lowest_count?: number;
       };
-      if (body.name !== undefined && body.name.trim()) category.name = body.name.trim();
+      const name = body.name?.trim();
+      if (name && name.toLowerCase() !== category.name.toLowerCase()) {
+        if (categoryNameTaken(target.id, name, category.id)) {
+          return errorResponse(
+            409,
+            'duplicate_category_name',
+            'A category with this name already exists.',
+          );
+        }
+      }
+      if (name) category.name = name;
       if (body.weight !== undefined) category.weight = body.weight;
       if (body.drop_lowest_count !== undefined) {
         category.drop_lowest_count = body.drop_lowest_count;
@@ -1059,22 +1133,23 @@ export const offeringsHandlers = [
     },
   ),
 
-  http.delete(`${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`, ({ params }) => {
-    const offering = getOffering(String(params.offeringId));
-    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
-    const idx = D.assessment_categories.findIndex(
-      (c) => c.id === String(params.categoryId) && c.offering_id === offering.id,
-    );
-    if (idx === -1) return errorResponse(404, 'not_found', 'Category not found.');
-    const category = D.assessment_categories[idx]!;
-    if (D.assessments.some((a) => a.category_id === category.id)) {
-      return errorResponse(
-        409,
-        'category_in_use',
-        'Assessments are grouped under this category. Move them first.',
+  http.delete(
+    `${API_BASE_URL}/offerings/:offeringId/categories/:categoryId`,
+    ({ params, cookies }) => {
+      const target = categoryWriteTarget(sessionRole(cookies), String(params.offeringId));
+      if (target instanceof Response) return target;
+      const idx = D.assessment_categories.findIndex(
+        (c) => c.id === String(params.categoryId) && c.offering_id === target.id,
       );
-    }
-    D.assessment_categories.splice(idx, 1);
-    return new HttpResponse(null, { status: 204 });
-  }),
+      if (idx === -1) return errorResponse(404, 'not_found', 'Category not found.');
+      const category = D.assessment_categories[idx]!;
+      // The server DETACHES (FK SET NULL) — it does not refuse. The demo used to answer
+      // 409 `category_in_use` here, a rule the backend never had.
+      for (const a of D.assessments) {
+        if (a.category_id === category.id) a.category_id = null;
+      }
+      D.assessment_categories.splice(idx, 1);
+      return new HttpResponse(null, { status: 204 });
+    },
+  ),
 ];

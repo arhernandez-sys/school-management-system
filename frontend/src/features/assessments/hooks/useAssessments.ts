@@ -54,6 +54,22 @@ export interface AssessmentCategory {
   drop_lowest_count: number;
 }
 
+/** GET /offerings/{id}/categories — the categories plus the D45 §24 "totals 100%" verdict. */
+export interface AssessmentCategoryList {
+  items: AssessmentCategory[];
+  weight_total: number;
+  /** True only when there is at least one category, they total exactly 100, and no live
+   *  assessment sits outside a category. The server VERIFIES this; it does not enforce it. */
+  weight_total_ok: boolean;
+  uncategorized_assessment_count: number;
+}
+
+export interface AssessmentCategoryBody {
+  name: string;
+  weight: number;
+  drop_lowest_count?: number;
+}
+
 export interface AssessmentListParams {
   offering_id?: string;
   type?: AssessmentType;
@@ -150,6 +166,70 @@ export function useAssessmentCategories(offeringId: string | null) {
       return res.data.items;
     },
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** The full list, verdict included — for the offering's Grading tab. Shares the picker's
+ *  cache key, since both read the same endpoint. */
+export function useAssessmentCategoryList(offeringId: string | null) {
+  return useQuery({
+    queryKey: [...assessmentKeys.categories(offeringId ?? ''), 'full'] as const,
+    enabled: Boolean(offeringId),
+    queryFn: async ({ signal }) => {
+      const res = await api.get<AssessmentCategoryList>(`/offerings/${offeringId}/categories`, {
+        signal,
+      });
+      return res.data;
+    },
+  });
+}
+
+/**
+ * Category writes. A weight change re-weights every student's course grade, so the
+ * gradebook cache goes too, not just the category list.
+ */
+function useInvalidateCategories(offeringId: string) {
+  const qc = useQueryClient();
+  return () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: assessmentKeys.categories(offeringId) }),
+      qc.invalidateQueries({ queryKey: ['grades', 'gradebook', offeringId] }),
+    ]);
+}
+
+export function useCreateAssessmentCategory(offeringId: string) {
+  const invalidate = useInvalidateCategories(offeringId);
+  return useMutation({
+    mutationFn: async (body: AssessmentCategoryBody) => {
+      const res = await api.post<AssessmentCategory>(`/offerings/${offeringId}/categories`, body);
+      return res.data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateAssessmentCategory(offeringId: string) {
+  const invalidate = useInvalidateCategories(offeringId);
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: Partial<AssessmentCategoryBody> }) => {
+      const res = await api.patch<AssessmentCategory>(
+        `/offerings/${offeringId}/categories/${id}`,
+        body,
+      );
+      return res.data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteAssessmentCategory(offeringId: string) {
+  const invalidate = useInvalidateCategories(offeringId);
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/offerings/${offeringId}/categories/${id}`);
+    },
+    // Deleting detaches the category's assessments (they become uncategorized).
+    onSuccess: invalidate,
   });
 }
 

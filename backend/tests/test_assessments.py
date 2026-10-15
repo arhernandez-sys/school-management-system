@@ -352,6 +352,45 @@ class TestCategories:
                         json={"name": "X"})
         assert r.status_code == 404
 
+    def test_dean_manages_categories(self, client, graph, make_user, auth_headers) -> None:
+        # The weighting scheme is the course's grading policy, so the Dean may set it on an
+        # offering they do not teach — unlike an assessment (`test_principal_cannot_create`).
+        p = make_user(role=Role.PRINCIPAL)
+        H = auth_headers(user_id=p.id, role=Role.PRINCIPAL)
+        r = client.post(_cat_path(graph.cs.id), headers=H, json={"name": "Final", "weight": 30})
+        assert r.status_code == 201, r.text
+        cat_id = r.json()["id"]
+        r = client.patch(_cat_path(graph.cs.id, cat_id), headers=H, json={"weight": 40})
+        assert r.status_code == 200 and r.json()["weight"] == 40
+        assert client.delete(_cat_path(graph.cs.id, cat_id), headers=H).status_code == 204
+
+    def test_registrar_cannot_write_categories(self, client, graph, make_user, auth_headers) -> None:
+        s = make_user(role=Role.SECRETARY)
+        r = client.post(_cat_path(graph.cs.id),
+                        headers=auth_headers(user_id=s.id, role=Role.SECRETARY),
+                        json={"name": "X"})
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize("role", [Role.AUDITOR, Role.HOD, Role.SECRETARY])
+    def test_non_teaching_staff_can_read_categories(
+        self, client, graph, make_user, auth_headers, role
+    ) -> None:
+        # The offering page shows these roles the Grading tab; before, Auditor and HOD fell
+        # into the student branch and got a 404 for an offering they could open.
+        graph.category(name="Quizzes", weight="25")
+        u = make_user(role=role)
+        r = client.get(_cat_path(graph.cs.id), headers=auth_headers(user_id=u.id, role=role))
+        assert r.status_code == 200, r.text
+        assert [c["name"] for c in r.json()["items"]] == ["Quizzes"]
+
+    def test_weight_total_verdict(self, client, graph) -> None:
+        graph.category(name="Coursework", weight="60")
+        body = client.get(_cat_path(graph.cs.id), headers=graph.H).json()
+        assert body["weight_total"] == 60 and body["weight_total_ok"] is False
+        graph.category(name="Final", weight="40")
+        body = client.get(_cat_path(graph.cs.id), headers=graph.H).json()
+        assert body["weight_total"] == 100 and body["weight_total_ok"] is True
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # POST /assessments/{id}/nudge-release

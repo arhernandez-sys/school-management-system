@@ -33,6 +33,7 @@ const ERROR_COPY: Record<string, string> = {
   course_not_found: 'That course is no longer in the catalog. Pick another one.',
   semester_not_found: 'That session no longer exists. Pick another one.',
   year_archived: 'That academic year is archived and cannot be changed.',
+  duplicate_category_name: 'This offering already has a category with that name.',
   semester_mismatch: 'That offering runs in a different session from the enrolment you are making.',
   // Academic structure
   active_year_exists: 'An active academic year already exists. Archive it before creating a new one.',

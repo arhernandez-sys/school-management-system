@@ -50,6 +50,9 @@ _teacher = require_role(Role.TEACHER, Role.HOD)
 #: BY an administrator ON a teacher's queue, so P/S only, teacher excluded.
 _admin = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.HOD, Role.AUDITOR)
 _any = get_current_user
+# Categories are the offering's grading policy: its lecturer OR the Dean (see
+# `service._assert_can_write_categories`).
+_category_writer = require_role(Role.TEACHER, Role.HOD, Role.PRINCIPAL)
 
 
 @router.get("", response_model=Page[AssessmentListItem],
@@ -231,13 +234,13 @@ def list_categories(
 
 @categories_router.post(_CAT, response_model=CategoryDetail,
                         status_code=status.HTTP_201_CREATED,
-                        summary="Create an assessment category (teacher; api-spec §6)",
+                        summary="Create an assessment category (lecturer or Dean; api-spec §6)",
                         responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR})
 def create_category(
     offering_id: uuid.UUID,
     payload: CategoryCreateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
+    actor: User = Depends(_category_writer),
 ) -> CategoryDetail:
     return service.create_category(
         db, actor=actor, offering_id=offering_id, payload=payload
@@ -245,14 +248,14 @@ def create_category(
 
 
 @categories_router.patch(_CAT + "/{category_id}", response_model=CategoryDetail,
-                         summary="Update an assessment category (teacher; api-spec §6)",
+                         summary="Update an assessment category (lecturer or Dean; api-spec §6)",
                          responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR})
 def update_category(
     offering_id: uuid.UUID,
     category_id: uuid.UUID,
     payload: CategoryUpdateRequest,
     db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
+    actor: User = Depends(_category_writer),
 ) -> CategoryDetail:
     return service.update_category(
         db, actor=actor, offering_id=offering_id,
@@ -261,13 +264,13 @@ def update_category(
 
 
 @categories_router.delete(_CAT + "/{category_id}", status_code=status.HTTP_204_NO_CONTENT,
-                          summary="Delete an assessment category (teacher; api-spec §6)",
+                          summary="Delete an assessment category (lecturer or Dean; api-spec §6)",
                           responses={401: _ERR, 403: _ERR, 404: _ERR})
 def delete_category(
     offering_id: uuid.UUID,
     category_id: uuid.UUID,
     db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
+    actor: User = Depends(_category_writer),
 ) -> Response:
     service.delete_category(
         db, actor=actor, offering_id=offering_id,

@@ -740,7 +740,10 @@ def list_categories(db: Session, *, caller: User, offering_id: uuid.UUID):
 
 
 def _assert_can_read_cs(db: Session, caller: User, cs: CourseOffering) -> None:
-    if caller.role in (Role.PRINCIPAL, Role.SECRETARY):
+    # The weighting scheme is shown on the offering page, which the Auditor and the HOD
+    # can open for offerings they do not teach. Before this, both fell through to the
+    # STUDENT branch below and got a 404 for an offering they could plainly see.
+    if caller.role in (Role.PRINCIPAL, Role.SECRETARY, Role.AUDITOR, Role.HOD):
         return
     if caller.role == Role.TEACHER:
         assert_teacher_owns_offering(db, caller, cs.id)
@@ -763,14 +766,26 @@ def _assert_cat_name_unique(db, cs_id, name, *, exclude_id=None) -> None:
                        code="duplicate_category_name")
 
 
+def _assert_can_write_categories(db: Session, actor: User, cs: CourseOffering) -> None:
+    """The offering's lecturer sets its weighting scheme, and so may the Dean.
+
+    The Dean is let in HERE and not on assessments: a category is the course's grading
+    policy ("Final 30%"), which is the Dean's to set or correct; an assessment is the
+    lecturer's own work and stays theirs (`test_principal_cannot_create`).
+    """
+    if actor.role == Role.PRINCIPAL:
+        return
+    assert_teacher_owns_offering(db, actor, cs.id, message="Offering not found.")
+
+
 def create_category(db: Session, *, actor: User, offering_id, payload):
     cs = _offering_or_404(db, offering_id)
-    assert_teacher_owns_offering(db, actor, cs.id)
+    _assert_can_write_categories(db, actor, cs)
     _assert_cs_year_writable(db, cs)
     _assert_cat_name_unique(db, cs.id, payload.name)
     c = AssessmentCategory(
         offering_id=cs.id, name=payload.name.strip(), weight=payload.weight,
-        drop_lowest_count=payload.drop_lowest_count, created_by=actor.id, 
+        drop_lowest_count=payload.drop_lowest_count, created_by=actor.id,
     )
     db.add(c)
     db.flush()
@@ -794,7 +809,7 @@ def _category_or_404(db, cs_id, category_id) -> AssessmentCategory:
 
 def update_category(db: Session, *, actor: User, offering_id, category_id, payload):
     cs = _offering_or_404(db, offering_id)
-    assert_teacher_owns_offering(db, actor, cs.id)
+    _assert_can_write_categories(db, actor, cs)
     _assert_cs_year_writable(db, cs)
     c = _category_or_404(db, cs.id, category_id)
     if payload.name is not None and payload.name.strip().lower() != c.name.lower():
@@ -813,7 +828,7 @@ def update_category(db: Session, *, actor: User, offering_id, category_id, paylo
 
 def delete_category(db: Session, *, actor: User, offering_id, category_id) -> None:
     cs = _offering_or_404(db, offering_id)
-    assert_teacher_owns_offering(db, actor, cs.id)
+    _assert_can_write_categories(db, actor, cs)
     _assert_cs_year_writable(db, cs)
     c = _category_or_404(db, cs.id, category_id)
     # Detach referencing assessments (FK SET NULL semantics).

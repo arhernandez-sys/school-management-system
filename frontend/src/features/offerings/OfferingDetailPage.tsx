@@ -22,6 +22,7 @@ import { strings } from '@i18n/strings';
 import { useOfferingDetail, useOfferingRoster } from './hooks/useOfferings';
 import { RosterTab } from './components/RosterTab';
 import { ScheduleTab } from './components/ScheduleTab';
+import { GradingTab } from './components/GradingTab';
 import { AssignTeachersDialog } from './components/AssignTeachersDialog';
 import { roomsOf, summarizeMeetings } from './meetingFormat';
 
@@ -32,6 +33,8 @@ import { roomsOf, summarizeMeetings } from './meetingFormat';
  * roster. Tabs:
  *  - Roster: the students enrolled in THIS offering (P/S enroll/withdraw).
  *  - Schedule: the Mon–Fri meeting rows (P/S edit; others read).
+ *  - Grading: the assessment categories and their weights (lecturer + Dean edit; others
+ *    read). The API existed long before any screen reached it.
  *  - Overview: at-a-glance stats.
  *
  * The **Subjects tab stays retired**, and the reason got stronger: it existed because a
@@ -52,6 +55,12 @@ export function OfferingDetailPage() {
 
   const detailQuery = useOfferingDetail(offeringId);
   const detail = detailQuery.data;
+  // The weighting scheme is the Dean's or the offering's own lecturer's — not the
+  // Registrar's, who can otherwise manage the offering. `actionable_by_caller` is the
+  // server's ownership answer for a lecturer.
+  const canEditGrading =
+    user?.role === 'principal' ||
+    ((user?.role === 'teacher' || user?.role === 'hod') && Boolean(detail?.actionable_by_caller));
 
   const tabs = useMemo<DetailTab[]>(() => {
     if (!offeringId || !detail) return [];
@@ -71,12 +80,23 @@ export function OfferingDetailPage() {
         ),
       },
       {
+        value: 'grading',
+        label: 'Grading',
+        render: () => (
+          <GradingTab
+            offeringId={offeringId}
+            offeringLabel={detail.label}
+            canEdit={canEditGrading}
+          />
+        ),
+      },
+      {
         value: 'overview',
         label: 'Overview',
         render: () => <OverviewTab offeringId={offeringId} />,
       },
     ];
-  }, [offeringId, detail, canManage]);
+  }, [offeringId, detail, canManage, canEditGrading]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading offering" />;
