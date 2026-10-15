@@ -45,8 +45,15 @@ class Classroom(Base):
 
     __tablename__ = "classroom"
 
+    #: The id is generated HERE (`default=uuid.uuid4`), like every other table's
+    #: `uuid_pk()`, and sent in the INSERT. It used to rely on the column's
+    #: `DEFAULT uuid_v4()` alone — which needs MariaDB 11.7+ and a native `uuid` column.
+    #: The production server's `classroomid` is a `varchar` with no such default, so the
+    #: INSERT arrived with no id and every "New classroom" returned 500. The
+    #: `server_default` stays for rows written outside the app (HeidiSQL, the client's
+    #: own imports) on a database that does have it.
     classroomid: Mapped[uuid.UUID] = mapped_column(
-        GUID(), primary_key=True, server_default=text("uuid_v4()")
+        GUID(), primary_key=True, default=uuid.uuid4, server_default=text("uuid_v4()")
     )
     #: e.g. `A-101`. Unique — a building can be renamed but two rooms cannot share a code,
     #: and the code is what a lecturer reads off a timetable.
