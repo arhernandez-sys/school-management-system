@@ -1366,8 +1366,8 @@ CREATE TABLE IF NOT EXISTS `users` (
 
 -- Dumping data for table sims.users: ~2 rows (approximately)
 INSERT INTO `users` (`id`, `email`, `username`, `password_hash`, `role`, `full_name`, `is_active`, `must_change_password`, `failed_login_count`, `locked_until`, `last_login_at`, `deleted_at`, `created_at`, `updated_at`, `created_by`, `updated_by`) VALUES
-	('57eb7c25-18b2-5789-a329-39a99e277c9a', 'alicia.cano@belmopancomp.edu.bz', 'alicia.cano', '$argon2id$v=19$m=65536,t=3,p=4$fP6f/MmEx2KA5Wee52ytTg$uA8G/+R6Aqb70HsZ6H0sXReoLWKTT8JtU8WVVZqGqX8', 'teacher', 'Alicia Cano', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
-	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@belmopancomp.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-10-04 17:57:52', NULL, '2026-08-20 08:24:23', '2026-10-04 17:57:52', NULL, NULL);
+	('57eb7c25-18b2-5789-a329-39a99e277c9a', 'alicia.cano@bajc.edu.bz', 'alicia.cano', '$argon2id$v=19$m=65536,t=3,p=4$fP6f/MmEx2KA5Wee52ytTg$uA8G/+R6Aqb70HsZ6H0sXReoLWKTT8JtU8WVVZqGqX8', 'teacher', 'Alicia Cano', 1, 1, 0, NULL, '2025-10-10 07:50:00', NULL, '2026-08-20 08:24:23', '2026-08-20 08:24:23', NULL, NULL),
+	('0cb78bec-f840-5f54-bdeb-58593a417c0b', 'principal@bajc.edu.bz', 'principal', '$argon2id$v=19$m=65536,t=3,p=4$QngY0FxcNt+K6Y68YPznwQ$Ox+ZvVugMy/qmb6aKJGbbFLu556roVgjw4IIADgA7Po', 'principal', 'Alicia Mendez', 1, 0, 0, NULL, '2026-10-04 17:57:52', NULL, '2026-08-20 08:24:23', '2026-10-04 17:57:52', NULL, NULL);
 
 /*!40103 SET TIME_ZONE=IFNULL(@OLD_TIME_ZONE, 'system') */;
 /*!40101 SET SQL_MODE=IFNULL(@OLD_SQL_MODE, '') */;

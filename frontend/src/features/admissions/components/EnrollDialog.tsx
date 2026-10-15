@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Alert, AlertTitle, Stack, TextField, Typography } from '@mui/material';
+import { Alert, AlertTitle, IconButton, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
 import { FormDialog, DateField } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useEnrollApplication } from '../hooks/useAdmissions';
@@ -27,6 +29,33 @@ export interface EnrollDialogProps {
   onClose: () => void;
   /** Called after a successful enrolment, once the result has been dismissed. */
   onEnrolled: (result: EnrollResponse) => void;
+}
+
+/**
+ * A small copy-to-clipboard button. The Registrar hands the student their ID, login and
+ * one-time password, and retyping a generated password is where transcription errors
+ * come from. Same behaviour as `TempPasswordDialog`'s copy button.
+ */
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable (insecure context); the value is still selectable.
+    }
+  };
+
+  return (
+    <Tooltip title={copied ? 'Copied' : `Copy ${label}`}>
+      <IconButton size="small" onClick={copy} aria-label={`Copy ${label}`} sx={{ ml: 0.5 }}>
+        {copied ? <CheckIcon fontSize="inherit" /> : <ContentCopyIcon fontSize="inherit" />}
+      </IconButton>
+    </Tooltip>
+  );
 }
 
 export function EnrollDialog({ open, application, onClose, onEnrolled }: EnrollDialogProps) {
@@ -79,23 +108,32 @@ export function EnrollDialog({ open, application, onClose, onEnrolled }: EnrollD
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Alert severity="success">
             <AlertTitle>{result.application.full_name} is now a student</AlertTitle>
-            Student ID <strong>{result.student_number}</strong>
-            {result.login_email && (
-              <>
-                {' · '}login <strong>{result.login_email}</strong>
-              </>
-            )}
+            <Stack spacing={0.25}>
+              <span>
+                Student ID <strong>{result.student_number}</strong>
+                <CopyButton value={result.student_number} label="student ID" />
+              </span>
+              {result.login_email && (
+                <span>
+                  Login <strong>{result.login_email}</strong>
+                  <CopyButton value={result.login_email} label="login email" />
+                </span>
+              )}
+            </Stack>
           </Alert>
 
           {result.temporary_password && (
             <Alert severity="warning">
               <AlertTitle>Temporary password — shown once</AlertTitle>
-              <Typography
-                component="code"
-                sx={{ fontFamily: 'monospace', fontSize: '1.1rem', fontWeight: 700 }}
-              >
-                {result.temporary_password}
-              </Typography>
+              <Stack direction="row" sx={{ alignItems: 'center' }}>
+                <Typography
+                  component="code"
+                  sx={{ fontFamily: 'monospace', fontSize: '1.1rem', fontWeight: 700 }}
+                >
+                  {result.temporary_password}
+                </Typography>
+                <CopyButton value={result.temporary_password} label="temporary password" />
+              </Stack>
               <Typography variant="body2" sx={{ mt: 1 }}>
                 Give it to the student now. It is not stored in readable form and cannot be shown
                 again — they will be asked to change it at first sign-in.
@@ -155,7 +193,7 @@ export function EnrollDialog({ open, application, onClose, onEnrolled }: EnrollD
           onChange={(e) => setLoginEmail(e.target.value)}
           fullWidth
           type="email"
-          placeholder="student@belmopancomp.edu.bz"
+          placeholder="student@bajc.edu.bz"
           helperText="Leave blank to enrol without a login. You can create one later in Settings → Users and link it to this student."
         />
         {application.email && (

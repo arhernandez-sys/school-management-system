@@ -246,7 +246,7 @@ Record for each step: pass / fail / observation. A failed step gets an entry in 
 (§7) before the run continues.
 
 ### UAT-1 — Authentication (all roles) · AC 5.1
-1. Log in as principal (`principal@belmopancomp.edu.bz`). Land on the dashboard.
+1. Log in as principal (`principal@bajc.edu.bz`). Land on the dashboard.
 2. **Hard-reload the page.** You must stay logged in. _(This is the silent-refresh path: an
    absolute `VITE_API_BASE_URL` makes the `SameSite=Lax` cookie cross-site and it is dropped,
    which presents as a random logout.)_

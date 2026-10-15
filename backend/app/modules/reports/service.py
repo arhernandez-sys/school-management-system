@@ -278,6 +278,27 @@ def _student_ref(db: Session, student: StudentProfile) -> ReportStudentRef:
     )
 
 
+def _transcript_address(student: StudentProfile) -> str | None:
+    """The address the transcript prints.
+
+    Enrolment copies the application's Section A — `street`, `city_town_village`,
+    `district` — and never writes the free-text `address`, which only imported and
+    hand-entered rows carry. Reading `address` alone printed a blank line for every
+    student enrolled through an application. The structured fields win when any is
+    set; `address` is the fallback for rows that predate them.
+    """
+    district = student.district.value if hasattr(student.district, "value") else student.district
+    parts = [
+        p.strip()
+        for p in (student.street, student.city_town_village, district)
+        if p and p.strip()
+    ]
+    if parts:
+        return ", ".join(parts)
+    legacy = (student.address or "").strip()
+    return legacy or None
+
+
 def _bands(db: Session, year_id: uuid.UUID | None) -> tuple[list[calc.BandInput], Decimal | None]:
     if year_id is None:
         return [], None
@@ -1086,7 +1107,7 @@ def get_transcript(db: Session, *, actor: User, student_id: uuid.UUID) -> Transc
         student=TranscriptStudentRef(
             **_student_ref(db, student).model_dump(),
             gender=student.gender,
-            address=student.address,
+            address=_transcript_address(student),
             date_of_entry=student.enrollment_date,
             date_of_completion=student.completion_date,
             date_of_graduation=student.graduation_date,

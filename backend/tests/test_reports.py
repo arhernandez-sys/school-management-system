@@ -801,6 +801,31 @@ class TestTranscript:
     def test_secretary_may_read(self, client, graph) -> None:
         assert client.get(f"{R}/transcript?student_id={graph.student.id}", headers=graph.S).status_code == 200
 
+    def test_address_is_built_from_the_enrolment_fields(self, client, graph, db_session) -> None:
+        """**Regression.** Enrolment copies Section A's `street` / `city_town_village` /
+        `district` and never writes the free-text `address`, so a transcript reading
+        `address` alone printed a blank line for every student enrolled through an
+        application."""
+        from app.common.enums import District
+
+        student = db_session.get(StudentProfile, graph.student.id)
+        student.address = None
+        student.street = "12 Hummingbird Hwy"
+        student.city_town_village = "Belmopan"
+        student.district = District.CAYO
+        db_session.flush()
+        body = client.get(f"{R}/transcript?student_id={student.id}", headers=graph.P).json()
+        assert body["student"]["address"] == "12 Hummingbird Hwy, Belmopan, Cayo"
+
+    def test_address_falls_back_to_the_free_text_column(self, client, graph, db_session) -> None:
+        """Imported rows carry only the legacy `address`; it still prints."""
+        student = db_session.get(StudentProfile, graph.student.id)
+        student.street = student.city_town_village = student.district = None
+        student.address = "Corozal Town, Corozal"
+        db_session.flush()
+        body = client.get(f"{R}/transcript?student_id={student.id}", headers=graph.P).json()
+        assert body["student"]["address"] == "Corozal Town, Corozal"
+
     def test_an_unmarked_term_does_not_dilute_the_cumulative_gpa(
         self, client, graph, db_session
     ) -> None:

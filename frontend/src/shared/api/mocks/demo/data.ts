@@ -414,7 +414,7 @@ const teachers: DemoTeacher[] = teacherSeed.map(([full_name, specs, status, gend
     user_id: status === 'active' ? `user-teach-${i + 1}` : null,
     staff_number: `T-${String(1001 + i)}`,
     full_name,
-    email: `${full_name.toLowerCase().replace(/[^a-z]+/g, '.')}@belmopancomp.edu.bz`,
+    email: `${full_name.toLowerCase().replace(/[^a-z]+/g, '.')}@bajc.edu.bz`,
     phone: `+501-6${randInt(makeRng(700 + i), 100000, 999999)}`,
     subject_specializations: specNames,
     status,
@@ -1338,7 +1338,7 @@ function pushUser(u: Omit<DemoUser, 'locale' | 'theme' | 'date_format' | 'defaul
 }
 pushUser({
   id: principalUserId,
-  email: 'principal@belmopancomp.edu.bz',
+  email: 'principal@bajc.edu.bz',
   username: 'principal',
   full_name: 'Alicia Mendez',
   role: 'principal',
@@ -1348,7 +1348,7 @@ pushUser({
 });
 pushUser({
   id: 'user-secretary',
-  email: 'secretary@belmopancomp.edu.bz',
+  email: 'secretary@bajc.edu.bz',
   username: 'secretary',
   full_name: 'Sofia Castillo',
   role: 'secretary',
@@ -1375,7 +1375,7 @@ for (const t of teachers) {
 }
 pushUser({
   id: 'user-auditor',
-  email: 'auditor@belmopancomp.edu.bz',
+  email: 'auditor@bajc.edu.bz',
   username: 'auditor',
   full_name: 'Ruth Bennett',
   // No lecturer or student profile: an auditor teaches nothing and studies nothing.
@@ -1388,7 +1388,7 @@ for (const s of students) {
   if (!s.user_id) continue;
   pushUser({
     id: s.user_id,
-    email: `${s.student_number.toLowerCase()}@student.belmopancomp.edu.bz`,
+    email: `${s.student_number.toLowerCase()}@student.bajc.edu.bz`,
     username: s.student_number.toLowerCase(),
     full_name: s.full_name,
     role: 'student',

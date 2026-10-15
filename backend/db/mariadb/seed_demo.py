@@ -371,11 +371,11 @@ def add_user(key, email, username, full_name, role, is_active, last_login=None):
 
 
 USER_PRINCIPAL = add_user(
-    "user-principal", "principal@belmopancomp.edu.bz", "principal",
+    "user-principal", "principal@bajc.edu.bz", "principal",
     "Alicia Mendez", "principal", True, dt(DEMO_TODAY, "09:00:00"),
 )
 USER_SECRETARY = add_user(
-    "user-secretary", "secretary@belmopancomp.edu.bz", "secretary",
+    "user-secretary", "secretary@bajc.edu.bz", "secretary",
     "Sofia Castillo", "secretary", True, dt(add_days(DEMO_TODAY, -1), "07:45:00"),
 )
 
@@ -416,7 +416,7 @@ for i, (full_name, specs, status, gender) in enumerate(TEACHER_SEED):
     spec_names = [course_name(c) for c in specs]
     designation = DESIGNATIONS[i % len(DESIGNATIONS)]
     years = rng.randint(5, 22)
-    email = full_name.lower().replace(" ", ".") + "@belmopancomp.edu.bz"
+    email = full_name.lower().replace(" ", ".") + "@bajc.edu.bz"
     user_id = None
     if status == "active":
         user_id = add_user(
@@ -704,7 +704,7 @@ for i in range(45):
     if i < 6:
         user_id = add_user(
             f"user-stu-{i + 1}",
-            f"{student_number.lower()}@student.belmopancomp.edu.bz",
+            f"{student_number.lower()}@student.bajc.edu.bz",
             student_number.lower(), f"{firstname} {lastname}", "student",
             status == "active",
             dt(add_days(DEMO_TODAY, -rng_stu.randint(0, 7)), "15:00:00"),

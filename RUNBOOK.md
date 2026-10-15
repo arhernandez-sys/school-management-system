@@ -240,10 +240,10 @@ no shared password any more. Before D31 Phase 5 all 19 accounts shared `SimsDemo
 
 | Role | Email | Count |
 |---|---|---|
-| principal | `principal@belmopancomp.edu.bz` | 1 |
-| secretary | `secretary@belmopancomp.edu.bz` | 1 |
-| teacher | `alicia.cano@belmopancomp.edu.bz` | 11 |
-| student | `s-25001@student.belmopancomp.edu.bz` | 6 |
+| principal | `principal@bajc.edu.bz` | 1 |
+| secretary | `secretary@bajc.edu.bz` | 1 |
+| teacher | `alicia.cano@bajc.edu.bz` | 11 |
+| student | `s-25001@student.bajc.edu.bz` | 6 |
 
 The login field accepts an **email address** (the API field is `identifier`, not `email`).
 Note only 6 of the 45 student profiles have user accounts — the rest exist as records only.

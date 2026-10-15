@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from app.main import create_app
 API = "/api/v1"
-EMAIL, PW = "secretary@belmopancomp.edu.bz", "a-q&9zs!bDJ%sC%w"
+EMAIL, PW = "secretary@bajc.edu.bz", "a-q&9zs!bDJ%sC%w"
 eng = create_engine("mysql+pymysql://root:Argo%40web1234@127.0.0.1:3306/sims")
 def flag(v):
     with eng.begin() as c:
