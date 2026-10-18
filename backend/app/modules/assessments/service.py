@@ -162,7 +162,7 @@ def _stats(db: Session, assessment_id: uuid.UUID) -> AssessmentStats:
 # ──────────────────────────────────────────────────────────────────────────────
 def _list_item(a: Assessment, cls: CourseOffering, subj: Course) -> AssessmentListItem:
     return AssessmentListItem(
-        id=a.id, title=a.title, type=a.type,
+        id=a.id, title=a.title,
         offering=offering_ref(cls, subj),
         category_id=a.category_id, max_score=float(a.max_score),
         weight=float(a.weight), assessment_date=a.assessment_date,
@@ -178,7 +178,7 @@ def _detail(db: Session, a: Assessment, *, with_stats: bool) -> AssessmentDetail
     ).first()
     cs_ref = offering_ref(row[0], row[1]) if row else None
     return AssessmentDetail(
-        id=a.id, title=a.title, type=a.type, offering=cs_ref,
+        id=a.id, title=a.title, offering=cs_ref,
         category_id=a.category_id, max_score=float(a.max_score), weight=float(a.weight),
         assessment_date=a.assessment_date, status=a.status, is_released=a.is_released,
         semester_id=a.semester_id,
@@ -216,7 +216,6 @@ def list_assessments(
     offering_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None,
     semester_id: uuid.UUID | None,
-    type_filter: str | None,
     status_filter: str | None,
     scope: str | None,
 ):
@@ -235,8 +234,6 @@ def list_assessments(
         # Narrows WITHIN a year: `Assessment.semester_id` is the assessment's own term,
         # while `academic_year_id` above filters on the section's year. Both may be sent.
         stmt = stmt.where(Assessment.semester_id == semester_id)
-    if type_filter is not None:
-        stmt = stmt.where(Assessment.type == type_filter)
     if status_filter is not None:
         stmt = stmt.where(Assessment.status == status_filter)
 
@@ -350,6 +347,11 @@ def list_offerings_picker(
     return OfferingPickerList(items=refs)
 
 
+# Client request, 17 Oct 2026: every assessment counts equally within its category, so the
+# weight is locked at 1 server-side. A submitted `weight` is still accepted (older clients
+# send it) but ignored. Category weights are unaffected.
+FIXED_ASSESSMENT_WEIGHT = 1
+
 # ══════════════════════════════════════════════════════════════════════════════
 # POST /assessments
 # ══════════════════════════════════════════════════════════════════════════════
@@ -370,9 +372,8 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
         semester_id=semester_id,
         category_id=payload.category_id,
         title=payload.title.strip(),
-        type=payload.type,
         max_score=payload.max_score,
-        weight=payload.weight,
+        weight=FIXED_ASSESSMENT_WEIGHT,
         assessment_date=payload.assessment_date,
         status=AssessmentStatus.DRAFT,
         is_released=False,
@@ -419,12 +420,10 @@ def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, pay
 
     if payload.title is not None:
         a.title = payload.title.strip()
-    if payload.type is not None:
-        a.type = payload.type
     if payload.max_score is not None:
         a.max_score = payload.max_score
-    if payload.weight is not None:
-        a.weight = payload.weight
+    # Locked (see FIXED_ASSESSMENT_WEIGHT): any edit also brings an older non-1 weight back to 1.
+    a.weight = FIXED_ASSESSMENT_WEIGHT
     if "assessment_date" in fields:
         a.assessment_date = payload.assessment_date
     if payload.absent_as_zero is not None:

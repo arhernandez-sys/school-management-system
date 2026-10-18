@@ -25,7 +25,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AssessmentStatus, AssessmentType, GradeStatus, Role
+from app.common.enums import AssessmentStatus, GradeStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.rbac import (
     _teacher_profile_id,
@@ -837,7 +837,6 @@ def get_gradebook(
             GradebookAssessment(
                 id=a.id,
                 title=a.title,
-                type=a.type,
                 category_id=a.category_id,
                 max_score=_f(a.max_score),
                 weight=_f(a.weight),
@@ -1312,7 +1311,6 @@ def get_my_grades(
                 MyGradeAssessment(
                     assessment_id=a.id,
                     title=a.title,
-                    type=a.type,
                     max_score=_f(a.max_score),
                     assessment_date=a.assessment_date,
                     status=g.status,
@@ -1361,7 +1359,6 @@ class StudentAssessmentLineData:
 
     id: uuid.UUID
     title: str
-    type: AssessmentType
     max_score: float
     weight: float | None
     assessment_date: date | None
@@ -1506,7 +1503,6 @@ def student_assessment_groups(
                 StudentAssessmentLineData(
                     id=a.id,
                     title=a.title,
-                    type=a.type,
                     max_score=_f(a.max_score),
                     weight=_f(a.weight),
                     assessment_date=a.assessment_date,

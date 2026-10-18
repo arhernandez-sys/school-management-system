@@ -44,7 +44,7 @@ import { isLecturerRole } from '@shared/auth/permissions';
  */
 const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
   no_midterm_window:
-    'This session has no mid-session grading period. The Dean sets one in Settings → Academic structure.',
+    'This session has no mid-session grading period.',
   // D33 — was "correct the mark directly instead", which the freeze made impossible: the
   // window is precisely when a Lecturer cannot type in a mark.
   midterm_window_open:
@@ -201,13 +201,22 @@ export function AssessmentGradingScreen() {
     }
   }, [assessment, assessmentId, draft, dirtyCount, saveMut]);
 
-  const backToList = () => navigate(ROUTES.grades);
+  // Back to THIS offering's assessment list (the Grades drill-down), not the grid of every
+  // offering. Both params are what that screen reads to reopen the same list.
+  const backToList = () => {
+    const params = new URLSearchParams();
+    if (offeringId) params.set('offering_id', offeringId);
+    const year = searchParams.get('year');
+    if (year) params.set('year', year);
+    const qs = params.toString();
+    navigate(qs ? `${ROUTES.grades}?${qs}` : ROUTES.grades);
+  };
 
   // ── Guard states ─────────────────────────────────────────────────────────────────
   if (!offeringId) {
     return (
       <Box sx={{ pt: 3 }}>
-        <BackButton onClick={backToList} />
+        <BackButton onClick={backToList} label="All offerings" />
         <EmptyState
           variant="page"
           title="No offering selected"
@@ -219,7 +228,7 @@ export function AssessmentGradingScreen() {
 
   return (
     <Box sx={{ pb: dirtyCount > 0 ? 10 : 3, pt: 3 }}>
-      <BackButton onClick={backToList} />
+      <BackButton onClick={backToList} label="Back to assessments" />
 
       {gradebookQuery.isLoading && <LoadingState variant="table" rows={8} label="Loading roster" />}
 
@@ -494,10 +503,10 @@ export function AssessmentGradingScreen() {
   );
 }
 
-function BackButton({ onClick }: { onClick: () => void }) {
+function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <Button startIcon={<ArrowBackIcon />} onClick={onClick} sx={{ mb: 1 }}>
-      All assessments
+      {label}
     </Button>
   );
 }

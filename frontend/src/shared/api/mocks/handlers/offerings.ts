@@ -72,6 +72,16 @@ function callerTeaches(role: string, offering: DemoOffering): boolean {
   return Boolean(teacher && offering.teacher_ids.includes(teacher.id));
 }
 
+/**
+ * A lecturer reads only the offerings they teach — the server's `assert_teacher_owns_offering`
+ * on GET /offerings/{id} and GET /offerings/{id}/categories, answered with a 404 so "you do
+ * not teach it" and "it does not exist" look the same. The list was already scoped; the
+ * detail and the grading scheme were not, so a typed URL showed another lecturer's scheme.
+ */
+function lecturerCannotRead(role: string, offering: DemoOffering): boolean {
+  return role === 'teacher' && !callerTeaches(role, offering);
+}
+
 /** The server's `actionable_by_caller`: teacher ownership, P/S always. */
 function actionableBy(role: string, offering: DemoOffering): boolean {
   return role === 'principal' || role === 'secretary' || callerTeaches(role, offering);
@@ -507,7 +517,9 @@ export const offeringsHandlers = [
   // ── GET /offerings/{id} — detail ────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/offerings/:offeringId`, ({ params, cookies }) => {
     const offering = getOffering(String(params.offeringId));
-    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    if (!offering || lecturerCannotRead(sessionRole(cookies), offering)) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    }
     // Per-caller, like the server: an HOD opening a programme offering they do not teach
     // must not be told they may write to it.
     return HttpResponse.json({
@@ -1047,9 +1059,11 @@ export const offeringsHandlers = [
   // Mirrors `assessments/service.py`: anyone who can open the offering reads; the
   // offering's lecturer or the Dean writes; the list carries the D45 §24 100% verdict;
   // a duplicate name (case-insensitive) is a 409; delete DETACHES its assessments.
-  http.get(`${API_BASE_URL}/offerings/:offeringId/categories`, ({ params }) => {
+  http.get(`${API_BASE_URL}/offerings/:offeringId/categories`, ({ params, cookies }) => {
     const offering = getOffering(String(params.offeringId));
-    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    if (!offering || lecturerCannotRead(sessionRole(cookies), offering)) {
+      return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    }
     const items = D.assessment_categories
       .filter((c) => c.offering_id === offering.id)
       .sort((a, b) => a.name.localeCompare(b.name));

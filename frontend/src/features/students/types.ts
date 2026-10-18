@@ -9,7 +9,6 @@
 import type { CourseRef, OfferingRef, Page } from '@shared/types/api';
 import type {
   StudentStatus,
-  AssessmentType,
   GradeStatus,
   District,
   EnrollmentLoad,
@@ -228,7 +227,6 @@ export interface StudentDetail extends StudentNameParts, StudentAdmissionFields 
 export interface StudentAssessmentLine {
   id: string;
   title: string;
-  type: AssessmentType;
   max_score: number;
   weight: number;
   assessment_date: string | null;

@@ -20,7 +20,7 @@
  * schema classes are. Typed by hand against `grades/schemas.py` accordingly.
  */
 import type { CourseRef, OfferingRef } from '@shared/types/api';
-import type { AssessmentType, GradeStatus } from '@shared/types/enums';
+import type { GradeStatus } from '@shared/types/enums';
 
 export type { CourseRef, OfferingRef };
 
@@ -69,7 +69,6 @@ export interface StudentRef {
 export interface GradebookAssessment {
   id: string;
   title: string;
-  type: AssessmentType;
   category_id: string | null;
   max_score: number;
   weight: number;
@@ -193,7 +192,6 @@ export interface GradeEntryResponse {
 export interface MyGradeAssessment {
   assessment_id: string;
   title: string;
-  type: AssessmentType;
   max_score: number;
   assessment_date: string | null;
   status: GradeStatus;

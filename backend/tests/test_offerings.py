@@ -617,7 +617,7 @@ class TestUpdateDelete:
         _year, sem = _writable_year(db_session, archive_seeded_active_year)
         off = _offering(db_session, sem)
         db_session.add(Assessment(
-            offering_id=off.id, semester_id=sem.id, title="Quiz", type="quiz",
+            offering_id=off.id, semester_id=sem.id, title="Quiz",
             max_score=Decimal("10"), weight=Decimal("1"), status="draft",
         ))
         db_session.flush()

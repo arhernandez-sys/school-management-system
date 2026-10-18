@@ -41,7 +41,6 @@ export function OfferingGradesTable({ subject }: OfferingGradesTableProps) {
         <TableHead>
           <TableRow>
             <TableCell sx={{ fontWeight: 600 }}>Assessment</TableCell>
-            <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
             <TableCell align="right" sx={{ fontWeight: 600 }}>
               Score
             </TableCell>
@@ -54,7 +53,6 @@ export function OfferingGradesTable({ subject }: OfferingGradesTableProps) {
           {subject.assessments.map((a) => (
             <TableRow key={a.assessment_id} hover>
               <TableCell>{a.title}</TableCell>
-              <TableCell sx={{ textTransform: 'capitalize' }}>{a.type}</TableCell>
               <TableCell align="right">
                 {a.status === 'graded' && a.score != null ? `${a.score} / ${a.max_score}` : '—'}
               </TableCell>

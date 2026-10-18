@@ -215,7 +215,6 @@ class _Graph:
             offering_id=self.offerings[course.id].id,
             semester_id=self.sem.id,
             title=f"Final {course.code}",
-            type="exam",
             max_score=Decimal("100"),
             weight=Decimal("1"),
             status="graded",
@@ -494,7 +493,7 @@ class TestDerivedAcademicHistory:
         completed."""
         assessment = Assessment(
             offering_id=graph.offerings[graph.shared.id].id,
-            semester_id=graph.sem.id, title="Pending", type="quiz",
+            semester_id=graph.sem.id, title="Pending",
             max_score=Decimal("100"), weight=Decimal("1"), status="published",
         )
         db_session.add(assessment)

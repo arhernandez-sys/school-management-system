@@ -320,7 +320,6 @@ class TestHodCanEditOnlyTheirOwnTeaching:
             offering_id=dept.mine.offering.id,   # the COLLEAGUE's offering
             semester_id=dept.sem.id,
             title="Colleague quiz",
-            type="quiz",
             max_score=Decimal("20"),
             weight=Decimal("1.00"),
             status="graded",

@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.common.enums import AssessmentStatus, AssessmentType, Role
+from app.common.enums import AssessmentStatus, Role
 from app.common.schemas import ErrorResponse, Page
 from app.core.deps import get_current_user, get_db, require_role
 from app.core.pagination import PageParams, page_params
@@ -63,7 +63,6 @@ def list_assessments(
     offering_id: Annotated[uuid.UUID | None, Query()] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
-    type: Annotated[AssessmentType | None, Query()] = None,
     status_filter: Annotated[AssessmentStatus | None, Query(alias="status")] = None,
     scope: Annotated[str | None, Query()] = None,
     db: Session = Depends(get_db),
@@ -76,7 +75,6 @@ def list_assessments(
     return service.list_assessments(
         db, caller=caller, params=params, offering_id=offering_id,
         academic_year_id=academic_year_id, semester_id=semester_id,
-        type_filter=type.value if type else None,
         status_filter=status_filter.value if status_filter else None, scope=scope,
     )
 

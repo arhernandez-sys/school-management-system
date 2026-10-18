@@ -1501,7 +1501,6 @@ def list_student_assessments(
                     StudentAssessmentLine(
                         id=line.id,
                         title=line.title,
-                        type=line.type,
                         max_score=line.max_score,
                         weight=line.weight,
                         assessment_date=line.assessment_date,

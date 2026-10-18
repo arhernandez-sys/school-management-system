@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -37,7 +37,7 @@ import {
   type AssessmentListItem,
 } from '@features/assessments/hooks/useAssessments';
 import { AssessmentFormDialog, type AssessmentFormValues } from '@features/assessments/components/AssessmentFormDialog';
-import { NEXT_STATUSES, STATUS_META, TYPE_LABEL, transitionLabel } from '@features/assessments/statusMeta';
+import { NEXT_STATUSES, STATUS_META, transitionLabel } from '@features/assessments/statusMeta';
 import type { OfferingOption } from './types';
 
 const OFFERING_PARAM = 'offering_id';
@@ -65,6 +65,7 @@ export function OfferingGradesScreen({
   onBack: () => void;
 }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
 
@@ -88,7 +89,12 @@ export function OfferingGradesScreen({
   const [editing, setEditing] = useState<AssessmentListItem | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string[]>>({});
-  const categoriesQuery = useAssessmentCategories(formOpen ? offeringId : null);
+  // Always loaded, not only while the form is open: the Category column needs the names.
+  const categoriesQuery = useAssessmentCategories(offeringId);
+  const categoryName = useMemo(
+    () => new Map((categoriesQuery.data ?? []).map((c) => [c.id, c.name])),
+    [categoriesQuery.data],
+  );
   // Every assessment write needs the REAL active semester id. Read from YearContext,
   // which already holds `GET /settings/active-term` — no extra request. It was a
   // hardcoded demo-dataset id here, which no real database contains.
@@ -121,7 +127,6 @@ export function OfferingGradesScreen({
           id: editing.id,
           body: {
             title: values.title,
-            type: values.type,
             category_id: values.category_id,
             assessment_date: values.assessment_date,
             max_score: values.max_score,
@@ -144,7 +149,6 @@ export function OfferingGradesScreen({
           offering_id: offeringId,
           semester_id: activeSemesterId,
           title: values.title,
-          type: values.type,
           category_id: values.category_id,
           assessment_date: values.assessment_date,
           max_score: values.max_score,
@@ -186,10 +190,15 @@ export function OfferingGradesScreen({
     });
   };
 
-  const openGrading = (a: AssessmentListItem) =>
-    navigate(
-      `${ROUTES.gradeAssessment}/${a.id}?${OFFERING_PARAM}=${encodeURIComponent(offeringId)}`,
-    );
+  // `year` is carried through so the grading page's Back can return HERE: this list
+  // only opens when the offering is in the selected year, and without the param the
+  // Grades page falls back to the active year and drops the offering.
+  const openGrading = (a: AssessmentListItem) => {
+    const params = new URLSearchParams({ [OFFERING_PARAM]: offeringId });
+    const year = searchParams.get('year');
+    if (year) params.set('year', year);
+    navigate(`${ROUTES.gradeAssessment}/${a.id}?${params.toString()}`);
+  };
 
   const columns: DataTableColumn<AssessmentListItem>[] = [
     {
@@ -202,7 +211,21 @@ export function OfferingGradesScreen({
         </Typography>
       ),
     },
-    { field: 'type', headerName: 'Type', render: (a) => TYPE_LABEL[a.type] },
+    {
+      // Replaces the retired Type column (16 Oct 2026): the category is how an assessment
+      // is grouped now, and an uncategorized one is worth flagging — see the Grading tab.
+      field: 'category_id',
+      headerName: 'Category',
+      render: (a) =>
+        a.category_id ? (
+          // `—` while the names load (or if they failed), never a wrong "Uncategorized".
+          categoryName.get(a.category_id) ?? '—'
+        ) : (
+          <Typography variant="body2" color="text.disabled">
+            Uncategorized
+          </Typography>
+        ),
+    },
     {
       field: 'assessment_date',
       headerName: 'Date',

@@ -130,7 +130,11 @@ function buildSections(role: Role): NavSection[] {
         // D44 — a STUDENT keeps the flat item, labelled "My Courses"; staff reach Course
         // Offerings through the Courses group above, where a second flat copy would be a
         // duplicate entry pointing at the same route.
-        ...(isStudent
+        //
+        // A LECTURER gets the flat item too (16 Oct 2026). Their `courses` is `'none'`, so
+        // the Courses group above is filtered out WITH its Course Offerings child, and the
+        // only way into an offering — and its Grading tab — was a dashboard tile.
+        ...(isStudent || role === 'teacher'
           ? [
               {
                 module: 'offerings' as ModuleKey,

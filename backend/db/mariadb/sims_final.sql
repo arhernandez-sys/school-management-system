@@ -366,7 +366,6 @@ CREATE TABLE IF NOT EXISTS `assessments` (
   `semester_id` uuid NOT NULL COMMENT 'FK → semesters',
   `category_id` uuid DEFAULT NULL COMMENT 'FK → assessment_categories (optional)',
   `title` varchar(150) NOT NULL,
-  `type` enum('quiz','test','exam','assignment') NOT NULL,
   `max_score` decimal(6,2) NOT NULL,
   `weight` decimal(5,2) NOT NULL DEFAULT 1.00,
   `assessment_date` date DEFAULT NULL,

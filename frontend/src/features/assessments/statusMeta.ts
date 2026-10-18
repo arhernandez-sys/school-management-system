@@ -1,5 +1,5 @@
 import type { StatusKind } from '@shared/components';
-import type { AssessmentStatus, AssessmentType } from '@shared/types/enums';
+import type { AssessmentStatus } from '@shared/types/enums';
 
 /** Human label + badge color for each assessment status (single source of truth). */
 export const STATUS_META: Record<AssessmentStatus, { label: string; kind: StatusKind }> = {
@@ -28,22 +28,3 @@ export function transitionLabel(to: AssessmentStatus, from: AssessmentStatus): s
   if (to === 'grading') return 'Start grading';
   return 'Mark graded';
 }
-
-export const TYPE_LABEL: Record<AssessmentType, string> = {
-  quiz: 'Quiz',
-  class_work: 'Class Work',
-  project: 'Project',
-  test: 'Test',
-  research: 'Research',
-  journal: 'Journal',
-  assignment: 'Assignment',
-  simulation: 'Simulation',
-  case_study: 'Case Study',
-  group_work: 'Group Work',
-  final_project: 'Final Project',
-  final_exam: 'Final Exam',
-  timely_class_attendance: 'Timely Class Attendance',
-  chapel_attendance: 'Chapel Attendance',
-  // Legacy — no longer offered, still labelled for assessments saved before the change.
-  exam: 'Exam',
-};

@@ -930,7 +930,6 @@ const assessments: DemoAssessment[] = [];
 let asmtCounter = 0;
 interface AsmtTemplate {
   title: string;
-  type: DemoAssessment['type'];
   catSuffix: 'q' | 't' | null;
   max: number;
   weight: number;
@@ -942,14 +941,14 @@ interface AsmtTemplate {
   released: boolean;
 }
 const SEM1_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
-  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, status: 'graded', released: true },
-  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, status: 'graded', released: true },
-  { title: 'Unit Test 1', type: 'test', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, status: 'graded', released: false },
-  { title: 'Project', type: 'assignment', catSuffix: null, max: 100, weight: 1, offsetDays: 7, status: 'published', released: false },
+  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, status: 'graded', released: true },
+  { title: 'Quiz 2', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, status: 'graded', released: true },
+  { title: 'Unit Test 1', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, status: 'graded', released: false },
+  { title: 'Project', catSuffix: null, max: 100, weight: 1, offsetDays: 7, status: 'published', released: false },
 ];
 const SEM2_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
-  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', status: 'published', released: false },
-  { title: 'Mid-Session Exam', type: 'exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
+  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', status: 'published', released: false },
+  { title: 'Mid-Session Exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
 ];
 for (const off of offerings) {
   if (off.is_archived) continue;
@@ -963,7 +962,6 @@ for (const off of offerings) {
       semester_id: off.semester_id,
       category_id: tmpl.catSuffix ? `cat-${off.id}-${tmpl.catSuffix}` : null,
       title: tmpl.title,
-      type: tmpl.type,
       max_score: tmpl.max,
       weight: tmpl.weight,
       assessment_date: tmpl.date ?? addDays(DEMO_TODAY, tmpl.offsetDays),
@@ -1498,15 +1496,14 @@ function histRoster(offeringId: string): DemoStudent[] {
 // Historical assessments — the year is complete, so all are graded + released.
 const HIST_ASMT_TEMPLATES: ReadonlyArray<{
   title: string;
-  type: DemoAssessment['type'];
   catSuffix: 'q' | 't' | null;
   max: number;
   offsetDays: number;
 }> = [
-  { title: 'Quiz 1', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -90 },
-  { title: 'Quiz 2', type: 'quiz', catSuffix: 'q', max: 20, offsetDays: -60 },
-  { title: 'Mid-Session Test', type: 'test', catSuffix: 't', max: 50, offsetDays: -30 },
-  { title: 'Final Project', type: 'assignment', catSuffix: null, max: 100, offsetDays: -10 },
+  { title: 'Quiz 1', catSuffix: 'q', max: 20, offsetDays: -90 },
+  { title: 'Quiz 2', catSuffix: 'q', max: 20, offsetDays: -60 },
+  { title: 'Mid-Session Test', catSuffix: 't', max: 50, offsetDays: -30 },
+  { title: 'Final Project', catSuffix: null, max: 100, offsetDays: -10 },
 ];
 const histAssessments: DemoAssessment[] = [];
 let histAsmtCounter = 0;
@@ -1519,7 +1516,6 @@ for (const off of histOfferings) {
       semester_id: SEM_2024_1,
       category_id: tmpl.catSuffix ? `cat-${off.id}-${tmpl.catSuffix}` : null,
       title: tmpl.title,
-      type: tmpl.type,
       max_score: tmpl.max,
       weight: 1,
       assessment_date: addDays(HIST_ANCHOR, tmpl.offsetDays),

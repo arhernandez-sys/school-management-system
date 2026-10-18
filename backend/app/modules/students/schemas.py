@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.common.enums import (
     AcademicYearStatus,
-    AssessmentType,
     District,
     EnrollmentLoad,
     GradeStatus,
@@ -275,7 +274,6 @@ class StudentAssessmentLine(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     title: str
-    type: AssessmentType
     max_score: float
     weight: float | None = None
     assessment_date: date | None = None

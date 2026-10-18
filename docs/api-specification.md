@@ -227,7 +227,7 @@ Role                 = principal | secretary | teacher | student
 StudentStatus        = active | inactive | transferred | graduated | withdrawn
 TeacherStatus        = active | inactive
 AcademicYearStatus   = active | archived
-AssessmentType       = quiz | test | exam | assignment
+AssessmentType       = (retired 16 Oct 2026; no assessment carries a type, so group by category_id)
 AssessmentStatus     = draft | published | grading | graded
 GradeStatus          = pending | graded | absent | excused | exempt      // DB-14
 AttendanceStatus     = present | absent | late | excused
@@ -435,7 +435,7 @@ Tables: `student_profiles`, `class_enrollments`. FR-STU-01..10.
 - **Query:** `academic_year_id?` — scopes to the section the student sat in **that year** (a year spans both semesters, so this is *not* a semester filter). Default: the active year.
 - **Success `200`:** `{ items: StudentAssessmentGroup[] }` — **an envelope, not a bare array** (§5.0a).
   - `StudentAssessmentGroup { class_subject_id: uuid, subject: SubjectRef|null, term_grade: { numeric: float|null, letter: string|null }, assessments: StudentAssessmentLine[] }`
-  - `StudentAssessmentLine { id: uuid, title: string, type: AssessmentType, max_score: float, weight: float|null, assessment_date: date|null, status: GradeStatus, score: float|null, is_released: bool }`
+  - `StudentAssessmentLine { id: uuid, title: string, max_score: float, weight: float|null, assessment_date: date|null, status: GradeStatus, score: float|null, is_released: bool }`
 - **Semantics:** `status` is the **student's grade status** (`pending` when no `assessment_grades` row exists), *not* the assessment's lifecycle status. `is_released` = `grade.is_released ?? assessment.is_released`. `score` is withheld (`null`) unless released **and** graded — but the row is still listed, because the viewer is an admin/teacher (contrast `GET /grades/me`, which drops unreleased rows). `draft` assessments are excluded. `term_grade` is computed by the single engine in `grades/calc.py` with `released_only=false`, so it is the true working average and may legitimately differ from the student's own `/grades/me` number while results are unreleased.
 - **Errors:** `401`, `403`, `404`.
 
@@ -601,7 +601,7 @@ Tables: `assessments`, `assessment_categories`. **Created independently of any s
 #### `GET /assessments`
 - **Authz:** `authenticated`. **Scope:** P/S = view-all; Teacher = own `class_subjects`; Student (`scope=me`) = assessments for subjects in their enrolled section.
 - **S6 — student visibility (FR-ASMT-06):** a student **sees the assessment itself** (title, type, `assessment_date`, `max_score`) for every **published** assessment in their subjects — so they can prepare — but the **`my_score`/`my_status` fields are omitted (null) until that assessment's grade is released** to them (grade_release_filter on the *score*, not the assessment). The whole assessment is **not** hidden. Draft assessments are not shown to students. *(Contrast `/grades/me` (§5.7), which lists graded results and **excludes unreleased assessments entirely** — that endpoint is about results, this one is about the upcoming/known assessment set.)*
-- **Query:** list params + `class_subject_id?`, `class_id?` (all subjects in a section), `academic_year_id?`, `semester_id?`, `type?: AssessmentType`, `status?: AssessmentStatus`, `scope?:"me"`.
+- **Query:** list params + `class_subject_id?`, `class_id?` (all subjects in a section), `academic_year_id?`, `semester_id?`, `status?: AssessmentStatus`, `scope?:"me"`.
   - `academic_year_id` filters on the **section's** year; `semester_id` on the **assessment's own** `semester_id`. They **compose** — the student's global switcher sends both. Pairing a year with a semester from a *different* year intersects to nothing, and empty is the intended answer: showing one period's rows under another's heading is the mislabelling class of defect `/grades/me` was fixed for.
   - ⚠️ `semester_id` was specified here but **not declared by the endpoint until 2026-07-29**, so FastAPI silently dropped it — "My Assessments" listed a student's whole year under a heading naming one semester. Now honoured; pinned by `tests/test_year_scoping.py::TestAssessmentsSemesterFilter`.
 - **Success `200`:** `Page[AssessmentListItem]` `{ id, title, type, class_subject: ClassSubjectRef, max_score, weight, assessment_date?, status, is_released, my_score?: number /* student scope, released only */, my_status?: GradeStatus /* student scope, released only */ }`.
@@ -620,7 +620,6 @@ Tables: `assessments`, `assessment_categories`. **Created independently of any s
   | `semester_id` | uuid | yes | must belong to the same active (non-archived) year as the section |
   | `category_id` | uuid? | no | if set, must belong to the **same** `class_subject` (service check, schema §5) |
   | `title` | string | yes | 1..160 |
-  | `type` | AssessmentType | yes | |
   | `max_score` | number | yes | **> 0** (FR-ASMT-02) |
   | `weight` | number | no | **≥ 0**, default 1.00 |
   | `assessment_date` | date? | no | |

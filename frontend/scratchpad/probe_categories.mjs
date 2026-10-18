@@ -128,7 +128,11 @@ if (asmt) {
 }
 
 r = await call('teacher', 'GET', `/offerings/${notMine.id}`);
-check('detail: lecturer not actionable on others’ offering', r.body.actionable_by_caller === false);
+check('detail: lecturer reading another lecturer’s offering → 404', r.status === 404, String(r.status));
+r = await call('teacher', 'GET', `/offerings/${notMine.id}/categories`);
+check('grading scheme: lecturer reading another lecturer’s → 404', r.status === 404, String(r.status));
+r = await call('principal', 'GET', `/offerings/${notMine.id}/categories`);
+check('grading scheme: Dean reads any → 200', r.status === 200, String(r.status));
 r = await call('teacher', 'GET', `/offerings/${mine.id}`);
 check('detail: lecturer actionable on own offering', r.body.actionable_by_caller === true);
 

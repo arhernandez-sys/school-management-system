@@ -24,7 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.common.enums import AssessmentStatus, AssessmentType
+from app.common.enums import AssessmentStatus
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
 from app.db.types import GUID, enum_col
 
@@ -83,7 +83,6 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
         nullable=True,
     )
     title: Mapped[str] = mapped_column(Text(), nullable=False)
-    type: Mapped[AssessmentType] = mapped_column(enum_col(AssessmentType), nullable=False)
     max_score: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
     weight: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, server_default=text("1.00")

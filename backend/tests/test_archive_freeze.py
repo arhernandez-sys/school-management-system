@@ -111,7 +111,7 @@ class _TinyYear:
 
         self.assessment = Assessment(
             offering_id=self.cs.id, semester_id=self.semester.id,
-            title=f"Final {tag}", type="exam", max_score=Decimal("100"),
+            title=f"Final {tag}", max_score=Decimal("100"),
             weight=Decimal("1"), status="graded", is_released=True,
         )
         db_session.add(self.assessment)

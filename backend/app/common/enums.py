@@ -502,13 +502,6 @@ GPA_EXCLUDED_STATUSES: frozenset[EnrollmentStatus] = frozenset(
 )
 
 
-class AssessmentType(str, enum.Enum):
-    QUIZ = "quiz"
-    TEST = "test"
-    EXAM = "exam"
-    ASSIGNMENT = "assignment"
-
-
 class AssessmentStatus(str, enum.Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
@@ -781,7 +774,6 @@ PG_ENUM_NAMES: dict[type[enum.Enum], str] = {
     StudentStatus: "student_status",
     TeacherStatus: "teacher_status",
     AcademicYearStatus: "academic_year_status",
-    AssessmentType: "assessment_type",
     AssessmentStatus: "assessment_status",
     GradeStatus: "grade_status",
     AttendanceStatus: "attendance_status",

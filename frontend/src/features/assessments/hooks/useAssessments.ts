@@ -22,7 +22,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@shared/api/client';
 import type { OfferingRef, Page } from '@shared/types/api';
-import type { AssessmentStatus, AssessmentType } from '@shared/types/enums';
+import type { AssessmentStatus } from '@shared/types/enums';
 
 export type { OfferingRef };
 
@@ -30,7 +30,6 @@ export type { OfferingRef };
 export interface AssessmentListItem {
   id: string;
   title: string;
-  type: AssessmentType;
   /** Nullable only for a row whose offering was since deleted. */
   offering: OfferingRef | null;
   category_id: string | null;
@@ -72,7 +71,6 @@ export interface AssessmentCategoryBody {
 
 export interface AssessmentListParams {
   offering_id?: string;
-  type?: AssessmentType;
   status?: AssessmentStatus;
   academic_year_id?: string;
   /**
@@ -95,7 +93,6 @@ export interface AssessmentCreateBody {
   semester_id?: string;
   category_id?: string | null;
   title: string;
-  type: AssessmentType;
   max_score: number;
   weight?: number;
   assessment_date?: string | null;
@@ -104,7 +101,7 @@ export interface AssessmentCreateBody {
 export type AssessmentUpdateBody = Partial<
   Pick<
     AssessmentCreateBody,
-    'title' | 'type' | 'category_id' | 'max_score' | 'weight' | 'assessment_date'
+    'title' | 'category_id' | 'max_score' | 'weight' | 'assessment_date'
   >
 >;
 

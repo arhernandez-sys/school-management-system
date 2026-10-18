@@ -19,7 +19,6 @@ import type {
   StudentStatus,
   TeacherStatus,
   AcademicYearStatus,
-  AssessmentType,
   AssessmentStatus,
   GradeStatus,
   AttendanceStatus,
@@ -441,7 +440,6 @@ export interface DemoAssessment {
   semester_id: string;
   category_id: string | null;
   title: string;
-  type: AssessmentType;
   max_score: number;
   weight: number;
   assessment_date: string | null; // YYYY-MM-DD

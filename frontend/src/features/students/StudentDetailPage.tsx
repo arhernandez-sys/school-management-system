@@ -342,15 +342,6 @@ const BASE_ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
     render: (a) => <Typography variant="body2">{a.title}</Typography>,
   },
   {
-    field: 'type',
-    headerName: 'Type',
-    render: (a) => (
-      <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
-        {a.type}
-      </Typography>
-    ),
-  },
-  {
     field: 'assessment_date',
     headerName: 'Date',
     render: (a) => <Typography variant="body2">{a.assessment_date ?? '—'}</Typography>,

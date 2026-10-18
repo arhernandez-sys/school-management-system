@@ -167,7 +167,6 @@ class _Graph:
             offering_id=(cs or self.cs).id,
             semester_id=(semester or self.sem).id,
             title=f"A {uuid.uuid4().hex[:5]}",
-            type="quiz",
             max_score=Decimal(max_score),
             weight=Decimal(weight),
             status=status,

@@ -428,6 +428,8 @@ MIGRATIONS: list[tuple[str, str, list]] = [
             fk_targets("attendance_records", "offering_id", "course_offerings"),
             fk_targets("announcements", "offering_id", "course_offerings"),
             column_absent("assessments", "class_subject_id"),
+            # Assessment types retired 16 Oct 2026 (drop_assessment_type.sql).
+            column_absent("assessments", "type"),
             column_absent("class_enrollments", "class_id"),
             # The stakeholder audience rule, re-created against the new column.
             constraint_absent("announcements", "ck_announcements_class_audience"),

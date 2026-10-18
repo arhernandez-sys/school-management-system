@@ -138,7 +138,6 @@ class _Graph:
             semester_id=semester_id or self.sem.id,
             category_id=category_id,
             title=title or f"A {uuid.uuid4().hex[:5]}",
-            type="quiz",
             max_score=Decimal(max_score),
             weight=Decimal(weight),
             status=status,

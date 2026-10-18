@@ -16,7 +16,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.common.enums import AssessmentStatus, AssessmentType
+from app.common.enums import AssessmentStatus
 from app.common.schemas import OfferingRef
 
 
@@ -36,7 +36,6 @@ class AssessmentStats(BaseModel):
 class AssessmentListItem(BaseModel):
     id: UUID
     title: str
-    type: AssessmentType
     offering: OfferingRef | None = None
     category_id: UUID | None = None
     max_score: float
@@ -150,9 +149,10 @@ class AssessmentCreateRequest(BaseModel):
     semester_id: UUID | None = None  # defaults to the active semester
     category_id: UUID | None = None
     title: str = Field(min_length=1, max_length=160)
-    type: AssessmentType
     max_score: float = Field(gt=0)
-    weight: float = Field(default=1.0, ge=0)
+    # Ignored: the service locks every assessment's weight at 1 (17 Oct 2026). Still
+    # accepted so older clients don't 422 under extra="forbid".
+    weight: float = Field(default=1.0, ge=0, le=999.99)
     assessment_date: date | None = None
     absent_as_zero: bool | None = None
     allow_makeup: bool | None = None
@@ -164,10 +164,9 @@ class AssessmentUpdateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, min_length=1, max_length=160)
-    type: AssessmentType | None = None
     category_id: UUID | None = None
     max_score: float | None = Field(default=None, gt=0)
-    weight: float | None = Field(default=None, ge=0)
+    weight: float | None = Field(default=None, ge=0, le=999.99)  # ignored; locked at 1
     assessment_date: date | None = None
     absent_as_zero: bool | None = None
     allow_makeup: bool | None = None

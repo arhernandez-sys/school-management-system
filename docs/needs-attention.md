@@ -173,7 +173,13 @@ but nobody has clicked it. Worth checking the ledger row at phone width and the
 
 ---
 
-## ⚠️ Two things to be careful of
+## ⚠️ Three things to be careful of
+
+**`assessments.type` must be dropped on live `sims` WHEN this code is deployed** (16 Oct
+2026). Run `backend/db/mariadb/drop_assessment_type.sql` at the same moment. Running it
+early or late breaks a different side. The new code does not write the column, so while
+it still exists, every new assessment fails (NOT NULL, no default). The old code reads the
+column, so once it is gone, every assessment screen fails. `sims_test` is already dropped.
 
 **`class_meetings.room` and `course_offerings.classroomid` both describe where a class
 meets**, and the free-text one is still what the timetable renders. Two columns can

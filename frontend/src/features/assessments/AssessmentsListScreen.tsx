@@ -43,7 +43,7 @@ import {
 } from './hooks/useAssessments';
 import { AssessmentFormDialog, type AssessmentFormValues } from './components/AssessmentFormDialog';
 import { OfferingPicker } from './components/OfferingPicker';
-import { NEXT_STATUSES, STATUS_META, TYPE_LABEL, transitionLabel } from './statusMeta';
+import { NEXT_STATUSES, STATUS_META, transitionLabel } from './statusMeta';
 
 const OFFERING_PARAM = 'offering_id';
 
@@ -196,7 +196,6 @@ export function AssessmentsListScreen() {
           id: editing.id,
           body: {
             title: values.title,
-            type: values.type,
             category_id: values.category_id,
             assessment_date: values.assessment_date,
             max_score: values.max_score,
@@ -219,7 +218,6 @@ export function AssessmentsListScreen() {
           offering_id: selectedOfferingId,
           semester_id: activeSemesterId,
           title: values.title,
-          type: values.type,
           category_id: values.category_id,
           assessment_date: values.assessment_date,
           max_score: values.max_score,
@@ -280,7 +278,6 @@ export function AssessmentsListScreen() {
         </Typography>
       ),
     },
-    { field: 'type', headerName: 'Type', render: (a) => TYPE_LABEL[a.type] },
     {
       field: 'assessment_date',
       headerName: 'Date',
@@ -292,7 +289,6 @@ export function AssessmentsListScreen() {
         ),
     },
     { field: 'max_score', headerName: 'Max', align: 'right', render: (a) => a.max_score },
-    { field: 'weight', headerName: 'Weight', align: 'right', hideOnMobile: true, render: (a) => a.weight },
     {
       field: 'status',
       headerName: 'Status',

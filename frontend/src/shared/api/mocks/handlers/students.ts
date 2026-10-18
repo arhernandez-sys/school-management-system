@@ -327,7 +327,6 @@ function assessmentLine(a: DemoAssessment, studentId: string) {
   return {
     id: a.id,
     title: a.title,
-    type: a.type,
     max_score: a.max_score,
     weight: a.weight,
     assessment_date: a.assessment_date,

@@ -835,24 +835,24 @@ for key in list(offering_id_by_key):
 # they are published and unreleased: an upcoming term, which is what a student expects
 # to see there.
 #
-#   title, type, category suffix, max, weight, offset from DEMO_TODAY, absolute date,
+#   title, category suffix, max, weight, offset from DEMO_TODAY, absolute date,
 #   status, is_released
 SEM1_ASMT = [
-    ("Quiz 1", "quiz", "q", 20, "1.00", -30, None, "graded", True),
-    ("Quiz 2", "quiz", "q", 20, "1.00", -16, None, "graded", True),
-    ("Unit Test 1", "test", "t", 50, "1.00", -9, None, "graded", False),
-    ("Project", "assignment", None, 100, "1.00", 7, None, "published", False),
+    ("Quiz 1", "q", 20, "1.00", -30, None, "graded", True),
+    ("Quiz 2", "q", 20, "1.00", -16, None, "graded", True),
+    ("Unit Test 1", "t", 50, "1.00", -9, None, "graded", False),
+    ("Project", None, 100, "1.00", 7, None, "published", False),
 ]
 SEM2_ASMT = [
-    ("Quiz 1", "quiz", "q", 20, "1.00", 0, date(2026, 2, 10), "published", False),
-    ("Midterm Exam", "exam", "t", 100, "2.00", 0, date(2026, 3, 18), "published", False),
+    ("Quiz 1", "q", 20, "1.00", 0, date(2026, 2, 10), "published", False),
+    ("Midterm Exam", "t", 100, "2.00", 0, date(2026, 3, 18), "published", False),
 ]
 #: The archived year is complete, so every historical assessment is graded + released.
 HIST_ASMT = [
-    ("Quiz 1", "quiz", "q", 20, "1.00", -90),
-    ("Quiz 2", "quiz", "q", 20, "1.00", -60),
-    ("Midterm Test", "test", "t", 50, "1.00", -30),
-    ("Final Project", "assignment", None, 100, "1.00", -10),
+    ("Quiz 1", "q", 20, "1.00", -90),
+    ("Quiz 2", "q", 20, "1.00", -60),
+    ("Midterm Test", "t", 50, "1.00", -30),
+    ("Final Project", None, 100, "1.00", -10),
 ]
 
 asmt_counter = 0
@@ -860,14 +860,14 @@ asmt_counter = 0
 asmt_meta: dict[str, tuple[str, int, str]] = {}
 for key in list(offering_id_by_key):
     templates = SEM1_ASMT if offering_semester[key] == SEM_ACTIVE else SEM2_ASMT
-    for title, typ, cat, mx, weight, off_days, abs_date, status, released in templates:
+    for title, cat, mx, weight, off_days, abs_date, status, released in templates:
         asmt_counter += 1
         aid = f"asmt-{asmt_counter}"
         asmt_meta[aid] = (key, mx, status)
         add("assessments", id=uid(aid), offering_id=offering_id_by_key[key],
             semester_id=uid(offering_semester[key]),
             category_id=(uid(f"cat-{key}-{cat}") if cat else None), title=title,
-            type=typ, max_score=Decimal(mx), weight=Decimal(weight),
+            max_score=Decimal(mx), weight=Decimal(weight),
             assessment_date=(abs_date or add_days(DEMO_TODAY, off_days)),
             status=status, is_released=released, released_at=None)
 
@@ -1077,14 +1077,14 @@ hist_asmt_counter = 0
 hist_meta: dict[str, tuple[str, int]] = {}
 for key in SEM1_KEYS:
     hist_key = hist_key_by_key[key]
-    for title, typ, cat, mx, weight, off_days in HIST_ASMT:
+    for title, cat, mx, weight, off_days in HIST_ASMT:
         hist_asmt_counter += 1
         aid = f"asmt-2024-{hist_asmt_counter}"
         hist_meta[aid] = (hist_key, mx)
         add("assessments", id=uid(aid), offering_id=offering_id_by_key[hist_key],
             semester_id=uid(SEM_2024_1),
             category_id=(uid(f"cat-{hist_key}-{cat}") if cat else None), title=title,
-            type=typ, max_score=Decimal(mx), weight=Decimal(weight),
+            max_score=Decimal(mx), weight=Decimal(weight),
             assessment_date=add_days(HIST_ANCHOR, off_days), status="graded",
             is_released=True, released_at=None)
 

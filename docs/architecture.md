@@ -291,7 +291,7 @@ backend/
 │   │
 │   └── common/
 │       ├── schemas.py            # Shared Pydantic models (Page[T], ErrorResponse)
-│       └── enums.py              # Role, StudentStatus, AttendanceStatus, AssessmentType, ...
+│       └── enums.py              # Role, StudentStatus, AttendanceStatus, AssessmentStatus, ...
 │
 ├── tests/                        # Phase 8; mirrors modules/
 ├── alembic.ini

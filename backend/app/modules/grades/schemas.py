@@ -31,7 +31,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from app.common.enums import (
     AssessmentStatus,
-    AssessmentType,
     GradeRevisionStatus,
     GradeStatus,
 )
@@ -105,7 +104,6 @@ class OfferingOptionsResponse(BaseModel):
 class GradebookAssessment(BaseModel):
     id: UUID
     title: str
-    type: AssessmentType
     category_id: UUID | None = None
     max_score: float
     weight: float
@@ -233,7 +231,6 @@ class TermGradeList(BaseModel):
 class MyGradeAssessment(_LetterOptional):
     assessment_id: UUID
     title: str
-    type: AssessmentType
     max_score: float
     assessment_date: date | None = None
     status: GradeStatus

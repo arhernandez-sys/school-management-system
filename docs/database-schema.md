@@ -89,7 +89,7 @@ All instants are `timestamptz`, never naive `timestamp` — the app is region-fl
 |---|---|---|
 | `user_role` (principal/secretary/teacher/student/**hod**/**auditor**) | **Native enum** | Fixed at 6 since D43 (A-ONE-ROLE); changes only via deploy. Widening is append-only — MariaDB stores the ordinal, so new labels must go on the END or existing rows change meaning. |
 | `attendance_status` (present/absent/late/excused) | **Native enum** | Fixed small set (D-Q4). |
-| `assessment_type` (quiz/test/exam/assignment) | **Native enum** | Fixed (FR-ASMT-01). |
+| ~~`assessment_type` (quiz/test/exam/assignment)~~ | — | **Retired 16 Oct 2026**: the column was dropped (`db/mariadb/drop_assessment_type.sql`). Assessments are grouped by category only. |
 | `assessment_status` (draft/published/grading/graded) | **Native enum** | Fixed (FR-ASMT-04). |
 | `student_status` (active/inactive/transferred/graduated/withdrawn) | **Native enum** | Fixed (FR-STU-04). |
 | `teacher_status` (active/inactive) | **Native enum** | Fixed. |
@@ -576,7 +576,6 @@ Teacher-owned graded activities (FR-ASMT-01). **Created independently** of grade
 | `semester_id` | `uuid` | no | — | FK → semesters (FR-ASMT-05) |
 | `category_id` | `uuid` | yes | — | FK → assessment_categories (optional grouping) |
 | `title` | `text` | no | — | (FR-ASMT-01) |
-| `type` | `assessment_type` | no | — | quiz/test/exam/assignment |
 | `max_score` | `numeric(6,2)` | no | — | Positive (FR-ASMT-02) |
 | `weight` | `numeric(5,2)` | no | `1.00` | Contribution to term grade (FR-ASMT-01); non-negative |
 | `assessment_date` | `date` | yes | — | Due/assessment date (FR-ASMT-01) |

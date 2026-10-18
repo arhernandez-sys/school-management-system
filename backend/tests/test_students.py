@@ -34,7 +34,6 @@ from sqlalchemy import func, select
 from app.common.enums import (
     AcademicYearStatus,
     AssessmentStatus,
-    AssessmentType,
     GradeStatus,
     Role,
     StudentStatus,
@@ -261,7 +260,6 @@ def _make_assessment(  # noqa: ANN001
     class_subject,
     semester_id=None,
     title=None,
-    type_=AssessmentType.TEST,
     max_score=50,
     weight=1,
     status=AssessmentStatus.GRADED,
@@ -272,7 +270,6 @@ def _make_assessment(  # noqa: ANN001
         offering_id=class_subject.id,
         semester_id=semester_id or _active_semester_id(db_session),
         title=title or f"Assessment {uuid.uuid4().hex[:6]}",
-        type=type_,
         max_score=max_score,
         weight=weight,
         status=status,
@@ -1014,7 +1011,6 @@ class TestDeleteStudent:
             offering_id=cs.id,
             semester_id=_active_semester_id(db_session),
             title="Quiz 1",
-            type=AssessmentType.QUIZ,
             max_score=100,
             status=AssessmentStatus.PUBLISHED,
         )
@@ -1144,7 +1140,7 @@ class TestStudentAssessments:
         # (This assertion was missed when the feature landed; the envelope-level one
         # above was updated, this one was not.)
         assert set(group["assessments"][0].keys()) == {
-            "id", "title", "type", "max_score", "weight",
+            "id", "title", "max_score", "weight",
             "assessment_date", "status", "score", "is_released",
             "last_nudged_at",
         }

@@ -92,7 +92,7 @@ class _Graph:
     def assessment(self, *, status="draft", max_score="20", is_released=False, category_id=None) -> Assessment:
         a = Assessment(
             offering_id=self.cs.id, semester_id=self.sem.id, category_id=category_id,
-            title=f"A {uuid.uuid4().hex[:5]}", type="quiz", max_score=Decimal(max_score),
+            title=f"A {uuid.uuid4().hex[:5]}", max_score=Decimal(max_score),
             weight=Decimal("1.00"), status=status, is_released=is_released,
         )
         self._db.add(a)
@@ -145,15 +145,14 @@ class TestAuthGate:
         p = make_user(role=Role.PRINCIPAL)
         r = client.post(A, headers=auth_headers(user_id=p.id, role=Role.PRINCIPAL),
                         json={"offering_id": str(graph.cs.id), "title": "X",
-                              "type": "quiz", "max_score": 10})
+                              "max_score": 10})
         assert r.status_code == 403
 
 
 class TestCreate:
     def test_create_ok_forces_draft(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "Quiz 1", "type": "quiz",
-            "max_score": 25, "weight": 1})
+            "offering_id": str(graph.cs.id), "title": "Quiz 1",             "max_score": 25, "weight": 1})
         assert r.status_code == 201, r.text
         b = r.json()
         assert b["status"] == "draft" and b["is_released"] is False
@@ -161,7 +160,7 @@ class TestCreate:
 
     def test_create_unknown_cs_404(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(uuid.uuid4()), "title": "X", "type": "quiz", "max_score": 10})
+            "offering_id": str(uuid.uuid4()), "title": "X", "max_score": 10})
         assert r.status_code == 404
         _assert_envelope(r.json(), code="offering_not_found")
 
@@ -172,7 +171,7 @@ class TestCreate:
         db_session.flush()
         r = client.post(A, headers=auth_headers(user_id=other_user.id, role=Role.TEACHER),
                         json={"offering_id": str(graph.cs.id), "title": "X",
-                              "type": "quiz", "max_score": 10})
+                              "max_score": 10})
         assert r.status_code == 404
 
     def test_create_category_mismatch_409(self, client, graph, db_session) -> None:
@@ -192,20 +191,26 @@ class TestCreate:
         db_session.flush()
         r = client.post(A, headers=graph.H, json={
             "offering_id": str(graph.cs.id), "category_id": str(foreign_cat.id),
-            "title": "X", "type": "quiz", "max_score": 10})
+            "title": "X", "max_score": 10})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="category_subject_mismatch")
 
-    def test_create_bad_type_422(self, client, graph) -> None:
+    def test_type_is_retired(self, client, graph) -> None:
+        # Assessment types were removed on 16 Oct 2026 (column dropped): the API neither
+        # returns one nor accepts one — `extra="forbid"` makes a stale client's `type` a 422.
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "X", "type": "essay", "max_score": 10})
+            "offering_id": str(graph.cs.id), "title": "No type", "max_score": 10})
+        assert r.status_code == 201, r.text
+        assert "type" not in r.json()
+        r = client.post(A, headers=graph.H, json={
+            "offering_id": str(graph.cs.id), "title": "X", "type": "quiz", "max_score": 10})
         assert r.status_code == 422
 
     def test_create_in_archived_year_409(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
         db_session.flush()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "X", "type": "quiz", "max_score": 10})
+            "offering_id": str(graph.cs.id), "title": "X", "max_score": 10})
         assert r.status_code == 409
         _assert_envelope(r.json(), code="year_archived")
 
@@ -223,7 +228,7 @@ class TestReadScope:
         )
         db_session.add(cs2); db_session.flush()
         db_session.add(Assessment(offering_id=cs2.id, semester_id=graph.sem.id,
-                                  title="Foreign", type="quiz", max_score=Decimal("10"),
+                                  title="Foreign", max_score=Decimal("10"),
                                   weight=Decimal("1"), status="published"))
         db_session.flush()
         r = client.get(f"{A}?page_size=200", headers=graph.H)
@@ -270,6 +275,25 @@ class TestUpdateStatusDelete:
         a = graph.assessment()
         r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"title": "New", "max_score": 40})
         assert r.status_code == 200 and r.json()["title"] == "New" and r.json()["max_score"] == 40
+
+    def test_weight_is_locked_at_1(self, client, graph, db_session) -> None:
+        # 17 Oct 2026: a submitted weight is accepted but ignored, on create AND on edit,
+        # and any edit brings an older non-1 weight back to 1.
+        r = client.post(A, headers=graph.H, json={
+            "offering_id": str(graph.cs.id), "title": "W", "max_score": 10, "weight": 5})
+        assert r.status_code == 201, r.text
+        assert r.json()["weight"] == 1
+
+        a = graph.assessment()
+        a.weight = Decimal("3.00")  # a legacy row from before the lock
+        db_session.flush()
+        r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"weight": 7})
+        assert r.status_code == 200 and r.json()["weight"] == 1
+        db_session.refresh(a)
+        a.weight = Decimal("3.00")
+        db_session.flush()
+        r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"title": "Renamed"})
+        assert r.status_code == 200 and r.json()["weight"] == 1
 
     def test_patch_scores_exceed_new_max_409(self, client, graph) -> None:
         a = graph.assessment(max_score="100")

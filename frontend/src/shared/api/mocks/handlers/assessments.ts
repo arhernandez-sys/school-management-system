@@ -16,7 +16,7 @@ import {
   paginate,
 } from '@shared/api/mocks/demo/dataset';
 import type { DemoAssessment, DemoOffering } from '@shared/api/mocks/demo/dataset';
-import type { AssessmentStatus, AssessmentType } from '@shared/types/enums';
+import type { AssessmentStatus } from '@shared/types/enums';
 import { errorResponse, listParamsFrom } from './_helpers';
 
 /**
@@ -89,7 +89,6 @@ function assessmentListItem(a: DemoAssessment) {
   return {
     id: a.id,
     title: a.title,
-    type: a.type,
     offering: offering ? offeringRef(offering) : null,
     category_id: a.category_id,
     max_score: a.max_score,
@@ -126,7 +125,6 @@ function isLegalTransition(from: AssessmentStatus, to: AssessmentStatus): boolea
   return LEGAL_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-const VALID_TYPES: readonly AssessmentType[] = ['quiz', 'test', 'exam', 'assignment'];
 const VALID_STATUSES: readonly AssessmentStatus[] = ['draft', 'published', 'grading', 'graded'];
 
 let newAssessmentSeq = 0;
@@ -188,7 +186,6 @@ export const assessmentsHandlers: RequestHandler[] = [
     const url = new URL(request.url);
     const role = cookies['sis_mock_session'] ?? 'principal';
     const offeringId = url.searchParams.get('offering_id');
-    const type = url.searchParams.get('type');
     const status = url.searchParams.get('status');
     // A REAL server-side param, unlike the retired `teacher_profile_id`: it says "restrict
     // to mine", and the server decides who that is.
@@ -244,7 +241,6 @@ export const assessmentsHandlers: RequestHandler[] = [
     // scope branch above so it composes with all of them (matching the backend, where
     // it is one more WHERE clause beside `academic_year_id`).
     if (semesterId) rows = rows.filter((a) => a.semester_id === semesterId);
-    if (type) rows = rows.filter((a) => a.type === type);
     if (status) rows = rows.filter((a) => a.status === status);
 
     const page = paginate(rows.map(assessmentListItem) as unknown as Array<Record<string, unknown>>, {
@@ -268,7 +264,6 @@ export const assessmentsHandlers: RequestHandler[] = [
       semester_id?: string;
       category_id?: string | null;
       title?: string;
-      type?: AssessmentType;
       max_score?: number;
       weight?: number;
       assessment_date?: string | null;
@@ -279,14 +274,17 @@ export const assessmentsHandlers: RequestHandler[] = [
     if (title.length < 1 || title.length > 160) {
       fields.title = ['Title must be between 1 and 160 characters.'];
     }
-    if (!body.type || !VALID_TYPES.includes(body.type)) {
-      fields.type = ['A valid assessment type is required.'];
-    }
+    // Assessment types were retired 16 Oct 2026 (column dropped). The server's
+    // `extra="forbid"` refuses a stale client that still sends one.
+    if ('type' in body) fields.type = ['Extra inputs are not permitted'];
     if (typeof body.max_score !== 'number' || body.max_score <= 0) {
       fields.max_score = ['Max score must be greater than 0.'];
     }
-    if (body.weight !== undefined && (typeof body.weight !== 'number' || body.weight < 0)) {
-      fields.weight = ['Weight must be zero or greater.'];
+    if (
+      body.weight !== undefined &&
+      (typeof body.weight !== 'number' || body.weight < 0 || body.weight > 999.99)
+    ) {
+      fields.weight = ['Weight must be between 0 and 999.99.'];
     }
     if (Object.keys(fields).length > 0) {
       return errorResponse(422, 'validation_error', 'Please correct the highlighted fields.', fields);
@@ -317,7 +315,6 @@ export const assessmentsHandlers: RequestHandler[] = [
       semester_id: offering.semester_id,
       category_id: body.category_id ?? null,
       title,
-      type: body.type as AssessmentType,
       max_score: body.max_score as number,
       weight: typeof body.weight === 'number' ? body.weight : 1,
       assessment_date: body.assessment_date ?? null,
@@ -334,7 +331,6 @@ export const assessmentsHandlers: RequestHandler[] = [
     if (!a) return errorResponse(404, 'not_found', 'Assessment not found.');
     const body = (await request.json()) as {
       title?: string;
-      type?: AssessmentType;
       category_id?: string | null;
       max_score?: number;
       weight?: number;
@@ -348,14 +344,15 @@ export const assessmentsHandlers: RequestHandler[] = [
         fields.title = ['Title must be between 1 and 160 characters.'];
       }
     }
-    if (body.type !== undefined && !VALID_TYPES.includes(body.type)) {
-      fields.type = ['A valid assessment type is required.'];
-    }
+    if ('type' in body) fields.type = ['Extra inputs are not permitted'];
     if (body.max_score !== undefined && (typeof body.max_score !== 'number' || body.max_score <= 0)) {
       fields.max_score = ['Max score must be greater than 0.'];
     }
-    if (body.weight !== undefined && (typeof body.weight !== 'number' || body.weight < 0)) {
-      fields.weight = ['Weight must be zero or greater.'];
+    if (
+      body.weight !== undefined &&
+      (typeof body.weight !== 'number' || body.weight < 0 || body.weight > 999.99)
+    ) {
+      fields.weight = ['Weight must be between 0 and 999.99.'];
     }
     if (Object.keys(fields).length > 0) {
       return errorResponse(422, 'validation_error', 'Please correct the highlighted fields.', fields);
@@ -389,7 +386,6 @@ export const assessmentsHandlers: RequestHandler[] = [
       a.category_id = body.category_id;
     }
     if (body.title !== undefined) a.title = body.title.trim();
-    if (body.type !== undefined) a.type = body.type;
     if (body.max_score !== undefined) a.max_score = body.max_score;
     if (body.weight !== undefined) a.weight = body.weight;
     if (body.assessment_date !== undefined) a.assessment_date = body.assessment_date;

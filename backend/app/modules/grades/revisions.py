@@ -96,7 +96,7 @@ def _audit(
 REVISION_BLOCKED_REASONS: dict[str, str] = {
     "no_midterm_window": (
         "This term has no mid-term grading period configured, so there is nothing to "
-        "revise against. The Dean sets one in Settings → Academic structure."
+        "revise against."
     ),
     "midterm_window_open": (
         # D33 — this used to say "correct the mark directly while grade entry is still

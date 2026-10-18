@@ -128,7 +128,6 @@ function assessmentSummary(a: DemoAssessment) {
   return {
     id: a.id,
     title: a.title,
-    type: a.type,
     category_id: a.category_id,
     max_score: a.max_score,
     weight: a.weight,
@@ -619,7 +618,6 @@ export const gradesHandlers = [
           return {
             assessment_id: a.id,
             title: a.title,
-            type: a.type,
             max_score: a.max_score,
             assessment_date: a.assessment_date,
             status: g.status,
