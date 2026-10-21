@@ -148,6 +148,24 @@ class TestInactiveSessionIsReadOnly:
         assert r.status_code == 200, r.text
 
 
+class TestPickersCarryTheOfferingSession:
+    """The staff Grades grid and Assessments picker filter these feeds by the session
+    chosen beside the year. Both shipped `semester: null`, so every offering failed that
+    filter and both screens were empty — only a dashboard deep link reached a gradebook."""
+
+    def test_grades_picker_reports_the_offering_semester(self, client, inactive) -> None:
+        r = client.get("/api/v1/grades/offerings", headers=inactive.H)
+        assert r.status_code == 200, r.text
+        mine = [o for o in r.json()["items"] if o["offering"]["id"] == str(inactive.cs.id)]
+        assert mine and mine[0]["offering"]["semester"]["id"] == str(inactive.inactive_sem.id)
+
+    def test_assessments_picker_reports_the_offering_semester(self, client, inactive) -> None:
+        r = client.get(f"{A}/offerings", headers=inactive.H)
+        assert r.status_code == 200, r.text
+        mine = [o for o in r.json()["items"] if o["id"] == str(inactive.cs.id)]
+        assert mine and mine[0]["semester"]["id"] == str(inactive.inactive_sem.id)
+
+
 class TestStudentListFollowsChosenSession:
     def test_lecturer_sees_students_of_the_chosen_session(self, client, inactive) -> None:
         s, enr = inactive.enrolled_student()

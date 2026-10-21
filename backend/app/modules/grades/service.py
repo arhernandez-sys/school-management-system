@@ -462,12 +462,13 @@ def _offering_ref(
     offering: CourseOffering,
     course: Course,
     teachers: list[tuple],
+    semester: Semester | None = None,
 ) -> GradesOfferingRef:
     """D31: one row, not two. This took `cs` AND `section` because a gradebook lived at
     the intersection of a homeroom and a subject; an offering IS the gradebook."""
     lead = next((t for t, is_lead in teachers if is_lead), None)
     return GradesOfferingRef(
-        offering=offering_ref(offering, course),
+        offering=offering_ref(offering, course, semester),
         teachers=[TeacherRef(id=t.id, full_name=t.full_name) for t, _ in teachers],
         lead_teacher_id=lead.id if lead is not None else None,
     )
@@ -494,9 +495,12 @@ def list_offering_options(
         active = _active_year(db)
         year_id = active.id if active is not None else None
 
+    # The semester rides along: the Grades grid filters these cards by the session picked
+    # beside the year, and a card with no semester matched no session at all.
     stmt = (
-        select(CourseOffering, Course)
+        select(CourseOffering, Course, Semester)
         .join(Course, CourseOffering.course_id == Course.id)
+        .outerjoin(Semester, CourseOffering.semester_id == Semester.id)
         # NOTE: `is_archived` is deliberately NOT filtered here. Offerings of a past
         # year are archived, and the year switcher must still list them.
         .where(CourseOffering.deleted_at.is_(None))
@@ -529,7 +533,7 @@ def list_offering_options(
         editable_ids = owned_ids
 
     rows = db.execute(stmt).all()
-    cs_ids = [cs.id for cs, _ in rows]
+    cs_ids = [cs.id for cs, _, _ in rows]
     teachers_by_cs = _teacher_rows(db, cs_ids)
 
     counts: dict[uuid.UUID, int] = {}
@@ -548,12 +552,12 @@ def list_offering_options(
     active_semester_id = db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))
     items = [
         OfferingOption(
-            **_offering_ref(cs, subject, teachers_by_cs.get(cs.id, [])).model_dump(),
+            **_offering_ref(cs, subject, teachers_by_cs.get(cs.id, []), semester).model_dump(),
             assessment_count=counts.get(cs.id, 0),
             can_edit=(is_teacher if editable_ids is None else cs.id in editable_ids)
             and cs.semester_id == active_semester_id,
         )
-        for cs, subject in rows
+        for cs, subject, semester in rows
     ]
 
     return OfferingOptionsResponse(items=items)

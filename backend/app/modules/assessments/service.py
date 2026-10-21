@@ -48,7 +48,7 @@ from app.modules.offerings.models import (
     ClassTeacher,
     Course,
 )
-from app.modules.settings.models import AcademicYear, AuditLog
+from app.modules.settings.models import AcademicYear, AuditLog, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
@@ -316,9 +316,13 @@ def get_assessment(db: Session, *, caller: User, assessment_id: uuid.UUID) -> As
 def list_offerings_picker(
     db: Session, *, caller: User, academic_year_id: uuid.UUID | None
 ):
+    # The semester rides along: the staff screens filter this feed by the session picked
+    # beside the year, so an offering without one matched no session and the picker was
+    # always empty.
     stmt = (
-        select(CourseOffering, Course)
+        select(CourseOffering, Course, Semester)
         .join(Course, CourseOffering.course_id == Course.id)
+        .outerjoin(Semester, CourseOffering.semester_id == Semester.id)
         .where(CourseOffering.deleted_at.is_(None))
     )
     if academic_year_id is not None:
@@ -343,7 +347,7 @@ def list_offerings_picker(
     # Ordered in SQL by course code then section, never by the formatted label — see
     # `OFFERING_ORDER`.
     rows = db.execute(stmt.order_by(*OFFERING_ORDER)).all()
-    refs = [offering_ref(offering, course) for (offering, course) in rows]
+    refs = [offering_ref(offering, course, semester) for (offering, course, semester) in rows]
     from app.modules.assessments.schemas import OfferingPickerList
 
     return OfferingPickerList(items=refs)
