@@ -240,7 +240,13 @@ export function AssessmentGradingScreen() {
         />
       )}
 
-      {gradebook && !assessment && (
+      {/* A stale cached gradebook can predate this assessment; wait for the refetch
+          before calling it missing. */}
+      {gradebook && !assessment && gradebookQuery.isFetching && (
+        <LoadingState variant="table" rows={8} label="Loading roster" />
+      )}
+
+      {gradebook && !assessment && !gradebookQuery.isFetching && (
         <EmptyState
           variant="page"
           title="Assessment not found"

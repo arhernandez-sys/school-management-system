@@ -231,9 +231,19 @@ export function useDeleteAssessmentCategory(offeringId: string) {
 }
 
 // ── Mutations ──────────────────────────────────────────────────────────────────────
+/**
+ * Every assessment write also invalidates the GRADEBOOKS: the per-assessment grading page
+ * finds its assessment in the offering's gradebook, not in this list. Invalidating only
+ * the list left a gradebook cached before a create without the new assessment, so opening
+ * it straight from the list said "Assessment not found".
+ */
 function useInvalidateAssessments() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: assessmentKeys.all });
+  return () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: assessmentKeys.all }),
+      qc.invalidateQueries({ queryKey: ['grades', 'gradebook'] }),
+    ]);
 }
 
 export function useCreateAssessment() {
