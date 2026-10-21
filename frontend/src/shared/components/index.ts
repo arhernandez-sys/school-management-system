@@ -18,6 +18,8 @@ export { FilterBar } from './FilterBar';
 export type { FilterBarProps } from './FilterBar';
 export { YearSelect, ALL_YEARS } from './YearSelect';
 export type { YearSelectProps } from './YearSelect';
+export { SessionSelect, ALL_SESSIONS } from './SessionSelect';
+export type { SessionSelectProps } from './SessionSelect';
 export { StatusBadge } from './StatusBadge';
 export type { StatusBadgeProps, StatusKind } from './StatusBadge';
 export { RoleChip } from './RoleChip';

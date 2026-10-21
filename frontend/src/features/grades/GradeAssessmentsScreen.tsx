@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Box,
   Card,
   CardActionArea,
@@ -17,9 +18,10 @@ import {
   ErrorState,
   LoadingState,
   PageHeader,
+  SessionSelect,
   YearSelect,
 } from '@shared/components';
-import { useYearFilter } from '@shared/hooks';
+import { useSessionFilter, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { strings } from '@i18n/strings';
 import { useOfferingOptions } from './hooks/useGrades';
@@ -49,6 +51,9 @@ export function GradeAssessmentsScreen() {
   // narrowing. A lecturer sees only their own, where these would be noise.
   const showBrowseFilters = user?.role === 'principal' || user?.role === 'secretary';
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  // Session beside the year, for every role, defaulting to the active one. Any other
+  // session is browsed read-only — the server reports `can_edit: false` for it too.
+  const session = useSessionFilter(yearId);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get(OFFERING_PARAM);
@@ -60,39 +65,27 @@ export function GradeAssessmentsScreen() {
     [options, selectedId],
   );
 
-  // ── Lecturer / Term filters (Dean + Registrar only) ──────────────────────────────
+  // ── Lecturer filter (Dean + Registrar only) ──────────────────────────────────────
   const [teacherId, setTeacherId] = useState('');
-  const [semesterId, setSemesterId] = useState('');
 
-  // Distinct filter options derived from the offerings the caller can see.
-  const { teachers, semesters } = useMemo(() => {
+  // Distinct lecturers derived from the offerings the caller can see.
+  const teachers = useMemo(() => {
     const teacherMap = new Map<string, string>();
-    const semesterMap = new Map<string, { name: string; sequence: number }>();
-    for (const o of options) {
-      for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
-      const sem = o.offering.semester;
-      if (sem) semesterMap.set(sem.id, { name: sem.name, sequence: sem.sequence });
-    }
-    return {
-      teachers: [...teacherMap.entries()]
-        .map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      // Ordered by the term's own sequence, not by its name — "Semester 10" must not sort
-      // before "Semester 2".
-      semesters: [...semesterMap.entries()]
-        .map(([id, s]) => ({ id, ...s }))
-        .sort((a, b) => a.sequence - b.sequence),
-    };
+    for (const o of options) for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
+    return [...teacherMap.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [options]);
 
-  const filteredOptions = useMemo(() => {
-    if (!showBrowseFilters) return options;
-    return options.filter(
-      (o) =>
-        (!teacherId || o.teachers.some((t) => t.id === teacherId)) &&
-        (!semesterId || o.offering.semester?.id === semesterId),
-    );
-  }, [options, showBrowseFilters, teacherId, semesterId]);
+  const filteredOptions = useMemo(
+    () =>
+      options.filter(
+        (o) =>
+          (!session.sessionId || o.offering.semester?.id === session.sessionId) &&
+          (!showBrowseFilters || !teacherId || o.teachers.some((t) => t.id === teacherId)),
+      ),
+    [options, session.sessionId, showBrowseFilters, teacherId],
+  );
 
   // Drop a stale ?offering_id= that isn't in the current year's options.
   useEffect(() => {
@@ -125,6 +118,8 @@ export function GradeAssessmentsScreen() {
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', id);
+        // A session belongs to one year; the new year resolves its own default.
+        next.delete('session');
         next.delete(OFFERING_PARAM);
         return next;
       },
@@ -165,6 +160,13 @@ export function GradeAssessmentsScreen() {
           isLoading={yearsLoading}
         />
 
+        <SessionSelect
+          value={session.sessionId}
+          onChange={session.setSessionId}
+          sessions={session.sessions}
+          isLoading={session.isLoading}
+        />
+
         {showBrowseFilters && (
           <>
             <TextField
@@ -183,26 +185,15 @@ export function GradeAssessmentsScreen() {
                 </MenuItem>
               ))}
             </TextField>
-
-            <TextField
-              select
-              size="small"
-              label="Session"
-              value={semesterId}
-              onChange={(e) => setSemesterId(e.target.value)}
-              disabled={semesters.length === 0}
-              sx={{ minWidth: 160 }}
-            >
-              <MenuItem value="">All sessions</MenuItem>
-              {semesters.map((s) => (
-                <MenuItem key={s.id} value={s.id}>
-                  {s.name}
-                </MenuItem>
-              ))}
-            </TextField>
           </>
         )}
       </Stack>
+
+      {!session.isLoading && session.sessionId && !session.isActive && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          This session is not active. Its assessments and grades are read-only.
+        </Alert>
+      )}
 
       {optionsQuery.isLoading && (
         <LoadingState variant="cards" rows={6} label="Loading course offerings" />
@@ -231,7 +222,7 @@ export function GradeAssessmentsScreen() {
         <EmptyState
           variant="page"
           title="No offerings match these filters"
-          description="Try clearing the lecturer or session filter."
+          description="Try another session, or clear the lecturer filter."
         />
       )}
 

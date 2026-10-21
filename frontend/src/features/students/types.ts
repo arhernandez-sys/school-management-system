@@ -339,6 +339,8 @@ export interface StudentsListParams {
   year_of_study?: string;
   /** Per-module year switcher: restrict to students enrolled in this academic year. */
   academic_year_id?: string;
+  /** The session switcher: students enrolled in that session. */
+  semester_id?: string;
   /**
    * D32 (brief §3). All three AND with each other and with everything above, and they
    * filter the STUDENT RECORD rather than their enrolment — so a graduated student still

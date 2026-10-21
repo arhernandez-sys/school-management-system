@@ -18,14 +18,18 @@ import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import PrintIcon from '@mui/icons-material/Print';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import {
+  ALL_SESSIONS,
   ALL_YEARS,
   DataTable,
   PageHeader,
+  SessionSelect,
   StatusBadge,
+  YearSelect,
   type DataTableColumn,
 } from '@shared/components';
-import { useDebounce, useYearFilter } from '@shared/hooks';
+import { useDebounce, useSessionFilter, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
+import { isLecturerRole } from '@shared/auth/permissions';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
 import { surnameFirst } from '@shared/utils/names';
@@ -161,6 +165,12 @@ export function StudentsListPage() {
   // the sentinel would have the server look for an academic year called "all" and answer
   // with nothing, which looks exactly like a directory that has no students in it.
   const showAllYears = effectiveYearId === ALL_YEARS;
+  // The session beside the year scopes the list to students enrolled in it. A lecturer
+  // defaults to the active session; admin roles default to the full register (newly
+  // admitted students are not in any class yet) and narrow only when they pick one.
+  // "All years" is the whole register, so it has no session.
+  const session = useSessionFilter(showAllYears ? undefined : effectiveYearId);
+  const allSessions = !isLecturerRole(user?.role) && !session.isExplicit;
 
   const params = useMemo<StudentsListParams>(
     () => ({
@@ -170,6 +180,7 @@ export function StudentsListPage() {
       // Filters on the student's OWN level, not on anything derived from what they take.
       year_of_study: filters.yearOfStudy || undefined,
       academic_year_id: showAllYears ? undefined : effectiveYearId || undefined,
+      semester_id: showAllYears || allSessions ? undefined : session.sessionId || undefined,
       gender: filters.gender || undefined,
       religion: filters.religion || undefined,
       civil_status: filters.civilStatus || undefined,
@@ -183,6 +194,8 @@ export function StudentsListPage() {
       filters,
       effectiveYearId,
       showAllYears,
+      allSessions,
+      session.sessionId,
       page,
       pageSize,
       sortField,
@@ -467,6 +480,34 @@ export function StudentsListPage() {
             placeholder="Search by name or student #…"
             sx={{ flexGrow: 1, minWidth: { sm: 240 } }}
           />
+          {/* Year and session side by side, as on the other staff screens. The year is
+              also in the Filters dialog; both write the same state. */}
+          <YearSelect
+            value={effectiveYearId}
+            onChange={(id) => {
+              setFilters((prev) => ({ ...prev, yearId: id }));
+              // `ALL_YEARS` stays local to this directory — see `applyFilters`.
+              if (id !== ALL_YEARS) setYearId(id);
+              setPage(0);
+            }}
+            years={years}
+            activeYearId={activeYearId}
+            isLoading={yearsLoading}
+            allowAll
+          />
+          {!showAllYears && (
+            <SessionSelect
+              value={allSessions ? ALL_SESSIONS : session.sessionId}
+              onChange={(id) => {
+                if (id === ALL_SESSIONS) session.clearSessionId();
+                else session.setSessionId(id);
+                setPage(0);
+              }}
+              sessions={session.sessions}
+              isLoading={session.isLoading}
+              allLabel={isLecturerRole(user?.role) ? undefined : 'All sessions'}
+            />
+          )}
           <Badge badgeContent={filterCount} color="primary" overlap="rectangular">
             <Button
               variant="outlined"

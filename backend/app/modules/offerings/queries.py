@@ -66,3 +66,33 @@ def year_of_offering(db, offering):
         .join(Semester, Semester.academic_year_id == AcademicYear.id)
         .where(Semester.id == offering.semester_id)
     )
+
+
+SESSION_INACTIVE_MESSAGE = (
+    "This session is not active. Its assessments and grades are read-only."
+)
+
+
+def offering_session_active(db, offering) -> bool:
+    """Whether the offering's own semester (session) is the active one.
+
+    Assessments and grades belong to the offering's term, so this — not the school's
+    active semester in the abstract — is what decides whether they can still change.
+    """
+    if offering.semester_id is None:
+        return False
+    return bool(
+        db.scalar(select(Semester.is_active).where(Semester.id == offering.semester_id))
+    )
+
+
+def assert_offering_session_active(db, offering) -> None:
+    """409 `session_inactive` when the offering's session is not the active one.
+
+    Called from the assessment, category, release and grade write guards so a past or
+    future session can be browsed but never overwritten.
+    """
+    from app.core.errors import Conflict
+
+    if not offering_session_active(db, offering):
+        raise Conflict(SESSION_INACTIVE_MESSAGE, code="session_inactive")

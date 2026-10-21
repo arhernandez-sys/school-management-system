@@ -23,10 +23,11 @@ import {
   PageHeader,
   StatusBadge,
   ConfirmDialog,
+  SessionSelect,
   YearSelect,
   type DataTableColumn,
 } from '@shared/components';
-import { useYearFilter } from '@shared/hooks';
+import { useSessionFilter, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
@@ -68,7 +69,6 @@ export function AssessmentsListScreen() {
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
   const isStudent = user?.role === 'student';
-  const canAuthor = isTeacher; // P/S are view-all (OQ-API-2)
   const canGrade = !isStudent; // teacher (edit) + P/S (read-only) open the grading page
 
   /**
@@ -84,8 +84,13 @@ export function AssessmentsListScreen() {
    * for a student its result is deliberately unused.
    */
   const staffYear = useYearFilter();
+  // Staff pick a session beside the year; it defaults to the active one. Only the active
+  // session is writable — any other is browsed read-only (the server enforces the same).
+  const staffSession = useSessionFilter(staffYear.yearId);
   const { selectedYearId, selectedSemesterId, selectedPeriod } = useSelectedYear();
   const yearId = isStudent ? selectedYearId : staffYear.yearId;
+  const sessionReadOnly = !isStudent && !staffSession.isLoading && !staffSession.isActive;
+  const canAuthor = isTeacher && !sessionReadOnly; // P/S are view-all (OQ-API-2)
 
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedOfferingId = searchParams.get(OFFERING_PARAM) ?? '';
@@ -97,7 +102,12 @@ export function AssessmentsListScreen() {
   const optionsQuery = useOfferingPickerOptions(yearId);
   // Memoized because the reconcile effect below depends on it — a fresh `[]` literal on
   // every render would re-run that effect continuously.
-  const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
+  // Staff see only the chosen session's offerings; an offering belongs to one session.
+  const options = useMemo(() => {
+    const all = optionsQuery.data ?? [];
+    if (isStudent || !staffSession.sessionId) return all;
+    return all.filter((o) => o.semester?.id === staffSession.sessionId);
+  }, [optionsQuery.data, isStudent, staffSession.sessionId]);
   const selectedOption = options.find((o) => o.id === selectedOfferingId) ?? null;
 
   const setSelectedOfferingId = useCallback(
@@ -139,15 +149,16 @@ export function AssessmentsListScreen() {
     () => ({
       offering_id: selectedOfferingId || undefined,
       academic_year_id: yearId || undefined,
-      // Students only: staff scope by year here and manage every term of an offering
-      // together. `semester_id` is what makes the switcher's "· Semester 2" mean
-      // something instead of listing the whole year under that heading.
-      semester_id: isStudent ? (selectedSemesterId || undefined) : undefined,
+      // Students: the top-bar switcher's semester. Staff: the session picked beside
+      // the year, so a year's active and inactive sessions are never mixed together.
+      semester_id: isStudent
+        ? selectedSemesterId || undefined
+        : staffSession.sessionId || undefined,
       page: page + 1,
       page_size: pageSize,
       sort: '-assessment_date',
     }),
-    [selectedOfferingId, yearId, isStudent, selectedSemesterId, page, pageSize],
+    [selectedOfferingId, yearId, isStudent, selectedSemesterId, staffSession.sessionId, page, pageSize],
   );
   const listQuery = useAssessmentsList(listParams, Boolean(selectedOfferingId));
 
@@ -163,11 +174,6 @@ export function AssessmentsListScreen() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string[]>>({});
   const categoriesQuery = useAssessmentCategories(formOpen ? selectedOfferingId || null : null);
-  // Every assessment write needs the REAL active semester id — the school's CURRENT
-  // term, not `selectedSemesterId` (what the reader is browsing). Read from YearContext,
-  // which already holds `GET /settings/active-term` — no extra request. It was a
-  // hardcoded demo-dataset id here, which no real database contains.
-  const { activeSemesterId } = useSelectedYear();
 
   const openCreate = () => {
     setEditing(null);
@@ -205,18 +211,12 @@ export function AssessmentsListScreen() {
         { onSuccess: () => setFormOpen(false), onError },
       );
     } else {
-      // No active semester → the write cannot be formed. Say so instead of posting a
-      // request the server will reject with an error nobody can act on.
-      if (!activeSemesterId) {
-        setFormError(
-          'No active semester is set for the school. An administrator must set the active session before assessments can be created.',
-        );
-        return;
-      }
+      // No `semester_id`: the server stamps the offering's own session. Sending the
+      // school's active semester here is what made new assessments vanish from the
+      // gradebook of an offering running in a different session.
       createMut.mutate(
         {
           offering_id: selectedOfferingId,
-          semester_id: activeSemesterId,
           title: values.title,
           category_id: values.category_id,
           assessment_date: values.assessment_date,
@@ -402,6 +402,18 @@ export function AssessmentsListScreen() {
             isLoading={staffYear.isLoading}
           />
         )}
+        {!isStudent && (
+          <SessionSelect
+            value={staffSession.sessionId}
+            onChange={(id) => {
+              setSelectedOfferingId('');
+              staffSession.setSessionId(id);
+              setPage(0);
+            }}
+            sessions={staffSession.sessions}
+            isLoading={staffSession.isLoading}
+          />
+        )}
         <OfferingPicker
           options={options}
           value={selectedOfferingId}
@@ -410,6 +422,12 @@ export function AssessmentsListScreen() {
           disabled={optionsQuery.isError}
         />
       </Stack>
+
+      {sessionReadOnly && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          This session is not active. Its assessments and grades are read-only.
+        </Alert>
+      )}
 
       {optionsQuery.isError && (
         <Alert severity="error" sx={{ mb: 2 }} role="alert">

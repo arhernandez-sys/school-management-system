@@ -584,6 +584,7 @@ def list_students(
     civil_status: str | None = None,
     gender: str | None = None,
     program_id: uuid.UUID | None = None,
+    semester_id: uuid.UUID | None = None,
 ):
     """GET /students (P/S/Teacher). Page[StudentListItem]; default sort by surname.
 
@@ -606,11 +607,16 @@ def list_students(
     who hold no active enrollment. Filtering on the active year would quietly empty
     the `status=graduated` view (mock: `academic_year_id !== activeYearId`).
     """
-    semester_id = _active_semester_id(db)
+    # An explicit session (the session switcher) scopes the enrolment check to that
+    # term. Without one, the live view falls back to the active session as before.
+    chosen_semester_id = semester_id
+    semester_id = chosen_semester_id or _active_semester_id(db)
     # Only a PAST year scopes the roster; the active year means "the directory".
     past_year_id = (
         academic_year_id
-        if academic_year_id is not None and academic_year_id != _active_year_id(db)
+        if chosen_semester_id is None
+        and academic_year_id is not None
+        and academic_year_id != _active_year_id(db)
         else None
     )
 
@@ -712,7 +718,8 @@ def list_students(
     # the joins fan out — which matters much more under D29, where a student has many
     # enrollments and a plain join would return them once per class.
     needs_enrollment_scope = (
-        past_year_id is not None
+        chosen_semester_id is not None
+        or past_year_id is not None
         or offering_id is not None
         or caller.role == Role.TEACHER
     )
@@ -736,6 +743,10 @@ def list_students(
                     )
                 )
             )
+        elif chosen_semester_id is not None and chosen_semester_id != _active_semester_id(db):
+            # A past (or future) session chosen in the switcher: its roster as it stood,
+            # so enrolments ended since then still count, as for a past year above.
+            enr = enr.where(ClassEnrollment.semester_id == chosen_semester_id)
         else:
             # Live view: constrain to the active semester when known so section /
             # grade filters and teacher scope reflect the current term.

@@ -36,6 +36,7 @@ import { useGradebook, useSaveGrades, useSetRelease } from './hooks/useGrades';
 import type { GradeEntry, RevisionBlockedReason } from './types';
 import { formatSchoolDateTime } from '@shared/utils/schoolDate';
 import { isLecturerRole } from '@shared/auth/permissions';
+import { useIsSessionActive } from '@shared/hooks';
 
 /**
  * Tooltip copy per blocked reason (D32, brief §1). Short by design — the server's
@@ -107,6 +108,9 @@ export function AssessmentGradingScreen() {
   }, [assessmentId, offeringId]);
 
   const gradebook = gradebookQuery.data;
+  // An inactive session is read-only; the server already returns `can_edit: false` for
+  // it, this only explains why.
+  const sessionActive = useIsSessionActive(gradebook?.semester?.id);
   const assessment = useMemo(
     () => gradebook?.assessments.find((a) => a.id === assessmentId) ?? null,
     [gradebook, assessmentId],
@@ -298,6 +302,12 @@ export function AssessmentGradingScreen() {
               </Button>
             )}
           </Stack>
+          {sessionActive === false && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {gradebook.semester?.name ?? 'This session'} is not active. Its grades are
+              read-only.
+            </Alert>
+          )}
 
           {/* D33 ask 7 — the freeze, explained with its REOPEN DATE, BEFORE the Lecturer
               types forty marks into a form that will refuse them. "Frozen" on its own is

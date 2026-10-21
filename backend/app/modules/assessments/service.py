@@ -37,14 +37,18 @@ from app.modules.assessments.schemas import (
     ReleaseResult,
 )
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
-from app.modules.offerings.queries import offerings_in_year, year_of_offering
+from app.modules.offerings.queries import (
+    assert_offering_session_active,
+    offerings_in_year,
+    year_of_offering,
+)
 from app.modules.offerings.models import (
     CourseOffering,
     ClassEnrollment,
     ClassTeacher,
     Course,
 )
-from app.modules.settings.models import AcademicYear, AuditLog, Semester
+from app.modules.settings.models import AcademicYear, AuditLog
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
 from app.modules.users.models import User
@@ -112,10 +116,6 @@ def _assessment_or_404(db: Session, assessment_id: uuid.UUID) -> Assessment:
     return a
 
 
-def _active_semester_id(db: Session) -> uuid.UUID | None:
-    return db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))
-
-
 def _assert_cs_year_writable(db: Session, cs: CourseOffering) -> None:
     section = cs  # D31: the offering IS the section
     if section is not None and section.is_archived:
@@ -124,6 +124,8 @@ def _assert_cs_year_writable(db: Session, cs: CourseOffering) -> None:
         year = year_of_offering(db, section)
         if year is not None and year.archived_at is not None:
             raise Conflict("The academic year is archived.", code="year_archived")
+    # Only the active session's assessments and categories may change.
+    assert_offering_session_active(db, cs)
 
 
 def _offering_ref_by_id(db: Session, offering_id: uuid.UUID) -> OfferingRef | None:
@@ -360,9 +362,16 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
     assert_teacher_owns_offering(db, actor, cs.id)  # 404 if not owner
     _assert_cs_year_writable(db, cs)
 
-    semester_id = payload.semester_id or _active_semester_id(db)
-    if semester_id is None:
-        raise Conflict("No active semester is configured.", code="no_active_semester")
+    # The term comes from the offering, not from "the active semester": the gradebook
+    # lists an offering's assessments by `cs.semester_id`, so stamping anything else here
+    # made a freshly created assessment invisible ("Assessment not found").
+    semester_id = cs.semester_id
+    if payload.semester_id is not None and payload.semester_id != semester_id:
+        raise Conflict(
+            "The assessment's session must match the course offering's session.",
+            code="semester_mismatch",
+            fields={"semester_id": ["Must be the course offering's session."]},
+        )
 
     if payload.category_id is not None:
         _assert_category_matches_cs(db, payload.category_id, cs.id)

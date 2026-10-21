@@ -38,7 +38,13 @@ from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments import release_nudge
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
-from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
+from app.modules.offerings.queries import (
+    assert_offering_session_active,
+    offering_session_active,
+    offerings_in_year,
+    year_id_of_offering,
+    year_of_offering,
+)
 from app.modules.offerings.models import (
     CourseOffering,
     ClassEnrollment,
@@ -137,6 +143,8 @@ def _assert_year_writable(db: Session, cs: CourseOffering) -> None:
         year = year_of_offering(db, section)
         if year is not None and year.archived_at is not None:
             raise Conflict("The academic year is archived.", code="year_archived")
+    # Grades in an inactive session are read-only.
+    assert_offering_session_active(db, cs)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -536,11 +544,14 @@ def list_offering_options(
         ).all():
             counts[cs_id] = total
 
+    # One lookup, not one per offering: only the active session's offerings are editable.
+    active_semester_id = db.scalar(select(Semester.id).where(Semester.is_active.is_(True)))
     items = [
         OfferingOption(
             **_offering_ref(cs, subject, teachers_by_cs.get(cs.id, [])).model_dump(),
             assessment_count=counts.get(cs.id, 0),
-            can_edit=is_teacher if editable_ids is None else cs.id in editable_ids,
+            can_edit=(is_teacher if editable_ids is None else cs.id in editable_ids)
+            and cs.semester_id == active_semester_id,
         )
         for cs, subject in rows
     ]
@@ -674,7 +685,8 @@ def get_gradebook(
     semester_id: uuid.UUID | None,
 ) -> Gradebook:
     cs = _cs_or_404(db, offering_id)
-    can_edit = _assert_readable(db, actor, cs)
+    # A gradebook in an inactive session renders read-only for everyone.
+    can_edit = _assert_readable(db, actor, cs) and offering_session_active(db, cs)
 
     section = cs  # D31: the offering IS the section
     subject = db.get(Course, cs.course_id)

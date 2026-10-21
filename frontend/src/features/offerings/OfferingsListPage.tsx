@@ -20,10 +20,11 @@ import {
   PageHeader,
   StatusBadge,
   SearchableSelect,
+  SessionSelect,
   YearSelect,
   type DataTableColumn,
 } from '@shared/components';
-import { useDebounce, useYearFilter } from '@shared/hooks';
+import { useDebounce, useSessionFilter, useYearFilter } from '@shared/hooks';
 import { canWrite } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { ROUTES } from '@shared/constants/routes';
@@ -67,6 +68,9 @@ export function OfferingsListPage() {
   const canManage = user ? canWrite(user.role, 'offerings') : false;
 
   const { yearId, setYearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  // The session beside the year, defaulting to the active one, so a year's sessions are
+  // listed one at a time instead of mixed together.
+  const session = useSessionFilter(yearId);
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
@@ -94,6 +98,7 @@ export function OfferingsListPage() {
       search: debouncedSearch || undefined,
       // Filters THROUGH the offering's semester — an offering carries no year of its own.
       academic_year_id: yearId || undefined,
+      semester_id: session.sessionId || undefined,
       course_id: courseId || undefined,
       page: page + 1, // API is 1-based
       page_size: pageSize,
@@ -101,7 +106,7 @@ export function OfferingsListPage() {
       // NOT sort the formatted string, which would put "MATH1110-2" before "MATH1110-10".
       sort: 'label',
     }),
-    [debouncedSearch, yearId, courseId, page, pageSize],
+    [debouncedSearch, yearId, session.sessionId, courseId, page, pageSize],
   );
 
   const query = useOfferingsList(params);
@@ -114,13 +119,15 @@ export function OfferingsListPage() {
    *  would recognise — a caption reading `course_id 9f3c…` is worse than no caption. */
   const filterSummary = useMemo(() => {
     const yearName = years.find((y) => y.id === yearId)?.name;
+    const sessionName = session.sessions.find((x) => x.id === session.sessionId)?.name;
     const course = courseOptions.find((c) => c.id === courseId);
     return [
       ...(debouncedSearch ? [`Search "${debouncedSearch}"`] : []),
       ...(yearName ? [`Year ${yearName}`] : []),
+      ...(sessionName ? [`Session ${sessionName}`] : []),
       ...(course ? [`Course ${course.code} — ${course.name}`] : []),
     ];
-  }, [debouncedSearch, yearId, years, courseId, courseOptions]);
+  }, [debouncedSearch, yearId, years, session.sessions, session.sessionId, courseId, courseOptions]);
 
   const createMut = useCreateOffering();
   // Keyed by the row under edit. `?? ''` keeps the hook unconditional — it is only ever
@@ -347,6 +354,15 @@ export function OfferingsListPage() {
               years={years}
               activeYearId={activeYearId}
               isLoading={yearsLoading}
+            />
+            <SessionSelect
+              value={session.sessionId}
+              onChange={(id) => {
+                session.setSessionId(id);
+                setPage(0);
+              }}
+              sessions={session.sessions}
+              isLoading={session.isLoading}
             />
             {showCourseFilter && (
               // D43-b — type-to-filter. This picker lists the whole catalog (114

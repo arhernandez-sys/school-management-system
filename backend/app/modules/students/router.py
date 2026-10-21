@@ -86,6 +86,7 @@ def list_students(
     offering_id: Annotated[uuid.UUID | None, Query()] = None,
     year_of_study: Annotated[str | None, Query(max_length=50)] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
     religion: Annotated[str | None, Query(max_length=100)] = None,
     civil_status: Annotated[str | None, Query(max_length=50)] = None,
     gender: Annotated[str | None, Query(max_length=20)] = None,
@@ -101,6 +102,10 @@ def list_students(
     course offering. `academic_year_id` (year switcher) restricts the directory to
     students enrolled in that year when it is a PAST year; the active year lists
     everyone.
+
+    `semester_id` (session switcher) restricts the list to students enrolled in that
+    session. It takes precedence over `academic_year_id` for the enrolment scope, and is
+    what a lecturer's list follows instead of the school's active session.
 
     **D32 (brief §3) adds `religion`, `gender` and `program_id`.** Server-side, and they
     AND with each other and with everything above — "all Female students in Programme X"
@@ -130,6 +135,7 @@ def list_students(
         program_id=program_id,
         year_of_study=year_of_study,
         academic_year_id=academic_year_id,
+        semester_id=semester_id,
     )
 
 
