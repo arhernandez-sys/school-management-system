@@ -258,6 +258,10 @@ class StudentDetail(_AdmissionProfileFields):
     #: whether THIS viewer may open it. See that class for why the list is no longer
     #: filtered.
     current_offerings: list[StudentOfferingRef] = Field(default_factory=list)
+    #: The Dean's per-student grade hold (`PUT /students/{id}/grades-withheld`). Staff
+    #: reads only: `None` on the student's own `/students/me`, where it is not theirs to
+    #: read any more than the Registrar's `comments` are.
+    grades_withheld: bool | None = None
     audit: AuditStamp | None = None
 
 
@@ -446,6 +450,18 @@ class ProgramRef(BaseModel):
     id: UUID
     code: str = ""
     name: str = ""
+
+
+class GradesWithheldRequest(BaseModel):
+    """PUT /students/{id}/grades-withheld — the Dean's per-student hold."""
+
+    model_config = ConfigDict(extra="forbid")
+    withheld: bool
+
+
+class GradesWithheldResponse(BaseModel):
+    student_id: UUID
+    grades_withheld: bool
 
 
 class ProgramChangeRequest(BaseModel):

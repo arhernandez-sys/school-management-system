@@ -58,6 +58,7 @@ from app.modules.students.models import StudentProfile, StudentProgramHistory
 from app.common.numbering import allocate_student_number
 from app.modules.programs.models import Program
 from app.modules.students.schemas import (
+    GradesWithheldResponse,
     ProgramRef,
     StudentAssessmentGroup,
     StudentAssessmentLine,
@@ -1022,9 +1023,12 @@ def get_my_student(
     since that comes from `caller` alone."""
     student = _my_student_or_404(db, caller)
     semester_id = _active_semester_id(db)
-    return _detail(
+    detail = _detail(
         db, student, semester_id=semester_id, academic_year_id=academic_year_id
     )
+    # The Dean's per-student grade hold is a staff fact, not the student's to read.
+    detail.grades_withheld = None
+    return detail
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1343,6 +1347,32 @@ def update_student(
     _audit(db, actor=actor, action="student.update", entity_id=student.id)
     db.commit()
     return _detail(db, student, semester_id=_active_semester_id(db))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PUT /students/{id}/grades-withheld — the Dean's per-student grade hold
+# ──────────────────────────────────────────────────────────────────────────────
+def set_grades_withheld(
+    db: Session, *, actor: User, student_id: uuid.UUID, withheld: bool
+) -> GradesWithheldResponse:
+    """Hide (or un-hide) one student's grades while the school-wide switch is on.
+
+    Idempotent: setting the value it already has writes nothing and logs nothing, so a
+    double-click cannot leave two audit rows for one decision.
+    """
+    student = _student_or_404(db, student_id)
+    if student.grades_withheld != withheld:
+        student.grades_withheld = withheld
+        student.updated_by = actor.id
+        _audit(
+            db,
+            actor=actor,
+            action="student.grades_withheld" if withheld else "student.grades_unwithheld",
+            entity_id=student.id,
+            summary={"grades_withheld": withheld},
+        )
+        db.commit()
+    return GradesWithheldResponse(student_id=student.id, grades_withheld=withheld)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

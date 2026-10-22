@@ -112,8 +112,12 @@ def _student_offering_ids(
     *,
     student_id: uuid.UUID,
     academic_year_id: uuid.UUID | None,
+    semester_id: uuid.UUID | None = None,
 ) -> list[uuid.UUID]:
     """The classes a student actively sits, in ONE term of the given year.
+
+    `semester_id` names that term outright (the student's top-bar switcher). Without it
+    the term is inferred by `_narrow_to_one_term`.
 
     Scoped through `semesters` rather than the offering's year so a class whose year was
     later corrected cannot appear under two years at once: the enrolment's own semester
@@ -131,6 +135,9 @@ def _student_offering_ids(
     )
     if academic_year_id is not None:
         stmt = stmt.where(Semester.academic_year_id == academic_year_id)
+    if semester_id is not None:
+        stmt = stmt.where(ClassEnrollment.semester_id == semester_id)
+        return list(dict.fromkeys(row[0] for row in db.execute(stmt)))
     return _narrow_to_one_term(db, [(row[0], row[1]) for row in db.execute(stmt)])
 
 
@@ -253,7 +260,11 @@ def _build_view(
 # GET /timetable/me
 # ══════════════════════════════════════════════════════════════════════════════
 def my_timetable(
-    db: Session, *, caller: User, academic_year_id: uuid.UUID | None
+    db: Session,
+    *,
+    caller: User,
+    academic_year_id: uuid.UUID | None,
+    semester_id: uuid.UUID | None = None,
 ) -> TimetableView:
     """The caller's own week.
 
@@ -273,7 +284,7 @@ def my_timetable(
             # A login not linked to a student record: an empty week, like P/S get.
             return _build_view(db, offering_ids=[], academic_year_id=year_id)
         offering_ids = _student_offering_ids(
-            db, student_id=profile.id, academic_year_id=year_id
+            db, student_id=profile.id, academic_year_id=year_id, semester_id=semester_id
         )
         return _build_view(
             db,

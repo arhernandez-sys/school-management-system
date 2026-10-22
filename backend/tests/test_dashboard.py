@@ -659,6 +659,10 @@ class TestTeacherAwaitingRelease:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# D32 — the grade block on this payload obeys the Dean's switch like `/grades/me` does,
+# so this suite (about WHAT the student sees) opts in. The OFF case is
+# `test_student_grade_visibility.py::TestTheDashboardGradeBlockIsGated`.
+@pytest.mark.usefixtures("student_grades_visible")
 class TestStudentVariant:
     def test_top_level_keys(self, client, graph) -> None:
         body = client.get(DB, headers=graph.U).json()

@@ -77,6 +77,10 @@ class CurrentUser(BaseModel):
     #: member needs to see the same value to answer "why can't my students see marks?",
     #: and making it mean different things per role would make that impossible.
     students_can_view_grades: bool = False
+    #: The Dean has withheld THIS student's grades individually, even while
+    #: `students_can_view_grades` is on. Only ever True on a student's own session.
+    #: UX signal only — `require_student_grade_visibility` is the boundary.
+    grades_withheld: bool = False
 
 
 class UserRef(BaseModel):

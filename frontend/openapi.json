@@ -19577,6 +19577,11 @@
             "type": "boolean",
             "title": "Students Can View Grades",
             "default": false
+          },
+          "grades_withheld": {
+            "type": "boolean",
+            "title": "Grades Withheld",
+            "default": false
           }
         },
         "type": "object",

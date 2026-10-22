@@ -1227,25 +1227,29 @@ def get_my_grades(
         active = _active_year(db)
         year_id = active.id if active is not None else None
 
-    # Resolve the section this student sat in for the selected year, via their
-    # enrollments joined to that year's semesters.
-    section: CourseOffering | None = None
+    # D29: EVERY offering the student sits, not one homeroom. This resolved a single
+    # `section` (`.limit(1)`) — correct under K-12, but a tertiary student takes several
+    # courses at once, so only the most recent enrollment's results ever reached them
+    # (and nothing at all when that one course had nothing released yet). Same fix the
+    # student dashboard already carries.
+    enrolled = (
+        select(ClassEnrollment.offering_id)
+        .where(ClassEnrollment.student_id == student.id)
+    )
     if year_id is not None:
-        section = db.scalar(
-            select(CourseOffering)
-            .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
-            .join(Semester, ClassEnrollment.semester_id == Semester.id)
-            .where(
-                ClassEnrollment.student_id == student.id,
-                Semester.academic_year_id == year_id,
-            )
-            .order_by(ClassEnrollment.enrolled_at.desc())
-            .limit(1)
+        enrolled = enrolled.join(Semester, ClassEnrollment.semester_id == Semester.id).where(
+            Semester.academic_year_id == year_id
         )
-    # Fallback to the student's current enrollment ONLY when no year was asked for.
+        # Narrow to the picked session, so a course from another session of the same year
+        # does not appear as an empty card under this one's heading.
+        if semester_id is not None:
+            enrolled = enrolled.where(ClassEnrollment.semester_id == semester_id)
+    offering_ids = list(dict.fromkeys(db.scalars(enrolled).all()))
+
+    # Fallback to the student's current enrollments ONLY when no year was asked for.
     #
     # ⚠️ This condition is the fix for a real defect. The fallback used to run whenever
-    # `section is None`, including when the caller had explicitly named a year the
+    # nothing matched, including when the caller had explicitly named a year the
     # student has no enrollment in — so `/grades/me?academic_year_id=<other-or-stale>`
     # silently returned the CURRENT year's grades under the requested year's heading.
     # The student's own year switcher only offers years they were enrolled in, so this
@@ -1255,44 +1259,44 @@ def get_my_grades(
     #
     # Keeping the fallback for the `academic_year_id is None` case is deliberate: that
     # is the "school has no active year configured" path, where showing the student
-    # their most recent enrollment is better than showing nothing.
+    # their current enrollments is better than showing nothing.
     #
     # With a year requested and no enrollment in it, the correct answer is an EMPTY
     # result, which is what `/attendance/me` already does for the same situation
     # (it filters records by that year's semesters with no fallback). Matching it
     # keeps the two student year-switcher surfaces consistent with each other.
-    if section is None and academic_year_id is None:
-        section = db.scalar(
-            select(CourseOffering)
-            .join(ClassEnrollment, ClassEnrollment.offering_id == CourseOffering.id)
-            .where(
-                ClassEnrollment.student_id == student.id,
-                ClassEnrollment.unenrolled_at.is_(None),
+    if not offering_ids and academic_year_id is None:
+        offering_ids = list(
+            dict.fromkeys(
+                db.scalars(
+                    select(ClassEnrollment.offering_id).where(
+                        ClassEnrollment.student_id == student.id,
+                        ClassEnrollment.unenrolled_at.is_(None),
+                    )
+                ).all()
             )
-            .order_by(ClassEnrollment.enrolled_at.desc())
-            .limit(1)
         )
 
     student_ref = StudentRef(
         id=student.id, full_name=student.full_name, student_number=student.student_number
     )
-    if section is None:
+    if not offering_ids:
         return MyGrades(student=student_ref, by_subject=[])
 
-    year = year_of_offering(db, section)
     school = _school_policy(db)
-    bands, _pass_mark = _bands_for_section(db, section)
 
     offerings = db.execute(
         select(CourseOffering, Course)
         .join(Course, CourseOffering.course_id == Course.id)
         # As in the picker: no `is_active` filter, so a past year still lists.
-        .where(CourseOffering.id == section.id, CourseOffering.deleted_at.is_(None))
+        .where(CourseOffering.id.in_(offering_ids), CourseOffering.deleted_at.is_(None))
     ).all()
     teachers_by_cs = _teacher_rows(db, [cs.id for cs, _ in offerings])
 
     by_subject: list[MyGradeSubject] = []
     for cs, subject in offerings:
+        year = year_of_offering(db, cs)
+        bands, _pass_mark = _bands_for_section(db, cs)
         assessments = _assessments_for(db, cs.id, semester_id)
         assessment_ids = [a.id for a in assessments]
         student_grades = {

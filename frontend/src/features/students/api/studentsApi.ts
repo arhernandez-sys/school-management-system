@@ -139,6 +139,18 @@ export async function setStudentStatus(id: string, status: StudentStatus): Promi
   return res.data;
 }
 
+/** PUT /students/{id}/grades-withheld — the Dean's per-student grade hold. Dean only. */
+export async function setGradesWithheld(
+  id: string,
+  withheld: boolean,
+): Promise<{ student_id: string; grades_withheld: boolean }> {
+  const res = await api.put<{ student_id: string; grades_withheld: boolean }>(
+    `/students/${id}/grades-withheld`,
+    { withheld },
+  );
+  return res.data;
+}
+
 /** DELETE /students/{id} — hard delete (409 has_academic_history). */
 export async function deleteStudent(id: string): Promise<void> {
   await api.delete(`/students/${id}`);

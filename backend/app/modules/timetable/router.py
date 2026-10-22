@@ -57,10 +57,14 @@ _any = get_current_user
 )
 def my_timetable(
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_any),
 ) -> TimetableView:
-    return service.my_timetable(db, caller=caller, academic_year_id=academic_year_id)
+    """`semester_id` is the student's top-bar session; omitted, the term is inferred."""
+    return service.my_timetable(
+        db, caller=caller, academic_year_id=academic_year_id, semester_id=semester_id
+    )
 
 
 @router.get(

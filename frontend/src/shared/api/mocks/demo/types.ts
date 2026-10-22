@@ -385,6 +385,8 @@ export interface DemoStudent {
   transferred_from: string | null;
   completion_date: string | null;
   graduation_date: string | null;
+  /** The Dean's per-student grade hold. Optional so the seed data need not carry it. */
+  grades_withheld?: boolean;
   dropout_date: string | null;
   dropout_reason: string | null;
   comments: string | null;

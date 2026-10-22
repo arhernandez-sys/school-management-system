@@ -9,11 +9,13 @@ import {
   CardActionArea,
   CardContent,
   Chip,
+  FormControlLabel,
   Grid,
   Link as MuiLink,
   MenuItem,
   Snackbar,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
@@ -41,6 +43,7 @@ import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteStudent,
   useNudgeRelease,
+  useSetGradesWithheld,
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,
@@ -128,7 +131,17 @@ export function StudentDetailPage() {
               value: 'grades',
               label: 'Grades & Assessments',
               icon: <GradingOutlinedIcon fontSize="small" />,
-              render: () => <GradesTab studentId={studentId} yearId={yearId} />,
+              render: () => (
+                <>
+                  {user?.role === 'principal' && (
+                    <GradesWithheldControl
+                      studentId={studentId}
+                      withheld={Boolean(detail.grades_withheld)}
+                    />
+                  )}
+                  <GradesTab studentId={studentId} yearId={yearId} />
+                </>
+              ),
             } as DetailTab,
           ]
         : []),
@@ -197,6 +210,39 @@ export function StudentDetailPage() {
     >
       {tabs.length > 0 && <DetailTabs tabs={tabs} aria-label="Student detail sections" />}
     </ProfileLayout>
+  );
+}
+
+/**
+ * The Dean's per-student grade hold. With grades published school-wide, this keeps THIS
+ * student on "grades not published" anyway. Rendered for the Dean only; the server's
+ * `PUT /students/{id}/grades-withheld` is the boundary.
+ */
+function GradesWithheldControl({ studentId, withheld }: { studentId: string; withheld: boolean }) {
+  const mutation = useSetGradesWithheld(studentId);
+  return (
+    <Box sx={{ mb: 2 }}>
+      <FormControlLabel
+        control={
+          <Switch
+            checked={withheld}
+            disabled={mutation.isPending}
+            onChange={(e) => mutation.mutate(e.target.checked)}
+          />
+        }
+        label="Hide grades from this student"
+      />
+      <Typography variant="body2" color="text.secondary">
+        {withheld
+          ? 'This student cannot see their grades, even while grades are published to students.'
+          : 'This student sees their grades whenever grades are published to students.'}
+      </Typography>
+      {mutation.isError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {apiErrorMessage(mutation.error, 'Could not update grade visibility.')}
+        </Alert>
+      )}
+    </Box>
   );
 }
 

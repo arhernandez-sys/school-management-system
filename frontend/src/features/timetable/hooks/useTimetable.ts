@@ -25,12 +25,17 @@ export const timetableKeys = {
  * offerings they teach. Dean/Registrar get an empty week rather than a 403 (they have no
  * personal timetable and the nav never offers them this screen).
  */
-export function useMyTimetable(academicYearId?: string) {
+export function useMyTimetable(academicYearId?: string, semesterId?: string) {
   return useQuery({
-    queryKey: timetableKeys.me(academicYearId),
+    queryKey: [...timetableKeys.me(academicYearId), semesterId ?? null],
     queryFn: async ({ signal }) => {
       const res = await api.get<TimetableView>('/timetable/me', {
-        params: academicYearId ? { academic_year_id: academicYearId } : undefined,
+        params: {
+          ...(academicYearId ? { academic_year_id: academicYearId } : {}),
+          // The student's top-bar session. Without it the server picks the term itself,
+          // which ignored the switcher.
+          ...(semesterId ? { semester_id: semesterId } : {}),
+        },
         signal,
       });
       return res.data;

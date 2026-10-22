@@ -216,6 +216,11 @@ export interface StudentDetail extends StudentNameParts, StudentAdmissionFields 
    * a name.
    */
   login_email: string | null;
+  /**
+   * The Dean's per-student grade hold (`PUT /students/{id}/grades-withheld`). Staff reads
+   * only — `null` on the student's own `/students/me`.
+   */
+  grades_withheld?: boolean | null;
   // ── D34 · mapped for the client's tooling, unused by the API ──────────────
   /** No FK and no consumer: prior education is application-scoped. Read-only. */
   educationbg_id: string | null;

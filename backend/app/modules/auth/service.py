@@ -93,6 +93,28 @@ def students_can_view_grades(db: Session) -> bool:
     )
 
 
+def student_grades_withheld(db: Session, user: User) -> bool:
+    """The Dean's per-student hold on top of the school-wide switch.
+
+    False for every non-student, and for a student login with no live profile — there is
+    nothing to withhold, and the switch alone already decides that case.
+    """
+    if user.role != Role.STUDENT:
+        return False
+    return bool(
+        db.scalar(
+            select(StudentProfile.grades_withheld).where(
+                StudentProfile.user_id == user.id, StudentProfile.deleted_at.is_(None)
+            )
+        )
+    )
+
+
+def student_can_view_own_grades(db: Session, user: User) -> bool:
+    """Both conditions a student must pass to reach any grade surface."""
+    return students_can_view_grades(db) and not student_grades_withheld(db, user)
+
+
 def build_current_user(db: Session, user: User) -> CurrentUser:
     """Assemble the CurrentUser payload, resolving profile ids + preferences.
 
@@ -133,6 +155,7 @@ def build_current_user(db: Session, user: User) -> CurrentUser:
         teacher_profile_id=teacher_profile_id,
         preferences=_preferences_for(db, user),
         students_can_view_grades=students_can_view_grades(db),
+        grades_withheld=student_grades_withheld(db, user),
     )
 
 

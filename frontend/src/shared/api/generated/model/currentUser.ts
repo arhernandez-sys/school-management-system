@@ -26,4 +26,5 @@ export interface CurrentUser {
   teacher_profile_id?: CurrentUserTeacherProfileId;
   preferences: UserPreferences;
   students_can_view_grades?: boolean;
+  grades_withheld?: boolean;
 }

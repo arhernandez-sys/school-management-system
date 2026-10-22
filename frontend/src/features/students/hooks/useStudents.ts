@@ -15,6 +15,7 @@ import {
   getStudentYears,
   listStudents,
   nudgeRelease,
+  setGradesWithheld,
   setStudentStatus,
   updateStudent,
 } from '../api/studentsApi';
@@ -171,6 +172,17 @@ export function useSetStudentStatus(studentId: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: studentKeys.detail(studentId) });
       void qc.invalidateQueries({ queryKey: [...studentKeys.all, 'list'] });
+    },
+  });
+}
+
+/** PUT /students/{id}/grades-withheld — Dean only; a 403 is the boundary, not a bug. */
+export function useSetGradesWithheld(studentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (withheld: boolean) => setGradesWithheld(studentId, withheld),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: studentKeys.detail(studentId) });
     },
   });
 }

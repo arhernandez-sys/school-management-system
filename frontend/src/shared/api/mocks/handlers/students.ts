@@ -270,6 +270,8 @@ function studentDetail(s: DemoStudent, yearId?: string | null, viewerRole?: stri
     transferred_from: s.transferred_from,
     completion_date: s.completion_date,
     graduation_date: s.graduation_date,
+    // Staff reads only, as on the server — the student's own record carries null.
+    grades_withheld: viewerRole && viewerRole !== 'student' ? Boolean(s.grades_withheld) : null,
     dropout_date: s.dropout_date,
     dropout_reason: s.dropout_reason,
     comments: s.comments,
@@ -809,6 +811,18 @@ export const studentsHandlers = [
     // Neither is `program_id`: a change closes the open `student_program_history` row and
     // opens a new one, which is the Dean-only `PUT /students/{id}/program` (§D12).
     return HttpResponse.json(studentDetail(student));
+  }),
+
+  // ── PUT /students/{id}/grades-withheld — the Dean's per-student hold ────────────
+  http.put(`${API_BASE_URL}/students/:studentId/grades-withheld`, async ({ params, request, cookies }) => {
+    if (sessionRole(cookies) !== 'principal') {
+      return errorResponse(403, 'forbidden', "Only the Dean can hide a student's grades.");
+    }
+    const student = getStudent(String(params.studentId));
+    if (!student) return errorResponse(404, 'not_found', 'Student not found.');
+    const body = (await request.json()) as { withheld?: boolean };
+    student.grades_withheld = Boolean(body.withheld);
+    return HttpResponse.json({ student_id: student.id, grades_withheld: student.grades_withheld });
   }),
 
   // ── POST /students/{id}/status — lifecycle change (auditable, guarded) ──────────

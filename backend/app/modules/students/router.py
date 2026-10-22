@@ -15,6 +15,7 @@ Endpoints:
   PATCH  /students/{id}                  P/S           -> StudentDetail
   POST   /students/{id}/status           P/S           -> StudentDetail
   DELETE /students/{id}                  P/S           -> 204
+  PUT    /students/{id}/grades-withheld P (Dean)      -> GradesWithheldResponse
 
 Route ordering note: the literal `/students/me` and `/students/me/years` are
 declared BEFORE their `/{student_id}` counterparts so the literal path wins over
@@ -37,6 +38,8 @@ from app.core.pagination import PageParams, page_params
 from app.modules.students import academics, service
 from app.modules.students.schemas import (
     AcademicHistory,
+    GradesWithheldRequest,
+    GradesWithheldResponse,
     ProgramChangeRequest,
     StudentProgramRef,
     StudentAssessmentsResponse,
@@ -384,4 +387,27 @@ def set_student_program(
     """
     return academics.set_program(
         db, actor=actor, student_id=student_id, payload=payload
+    )
+
+
+@router.put(
+    "/{student_id}/grades-withheld",
+    response_model=GradesWithheldResponse,
+    summary="Hide or show ONE student's grades — DEAN ONLY",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def set_grades_withheld(
+    student_id: uuid.UUID,
+    payload: GradesWithheldRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_dean),
+) -> GradesWithheldResponse:
+    """The Dean's per-student exception to the school-wide `students_can_view_grades`.
+
+    `withheld=true` keeps this student on 403 `grades_hidden` even while grades are
+    published to everyone else. It can only hide: with the school-wide switch off, nobody
+    sees grades whatever this says. Dean only, like the switch itself (§D14).
+    """
+    return service.set_grades_withheld(
+        db, actor=actor, student_id=student_id, withheld=payload.withheld
     )
