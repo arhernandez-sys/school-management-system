@@ -21,8 +21,23 @@ export interface PrintLayoutProps {
   documentTitle: string;
   /** Optional logo URL; falls back to no image. */
   logoUrl?: string | null;
+  /**
+   * Optional letterhead contact line — address · phone · email (D39, Meeting #2 "*Letterhead").
+   *
+   * The school identity already reached this component as a NAME only, so a printed
+   * report card carried no address and no way to contact the issuing institution. A
+   * receiving school or employer holding the paper needs both. Falsy entries are dropped
+   * rather than printed as gaps, so a profile with only a phone number still reads well.
+   */
+  contactLines?: Array<string | null | undefined>;
   /** Optional right-aligned meta (issue date, student number). */
   meta?: ReactNode;
+  /**
+   * Replaces the standard letterhead (logo · name · title · contact · meta) entirely.
+   * For a document with its own prescribed layout — the transcript follows the client's
+   * template. `schoolName` / `documentTitle` are still required for the defaults.
+   */
+  header?: ReactNode;
   children: ReactNode;
   /** Label for the print button. */
   printLabel?: string;
@@ -47,10 +62,13 @@ export function PrintLayout({
   schoolName,
   documentTitle,
   logoUrl,
+  contactLines,
   meta,
+  header,
   children,
   printLabel = 'Print / Save as PDF',
 }: PrintLayoutProps) {
+  const contact = (contactLines ?? []).map((l) => (l ?? '').trim()).filter(Boolean);
   return (
     <>
       <style>{PRINT_CSS}</style>
@@ -73,33 +91,44 @@ export function PrintLayout({
           borderRadius: 2,
         }}
       >
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-            {logoUrl && (
-              <Box
-                component="img"
-                src={logoUrl}
-                alt=""
-                sx={{ height: 56, width: 56, objectFit: 'contain' }}
-              />
+        {header ?? (
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{ alignItems: 'center', justifyContent: 'space-between' }}
+          >
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+              {logoUrl && (
+                <Box
+                  component="img"
+                  src={logoUrl}
+                  alt=""
+                  sx={{ height: 56, width: 56, objectFit: 'contain' }}
+                />
+              )}
+              <Box>
+                <Typography variant="h3" component="h1">
+                  {schoolName}
+                </Typography>
+                <Typography variant="subtitle1" color="text.secondary">
+                  {documentTitle}
+                </Typography>
+                {contact.length > 0 && (
+                  <Typography variant="caption" color="text.secondary" component="div">
+                    {contact.join(' · ')}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
+            {meta && (
+              <Box sx={{ textAlign: 'right' }}>
+                <Typography variant="body2" color="text.secondary" component="div">
+                  {meta}
+                </Typography>
+              </Box>
             )}
-            <Box>
-              <Typography variant="h3" component="h1">
-                {schoolName}
-              </Typography>
-              <Typography variant="subtitle1" color="text.secondary">
-                {documentTitle}
-              </Typography>
-            </Box>
           </Stack>
-          {meta && (
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="body2" color="text.secondary" component="div">
-                {meta}
-              </Typography>
-            </Box>
-          )}
-        </Stack>
+        )}
 
         <Divider sx={{ my: 2 }} />
 

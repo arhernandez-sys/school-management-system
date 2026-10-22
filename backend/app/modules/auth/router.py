@@ -15,7 +15,6 @@ Endpoints (all mount under `/api/v1/auth` via app/main.py):
 
 from __future__ import annotations
 
-import ipaddress
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
@@ -25,13 +24,15 @@ from sqlalchemy.orm import Session
 from app.common.enums import Role
 from app.common.schemas import CurrentUser, ErrorResponse
 from app.config import Settings, get_settings
+from app.core import ratelimit
 from app.core.cookies import (
     REFRESH_COOKIE_NAME,
     clear_refresh_cookie,
     set_refresh_cookie,
 )
 from app.core.deps import get_current_user, get_db, require_role
-from app.core.errors import _envelope
+from app.core.errors import AppError, _envelope
+from app.core.net import ClientAddress, resolve_client
 from app.core.security import parse_refresh_jti
 from app.modules.auth import service
 from app.modules.auth.schemas import (
@@ -69,22 +70,23 @@ def _refresh_invalid_response(
     return resp
 
 
-def _client_meta(request: Request) -> tuple[str | None, str | None]:
-    """Best-effort (user_agent, ip) for the session/attempt audit columns.
+def _client_meta(
+    request: Request, settings: Settings
+) -> tuple[str | None, ClientAddress]:
+    """Best-effort (user_agent, client address) for the audit columns + throttle.
 
-    `ip_address` columns are Postgres INET, so a non-IP host value (e.g. the
-    TestClient's "testclient", or a malformed proxy header) must be coerced to
-    NULL rather than crash the INSERT — these are advisory audit fields, not a
-    security control."""
-    ua = request.headers.get("user-agent")
-    raw_ip = request.client.host if request.client else None
-    ip: str | None = None
-    if raw_ip:
-        try:
-            ip = str(ipaddress.ip_address(raw_ip))
-        except ValueError:
-            ip = None
-    return ua, ip
+    The address comes from `core.net.resolve_client`, NOT `request.client.host`:
+    behind any reverse proxy the raw peer is the proxy for every request, which
+    would make `login_attempts.ip_address` and the rate-limit key useless. See
+    that module for why `X-Forwarded-For` is honoured only from a trusted peer.
+
+    `ClientAddress.ip` is a validated IP or None — a non-IP host value (the
+    TestClient's literal "testclient", or a malformed proxy header) must be
+    coerced to NULL rather than crash the INSERT, since these are advisory audit
+    fields, not a security control. `ClientAddress.key` is always populated so
+    the limiter can still count anonymous peers.
+    """
+    return request.headers.get("user-agent"), resolve_client(request, settings)
 
 
 @router.post(
@@ -102,16 +104,34 @@ def login(
 ) -> AuthTokenResponse:
     """Establish a session: mint an access token + set the HttpOnly refresh
     cookie. Non-enumerating 401 for a wrong identifier OR password; 423 (with
-    `retry_after_seconds`) while locked; 403 for inactive accounts (api-spec §2.3)."""
-    ua, ip = _client_meta(request)
-    result = service.login(
-        db,
-        identifier=payload.identifier,
-        password=payload.password,
-        settings=settings,
-        user_agent=ua,
-        ip_address=ip,
-    )
+    `retry_after_seconds`) while locked; 403 for inactive accounts (api-spec §2.3).
+
+    Additionally 429 (with `retry_after_seconds`) once ONE client IP has failed
+    too many times in the configured window. The per-account lockout in
+    `service.login` cannot see a password spray — one failure each across a
+    hundred accounts trips nothing — so the IP budget is what covers it.
+    Guarding BEFORE the service call also stops each miss appending a
+    `login_attempts` row (OQ-DB6 write amplification).
+    """
+    ua, client = _client_meta(request, settings)
+    policy = ratelimit.login_policy(settings)
+    ratelimit.guard(policy, client.key)
+    try:
+        result = service.login(
+            db,
+            identifier=payload.identifier,
+            password=payload.password,
+            settings=settings,
+            user_agent=ua,
+            ip_address=client.ip,
+        )
+    except AppError:
+        # Charge the budget only for a REJECTED attempt (401/403/423), never for
+        # a success — a campus behind one NAT address must not throttle itself at
+        # the morning bell. `AppError` and not `Exception`: a 500 is our fault,
+        # and holding it against the caller would turn an outage into a lockout.
+        ratelimit.penalize(policy, client.key)
+        raise
     set_refresh_cookie(response, result.raw_refresh_token, settings)
     return AuthTokenResponse(access_token=result.access_token, user=result.user)
 
@@ -137,23 +157,37 @@ def refresh(
     clearing `Set-Cookie` is attached to the response that is actually sent. If we
     raised, FastAPI would route to the global handler and DISCARD this `response`
     object — the clearing cookie would never reach the browser (api-spec §2.3
-    requires a refresh failure to clear the cookie)."""
+    requires a refresh failure to clear the cookie).
+
+    The 429 is the ONE exception to that rule and deliberately RAISES: being
+    throttled says nothing about the validity of the cookie, so clearing it would
+    convert a "wait a moment" into a forced re-login for every legitimate tab
+    sharing the address. Only genuine refresh failures clear the cookie.
+
+    Failures counted here include the missing `X-Refresh` header — a request
+    without it is either a forged cross-site call or a broken client, and neither
+    should be allowed to retry indefinitely.
+    """
     raw_cookie = request.cookies.get(REFRESH_COOKIE_NAME)
+    ua, client = _client_meta(request, settings)
+    policy = ratelimit.refresh_policy(settings)
+    ratelimit.guard(policy, client.key)
     # §2.2: reject without the custom header (a forged cross-site call lacks it).
     if x_refresh != "1":
+        ratelimit.penalize(policy, client.key)
         return _refresh_invalid_response(settings)
     try:
-        ua, ip = _client_meta(request)
         result = service.refresh(
             db,
             raw_cookie=raw_cookie,
             settings=settings,
             user_agent=ua,
-            ip_address=ip,
+            ip_address=client.ip,
         )
     except service.Unauthenticated as exc:
         # Clear the (stale/invalid) cookie on every failure path — returned, not
         # raised, so the Set-Cookie survives (see the function docstring).
+        ratelimit.penalize(policy, client.key)
         return _refresh_invalid_response(settings, message=exc.message)
     set_refresh_cookie(response, result.raw_refresh_token, settings)
     return AuthTokenResponse(access_token=result.access_token, user=result.user)

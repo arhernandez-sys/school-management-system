@@ -33,6 +33,19 @@ export function TeacherProfileRoute() {
     case 'principal':
     case 'secretary':
       return <TeacherProfileView teacherId={teacherId} mode="manage" />;
+    // D43 — an Auditor reads any lecturer's profile, but in `view` mode: `manage` is
+    // what renders the edit affordances, and offering them a Save button that the server
+    // refuses on every verb is worse than not offering one.
+    case 'auditor':
+      return <TeacherProfileView teacherId={teacherId} mode="readonly" />;
+    // D43 — an HOD is a lecturer, so their OWN profile is `self`; anyone else's they
+    // read. Falling to `default` here would have denied a head their own profile page.
+    case 'hod':
+      return teacherId === user.teacher_profile_id ? (
+        <TeacherProfileView teacherId={teacherId} mode="self" />
+      ) : (
+        <TeacherProfileView teacherId={teacherId} mode="readonly" />
+      );
     case 'teacher':
       return teacherId === user.teacher_profile_id ? (
         <TeacherProfileView teacherId={teacherId} mode="self" />

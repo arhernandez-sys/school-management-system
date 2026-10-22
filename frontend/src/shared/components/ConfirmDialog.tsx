@@ -56,7 +56,12 @@ export function ConfirmDialog({
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         {description && (
-          <DialogContentText sx={{ mb: warning || error ? 2 : 0 }}>{description}</DialogContentText>
+          // `component="div"`, not the default <p>: callers pass controls here (the student
+          // status dialog passes a select), and a <p> cannot contain the <div>/<fieldset> a
+          // TextField renders — React warns `validateDOMNesting`.
+          <DialogContentText component="div" sx={{ mb: warning || error ? 2 : 0 }}>
+            {description}
+          </DialogContentText>
         )}
         {warning && (
           <Alert severity="warning" sx={{ mb: error ? 2 : 0 }}>

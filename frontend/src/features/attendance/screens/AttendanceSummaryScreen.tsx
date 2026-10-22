@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Box, Grid, Paper, Typography } from '@mui/material';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
+import { Alert, AlertTitle, Box, Button, Grid, Paper, Typography } from '@mui/material';
 import {
   PageHeader,
   LoadingState,
@@ -9,81 +10,83 @@ import {
   StatCard,
   ChartWithTable,
   DataTable,
+  StatusBadge,
   type DataTableColumn,
 } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
-import { useAttendanceSections, useAttendanceSummary } from '../hooks/useAttendance';
+import { ROUTES } from '@shared/constants/routes';
+import { useAttendanceOfferings, useAttendanceSummary } from '../hooks/useAttendance';
 import { AttendanceToolbar } from '../components/AttendanceToolbar';
 import { ATTENDANCE_STATUS_META } from '../attendanceStatus';
-import type { PerStudentAttendance } from '../types';
+import { ATTENDANCE_ALERT_THRESHOLD, type PerStudentAttendance } from '../types';
 
 /** Format an ISO date (YYYY-MM-DD) as a short weekday+day label for the trend axis. */
 function shortDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00`);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): one table column per day,
+  // so a full dd/mm/yyyy would wrap the header.
+  return formatSchoolDayMonth(iso);
 }
 
 /**
- * Attendance history / summary (design-system §7.6b, §7 Module 8) — per-section rate over
+ * Attendance history / summary (design-system §7.6b, §7 Module 8) — per-offering rate over
  * the recent (~2-week) window. Reached by teachers (own classes) and P/S (view-all). Shows
  * headline counts (StatCards) + a daily "% present" trend and a status breakdown, each via
  * ChartWithTable so the data is available to screen readers as an equivalent table.
  *
- * The selected section persists to the URL (?section_id=).
+ * The selected offering persists to the URL (?offering_id=).
  */
 export function AttendanceSummaryScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const sectionId = searchParams.get('section_id');
+  const offeringId = searchParams.get('offering_id');
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
 
   // Client-side pagination for the per-student list (the payload arrives whole).
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
 
-  const sectionsQuery = useAttendanceSections(yearId);
-  const summaryQuery = useAttendanceSummary(sectionId);
+  const offeringsQuery = useAttendanceOfferings(yearId);
+  const summaryQuery = useAttendanceSummary(offeringId);
 
-  // Switching year clears the (year-specific) section so the effect re-picks one.
+  // Switching year clears the (year-specific) offering so the effect re-picks one.
   const handleChangeYear = (value: string) =>
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', value);
-        next.delete('section_id');
+        next.delete('offering_id');
         return next;
       },
       { replace: true },
     );
 
-  // Default to the caller's first available section.
+  // Preselect the caller's first available class. As in the register screen, this `items[0]`
+  // is a picker default, not a "primary class" assumption (D29).
   useEffect(() => {
-    if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
+    if (!offeringId && offeringsQuery.data && offeringsQuery.data.items.length > 0) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set('section_id', sectionsQuery.data!.items[0]!.id);
+          next.set('offering_id', offeringsQuery.data!.items[0]!.offering.id);
           return next;
         },
         { replace: true },
       );
     }
-  }, [sectionId, sectionsQuery.data, setSearchParams]);
+  }, [offeringId, offeringsQuery.data, setSearchParams]);
 
   // Reset the per-student list to page 1 whenever the class changes.
-  useEffect(() => setPage(0), [sectionId]);
+  useEffect(() => setPage(0), [offeringId]);
 
-  const handleChangeSection = (value: string) =>
+  const handleChangeOffering = (value: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set('section_id', value);
+      next.set('offering_id', value);
       return next;
     });
 
-  if (sectionsQuery.isLoading) return <LoadingState variant="page" label="Loading classes" />;
-  if (sectionsQuery.isError) return <ErrorState onRetry={() => void sectionsQuery.refetch()} />;
-  if (sectionsQuery.data && sectionsQuery.data.items.length === 0) {
+  if (offeringsQuery.isLoading) return <LoadingState variant="page" label="Loading course offerings" />;
+  if (offeringsQuery.isError) return <ErrorState onRetry={() => void offeringsQuery.refetch()} />;
+  if (offeringsQuery.data && offeringsQuery.data.items.length === 0) {
     return (
       <>
         <PageHeader title="Attendance summary" />
@@ -102,6 +105,13 @@ export function AttendanceSummaryScreen() {
   const breakdownData = overall
     ? ATTENDANCE_STATUS_META.map((m) => ({ name: m.label, value: overall[m.value] }))
     : [];
+
+  // D44. The server echoes the threshold on the alerts endpoint; this screen is not that
+  // endpoint, so it uses the shared constant — the one number both sides start from.
+  const threshold = ATTENDANCE_ALERT_THRESHOLD;
+  const sessionsRecorded = overall
+    ? overall.present + overall.absent + overall.late + overall.excused
+    : 0;
 
   const byStudent = summaryQuery.data?.by_student ?? [];
   const pagedStudents = byStudent.slice(page * pageSize, page * pageSize + pageSize);
@@ -125,7 +135,39 @@ export function AttendanceSummaryScreen() {
       field: 'pct_present',
       headerName: '% present',
       align: 'right',
-      render: (r) => `${r.pct_present}%`,
+      // D44 — below the floor is flagged on the row, not only in the banner: the banner
+      // says a class is in trouble, this says WHO.
+      render: (r) =>
+        r.pct_present < threshold ? (
+          <StatusBadge label={`${r.pct_present}%`} kind="error" />
+        ) : (
+          `${r.pct_present}%`
+        ),
+    },
+    {
+      field: 'sessions_recorded',
+      headerName: 'Sessions',
+      align: 'right',
+      hideOnMobile: true,
+      // D44 — THE DENOMINATOR. The percentage divides by records WRITTEN, not sessions
+      // scheduled, so a row reading 50% off two marked days is not a problem. Without this
+      // column the reader cannot tell those two cases apart.
+      render: (r) => r.present + r.absent + r.late + r.excused,
+    },
+    {
+      field: 'student',
+      headerName: '',
+      align: 'right',
+      render: (r) => (
+        <Button
+          size="small"
+          component={RouterLink}
+          to={`${ROUTES.attendance}/student/${r.student.id}?offering_id=${offeringId ?? ''}`}
+          aria-label={`See ${r.student.full_name}'s attendance on its own`}
+        >
+          View
+        </Button>
+      ),
     },
   ];
 
@@ -135,15 +177,15 @@ export function AttendanceSummaryScreen() {
         title="Attendance summary"
         subtitle={
           summaryQuery.data
-            ? `${summaryQuery.data.section.name} · last two weeks`
-            : 'Per-section attendance over the recent window'
+            ? `${summaryQuery.data.offering.offering.label} · last two weeks`
+            : 'Per-offering attendance over the recent window'
         }
       />
 
       <AttendanceToolbar
-        sections={sectionsQuery.data?.items ?? []}
-        sectionId={sectionId}
-        onSectionChange={handleChangeSection}
+        offerings={offeringsQuery.data?.items ?? []}
+        offeringId={offeringId}
+        onOfferingChange={handleChangeOffering}
         showDate={false}
         years={years}
         yearId={yearId}
@@ -218,6 +260,19 @@ export function AttendanceSummaryScreen() {
             <Typography variant="subtitle1" sx={{ mb: 1 }}>
               Students in this class
             </Typography>
+            {/* D44 — the class-level alert. The session count rides along because the
+                percentage is meaningless without it: `_summarize` divides by records
+                WRITTEN, so two marked days and one absence reads 50%. An alert that hides
+                its denominator is an alert people learn to close. */}
+            {overall && overall.pct_present < threshold && sessionsRecorded > 0 && (
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                <AlertTitle>Attendance is below {threshold}%</AlertTitle>
+                This class is at <strong>{overall.pct_present}%</strong> across{' '}
+                {sessionsRecorded} recorded session{sessionsRecorded === 1 ? '' : 's'}.
+                {sessionsRecorded < 5 &&
+                  ' That is a small number of sessions, so the percentage may move a lot yet.'}
+              </Alert>
+            )}
             <DataTable<PerStudentAttendance>
               caption="Per-student attendance days over the summary window"
               columns={studentColumns}

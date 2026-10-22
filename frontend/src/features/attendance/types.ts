@@ -1,29 +1,42 @@
 /**
- * Attendance module types (Phase 7 — client demo).
+ * Attendance module types.
  *
- * These mirror the demo MSW handler wire shapes (handlers/attendance.ts). Attendance is
- * per-section, per-day (D-Q4): for a (section, date) each actively enrolled student has a
- * present/absent/late/excused status. Wire format is snake_case.
+ * These mirror `backend/app/modules/attendance/schemas.py` and the demo MSW handler
+ * (handlers/attendance.ts). Attendance is per-OFFERING, per-day (D-Q4): for an
+ * (offering, date) each actively enrolled student has a present/absent/late/excused
+ * status. Wire format is snake_case.
+ *
+ * **D31** — `AttendanceSectionRef` is gone. It was a "fat" homeroom ref carrying `name`,
+ * `grade_level`, the division letter and `homeroom_label` — four columns that no longer
+ * exist. The register now nests the SHARED `OfferingRef` beside the local `teachers[]`,
+ * which is the split the whole refactor settled on: the identity is shared so every screen
+ * names it identically, and only genuinely module-local data stays local.
+ *
+ * `teachers[].name` is that local half. Note it is `name`, NOT the shared ref's
+ * `full_name`: this is the attendance picker's own filter feed, and the backend serves it
+ * under `name`. Renaming it here would make the type lie about the wire.
  */
+import type { OfferingRef } from '@shared/types/api';
 import type { AttendanceStatus } from '@shared/types/enums';
 
-export type { AttendanceStatus };
+export type { AttendanceStatus, OfferingRef };
 
-/** A section as surfaced by the attendance picker / register. */
-export interface AttendanceSectionRef {
+/** The attendance module's local teacher shape — keyed `name`, not `full_name`. */
+export interface AttendanceTeacherRef {
   id: string;
   name: string;
-  grade_level: string;
-  /** Division letter within the grade/form (e.g. "A"). Drives the P/S section filter. */
-  section: string;
-  homeroom_label: string;
-  /** Teachers who teach a subject in this section — drives the P/S teacher filter. */
-  teachers: Array<{ id: string; name: string }>;
 }
 
-/** Picker payload: sections the caller may view/record + whether they can record. */
-export interface AttendanceSectionsResponse {
-  items: Array<AttendanceSectionRef & { enrolled_count: number }>;
+/** An offering as surfaced by the attendance picker / register. */
+export interface AttendanceOfferingRef {
+  offering: OfferingRef;
+  /** Lecturers who teach it — drives the Dean/Registrar lecturer filter. */
+  teachers: AttendanceTeacherRef[];
+}
+
+/** Picker payload: offerings the caller may view/record + whether they can record. */
+export interface AttendanceOfferingsResponse {
+  items: Array<AttendanceOfferingRef & { enrolled_count: number }>;
   can_record: boolean;
 }
 
@@ -41,9 +54,9 @@ export interface AttendanceEntry {
   recorded_at: string | null;
 }
 
-/** GET /attendance — the daily register for one (section, date). */
+/** GET /attendance — the daily register for one (offering, date). */
 export interface AttendanceRegister {
-  section: AttendanceSectionRef;
+  offering: AttendanceOfferingRef;
   date: string;
   can_record: boolean;
   entries: AttendanceEntry[];
@@ -52,7 +65,7 @@ export interface AttendanceRegister {
 
 /** Request body for PUT /attendance (bulk upsert). */
 export interface AttendanceUpsertRequest {
-  section_id: string;
+  offering_id: string;
   date: string;
   entries: Array<{ student_id: string; status: AttendanceStatus }>;
 }
@@ -74,13 +87,57 @@ export interface AttendanceUpsertResponse {
 /** One student's present/absent/late/excused tally over the summary window. */
 export type PerStudentAttendance = { student: AttendanceStudentRef } & AttendanceCounts;
 
-/** GET /attendance/summary — per-section rate over the seeded window. */
+/** GET /attendance/summary — per-offering rate over the seeded window. */
 export interface AttendanceSummaryResponse {
-  section: AttendanceSectionRef;
+  offering: AttendanceOfferingRef;
   overall: AttendanceCounts;
   by_date: Array<{ date: string } & AttendanceCounts>;
-  /** Per-student tallies for every actively enrolled student in the section. */
+  /** Per-student tallies for every actively enrolled student in the offering. */
   by_student: PerStudentAttendance[];
+}
+
+/**
+ * The attendance floor, as a percentage (D44). Mirrors
+ * `attendance/service.ATTENDANCE_ALERT_THRESHOLD`.
+ *
+ * Used only as the DEFAULT for the request. Everything rendered reads
+ * `AttendanceAlertsResponse.threshold`, which the server echoes back — so the screen
+ * states the rule the server applied rather than a second copy of the number that can
+ * disagree with it.
+ */
+export const ATTENDANCE_ALERT_THRESHOLD = 80;
+
+/**
+ * One class below the floor.
+ *
+ * ⚠️ `sessions_recorded` is the DENOMINATOR the percentage came from, and it is not
+ * optional decoration. The server counts records WRITTEN, not sessions scheduled: a class
+ * whose register has been marked twice, with one absence, reads 50% and is not in trouble.
+ * Every surface that shows the percentage must show this next to it.
+ */
+export type AttendanceAlertOffering = {
+  offering: AttendanceOfferingRef;
+  enrolled_count: number;
+  sessions_recorded: number;
+} & AttendanceCounts;
+
+/** One student below the floor, IN ONE CLASS — not averaged across their courses. */
+export type AttendanceAlertStudent = {
+  student: AttendanceStudentRef;
+  offering: AttendanceOfferingRef;
+  sessions_recorded: number;
+} & AttendanceCounts;
+
+/** GET /attendance/alerts — everything below the floor for one academic year. */
+export interface AttendanceAlertsResponse {
+  /** Echoed back by the server; render this, not the constant. */
+  threshold: number;
+  /** Null when the school has no active year — both lists are then empty for that reason. */
+  academic_year_id: string | null;
+  /** Worst first. */
+  offerings: AttendanceAlertOffering[];
+  /** Worst first. */
+  students: AttendanceAlertStudent[];
 }
 
 /** GET /attendance/me — a student's own attendance. */

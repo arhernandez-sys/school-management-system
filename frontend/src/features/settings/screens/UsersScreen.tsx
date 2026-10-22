@@ -14,8 +14,8 @@ import {
 } from '@shared/components';
 import { useDebounce } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { Role } from '@shared/api/generated/model';
-import type { UserListItem } from '@shared/api/generated/model';
+import type { Role, UserListItem } from '@shared/api/generated/model';
+import { ROLE_OPTIONS } from '@shared/auth/roleLabels';
 import {
   useUsersList,
   useCreateUser,
@@ -102,6 +102,10 @@ export function UsersScreen() {
         full_name: values.full_name,
         username: values.username || null,
         ...(isPrincipal ? { role: values.role, is_active: values.is_active } : {}),
+        // Only a real change: omitted leaves the link alone server side.
+        ...(values.profile_id && values.profile_id !== editing.linked_profile?.id
+          ? { profile_id: values.profile_id }
+          : {}),
       };
       updateMut.mutate({ userId: editing.id, data }, { onSuccess: () => setFormOpen(false), onError });
     } else {
@@ -113,6 +117,7 @@ export function UsersScreen() {
             full_name: values.full_name,
             role: values.role,
             temporary_password: values.temporary_password || null,
+            profile_id: values.profile_id || null,
           },
         },
         {
@@ -163,6 +168,22 @@ export function UsersScreen() {
       ),
     },
     { field: 'role', headerName: 'Role', render: (u) => <RoleChip role={u.role} /> },
+    {
+      field: 'linked_profile',
+      headerName: 'Linked to',
+      hideOnMobile: true,
+      render: (u) =>
+        u.linked_profile ? (
+          <>
+            <Typography variant="body2">{u.linked_profile.full_name}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {u.linked_profile.number}
+            </Typography>
+          </>
+        ) : (
+          '—'
+        ),
+    },
     {
       field: 'is_active',
       headerName: 'Status',
@@ -237,10 +258,11 @@ export function UsersScreen() {
               sx={{ minWidth: 140 }}
             >
               <MenuItem value="">All roles</MenuItem>
-              <MenuItem value={Role.principal}>Principal</MenuItem>
-              <MenuItem value={Role.secretary}>Secretary</MenuItem>
-              <MenuItem value={Role.teacher}>Teacher</MenuItem>
-              <MenuItem value={Role.student}>Student</MenuItem>
+              {ROLE_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
             </TextField>
             <TextField
               select

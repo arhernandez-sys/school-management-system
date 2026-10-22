@@ -4,6 +4,7 @@
  * has no date library). Weeks are Sunday-first.
  */
 import type { StatusKind } from '@shared/components';
+import { formatSchoolDateWithWeekday } from '@shared/utils/schoolDate';
 import type { CalendarEvent, EventCategory, EventVisibility } from './types';
 
 export interface DayCell {
@@ -112,15 +113,9 @@ export function formatTime(hhmm: string | null): string {
   return `${h12}:${mStr} ${suffix}`;
 }
 
-/** "Wed, Oct 15, 2025". */
+/** "Wed 15/10/2025" — D39 (Meeting #2 item 1) made the date half dd/mm/yyyy. */
 export function formatDateLong(ymd: string): string {
-  return parseYMD(ymd).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  return formatSchoolDateWithWeekday(ymd, 'short');
 }
 
 /** A short human range for an event ("Oct 20 · 5:00 PM – 6:30 PM", "Oct 20 – Oct 24"). */
@@ -170,7 +165,7 @@ export interface VisibilityMeta {
 
 export const VISIBILITY_META: Record<EventVisibility, VisibilityMeta> = {
   global: { label: 'Everyone', description: 'Visible to all staff and students' },
-  internal: { label: 'Staff only', description: 'Visible to teachers, principal and secretary — hidden from students' },
+  internal: { label: 'Staff only', description: 'Visible to lecturers, the Dean and the Registrar — hidden from students' },
 };
 
 export const VISIBILITY_OPTIONS: EventVisibility[] = ['global', 'internal'];

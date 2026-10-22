@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDisclosure } from '@shared/hooks';
 import { ROUTES } from '@shared/constants/routes';
 import { strings } from '@i18n/strings';
+import { ROLE_LABEL } from '@shared/auth/roleLabels';
 import type { CurrentUser } from '@shared/types/api';
 
 function initials(name: string): string {
@@ -26,13 +27,6 @@ function initials(name: string): string {
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('');
 }
-
-const ROLE_LABEL: Record<CurrentUser['role'], string> = {
-  principal: 'Principal',
-  secretary: 'Secretary',
-  teacher: 'Teacher',
-  student: 'Student',
-};
 
 export interface UserMenuProps {
   user: CurrentUser;

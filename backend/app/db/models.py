@@ -5,6 +5,9 @@ individual model modules) anywhere the complete metadata is required.
 
 from __future__ import annotations
 
+# Cross-module (D44) — owned by no single module; see app/common/models.py.
+from app.common.models import NumberSequence  # noqa: F401
+
 # Identity / RBAC
 from app.modules.users.models import User, UserPreferences  # noqa: F401
 from app.modules.auth.models import (  # noqa: F401
@@ -18,12 +21,21 @@ from app.modules.students.models import StudentDocument, StudentProfile  # noqa:
 from app.modules.teachers.models import TeacherProfile  # noqa: F401
 
 # Academic structure
-from app.modules.classes.models import (  # noqa: F401
-    Class,
+from app.modules.offerings.models import (  # noqa: F401
     ClassEnrollment,
-    ClassSubject,
+    ClassMeeting,
     ClassTeacher,
-    Subject,
+    Course,
+    CourseOffering,
+)
+# D43 — the programmes module was never registered here, so `programs` and
+# `program_courses` have been absent from `Base.metadata` since D30. `ProgramHead` is
+# added with them rather than becoming the next omission. (Admissions, prerequisites and
+# a few others are still missing; out of scope for D43, but worth a sweep.)
+from app.modules.programs.models import (  # noqa: F401
+    Program,
+    ProgramCourse,
+    ProgramHead,
 )
 from app.modules.settings.models import (  # noqa: F401
     AcademicYear,
@@ -50,5 +62,21 @@ from app.modules.announcements.models import (  # noqa: F401
 
 # Documents / reports
 from app.modules.reports.models import ReportCardSnapshot  # noqa: F401
+
+# Calendar (Module 12 — scope addition, 2026-07)
+from app.modules.events.models import Event  # noqa: F401
+
+# D44 — part of the sweep D43's note above asked for. Admissions was one of the modules
+# missing from `Base.metadata` entirely, which is why `applications` never appeared in an
+# autogenerate diff. `Classroom` is registered from the start rather than becoming the
+# next omission.
+from app.modules.admissions.models import (  # noqa: F401
+    Application,
+    ApplicationDocument,
+    ApplicationEducation,
+    ApplicationTemp,
+    CreditTransferRequest,
+)
+from app.modules.classrooms.models import Classroom  # noqa: F401
 
 from app.db.base import Base  # noqa: F401  (re-export for convenience)

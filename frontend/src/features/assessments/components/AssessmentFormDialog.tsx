@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
 import { MenuItem, Stack, TextField } from '@mui/material';
-import { FormDialog } from '@shared/components';
-import type { AssessmentType } from '@shared/types/enums';
+import { FormDialog, DateField } from '@shared/components';
 import type { AssessmentCategory, AssessmentListItem } from '../hooks/useAssessments';
 
 export interface AssessmentFormValues {
   title: string;
-  type: AssessmentType;
   category_id: string | null;
   assessment_date: string | null;
   max_score: number;
@@ -26,23 +24,28 @@ export interface AssessmentFormDialogProps {
   onClose: () => void;
 }
 
-const TYPE_OPTIONS: ReadonlyArray<{ value: AssessmentType; label: string }> = [
-  { value: 'quiz', label: 'Quiz' },
-  { value: 'test', label: 'Test' },
-  { value: 'exam', label: 'Exam' },
-  { value: 'assignment', label: 'Assignment' },
-];
-
 const NONE_CATEGORY = '__none__';
+
+/** Every assessment counts equally within its category (client request, 17 Oct 2026). */
+const FIXED_WEIGHT = 1;
 
 /**
  * Create / edit an assessment DEFINITION (assessment-first, API-9). Grade entry is a
- * separate module — this only captures title, type, optional category, date, max score
- * and weight. Local controlled state; the parent owns the mutation and passes
+ * separate module — this only captures title, optional category, date (required) and max
+ * score.
+ *
+ * **There is no Type field** (client request, 16 Oct 2026): the category is the only way
+ * to group an assessment. The server stores an omitted type as `assignment`, and nothing
+ * displays it. Local controlled state; the parent owns the mutation and passes
  * submitting/error plus any server field errors (422) surfaced inline.
  *
  * Status is NOT edited here — lifecycle transitions go through the dedicated status
  * action on the list (POST /assessments/{id}/status, api-spec §5.6 / API-16).
+ *
+ * **Weight is hidden and always 1** (client request, 17 Oct 2026 — it was editable from
+ * 16 Oct). It is the assessment's share WITHIN its category, so at 1 for every assessment
+ * they all count equally and the categories' own weights decide how much each group is
+ * worth. Saving an edit also resets an older non-1 weight to 1.
  */
 export function AssessmentFormDialog({
   open,
@@ -58,44 +61,36 @@ export function AssessmentFormDialog({
   const editing = Boolean(assessment);
 
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<AssessmentType>('quiz');
   const [categoryId, setCategoryId] = useState<string>(NONE_CATEGORY);
   const [date, setDate] = useState('');
   const [maxScore, setMaxScore] = useState('100');
-  const [weight, setWeight] = useState('1');
 
   useEffect(() => {
     if (!open) return;
     setTitle(assessment?.title ?? '');
-    setType(assessment?.type ?? 'quiz');
     setCategoryId(assessment?.category_id ?? NONE_CATEGORY);
     setDate(assessment?.assessment_date ?? '');
     setMaxScore(assessment ? String(assessment.max_score) : '100');
-    setWeight(assessment ? String(assessment.weight) : '1');
   }, [open, assessment]);
 
   const maxScoreNum = Number(maxScore);
-  const weightNum = Number(weight);
   const maxScoreValid = maxScore.trim() !== '' && Number.isFinite(maxScoreNum) && maxScoreNum > 0;
-  const weightValid = weight.trim() !== '' && Number.isFinite(weightNum) && weightNum >= 0;
   const titleValid = title.trim().length > 0;
-  const canSubmit = titleValid && maxScoreValid && weightValid;
+  const dateValid = date.trim() !== '';
+  const canSubmit = titleValid && dateValid && maxScoreValid;
 
   const handleSubmit = () => {
     onSubmit({
       title: title.trim(),
-      type,
       category_id: categoryId === NONE_CATEGORY ? null : categoryId,
-      assessment_date: date.trim() === '' ? null : date,
+      assessment_date: date,
       max_score: maxScoreNum,
-      weight: weightNum,
+      weight: FIXED_WEIGHT,
     });
   };
 
   const titleErrors = fieldErrors?.title;
   const maxScoreErrors = fieldErrors?.max_score;
-  const weightErrors = fieldErrors?.weight;
-  const typeErrors = fieldErrors?.type;
 
   return (
     <FormDialog
@@ -123,22 +118,6 @@ export function AssessmentFormDialog({
 
         <TextField
           select
-          label="Type"
-          value={type}
-          onChange={(e) => setType(e.target.value as AssessmentType)}
-          fullWidth
-          error={Boolean(typeErrors)}
-          helperText={typeErrors?.join(' ')}
-        >
-          {TYPE_OPTIONS.map((opt) => (
-            <MenuItem key={opt.value} value={opt.value}>
-              {opt.label}
-            </MenuItem>
-          ))}
-        </TextField>
-
-        <TextField
-          select
           label="Category (optional)"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
@@ -158,38 +137,27 @@ export function AssessmentFormDialog({
           ))}
         </TextField>
 
-        <TextField
-          label="Date (optional)"
-          type="date"
+        <DateField
+          label="Date"
           value={date}
-          onChange={(e) => setDate(e.target.value)}
+          onChange={setDate}
+          required
           fullWidth
-          InputLabelProps={{ shrink: true }}
+          error={Boolean(fieldErrors?.assessment_date)}
+          helperText={fieldErrors?.assessment_date?.join(' ') ?? 'Required'}
         />
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-          <TextField
-            label="Max score"
-            type="number"
-            value={maxScore}
-            onChange={(e) => setMaxScore(e.target.value)}
-            required
-            fullWidth
-            inputProps={{ min: 0.01, step: 'any', 'aria-required': true }}
-            error={Boolean(maxScoreErrors) || (maxScore.trim() !== '' && !maxScoreValid)}
-            helperText={maxScoreErrors?.join(' ') ?? 'Must be greater than 0.'}
-          />
-          <TextField
-            label="Weight"
-            type="number"
-            value={weight}
-            onChange={(e) => setWeight(e.target.value)}
-            fullWidth
-            inputProps={{ min: 0, step: 'any' }}
-            error={Boolean(weightErrors) || (weight.trim() !== '' && !weightValid)}
-            helperText={weightErrors?.join(' ') ?? 'Relative weight in the term grade.'}
-          />
-        </Stack>
+        <TextField
+          label="Max score"
+          type="number"
+          value={maxScore}
+          onChange={(e) => setMaxScore(e.target.value)}
+          required
+          fullWidth
+          inputProps={{ min: 0.01, step: 'any', 'aria-required': true }}
+          error={Boolean(maxScoreErrors) || (maxScore.trim() !== '' && !maxScoreValid)}
+          helperText={maxScoreErrors?.join(' ') ?? 'Must be greater than 0.'}
+        />
       </Stack>
     </FormDialog>
   );

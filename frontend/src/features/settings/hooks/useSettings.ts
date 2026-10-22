@@ -4,14 +4,17 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
   useListAcademicYearsApiV1SettingsAcademicYearsGet,
   useCreateAcademicYearApiV1SettingsAcademicYearsPost,
   useActivateSemesterApiV1SettingsSemestersSemesterIdActivatePatch,
+  useCreateSemesterApiV1SettingsSemestersPost,
+  useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch,
   useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost,
+  useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost,
   useGetGradingScaleApiV1SettingsGradingScaleGet,
   useUpdateGradingScaleApiV1SettingsGradingScalePut,
   useGetAssessmentPolicyApiV1SettingsAssessmentPolicyGet,
@@ -34,7 +37,9 @@ import { useResetUserPasswordApiV1AuthUsersUserIdResetPasswordPost } from '@shar
 import type {
   ListUsersApiV1SettingsUsersGetParams,
   GetGradingScaleApiV1SettingsGradingScaleGetParams,
+  Role,
 } from '@shared/api/generated/model';
+import { listLinkableProfiles } from '../api/linkableProfiles';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
 
@@ -54,9 +59,21 @@ export function useUpdateSchoolProfile() {
 }
 
 // ── Academic structure (years + semesters) ─────────────────────────────────────
-export function useAcademicYears() {
+/**
+ * GET /settings/academic-years — every year with its semesters.
+ *
+ * Readable by ALL authenticated roles (widened 2026-07-29): this is the calendar every
+ * period picker is built from — the staff `?year=` filter (`useYearFilter`) and the
+ * student's global year·semester switcher, which joins it against
+ * `GET /students/me/years` for the semesters. It was P/S-only, so a teacher's picker
+ * got a 403 and silently emptied.
+ *
+ * `enabled` mirrors {@link useActiveTerm}: YearProvider mounts ABOVE the route guards,
+ * so it must hold the request until the session exists or eat a 401 on every reload.
+ */
+export function useAcademicYears(options?: { enabled?: boolean }) {
   return useListAcademicYearsApiV1SettingsAcademicYearsGet({
-    query: { staleTime: CONFIG_STALE_MS },
+    query: { staleTime: CONFIG_STALE_MS, enabled: options?.enabled ?? true },
   });
 }
 
@@ -83,6 +100,52 @@ export function useActivateSemester() {
 export function useArchiveAcademicYear() {
   const invalidate = useInvalidateAcademicStructure();
   return useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost({
+    mutation: { onSuccess: invalidate },
+  });
+}
+
+/**
+ * D32 (brief §6) — capture the term's mid-term report cards.
+ *
+ * Invalidates the report-card cache as well as the academic structure: a freeze changes
+ * what `GET /reports/report-card?kind=midterm` returns, and a Dean who freezes and then
+ * opens the report should not be shown the pre-freeze error from cache.
+ */
+export function useFreezeMidtermGrades() {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidateAcademicStructure();
+  return useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        void queryClient.invalidateQueries({ queryKey: ['reports', 'report-card'] });
+      },
+    },
+  });
+}
+
+/**
+ * D30 §D3 — add / correct ONE calendar term.
+ *
+ * These two were hand-written because `POST /settings/semesters` and
+ * `PATCH /settings/semesters/{id}` were new in D30 and absent from the committed
+ * `openapi.json`, which was a stale 21-path snapshot at the time.
+ *
+ * **D31 switched them to the generated operations.** Refreshing the spec to the real
+ * 101-path surface brought both into `generated/settings/settings.ts`, and the config's own
+ * rule is that a generated copy must never sit beside a hand-authored one to drift — the
+ * hand-written versions were now a second declaration of the same two calls. Regenerating
+ * is also no longer the all-or-nothing hazard that note described: `orval.transformer.cjs`
+ * prunes the spec to the four generated tags, so codegen touches nothing else.
+ */
+export function useCreateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useCreateSemesterApiV1SettingsSemestersPost({ mutation: { onSuccess: invalidate } });
+}
+
+export function useUpdateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch({
     mutation: { onSuccess: invalidate },
   });
 }
@@ -132,7 +195,35 @@ export function useUsersList(params: ListUsersApiV1SettingsUsersGetParams) {
 
 function useInvalidateUsers() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+  return () => {
+    qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+    // A created login takes its profile out of the picker.
+    qc.invalidateQueries({ queryKey: ['settings', 'linkable-profiles'] });
+  };
+}
+
+/**
+ * The roles whose login must be linked to a profile, and which profile. Mirrors
+ * `_PROFILE_KIND` in `backend/app/modules/settings/service.py`: every scoped read for
+ * these roles starts from the caller's profile, so a login without one 404s.
+ */
+export const PROFILE_KIND_BY_ROLE: Partial<Record<Role, 'teacher' | 'student'>> = {
+  teacher: 'teacher',
+  hod: 'teacher',
+  student: 'student',
+};
+
+/** Unlinked profiles for the user form's picker; idle for a role that takes none. */
+export function useLinkableProfiles(role: Role, search: string, enabled: boolean) {
+  const takesProfile = Boolean(PROFILE_KIND_BY_ROLE[role]);
+  return useQuery({
+    // Keyed by the profile KIND, not the role: teacher and hod read the same rows.
+    queryKey: ['settings', 'linkable-profiles', PROFILE_KIND_BY_ROLE[role], search],
+    queryFn: ({ signal }) =>
+      listLinkableProfiles({ role, search: search || undefined }, signal),
+    enabled: enabled && takesProfile,
+    placeholderData: (prev) => prev,
+  });
 }
 
 export function useCreateUser() {
@@ -159,10 +250,18 @@ export function useAccount() {
  * GET /settings/active-term. 409 no_active_semester when the school has no active
  * year/semester — the caller degrades to a setup prompt. Retries are disabled so a
  * 409 (a valid "not set up" state, not a transient error) surfaces immediately.
+ *
+ * `enabled` exists so callers mounted ABOVE the route guards (YearProvider) can hold
+ * the request until the session is established. Without it the query fires during
+ * AuthProvider's bootstrap, when no access token is in memory yet, and eats a
+ * guaranteed 401 on every hard reload. The client's interceptor does recover it —
+ * the 401 coalesces onto the same single-flight `performRefresh()` the bootstrap is
+ * already running and is replayed — but it costs a round-trip and puts a red herring
+ * in the console. Defaults to true so existing callers are unaffected.
  */
-export function useActiveTerm() {
+export function useActiveTerm(options?: { enabled?: boolean }) {
   return useGetActiveTermApiV1SettingsActiveTermGet({
-    query: { staleTime: CONFIG_STALE_MS, retry: false },
+    query: { staleTime: CONFIG_STALE_MS, retry: false, enabled: options?.enabled ?? true },
   });
 }
 
@@ -174,3 +273,11 @@ export function useUpdateAccount() {
     },
   });
 }
+
+// ── Audit log ──────────────────────────────────────────────────────────────────
+// ⚠️ `AuditLogParams` / `AuditLogItem` / `AuditLogPage` / `auditLogKeys` / `useAuditLog`
+// LIVED HERE AND ARE GONE (Sep 2026), with `GET /settings/audit-log`. The one audit
+// reader is `features/audit`, over `GET /audit`. See `settings/index.tsx` for why there
+// is no longer a second one — it is about the AUDIENCE, not tidiness: this endpoint's
+// gate had grown to include the System Administrator, whom D45 Phase 7 deliberately
+// refused on the rendered trail because it is mostly academic records.

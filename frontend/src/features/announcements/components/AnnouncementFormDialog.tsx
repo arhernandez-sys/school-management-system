@@ -9,10 +9,11 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material';
-import { FormDialog } from '@shared/components';
+import { DateTimeField, FormDialog } from '@shared/components';
+import { isLecturerRole } from '@shared/auth/permissions';
 import type { Role } from '@shared/types/enums';
-import { AUDIENCE_LABEL, isoToLocalInput } from '../presentation';
-import { useTargetClasses } from '../hooks/useAnnouncements';
+import { AUDIENCE_LABEL } from '../presentation';
+import { useTargetOfferings } from '../hooks/useAnnouncements';
 import type {
   AnnouncementAudience,
   AnnouncementDetail,
@@ -26,7 +27,7 @@ import type {
  * they own; principal/secretary may broadcast to any audience.
  *
  * When audience = class, a section picker (GET /announcements/target-classes) is shown;
- * teachers see only their own sections, so a teacher can never target a class they do
+ * lecturers see only their own offerings, so a lecturer can never target one they do
  * not own from this form.
  */
 
@@ -34,9 +35,15 @@ export interface AnnouncementFormValues {
   title: string;
   body: string;
   audience: AnnouncementAudience;
-  class_id: string | null;
-  /** datetime-local string; '' = no expiry. */
-  expires_at_local: string;
+  offering_id: string | null;
+  /**
+   * A UTC ISO instant; `''` = no expiry.
+   *
+   * D42 §6 — this held a `datetime-local` wall-clock string, because that is what the
+   * native input it fed spoke. `DateTimeField` owns the local↔UTC conversion now, so the
+   * form holds the value it actually sends and `isoToLocalInput` has no caller left.
+   */
+  expires_at: string;
 }
 
 export interface AnnouncementFormDialogProps {
@@ -54,7 +61,8 @@ export interface AnnouncementFormDialogProps {
 const BROADCAST_AUDIENCES: AnnouncementAudience[] = ['all', 'teachers', 'students'];
 
 function audienceOptionsFor(role: Role): AnnouncementAudience[] {
-  if (role === 'teacher') return ['class'];
+  // D43 — an HOD posts as a lecturer does: to their own courses, not school-wide.
+  if (isLecturerRole(role)) return ['class'];
   // principal / secretary
   return [...BROADCAST_AUDIENCES, 'class'];
 }
@@ -62,9 +70,9 @@ function audienceOptionsFor(role: Role): AnnouncementAudience[] {
 const emptyValues = (role: Role): AnnouncementFormValues => ({
   title: '',
   body: '',
-  audience: role === 'teacher' ? 'class' : 'all',
-  class_id: null,
-  expires_at_local: '',
+  audience: isLecturerRole(role) ? 'class' : 'all',
+  offering_id: null,
+  expires_at: '',
 });
 
 export function AnnouncementFormDialog({
@@ -81,8 +89,8 @@ export function AnnouncementFormDialog({
   const [values, setValues] = useState<AnnouncementFormValues>(() => emptyValues(role));
 
   // Only fetch the section list once the dialog is open (avoids an eager request).
-  const classesQuery = useTargetClasses(open);
-  const sections = classesQuery.data ?? [];
+  const offeringsQuery = useTargetOfferings(open);
+  const offerings = offeringsQuery.data ?? [];
 
   const audienceOptions = useMemo(() => audienceOptionsFor(role), [role]);
 
@@ -94,8 +102,8 @@ export function AnnouncementFormDialog({
         title: announcement.title,
         body: announcement.body,
         audience: announcement.audience,
-        class_id: announcement.class_ref?.id ?? null,
-        expires_at_local: isoToLocalInput(announcement.expires_at),
+        offering_id: announcement.offering?.id ?? null,
+        expires_at: announcement.expires_at ?? '',
       });
     } else {
       setValues(emptyValues(role));
@@ -104,13 +112,17 @@ export function AnnouncementFormDialog({
 
   const handleAudienceChange = (e: SelectChangeEvent) => {
     const audience = e.target.value as AnnouncementAudience;
-    setValues((v) => ({ ...v, audience, class_id: audience === 'class' ? v.class_id : null }));
+    setValues((v) => ({
+      ...v,
+      audience,
+      offering_id: audience === 'class' ? v.offering_id : null,
+    }));
   };
 
   const titleTrimmed = values.title.trim();
   const bodyTrimmed = values.body.trim();
-  const classRequiredMissing = values.audience === 'class' && !values.class_id;
-  const submitDisabled = !titleTrimmed || !bodyTrimmed || classRequiredMissing;
+  const offeringRequiredMissing = values.audience === 'class' && !values.offering_id;
+  const submitDisabled = !titleTrimmed || !bodyTrimmed || offeringRequiredMissing;
 
   const handleSubmit = () => {
     if (submitDisabled) return;
@@ -118,9 +130,8 @@ export function AnnouncementFormDialog({
       title: titleTrimmed,
       body: bodyTrimmed,
       audience: values.audience,
-      class_id: values.audience === 'class' ? values.class_id : null,
-      expires_at:
-        values.expires_at_local === '' ? null : new Date(values.expires_at_local).toISOString(),
+      offering_id: values.audience === 'class' ? values.offering_id : null,
+      expires_at: values.expires_at === '' ? null : values.expires_at,
     };
     onSubmit(payload);
   };
@@ -180,46 +191,44 @@ export function AnnouncementFormDialog({
         </FormControl>
 
         {values.audience === 'class' && (
-          <FormControl fullWidth required error={Boolean(fieldError('class_id'))}>
-            <InputLabel id="announcement-class-label">Class</InputLabel>
+          <FormControl fullWidth required error={Boolean(fieldError('offering_id'))}>
+            <InputLabel id="announcement-offering-label">Course offering</InputLabel>
             <Select
-              labelId="announcement-class-label"
-              label="Class"
-              value={values.class_id ?? ''}
-              onChange={(e) => setValues((v) => ({ ...v, class_id: e.target.value || null }))}
-              disabled={classesQuery.isLoading}
+              labelId="announcement-offering-label"
+              label="Course offering"
+              value={values.offering_id ?? ''}
+              onChange={(e) => setValues((v) => ({ ...v, offering_id: e.target.value || null }))}
+              disabled={offeringsQuery.isLoading}
             >
-              {sections.map((s) => (
-                <MenuItem key={s.id} value={s.id}>
-                  {s.name}
+              {offerings.map((o) => (
+                <MenuItem key={o.id} value={o.id}>
+                  {o.course_name ? `${o.label} — ${o.course_name}` : o.label}
                 </MenuItem>
               ))}
             </Select>
-            {classesQuery.isLoading && (
+            {offeringsQuery.isLoading && (
               <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                Loading classes…
+                Loading course offerings…
               </Typography>
             )}
-            {!classesQuery.isLoading && sections.length === 0 && (
+            {!offeringsQuery.isLoading && offerings.length === 0 && (
               <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                You have no classes to post to.
+                You have no course offerings to post to.
               </Typography>
             )}
-            {fieldError('class_id') && (
+            {fieldError('offering_id') && (
               <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
-                {fieldError('class_id')}
+                {fieldError('offering_id')}
               </Typography>
             )}
           </FormControl>
         )}
 
-        <TextField
+        <DateTimeField
           label="Expires (optional)"
-          type="datetime-local"
-          value={values.expires_at_local}
-          onChange={(e) => setValues((v) => ({ ...v, expires_at_local: e.target.value }))}
+          value={values.expires_at}
+          onChange={(v) => setValues((prev) => ({ ...prev, expires_at: v }))}
           fullWidth
-          InputLabelProps={{ shrink: true }}
           helperText={fieldError('expires_at') ?? 'Leave blank to keep it visible indefinitely.'}
           error={Boolean(fieldError('expires_at'))}
         />

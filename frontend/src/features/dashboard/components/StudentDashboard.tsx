@@ -10,6 +10,8 @@ import {
   Typography,
 } from '@mui/material';
 import GradeIcon from '@mui/icons-material/Grade';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
+import SchoolIcon from '@mui/icons-material/School';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import UpcomingIcon from '@mui/icons-material/Upcoming';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
@@ -24,9 +26,10 @@ export interface StudentDashboardProps {
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'TBD';
-  const d = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  // `iso` here is a date-only `YYYY-MM-DD`, which the formatter reads as a calendar date
+  // rather than as UTC midnight — the reason the old `T00:00:00Z` suffix is gone.
+  return formatSchoolDayMonth(iso);
 }
 
 /** Map a letter grade to a status kind (passing letters read as success, F as error). */
@@ -37,9 +40,14 @@ function letterKind(letter: string): 'success' | 'warning' | 'error' {
 }
 
 /**
- * Student dashboard (design-system §7.2 — own data). Term-average + attendance summary
+ * Student dashboard (design-system §7.2 — own data). GPA, term average and attendance
  * as StatCards, then current classes, recent RELEASED grades (unreleased is never sent),
  * upcoming assessments and targeted announcements.
+ *
+ * **GPA leads the row** (D30 §D5): at a junior college it is the figure the student is
+ * actually judged on, and the one their report card prints. The term average stays
+ * beside it because it is a different measure — a 0-100 percentage rather than a 0-4
+ * credit-weighted figure — not a worse version of the same one.
  */
 export function StudentDashboard({ data }: StudentDashboardProps) {
   const { stats } = data;
@@ -51,19 +59,35 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
 
   return (
     <Grid container spacing={3}>
-      {/* Stat row */}
-      <Grid item xs={12} sm={4}>
+      {/* Stat row — four tiles, so sm halves and md quarters rather than thirds. */}
+      <Grid item xs={12} sm={6} md={3}>
         <StatCard
-          label="Term average"
-          value={averageDisplay}
-          icon={<GradeIcon />}
+          label="Session GPA"
+          value={stats.gpa != null ? stats.gpa.toFixed(2) : '—'}
+          icon={<SchoolIcon />}
           color="primary"
-          progress={stats.term_average ?? undefined}
-          helperText={stats.term_average == null ? 'No released grades yet' : 'Across your subjects'}
+          // StatCard's progress bar is a 0-100 scale, so a 0-4 GPA is scaled onto it.
+          progress={stats.gpa != null ? (stats.gpa / 4) * 100 : undefined}
+          helperText={
+            stats.gpa == null
+              ? 'No enrolled credits yet'
+              : `Across ${stats.total_credits} enrolled credits`
+          }
           to={ROUTES.grades}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} md={3}>
+        <StatCard
+          label="Session average"
+          value={averageDisplay}
+          icon={<GradeIcon />}
+          color="info"
+          progress={stats.term_average ?? undefined}
+          helperText={stats.term_average == null ? 'No released grades yet' : 'Across your courses'}
+          to={ROUTES.grades}
+        />
+      </Grid>
+      <Grid item xs={12} sm={6} md={3}>
         <StatCard
           label="Attendance"
           value={`${stats.attendance_rate}%`}
@@ -73,12 +97,12 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
           to={ROUTES.attendance}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} md={3}>
         <StatCard
           label="Upcoming assessments"
           value={stats.upcoming_count}
           icon={<UpcomingIcon />}
-          color="info"
+          color="warning"
           to={ROUTES.assessments}
         />
       </Grid>
@@ -94,21 +118,23 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
               <EmptyState
                 icon={<MenuBookIcon fontSize="inherit" />}
                 title="No classes yet"
-                description="You aren't enrolled in any subjects this term."
+                description="You aren't enrolled in any courses this session."
                 variant="card"
               />
             ) : (
               <List disablePadding>
                 {data.my_classes.map((c, i) => (
-                  <Box key={c.class_subject_id}>
+                  <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
                     <ListItem sx={{ px: 0, py: 1.25 }}>
                       <Stack sx={{ minWidth: 0 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
-                          {c.subject_name}
+                          {c.offering.course.name}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {c.teacher_name}
+                          {/* Label + lecturer: the label is what tells one section of a
+                              course from another. */}
+                          {[c.offering.label, c.teacher_name].filter(Boolean).join(' · ')}
                         </Typography>
                       </Stack>
                     </ListItem>
@@ -131,7 +157,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
               <EmptyState
                 icon={<GradeIcon fontSize="inherit" />}
                 title="No released grades"
-                description="Grades appear here once your teachers release them."
+                description="Grades appear here once your lecturers release them."
                 variant="card"
               />
             ) : (
@@ -148,7 +174,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                           {g.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {g.subject_name} · {g.score}/{g.max_score}
+                          {g.offering?.course.name ?? '—'} · {g.score}/{g.max_score}
                         </Typography>
                       </Stack>
                     </ListItem>
@@ -185,7 +211,7 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.subject_name} · {formatDate(a.assessment_date)}
+                          {a.offering?.course.name ?? '—'} · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
                     </ListItem>
