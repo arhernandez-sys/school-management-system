@@ -539,6 +539,8 @@ class TestTheDeanWritesThroughTheFreeze:
         graph.sem.grade_submission_deadline = _utc(-30)
         graph.sem.midterm_submission_start = None
         graph.sem.midterm_submission_end = None
+        # D47 — `marked` backdates the assessment, which closes its marking window too.
+        assessment.reopened_until = _utc(+1)
         db_session.flush()
         direct = client.put(
             f"{A}/{assessment.id}/grades",

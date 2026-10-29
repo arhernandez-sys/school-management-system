@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from app.common.enums import AssessmentStatus, GradeStatus
+from app.common.enums import GradeStatus
 from app.modules.grades.calc import (
     BandInput,
     CategoryInput,
@@ -64,20 +64,18 @@ def _grade(
     policy=LENIENT,
     category_id=None,
     makeup_score=None,
-    assessment_status=AssessmentStatus.GRADED,
-    is_released=True,
+    marking_closed=False,
 ):
     return GradeInput(
         assessment_id=uuid.uuid4(),
         max_score=D(max_score),
         weight=D(weight),
-        assessment_status=assessment_status,
         policy=policy,
         category_id=category_id,
         grade_status=status,
         score=None if score is None else D(score),
         makeup_score=None if makeup_score is None else D(makeup_score),
-        is_released=is_released,
+        marking_closed=marking_closed,
     )
 
 
@@ -273,31 +271,61 @@ class TestPerGradeTreatment:
         )
         assert result.numeric == D("75.00")
 
-    def test_only_graded_lifecycle_assessments_contribute(self):
-        """An assessment still being marked must not swing the average."""
+
+class TestMarkingWindowAutoZero:
+    """D47 — a blank mark is excluded while the marking window is open and counts as
+    0 once it has closed. Excused / exempt never do; that is what excusing is for."""
+
+    def test_blank_is_excluded_while_marking_is_open(self):
+        result = compute_term_grade(
+            [_grade(score="80"), _grade(status=GradeStatus.PENDING)], bands=SHIPPED_BANDS
+        )
+        assert (result.numeric, result.weight_base_used) == (D("80.00"), D("1"))
+
+    def test_blank_counts_as_zero_once_marking_has_closed(self):
+        result = compute_term_grade(
+            [_grade(score="80"), _grade(status=GradeStatus.PENDING, marking_closed=True)],
+            bands=SHIPPED_BANDS,
+        )
+        assert (result.numeric, result.weight_base_used) == (D("40.00"), D("2"))
+
+    def test_a_missing_row_is_a_blank_too(self):
+        result = compute_term_grade(
+            [_grade(score="80"), _grade(status=None, marking_closed=True)],
+            bands=SHIPPED_BANDS,
+        )
+        assert result.numeric == D("40.00")
+
+    def test_excused_and_exempt_are_never_zeroed(self):
         result = compute_term_grade(
             [
-                _grade(score="100"),
-                _grade(score="0", assessment_status=AssessmentStatus.GRADING),
-                _grade(score="0", assessment_status=AssessmentStatus.DRAFT),
-                _grade(score="0", assessment_status=AssessmentStatus.PUBLISHED),
+                _grade(score="80"),
+                _grade(status=GradeStatus.EXCUSED, marking_closed=True),
+                _grade(status=GradeStatus.EXEMPT, marking_closed=True),
             ],
             bands=SHIPPED_BANDS,
         )
-        assert (result.numeric, result.weight_base_used) == (D("100.00"), D("1"))
+        assert (result.numeric, result.weight_base_used) == (D("80.00"), D("1"))
 
-    def test_released_only_filters_unreleased_grades(self):
-        grades = [
-            _grade(score="100", is_released=True),
-            _grade(score="0", is_released=False),
-        ]
-        teacher_view = compute_term_grade(grades, bands=SHIPPED_BANDS)
-        student_view = compute_term_grade(grades, bands=SHIPPED_BANDS, released_only=True)
-        assert teacher_view.numeric == D("50.00")
-        assert student_view.numeric == D("100.00")
+    def test_absent_counts_as_a_blank(self):
+        result = compute_term_grade(
+            [_grade(score="80"), _grade(status=GradeStatus.ABSENT, marking_closed=True)],
+            bands=SHIPPED_BANDS,
+        )
+        assert result.numeric == D("40.00")
 
-    def test_release_state_ignored_for_staff_view(self):
-        result = compute_term_grade([_grade(score="90", is_released=False)], bands=SHIPPED_BANDS)
+    def test_an_absent_makeup_still_wins_after_close(self):
+        result = compute_term_grade(
+            [_grade(status=GradeStatus.ABSENT, makeup_score="70", policy=LENIENT,
+                    marking_closed=True)],
+            bands=SHIPPED_BANDS,
+        )
+        assert result.numeric == D("70.00")
+
+    def test_a_saved_mark_is_unaffected_by_the_window(self):
+        result = compute_term_grade(
+            [_grade(score="90", marking_closed=True)], bands=SHIPPED_BANDS
+        )
         assert result.numeric == D("90.00")
 
 
@@ -597,16 +625,6 @@ class TestComputeTermGradesBulk:
         assert results["bob"].letter == "D"
         assert results["carol"].numeric is None
 
-    def test_per_request_flags_are_honoured(self):
-        grades = [_grade(score="100", is_released=True), _grade(score="0", is_released=False)]
-        results = compute_term_grades_bulk(
-            {
-                "staff": TermGradeRequest(grades=grades, bands=SHIPPED_BANDS),
-                "student": TermGradeRequest(grades=grades, bands=SHIPPED_BANDS, released_only=True),
-            }
-        )
-        assert results["staff"].numeric == D("50.00")
-        assert results["student"].numeric == D("100.00")
 
     def test_empty_input(self):
         assert compute_term_grades_bulk({}) == {}

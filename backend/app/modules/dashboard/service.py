@@ -27,7 +27,6 @@ from sqlalchemy.orm import Session
 from app.common.enums import (
     AcademicYearStatus,
     ApplicationStatus,
-    AssessmentStatus,
     GradeStatus,
     Role,
     StudentStatus,
@@ -40,7 +39,7 @@ from app.modules.announcements import service as announcements_service
 from app.modules.announcements.models import Announcement, AnnouncementRead
 from app.modules.admissions.models import Application
 from app.modules.assessments.models import Assessment, AssessmentCategory
-from app.modules.assessments.release_nudge import graded_unreleased_clause
+from app.modules.assessments import marking
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance import service as attendance_service
 from app.modules.attendance.service import _summarize
@@ -75,7 +74,6 @@ from app.modules.dashboard.schemas import (
     StudentStats,
     StudentUpcomingItem,
     TeacherAssessmentItem,
-    TeacherAwaitingReleaseItem,
     TeacherDashboard,
     TeacherStats,
     TeacherTodayOffering,
@@ -325,31 +323,26 @@ def _outstanding_grade_submissions(
 ) -> int:
     """§42 "outstanding grade submissions" — assessments still being MARKED, college-wide.
 
-    **The same predicate as the Lecturer's own `ungraded_items` tile** (lifecycle
-    `published` or `grading`), summed over every offering in the session instead of one
-    lecturer's. That is deliberate: a Dean asking "how far behind is marking" must not
-    get a total that disagrees with the tiles of the people it is about.
+    **The same predicate as the Lecturer's own `ungraded_items` tile** (D47: the
+    marking window is still open), summed over every offering in the session instead
+    of one lecturer's. That is deliberate: a Dean asking "how far behind is marking"
+    must not get a total that disagrees with the tiles of the people it is about.
 
     Scoped to the offering's own session, not just the semester id, so an assessment
-    attached to an offering outside the active year cannot inflate it.
+    attached to an offering outside the active year cannot inflate it. The window is
+    computed, not stored, so the rows are filtered here rather than in SQL.
     """
-    return int(
-        db.scalar(
-            select(func.count())
-            .select_from(Assessment)
-            .join(CourseOffering, CourseOffering.id == Assessment.offering_id)
-            .where(
-                Assessment.semester_id == semester.id,
-                Assessment.deleted_at.is_(None),
-                Assessment.status.in_(
-                    (AssessmentStatus.PUBLISHED, AssessmentStatus.GRADING)
-                ),
-                offerings_in_year(year.id),
-                CourseOffering.deleted_at.is_(None),
-            )
+    rows = db.scalars(
+        select(Assessment)
+        .join(CourseOffering, CourseOffering.id == Assessment.offering_id)
+        .where(
+            Assessment.semester_id == semester.id,
+            Assessment.deleted_at.is_(None),
+            offerings_in_year(year.id),
+            CourseOffering.deleted_at.is_(None),
         )
-        or 0
-    )
+    ).all()
+    return sum(1 for a in rows if marking.is_marking_open(a))
 
 
 def _new_students_term(db: Session, year: AcademicYear) -> int:
@@ -512,7 +505,6 @@ def _term_grades_for_year(
                 assessment_id=a.id,
                 max_score=_dec(a.max_score) or Decimal(0),
                 weight=_dec(a.weight) or Decimal(0),
-                assessment_status=a.status,
                 policy=calc.resolve_policy(
                     a, cats_by_id.get(a.category_id) if a.category_id else None, year, school
                 ),
@@ -524,7 +516,7 @@ def _term_grades_for_year(
                 makeup_score=(
                     _dec(student_grades[a.id].makeup_score) if a.id in student_grades else None
                 ),
-                is_released=True,
+                marking_closed=not marking.is_marking_open(a),
             )
             for a in by_cs.get(cs_id, [])
         ]
@@ -954,33 +946,37 @@ def _teacher_payload(
     ]
 
     cs_meta = {cs.id: (cs, subject) for cs, subject in owned}
-    pending_statuses = (AssessmentStatus.PUBLISHED, AssessmentStatus.GRADING)
-    pending = []
+    # D47 — "still to mark" is every assessment whose marking window is open. The
+    # window is computed, not stored, so it is filtered after the load.
+    pending: list[tuple[Assessment, marking.MarkingState]] = []
     if cs_meta:
-        pending = list(
-            db.scalars(
-                select(Assessment).where(
-                    Assessment.offering_id.in_(list(cs_meta)),
-                    Assessment.semester_id == semester.id,
-                    Assessment.status.in_(pending_statuses),
-                    Assessment.deleted_at.is_(None),
-                )
-            ).all()
-        )
-    pending.sort(key=lambda a: (a.assessment_date is None, a.assessment_date, a.title))
+        for a in db.scalars(
+            select(Assessment).where(
+                Assessment.offering_id.in_(list(cs_meta)),
+                Assessment.semester_id == semester.id,
+                Assessment.deleted_at.is_(None),
+            )
+        ).all():
+            state = marking.marking_state(a)
+            if state.open:
+                pending.append((a, state))
+    # Soonest-closing first: that is the one the lecturer must not miss.
+    pending.sort(
+        key=lambda p: (p[1].effective_closes_at is None, p[1].effective_closes_at, p[0].title)
+    )
 
     recent_assessments = [
         TeacherAssessmentItem(
             id=a.id,
             title=a.title,
             offering=offering_ref(*cs_meta[a.offering_id]),
+            offering_id=a.offering_id,
             assessment_date=a.assessment_date,
-            status=a.status,
+            marking_closes_at=state.effective_closes_at,
+            days_left=state.days_left,
         )
-        for a in pending[:_CARD_LIMIT]
+        for a, state in pending[:_CARD_LIMIT]
     ]
-
-    awaiting = _awaiting_release(db, cs_meta, semester)
 
     return TeacherDashboard(
         user_full_name=actor.full_name,
@@ -992,88 +988,11 @@ def _teacher_payload(
                 1 for c in today_classes if not c.attendance_recorded
             ),
             ungraded_items=len(pending),
-            awaiting_release_items=len(awaiting),
         ),
         today_classes=today_classes,
         recent_assessments=recent_assessments,
-        awaiting_release=awaiting[:_CARD_LIMIT],
         recent_announcements=_recent_announcements(db, actor, _TEACHER_ANNOUNCEMENT_LIMIT),
     )
-
-
-def _awaiting_release(
-    db: Session,
-    cs_meta: dict[uuid.UUID, tuple],
-    semester: Semester,
-) -> list[TeacherAwaitingReleaseItem]:
-    """Assessments the teacher has MARKED but not yet PUBLISHED to students.
-
-    Distinct from `ungraded_items`, which counts assessments still being marked
-    (lifecycle `published`/`grading`). This counts assessments carrying at least one
-    grade row that is `graded` while its effective release flag is false — work the
-    teacher has finished and the student still cannot see. See
-    `assessments/release_nudge.graded_unreleased_clause`, which is the single
-    definition shared with `POST /assessments/{id}/nudge-release`, so the tile and
-    the endpoint's 409 can never disagree.
-
-    **Ownership is not re-derived here.** `cs_meta` is the caller's already-resolved
-    set of owned offerings (built in `_teacher_payload` from the same
-    `ClassTeacher → TeacherProfile` join the rest of the payload uses), so this adds
-    no second ownership query.
-
-    **One query, not one per assessment.** A single `IN (…) + GROUP BY` returns the
-    assessment, its display columns and the waiting-student count together, matching
-    this module's batched-load budget. Every non-aggregate column is named in the
-    GROUP BY rather than relying on functional dependency, which MariaDB's
-    ONLY_FULL_GROUP_BY does not infer as reliably as Postgres.
-
-    Scoped to the ACTIVE semester, exactly like `ungraded_items` — the dashboard is a
-    view of the current term's outstanding work, not a lifetime backlog.
-    """
-    if not cs_meta:
-        return []
-
-    rows = db.execute(
-        select(
-            Assessment.id,
-            Assessment.offering_id,
-            Assessment.title,
-            Assessment.assessment_date,
-            Assessment.status,
-            func.count(),
-        )
-        .join(AssessmentGrade, AssessmentGrade.assessment_id == Assessment.id)
-        .where(
-            Assessment.offering_id.in_(list(cs_meta)),
-            Assessment.semester_id == semester.id,
-            Assessment.deleted_at.is_(None),
-            graded_unreleased_clause(),
-        )
-        .group_by(
-            Assessment.id,
-            Assessment.offering_id,
-            Assessment.title,
-            Assessment.assessment_date,
-            Assessment.status,
-        )
-    ).all()
-
-    items = [
-        TeacherAwaitingReleaseItem(
-            id=a_id,
-            title=title,
-            offering=offering_ref(*cs_meta[cs_id]),
-            assessment_date=on,
-            status=status,
-            offering_id=cs_id,
-            graded_unreleased_count=waiting,
-        )
-        for a_id, cs_id, title, on, status, waiting in rows
-    ]
-    # Oldest work first — the longest-hidden result is the most overdue. Portable
-    # "NULLs last" ordering, as elsewhere in this codebase.
-    items.sort(key=lambda i: (i.assessment_date is None, i.assessment_date, i.title))
-    return items
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1196,13 +1115,7 @@ def _student_payload(
     for a in assessments:
         by_cs[a.offering_id].append(a)
 
-    def released(a: Assessment) -> bool:
-        g = my_grades.get(a.id)
-        return a.is_released if g is None or g.is_released is None else g.is_released
-
-    # Per-subject term grades, RELEASED ONLY. The mock computes this with the
-    # release-agnostic selector, which would surface a number a student cannot
-    # reconcile from the grades they can actually see.
+    # Per-subject term grades. D47: no release step — a saved mark counts at once.
     requests: dict[object, calc.TermGradeRequest] = {}
     for cs_id in cs_ids:
         cat_inputs = [
@@ -1224,7 +1137,6 @@ def _student_payload(
                     assessment_id=a.id,
                     max_score=_dec(a.max_score) or Decimal(0),
                     weight=_dec(a.weight) or Decimal(0),
-                    assessment_status=a.status,
                     policy=calc.resolve_policy(
                         a,
                         cats_by_id.get(a.category_id) if a.category_id else None,
@@ -1237,13 +1149,12 @@ def _student_payload(
                     makeup_score=(
                         _dec(my_grades[a.id].makeup_score) if a.id in my_grades else None
                     ),
-                    is_released=released(a),
+                    marking_closed=not marking.is_marking_open(a),
                 )
                 for a in by_cs.get(cs_id, [])
             ],
             categories=cat_inputs,
             bands=bands,
-            released_only=True,
         )
     computed_terms = calc.compute_term_grades_bulk(requests)
     per_subject = [t.numeric for t in computed_terms.values() if t.numeric is not None]
@@ -1271,9 +1182,7 @@ def _student_payload(
     recent_graded = [
         a
         for a in assessments
-        if a.status == AssessmentStatus.GRADED
-        and released(a)
-        and a.id in my_grades
+        if a.id in my_grades
         and my_grades[a.id].status == GradeStatus.GRADED
         and my_grades[a.id].score is not None
     ]
@@ -1294,14 +1203,11 @@ def _student_payload(
         for a in recent_graded[:_CARD_LIMIT]
     ]
 
-    # Upcoming: dated in the future and NOT a draft. The mock includes drafts, which
-    # leaks unpublished work to a student — a real scope bug, not copied.
+    # Upcoming: dated in the future. D47 retired drafts, so nothing is hidden.
     upcoming = [
         a
         for a in assessments
-        if a.assessment_date is not None
-        and a.assessment_date > school_today()
-        and a.status != AssessmentStatus.DRAFT
+        if a.assessment_date is not None and a.assessment_date > school_today()
     ]
     upcoming.sort(key=lambda a: a.assessment_date)
     upcoming_assessments = [

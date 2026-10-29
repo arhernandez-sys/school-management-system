@@ -445,31 +445,27 @@ class TestMyReportCard:
         assert row["status"] == "graded"
         assert row["numeric"] == 90.0
 
-    def test_any_unreleased_graded_work_makes_the_subject_pending(self, client, graph) -> None:
-        """AC 5.5 — the release rule is per-OFFERING, not per-assessment.
-
-        An official document must not print a partial average, so one unreleased
-        graded assessment suppresses the whole subject row.
-        """
-        shown = graph.assessment(cs=graph.cs, max_score="100", is_released=True)
-        secret = graph.assessment(cs=graph.cs, max_score="100", is_released=False)
-        graph.grade(shown, graph.student, graph.enrollment, score="90")
-        graph.grade(secret, graph.student, graph.enrollment, score="10")
+    def test_a_saved_mark_is_never_withheld_as_pending(self, client, graph) -> None:
+        """D47 retired release: the per-offering `pending` withhold has nothing left to
+        wait for, so a subject with saved marks always prints its average."""
+        a = graph.assessment(cs=graph.cs, max_score="100", is_released=False)
+        b = graph.assessment(cs=graph.cs, max_score="100", is_released=False)
+        graph.grade(a, graph.student, graph.enrollment, score="90")
+        graph.grade(b, graph.student, graph.enrollment, score="10")
         row = next(
             s for s in client.get(f"{R}/report-card/me", headers=graph.U).json()["subjects"]
             if s["subject"]["id"] == str(graph.subject.id)
         )
-        assert row["status"] == "pending"
-        assert row["numeric"] is None
-        assert row["letter"] is None
+        assert row["status"] == "graded"
+        assert row["numeric"] == 50.0
 
-    def test_pending_subject_excluded_from_the_term_average(self, client, graph) -> None:
-        ok = graph.assessment(cs=graph.cs2, max_score="100", is_released=True)
+    def test_every_subject_counts_in_the_term_average(self, client, graph) -> None:
+        ok = graph.assessment(cs=graph.cs2, max_score="100")
         graph.grade(ok, graph.student, graph.enrollment, score="70")
-        secret = graph.assessment(cs=graph.cs, max_score="100", is_released=False)
-        graph.grade(secret, graph.student, graph.enrollment, score="10")
+        other = graph.assessment(cs=graph.cs, max_score="100")
+        graph.grade(other, graph.student, graph.enrollment, score="10")
         body = client.get(f"{R}/report-card/me", headers=graph.U).json()
-        assert body["term_average"] == 70.0
+        assert body["term_average"] == 40.0
 
     def test_draft_lifecycle_assessments_do_not_make_a_subject_pending(self, client, graph) -> None:
         """Only `graded`-lifecycle work gates release; a draft is not yet real."""
@@ -682,30 +678,25 @@ class TestReportCardGpa:
         assert body["gpa"] == 0.00
         assert body["total_credits"] > 0
 
-    def test_a_withheld_subject_contributes_credits_but_no_points(
+    def test_every_marked_subject_earns_its_points(
         self, client, graph, db_session
     ) -> None:
-        """On the student's OWN card an unreleased subject shows `pending` — and it must
-        not leak its mark through the GPA either. It is scored as ungraded rather than
-        dropped, because dropping it would shrink the denominator and let the student
-        solve for the hidden grade.
-        """
+        """D47 — nothing is withheld any more, so both courses score on the student's
+        own card: 4.00 x 3 + 4.00 x 3 over 6 credits."""
         _reband_to_bajc(db_session, graph.year.id)
         graph.subject.credits = 3
         graph.subject2.credits = 3
         db_session.flush()
 
-        released = graph.assessment(cs=graph.cs, max_score="100", is_released=True)
-        graph.grade(released, graph.student, graph.enrollment, score="98")  # A -> 4.00
-        hidden = graph.assessment(cs=graph.cs2, max_score="100", is_released=False)
-        graph.grade(hidden, graph.student, graph.enrollment, score="98")
+        first = graph.assessment(cs=graph.cs, max_score="100")
+        graph.grade(first, graph.student, graph.enrollment, score="98")
+        second = graph.assessment(cs=graph.cs2, max_score="100")
+        graph.grade(second, graph.student, graph.enrollment, score="98")
 
         body = client.get(f"{R}/report-card/me", headers=graph.U).json()
-        statuses = {r["status"] for r in body["subjects"]}
-        assert "pending" in statuses
-        # 4.00 x 3 / 6 credits = 2.00 — the withheld course still pays its credits.
+        assert {r["status"] for r in body["subjects"]} == {"graded"}
         assert body["total_credits"] == 6
-        assert body["gpa"] == 2.00
+        assert body["gpa"] == 4.00
 
     def test_the_header_carries_period_and_a_blank_programme(
         self, client, graph

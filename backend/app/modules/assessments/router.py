@@ -2,7 +2,7 @@
 
 Thin transport; the service owns DB + transactions. Two routers are exported and
 mounted under `/api/v1`:
-  * `router`            prefix /assessments  — assessment CRUD + status + release
+  * `router`            prefix /assessments  — assessment CRUD
   * `categories_router` prefix /offerings    — per-offering categories
 
 Writes are teacher-only (+ ownership, enforced in the service). Reads are scoped.
@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.common.enums import AssessmentStatus, Role
+from app.common.enums import Role
 from app.common.schemas import ErrorResponse, Page
 from app.core.deps import get_current_user, get_db, require_role
 from app.core.pagination import PageParams, page_params
@@ -27,16 +27,12 @@ from app.modules.assessments.schemas import (
     AssessmentCreateRequest,
     AssessmentDetail,
     AssessmentListItem,
-    AssessmentStatusRequest,
     AssessmentUpdateRequest,
     CategoryCreateRequest,
     CategoryDetail,
     CategoryList,
     CategoryUpdateRequest,
     OfferingPickerList,
-    NudgeReleaseResult,
-    ReleaseRequest,
-    ReleaseResult,
 )
 from app.modules.users.models import User
 
@@ -46,9 +42,6 @@ categories_router = APIRouter(prefix="/offerings", tags=["assessments"])
 _ERR = {"model": ErrorResponse}
 #: D43 — the HOD is a lecturer; ownership limits them to their own offerings.
 _teacher = require_role(Role.TEACHER, Role.HOD)
-#: The nudge inverts this module's usual gate: it is the one action here performed
-#: BY an administrator ON a teacher's queue, so P/S only, teacher excluded.
-_admin = require_role(Role.PRINCIPAL, Role.SECRETARY, Role.HOD, Role.AUDITOR)
 _any = get_current_user
 # Categories are the offering's grading policy: its lecturer OR the Dean (see
 # `service._assert_can_write_categories`).
@@ -63,7 +56,6 @@ def list_assessments(
     offering_id: Annotated[uuid.UUID | None, Query()] = None,
     academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
     semester_id: Annotated[uuid.UUID | None, Query()] = None,
-    status_filter: Annotated[AssessmentStatus | None, Query(alias="status")] = None,
     scope: Annotated[str | None, Query()] = None,
     db: Session = Depends(get_db),
     caller: User = Depends(_any),
@@ -75,7 +67,7 @@ def list_assessments(
     return service.list_assessments(
         db, caller=caller, params=params, offering_id=offering_id,
         academic_year_id=academic_year_id, semester_id=semester_id,
-        status_filter=status_filter.value if status_filter else None, scope=scope,
+        scope=scope,
     )
 
 
@@ -126,77 +118,6 @@ def update_assessment(
     return service.update_assessment(
         db, actor=actor, assessment_id=assessment_id, payload=payload
     )
-
-
-@router.post("/{assessment_id}/status", response_model=AssessmentDetail,
-             summary="Transition assessment lifecycle status (teacher; api-spec §6)",
-             responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR})
-def change_status(
-    assessment_id: uuid.UUID,
-    payload: AssessmentStatusRequest,
-    db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
-) -> AssessmentDetail:
-    return service.change_status(
-        db, actor=actor, assessment_id=assessment_id, payload=payload
-    )
-
-
-@router.post("/{assessment_id}/release", response_model=ReleaseResult,
-             summary="Release grades for an assessment (teacher)",
-             responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR})
-def release(
-    assessment_id: uuid.UUID,
-    payload: ReleaseRequest | None = None,
-    db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
-) -> ReleaseResult:
-    """Body is optional. Omitted → whole-column release (what the frontend sends);
-    `{student_ids:[...]}` → per-student release (api-spec §7)."""
-    return service.set_release(
-        db,
-        actor=actor,
-        assessment_id=assessment_id,
-        released=True,
-        student_ids=payload.student_ids if payload else None,
-    )
-
-
-@router.post("/{assessment_id}/unrelease", response_model=ReleaseResult,
-             summary="Unrelease grades for an assessment (teacher)",
-             responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR})
-def unrelease(
-    assessment_id: uuid.UUID,
-    payload: ReleaseRequest | None = None,
-    db: Session = Depends(get_db),
-    actor: User = Depends(_teacher),
-) -> ReleaseResult:
-    """Mirrors `release`; see there for the two modes."""
-    return service.set_release(
-        db,
-        actor=actor,
-        assessment_id=assessment_id,
-        released=False,
-        student_ids=payload.student_ids if payload else None,
-    )
-
-
-@router.post("/{assessment_id}/nudge-release", response_model=NudgeReleaseResult,
-             summary="Remind the teacher to release this assessment's grades (principal/secretary)",
-             responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 429: _ERR})
-def nudge_release(
-    assessment_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    actor: User = Depends(_admin),
-) -> NudgeReleaseResult:
-    """No body. The reminder's recipients are derived from the offering's assigned
-    teachers, never supplied by the caller.
-
-    409 when nothing is marked-and-hidden (`nothing_awaiting_release`) or the
-    offering is unstaffed (`no_assigned_teacher`); 429 inside the cooldown, which
-    carries `retry_after_seconds` so the SPA can re-enable the control at the right
-    moment."""
-    return service.nudge_release(db, actor=actor, assessment_id=assessment_id)
 
 
 @router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT,

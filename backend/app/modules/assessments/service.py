@@ -13,18 +13,18 @@ MariaDB/Postgres portability.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import AssessmentStatus, Role
-from app.core.errors import Conflict, NotFound, RateLimited, ValidationError
+from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.pagination import PageParams, paginate
 from app.core.rbac import _teacher_profile_id, assert_teacher_owns_offering
-from app.core.timeutil import utcnow
-from app.modules.assessments import release_nudge
+from app.core.timeutil import school_today, utcnow
+from app.modules.assessments import marking
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.assessments.schemas import (
     AssessmentDetail,
@@ -32,9 +32,6 @@ from app.modules.assessments.schemas import (
     AssessmentStats,
     CategoryDetail,
     OfferingRef,
-    NudgedTeacher,
-    NudgeReleaseResult,
-    ReleaseResult,
 )
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.queries import (
@@ -70,19 +67,10 @@ def _dec(value) -> Decimal | None:  # noqa: ANN001
     except (InvalidOperation, ValueError):
         return None
 
-# Legal assessment lifecycle transitions (API-16). `graded` is terminal.
-_LEGAL_TRANSITIONS: dict[AssessmentStatus, set[AssessmentStatus]] = {
-    AssessmentStatus.DRAFT: {AssessmentStatus.PUBLISHED},
-    AssessmentStatus.PUBLISHED: {AssessmentStatus.GRADING, AssessmentStatus.DRAFT},
-    AssessmentStatus.GRADING: {AssessmentStatus.GRADED, AssessmentStatus.PUBLISHED},
-    AssessmentStatus.GRADED: set(),
-}
-
 _SORT_FIELDS = {
     "assessment_date": Assessment.assessment_date,
     "title": Assessment.title,
     "created_at": Assessment.created_at,
-    "status": Assessment.status,
 }
 
 
@@ -162,13 +150,24 @@ def _stats(db: Session, assessment_id: uuid.UUID) -> AssessmentStats:
 # ──────────────────────────────────────────────────────────────────────────────
 # Shaping
 # ──────────────────────────────────────────────────────────────────────────────
+def _marking_fields(a: Assessment) -> dict:
+    state = marking.marking_state(a)
+    return {
+        "marking_open": state.open,
+        "marking_closes_at": state.closes_at,
+        "reopened_until": state.reopened_until,
+        "effective_closes_at": state.effective_closes_at,
+        "days_left": state.days_left,
+    }
+
+
 def _list_item(a: Assessment, cls: CourseOffering, subj: Course) -> AssessmentListItem:
     return AssessmentListItem(
         id=a.id, title=a.title,
         offering=offering_ref(cls, subj),
         category_id=a.category_id, max_score=float(a.max_score),
         weight=float(a.weight), assessment_date=a.assessment_date,
-        status=a.status, is_released=a.is_released,
+        **_marking_fields(a),
     )
 
 
@@ -182,8 +181,8 @@ def _detail(db: Session, a: Assessment, *, with_stats: bool) -> AssessmentDetail
     return AssessmentDetail(
         id=a.id, title=a.title, offering=cs_ref,
         category_id=a.category_id, max_score=float(a.max_score), weight=float(a.weight),
-        assessment_date=a.assessment_date, status=a.status, is_released=a.is_released,
-        semester_id=a.semester_id,
+        assessment_date=a.assessment_date, semester_id=a.semester_id,
+        **_marking_fields(a),
         stats=_stats(db, a.id) if with_stats else None,
     )
 
@@ -218,7 +217,6 @@ def list_assessments(
     offering_id: uuid.UUID | None,
     academic_year_id: uuid.UUID | None,
     semester_id: uuid.UUID | None,
-    status_filter: str | None,
     scope: str | None,
 ):
     stmt = (
@@ -236,8 +234,6 @@ def list_assessments(
         # Narrows WITHIN a year: `Assessment.semester_id` is the assessment's own term,
         # while `academic_year_id` above filters on the section's year. Both may be sent.
         stmt = stmt.where(Assessment.semester_id == semester_id)
-    if status_filter is not None:
-        stmt = stmt.where(Assessment.status == status_filter)
 
     # Scope
     if caller.role == Role.TEACHER:
@@ -257,10 +253,7 @@ def list_assessments(
         if not section_ids:
             stmt = stmt.where(False)
         else:
-            stmt = stmt.where(
-                CourseOffering.id.in_(section_ids),
-                Assessment.status != AssessmentStatus.DRAFT,
-            )
+            stmt = stmt.where(CourseOffering.id.in_(section_ids))
     # P/S: no scope filter (view-all).
 
     # Sort (default newest-first by date).
@@ -303,7 +296,7 @@ def get_assessment(db: Session, *, caller: User, assessment_id: uuid.UUID) -> As
         sp_id = _student_profile_id(db, caller)
         cs = db.get(CourseOffering, a.offering_id)
         section_ids = _student_section_ids(db, sp_id) if sp_id else []
-        if cs is None or cs.id not in section_ids or a.status == AssessmentStatus.DRAFT:
+        if cs is None or cs.id not in section_ids:
             raise NotFound("Assessment not found.", code="not_found")
         return _detail(db, a, with_stats=False)
     # P/S
@@ -376,6 +369,7 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
             code="semester_mismatch",
             fields={"semester_id": ["Must be the course offering's session."]},
         )
+    _assert_window_not_already_closed(payload.assessment_date)
 
     if payload.category_id is not None:
         _assert_category_matches_cs(db, payload.category_id, cs.id)
@@ -388,8 +382,11 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
         max_score=payload.max_score,
         weight=FIXED_ASSESSMENT_WEIGHT,
         assessment_date=payload.assessment_date,
-        status=AssessmentStatus.DRAFT,
-        is_released=False,
+        # D47 — no lifecycle and no release step: an assessment is live from creation
+        # and a saved mark counts at once. The two legacy columns are set to the values
+        # that mean exactly that, so nothing still reading them disagrees.
+        status=AssessmentStatus.GRADED,
+        is_released=True,
         absent_as_zero=payload.absent_as_zero,
         allow_makeup=payload.allow_makeup,
         drop_lowest_count=payload.drop_lowest_count,
@@ -437,7 +434,12 @@ def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, pay
         a.max_score = payload.max_score
     # Locked (see FIXED_ASSESSMENT_WEIGHT): any edit also brings an older non-1 weight back to 1.
     a.weight = FIXED_ASSESSMENT_WEIGHT
-    if "assessment_date" in fields:
+    if "assessment_date" in fields and payload.assessment_date != a.assessment_date:
+        # D47 — the date anchors the marking window, so moving it moves the window.
+        # Frozen once closed (the way back in is a reopen request), and a new date may
+        # not land in an already-closed window either.
+        _assert_marking_open(a)
+        _assert_window_not_already_closed(payload.assessment_date)
         a.assessment_date = payload.assessment_date
     if payload.absent_as_zero is not None:
         a.absent_as_zero = payload.absent_as_zero
@@ -450,6 +452,31 @@ def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, pay
     _audit(db, actor=actor, action="assessment.update", entity_id=a.id)
     db.commit()
     return _detail(db, a, with_stats=True)
+
+
+def _assert_marking_open(a: Assessment) -> None:
+    if not marking.is_marking_open(a):
+        raise Conflict(
+            "The marking window for this assessment has closed. Ask the Dean to "
+            "reopen it first.",
+            code="marking_closed",
+        )
+
+
+def _assert_window_not_already_closed(assessment_date) -> None:  # noqa: ANN001
+    """A date whose whole marking window is already in the past would create an
+    assessment that is locked from birth (D47)."""
+    if assessment_date is None:
+        return
+    if assessment_date + timedelta(days=marking.MARKING_WINDOW_DAYS) < school_today():
+        raise ValidationError(
+            f"The assessment date is more than {marking.MARKING_WINDOW_DAYS} days ago, "
+            "so its marking window has already closed.",
+            code="marking_window_passed",
+            fields={"assessment_date": [
+                f"Must be within the last {marking.MARKING_WINDOW_DAYS} days or later."
+            ]},
+        )
 
 
 def _assert_no_scores_exceed(db: Session, assessment_id: uuid.UUID, new_max: float) -> None:
@@ -468,32 +495,6 @@ def _assert_no_scores_exceed(db: Session, assessment_id: uuid.UUID, new_max: flo
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# POST /assessments/{id}/status
-# ══════════════════════════════════════════════════════════════════════════════
-def change_status(db: Session, *, actor: User, assessment_id: uuid.UUID, payload) -> AssessmentDetail:
-    a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_offering(db, actor, a.offering_id)
-    cs = db.get(CourseOffering, a.offering_id)
-    _assert_cs_year_writable(db, cs)
-
-    # Coerce to the enum — a freshly-inserted row may hold the raw str value.
-    before, after = AssessmentStatus(a.status), AssessmentStatus(payload.status)
-    if before != after:
-        if after not in _LEGAL_TRANSITIONS.get(before, set()):
-            raise ValidationError(
-                f"Cannot change status from '{before.value}' to '{after.value}'.",
-                code="invalid_transition",
-                fields={"status": [f"Invalid transition from {before.value}."]},
-            )
-        a.status = after
-        a.updated_by = actor.id
-        _audit(db, actor=actor, action="assessment.status_change", entity_id=a.id,
-               summary={"before": before.value, "after": after.value})
-        db.commit()
-    return _detail(db, a, with_stats=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # DELETE /assessments/{id}
 # ══════════════════════════════════════════════════════════════════════════════
 def delete_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID) -> None:
@@ -501,6 +502,8 @@ def delete_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID) -> 
     assert_teacher_owns_offering(db, actor, a.offering_id)
     cs = db.get(CourseOffering, a.offering_id)
     _assert_cs_year_writable(db, cs)
+    # D47 — once closed, its blanks already count as 0; deleting it would erase them.
+    _assert_marking_open(a)
 
     from app.modules.grades.models import AssessmentGrade
 
@@ -524,175 +527,6 @@ def delete_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID) -> 
     a.updated_by = actor.id
     _audit(db, actor=actor, action="assessment.delete", entity_id=a.id)
     db.commit()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# POST /assessments/{id}/release  +  /unrelease
-# ══════════════════════════════════════════════════════════════════════════════
-def set_release(
-    db: Session,
-    *,
-    actor: User,
-    assessment_id: uuid.UUID,
-    released: bool,
-    student_ids: list[uuid.UUID] | None = None,
-) -> ReleaseResult:
-    """Release/unrelease grades for an assessment (api-spec §7).
-
-    Two modes. The read path everywhere is `grade.is_released ?? assessment.is_released`,
-    which is what makes the reset below necessary rather than optional.
-
-    * **Whole-column** (`student_ids is None`) — flip `assessments.is_released` AND
-      **reset every grade row's `is_released` back to NULL**. Without the reset, a
-      row left at `False` by an earlier per-student unrelease would keep
-      overriding the column and silently stay hidden after the teacher released
-      the whole assessment.
-    * **Per-student** — flip only the named rows' `is_released`, leaving the
-      assessment column alone. Rows that don't exist are ignored.
-    """
-    a = _assessment_or_404(db, assessment_id)
-    assert_teacher_owns_offering(db, actor, a.offering_id)
-    cs = db.get(CourseOffering, a.offering_id)
-    _assert_cs_year_writable(db, cs)
-
-    from app.modules.grades.models import AssessmentGrade
-
-    if student_ids is not None:
-        targets = list(dict.fromkeys(student_ids))  # de-dupe, preserve order
-        released_count = 0
-        if targets:
-            released_count = db.query(AssessmentGrade).filter(
-                AssessmentGrade.assessment_id == a.id,
-                AssessmentGrade.student_id.in_(targets),
-            ).update({"is_released": released, "updated_by": actor.id}, synchronize_session=False)
-        a.updated_by = actor.id
-        # `is_released` on the response reflects the ASSESSMENT column, which a
-        # per-student call deliberately does not touch.
-        effective = a.is_released
-    else:
-        a.is_released = released
-        a.released_at = utcnow() if released else None
-        a.updated_by = actor.id
-        db.query(AssessmentGrade).filter(
-            AssessmentGrade.assessment_id == a.id,
-            AssessmentGrade.is_released.isnot(None),
-        ).update({"is_released": None}, synchronize_session=False)
-        released_count = db.scalar(
-            select(func.count()).select_from(AssessmentGrade).where(
-                AssessmentGrade.assessment_id == a.id
-            )
-        ) or 0
-        effective = released
-
-    _audit(db, actor=actor, action="grade.release" if released else "grade.unrelease",
-           entity_id=a.id,
-           summary={"student_ids": [str(s) for s in student_ids]} if student_ids is not None else None)
-    db.commit()
-    return ReleaseResult(assessment_id=a.id, is_released=effective, released_count=released_count)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# POST /assessments/{id}/nudge-release
-# ══════════════════════════════════════════════════════════════════════════════
-def nudge_release(
-    db: Session, *, actor: User, assessment_id: uuid.UUID
-) -> NudgeReleaseResult:
-    """Remind the teacher(s) that this assessment holds marked-but-hidden grades.
-
-    Principal/secretary only (gated at the router by `require_role`, like every
-    other coarse role gate in this module). The 404-not-403 discipline used
-    elsewhere is an OWNERSHIP rule — it stops a teacher confirming that an offering
-    they don't own exists. It does not apply here: P/S are view-all, so there is no
-    resource whose existence a permitted caller could learn by being refused. A
-    teacher or student hitting this route gets the module's usual 403 from the gate.
-
-    **Delivery is the audit row plus the teacher's dashboard tile** — no email, no
-    announcement, no notifications table. The teacher already has a standing
-    "awaiting release" queue (`TeacherDashboard.awaiting_release`); this endpoint
-    records that a specific human asked for a specific assessment, which is what
-    makes it auditable rather than just a UI badge.
-
-    Four refusals, in order:
-
-    * **404** — unknown or soft-deleted assessment.
-    * **409 `year_archived`** — the section's year is archived, so
-      `POST /{id}/release` would itself 409. Nudging someone to perform an action
-      the system will reject is worse than useless, so the same guard applies.
-    * **409 `no_assigned_teacher`** — the offering is unstaffed (the secretary
-      dashboard already surfaces this as a setup task). A reminder addressed to
-      nobody must fail loudly, not be recorded as delivered.
-    * **409 `nothing_awaiting_release`** — nothing is marked-and-hidden, so there is
-      nothing to release. Silently succeeding here would let the UI report a
-      reminder that had no possible subject.
-    * **429 `rate_limited`** — a nudge for this assessment is inside the cooldown.
-
-    Idempotency/replay: a retried POST inside the window is absorbed by the 429
-    rather than appending a duplicate audit row, so a double-submit cannot inflate
-    the trail.
-    """
-    a = _assessment_or_404(db, assessment_id)
-    cs = _cs_or_404(db, a.offering_id)
-    _assert_cs_year_writable(db, cs)
-
-    teachers = db.execute(
-        select(TeacherProfile.id, TeacherProfile.full_name)
-        .join(ClassTeacher, ClassTeacher.teacher_id == TeacherProfile.id)
-        .where(
-            ClassTeacher.offering_id == cs.id,
-            TeacherProfile.deleted_at.is_(None),
-        )
-        .order_by(ClassTeacher.is_lead.desc(), TeacherProfile.full_name.asc())
-    ).all()
-    if not teachers:
-        raise Conflict(
-            "This subject offering has no assigned teacher to remind.",
-            code="no_assigned_teacher",
-        )
-
-    awaiting = release_nudge.count_awaiting_release(db, a.id)
-    if awaiting == 0:
-        raise Conflict(
-            "Nothing is awaiting release for this assessment.",
-            code="nothing_awaiting_release",
-        )
-
-    now = utcnow()
-    previous = release_nudge.last_nudged_at(db, a.id)
-    if previous is not None and now - previous < release_nudge.NUDGE_COOLDOWN:
-        retry_after = int((previous + release_nudge.NUDGE_COOLDOWN - now).total_seconds())
-        raise RateLimited(
-            "This teacher was reminded recently. Try again later.",
-            extra={
-                "retry_after_seconds": max(retry_after, 1),
-                "last_nudged_at": previous.isoformat(),
-                "cooldown_seconds": release_nudge.NUDGE_COOLDOWN_SECONDS,
-            },
-        )
-
-    at = release_nudge.record_nudge(
-        db,
-        actor=actor,
-        assessment_id=a.id,
-        summary={
-            "offering_id": str(cs.id),
-            "awaiting_release_count": awaiting,
-            # Names, not just ids, so the trail stays readable after a teacher row
-            # is renamed or soft-deleted. No contact details — audit rows are not
-            # a place for PII beyond what the action needs.
-            "teacher_ids": [str(t_id) for t_id, _ in teachers],
-            "teacher_names": [name for _, name in teachers],
-        },
-    )
-    db.commit()
-
-    return NudgeReleaseResult(
-        assessment_id=a.id,
-        awaiting_release_count=awaiting,
-        teachers=[NudgedTeacher(id=t_id, full_name=name) for t_id, name in teachers],
-        last_nudged_at=at,
-        next_nudge_allowed_at=at + release_nudge.NUDGE_COOLDOWN,
-        cooldown_seconds=release_nudge.NUDGE_COOLDOWN_SECONDS,
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

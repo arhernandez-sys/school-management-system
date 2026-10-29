@@ -6,7 +6,7 @@ are reconciled to the finished frontend MSW handler (which wins on divergence):
       {id, course:{id,name,code,credits}, semester?, section_code, label} (D31 — was a
       module-local `{offering_id, section:{id,name}, subject:{...}, label}`)
   * list item carries category_id; detail adds semester_id + stats
-  * release response = {assessment_id, is_released, released_count}
+  * list item / detail carry the D47 marking window (assessments/marking.py)
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.common.enums import AssessmentStatus
 from app.common.schemas import OfferingRef
 
 
@@ -41,8 +40,12 @@ class AssessmentListItem(BaseModel):
     max_score: float
     weight: float
     assessment_date: date | None = None
-    status: AssessmentStatus
-    is_released: bool
+    #: D47 — see `grades.schemas.GradebookAssessment` for the meaning of each.
+    marking_open: bool = True
+    marking_closes_at: datetime | None = None
+    reopened_until: datetime | None = None
+    effective_closes_at: datetime | None = None
+    days_left: int | None = None
 
 
 class AssessmentDetail(AssessmentListItem):
@@ -98,50 +101,6 @@ class OfferingPickerList(BaseModel):
     items: list[OfferingRef] = Field(default_factory=list)
 
 
-class ReleaseResult(BaseModel):
-    assessment_id: UUID
-    is_released: bool
-    released_count: int
-
-
-class NudgedTeacher(BaseModel):
-    """A teacher the reminder was addressed to (teacher PROFILE id, not user id)."""
-
-    id: UUID
-    full_name: str
-
-
-class NudgeReleaseResult(BaseModel):
-    """POST /assessments/{id}/nudge-release.
-
-    `last_nudged_at` is read back out of `audit_log` after the write, so it is the
-    same value a subsequent read reports — the UI never has to guess when the
-    cooldown started. `cooldown_seconds` is returned rather than hardcoded in the
-    SPA so the window can be retuned server-side without a frontend release.
-    """
-
-    assessment_id: UUID
-    #: Grades that are marked but still hidden — what the teacher is being asked
-    #: to release. Always ≥ 1; zero is a 409 instead.
-    awaiting_release_count: int
-    teachers: list[NudgedTeacher] = Field(default_factory=list)
-    last_nudged_at: datetime
-    next_nudge_allowed_at: datetime
-    cooldown_seconds: int
-
-
-class ReleaseRequest(BaseModel):
-    """Optional body for release/unrelease (api-spec §7).
-
-    Omitted (the frontend's current behavior) → whole-column release: flip
-    `assessments.is_released` for everyone. Supplied → per-student release, which
-    flips only `assessment_grades.is_released` on the named rows.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    student_ids: list[UUID] | None = None
-
-
 # ── Write models ───────────────────────────────────────────────────────────────
 class AssessmentCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -160,7 +119,8 @@ class AssessmentCreateRequest(BaseModel):
 
 
 class AssessmentUpdateRequest(BaseModel):
-    """Partial. `status` is NOT settable here (use POST /{id}/status)."""
+    """Partial. Once the marking window has closed `assessment_date` is frozen —
+    moving it would move the window (D47)."""
 
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, min_length=1, max_length=160)
@@ -171,11 +131,6 @@ class AssessmentUpdateRequest(BaseModel):
     absent_as_zero: bool | None = None
     allow_makeup: bool | None = None
     drop_lowest_count: int | None = Field(default=None, ge=0)
-
-
-class AssessmentStatusRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    status: AssessmentStatus
 
 
 class CategoryCreateRequest(BaseModel):

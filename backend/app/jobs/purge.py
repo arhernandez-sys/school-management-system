@@ -12,33 +12,13 @@ OQ-DB6 documents the intended windows; this is their implementation.
   * `login_attempts`   — older than RETENTION_LOGIN_ATTEMPTS_DAYS (90).
                          Nothing reads them beyond the current lockout window
                          (900s); the rest is forensic tail.
-  * `audit_log`        — older than RETENTION_AUDIT_LOG_DAYS (365), WITH the
-                         exception described under "the nudge trap" below.
+  * `audit_log`        — older than RETENTION_AUDIT_LOG_DAYS (365).
   * `refresh_sessions` — expired more than RETENTION_REFRESH_SESSION_GRACE_DAYS
                          (7) ago. An expired session is already unusable: every
                          read path filters on `expires_at`/`is_revoked`, so
                          deleting one cannot log anybody out. Revoked-but-unexpired
                          rows are LEFT ALONE — they are what makes "this token was
                          revoked" distinguishable from "this token never existed".
-
-THE NUDGE TRAP — read before changing anything about `audit_log`
-───────────────────────────────────────────────────────────────────────────────
-`audit_log` stopped being purely forensic. `assessments/release_nudge.py` stores a
-nudge AS an audit row (`action='grade.release_nudge'`) and derives the 4-hour
-re-nudge cooldown by reading the most recent one back — there is no other copy of
-that state. Delete the row and the cooldown silently resets: a principal who was
-correctly being told "wait, you just reminded them" can immediately nudge again,
-and the teacher gets the nagging the cooldown exists to prevent. Nothing would
-fail, log, or alert; the feature would just quietly stop working.
-
-The 365-day default is nowhere near a 4-hour cooldown, so in normal operation this
-cannot happen. It becomes reachable the moment somebody sets
-`RETENTION_AUDIT_LOG_DAYS` low — testing the job, tidying a bloated table, a typo
-of `1` for `100`. So the guard is UNCONDITIONAL rather than conditional on the
-configured window: a `grade.release_nudge` row newer than the cooldown is excluded
-from deletion no matter what the retention setting says, and the job reports how
-many rows that protected. Correctness of a live feature outranks the retention
-policy, and the exempted rows are collected on the next run anyway.
 
 SCHEDULING IS OUT OF SCOPE
 ───────────────────────────────────────────────────────────────────────────────
@@ -72,13 +52,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, func, not_, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.core.timeutil import utcnow
 from app.db.session import SessionLocal
-from app.modules.assessments.release_nudge import NUDGE_ACTION, NUDGE_COOLDOWN
 from app.modules.auth.models import LoginAttempt, RefreshSession
 from app.modules.settings.models import AuditLog
 
@@ -100,9 +79,6 @@ class TableResult:
     rows: int
     #: Human-readable description of the window applied.
     window: str
-    #: Rows matching the window but deliberately spared. Currently only the
-    #: in-cooldown nudge rows on `audit_log`.
-    protected: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,28 +177,9 @@ def run_purge(
             )
         )
 
-    # ── audit_log (see "THE NUDGE TRAP" in the module docstring) ──────────────
+    # ── audit_log ─────────────────────────────────────────────────────────────
     if "audit_log" in wanted:
         cutoff = now - timedelta(days=settings.retention_audit_log_days)
-        nudge_floor = now - NUDGE_COOLDOWN
-        # A nudge row still inside its cooldown is LOAD-BEARING STATE, not
-        # history. Excluded unconditionally, whatever the retention window says.
-        nudge_in_cooldown = and_(
-            AuditLog.action == NUDGE_ACTION,
-            AuditLog.created_at >= nudge_floor,
-        )
-        aged_out = AuditLog.created_at < cutoff
-        protected = _count(db, AuditLog, and_(aged_out, nudge_in_cooldown))
-        if protected:
-            # Only reachable with a retention window shorter than the 4h cooldown,
-            # i.e. a misconfiguration. Say so loudly rather than silently sparing.
-            logger.warning(
-                "purge_protected_nudge_rows count=%s retention_days=%s cooldown_hours=%s "
-                "— RETENTION_AUDIT_LOG_DAYS is shorter than the release-nudge cooldown",
-                protected,
-                settings.retention_audit_log_days,
-                NUDGE_COOLDOWN.total_seconds() / 3600,
-            )
         results.append(
             TableResult(
                 table="audit_log",
@@ -230,14 +187,12 @@ def run_purge(
                     db,
                     AuditLog,
                     AuditLog.id,
-                    and_(aged_out, not_(nudge_in_cooldown)),
+                    AuditLog.created_at < cutoff,
                     batch_size=batch,
                     dry_run=dry_run,
                 ),
                 window=f"created_at < {cutoff.isoformat()} "
-                f"({settings.retention_audit_log_days}d), "
-                f"excluding {NUDGE_ACTION} rows newer than {nudge_floor.isoformat()}",
-                protected=protected,
+                f"({settings.retention_audit_log_days}d)",
             )
         )
 
@@ -269,12 +224,6 @@ def _print_report(report: PurgeReport) -> None:
     for result in report.results:
         print(f"  {result.table:<18} {verb} {result.rows:>8}")
         print(f"  {'':<18} window: {result.window}")
-        if result.protected:
-            print(
-                f"  {'':<18} PROTECTED {result.protected} in-cooldown "
-                f"{NUDGE_ACTION} row(s): retention window is shorter than the "
-                "release-nudge cooldown; fix RETENTION_AUDIT_LOG_DAYS."
-            )
     print()
     print(f"  TOTAL {verb}: {report.total}")
     if report.dry_run:

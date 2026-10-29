@@ -30,7 +30,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from app.common.enums import (
-    AssessmentStatus,
     GradeRevisionStatus,
     GradeStatus,
 )
@@ -108,12 +107,22 @@ class GradebookAssessment(BaseModel):
     max_score: float
     weight: float
     assessment_date: date | None = None
-    status: AssessmentStatus
-    is_released: bool
-    #: Drafts are shown as columns but reject entry.
-    is_editable: bool
     graded_count: int = 0
     entered_count: int = 0
+    #: D47 — the marking window (assessments/marking.py). `marking_open` is the one
+    #: the UI gates entry on; the instants are there so it can say WHEN.
+    marking_open: bool = True
+    marking_closes_at: datetime | None = None
+    #: Set once the Dean has approved a reopen request; NULL otherwise.
+    reopened_until: datetime | None = None
+    #: The later of the two — when entry actually locks.
+    effective_closes_at: datetime | None = None
+    #: Whole school-local days left (0 = closes today); NULL once closed.
+    days_left: int | None = None
+    #: Whether THIS caller may ask the Dean to reopen it: the owning lecturer, window
+    #: closed, nothing already pending.
+    can_request_reopen: bool = False
+    pending_reopen_request_id: UUID | None = None
 
 
 class GradebookCategory(BaseModel):
@@ -128,8 +137,9 @@ class GradebookCell(_LetterOptional):
     status: GradeStatus = GradeStatus.PENDING
     score: float | None = None
     makeup_score: float | None = None
-    #: `grade.is_released ?? assessment.is_released`.
-    is_released: bool = False
+    #: D47 — no mark was entered and the marking window has closed, so this cell
+    #: counts as 0 in the term grade. `score` stays NULL: nothing was written.
+    auto_zero: bool = False
     #: D32 (brief §1) — may a Lecturer file a Revision of Grades against THIS result?
     #:
     #: Server-computed rather than re-derived in the browser, because the four rules read
@@ -235,6 +245,8 @@ class MyGradeAssessment(_LetterOptional):
     assessment_date: date | None = None
     status: GradeStatus
     score: float | None = None
+    #: D47 — see `GradebookCell.auto_zero`.
+    auto_zero: bool = False
 
 
 class MyGradeSubject(BaseModel):

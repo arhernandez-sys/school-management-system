@@ -28,7 +28,6 @@ from app.common.enums import (
     GPA_EXCLUDED_STATUSES,
     EnrollmentStatus,
     AcademicYearStatus,
-    AssessmentStatus,
     ReportCardKind,
     Role,
     StudentStatus,
@@ -36,6 +35,7 @@ from app.common.enums import (
 from app.core.errors import Forbidden, NotFound
 from app.core.pagination import PageParams
 from app.core.timeutil import ensure_aware, utcnow
+from app.modules.assessments import marking
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.attendance.service import _summarize
@@ -493,24 +493,15 @@ def _subject_results(
                 return max(0, int(candidate))
         return 0
 
-    def release_state(a: Assessment) -> bool:
-        g = my_grades.get(a.id)
-        return a.is_released if g is None or g.is_released is None else g.is_released
-
     requests: dict[object, calc.TermGradeRequest] = {}
-    released_flags: dict[uuid.UUID, bool] = {}
     for cs, _subject in offerings:
         items = by_cs.get(cs.id, [])
-        graded_lifecycle = [a for a in items if a.status == AssessmentStatus.GRADED]
-        # Per-OFFERING release rule: every graded assessment must be released.
-        released_flags[cs.id] = all(release_state(a) for a in graded_lifecycle)
         requests[cs.id] = calc.TermGradeRequest(
             grades=[
                 calc.GradeInput(
                     assessment_id=a.id,
                     max_score=_dec(a.max_score) or Decimal(0),
                     weight=_dec(a.weight) or Decimal(0),
-                    assessment_status=a.status,
                     policy=calc.resolve_policy(
                         a, cats_by_id.get(a.category_id) if a.category_id else None, year, school
                     ),
@@ -520,7 +511,7 @@ def _subject_results(
                     makeup_score=(
                         _dec(my_grades[a.id].makeup_score) if a.id in my_grades else None
                     ),
-                    is_released=release_state(a),
+                    marking_closed=not marking.is_marking_open(a),
                 )
                 for a in items
             ],
@@ -540,7 +531,8 @@ def _subject_results(
     results = [
         _SubjectResult(
             cs.id, subject.id, subject.name, subject.code or "", subject.credits,
-            computed[cs.id].numeric, computed[cs.id].letter, released_flags[cs.id],
+            # D47 — no release step, so nothing is ever withheld as `pending`.
+            computed[cs.id].numeric, computed[cs.id].letter, True,
         )
         for cs, subject in offerings
     ]

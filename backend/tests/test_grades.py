@@ -15,7 +15,7 @@ section + subject + offering and a teacher that OWNS it.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -33,12 +33,18 @@ from app.modules.grades.models import AssessmentGrade, TermGradeSnapshot
 from app.modules.settings.models import AcademicYear, Semester
 from app.modules.students.models import StudentProfile
 from app.modules.teachers.models import TeacherProfile
+from app.core.timeutil import school_today, utcnow
 from tests.conftest import split_name
 
 pytestmark = pytest.mark.requires_db
 
 G = "/api/v1/grades"
 A = "/api/v1/assessments"
+
+
+def _days_ago(n: int) -> date:
+    """An assessment date `n` school days back. D47: 5 = last open day, 6 = closed."""
+    return school_today() - timedelta(days=n)
 
 
 def _assert_envelope(body: dict, *, code: str) -> dict:
@@ -381,12 +387,17 @@ class TestGradebookRead:
         assert {c["assessment_id"] for c in row["cells"]} == {str(a1.id), str(a2.id)}
         assert all(c["status"] == "pending" and c["score"] is None for c in row["cells"])
 
-    def test_drafts_appear_as_non_editable_columns(self, client, graph) -> None:
-        draft = graph.assessment(status="draft")
-        live = graph.assessment(status="graded")
+    def test_each_column_reports_its_marking_window(self, client, graph) -> None:
+        """D47 — replaces drafts: a column is writable while its window is open."""
+        closed = graph.assessment(assessment_date=_days_ago(6))
+        live = graph.assessment(assessment_date=_days_ago(2))
         by_id = {a["id"]: a for a in _book(client, graph).json()["assessments"]}
-        assert by_id[str(draft.id)]["is_editable"] is False
-        assert by_id[str(live.id)]["is_editable"] is True
+        assert by_id[str(closed.id)]["marking_open"] is False
+        assert by_id[str(closed.id)]["days_left"] is None
+        assert by_id[str(live.id)]["marking_open"] is True
+        assert by_id[str(live.id)]["days_left"] == 3
+        assert "is_editable" not in by_id[str(live.id)]
+        assert "is_released" not in by_id[str(live.id)]
 
     def test_graded_and_entered_counts(self, client, graph) -> None:
         a = graph.assessment(max_score="20")
@@ -400,19 +411,36 @@ class TestGradebookRead:
         assert item["graded_count"] == 1
         assert item["entered_count"] == 2  # graded + absent, not pending
 
-    def test_cell_release_inherits_assessment_when_row_is_null(self, client, graph) -> None:
-        a = graph.assessment(is_released=True)
+    def test_a_blank_cell_on_a_closed_column_is_an_automatic_zero(self, client, graph) -> None:
+        closed = graph.assessment(max_score="100", assessment_date=_days_ago(6))
+        live = graph.assessment(max_score="100", assessment_date=_days_ago(1))
         s, e = graph.student()
-        graph.grade(a, s, e, is_released=None)
-        cell = _book(client, graph).json()["rows"][0]["cells"][0]
-        assert cell["is_released"] is True
+        graph.grade(live, s, e, status="graded", score="80")
+        row = _book(client, graph).json()["rows"][0]
+        cells = {c["assessment_id"]: c for c in row["cells"]}
+        assert cells[str(closed.id)]["auto_zero"] is True
+        assert cells[str(closed.id)]["score"] is None  # nothing was written
+        assert cells[str(live.id)]["auto_zero"] is False
+        # The closed blank counts as 0: (80 + 0) / 2.
+        assert row["term_numeric"] == 40.0
 
-    def test_per_row_release_override_wins(self, client, graph) -> None:
-        a = graph.assessment(is_released=True)
+    def test_excused_is_never_an_automatic_zero(self, client, graph) -> None:
+        closed = graph.assessment(max_score="100", assessment_date=_days_ago(6))
+        live = graph.assessment(max_score="100", assessment_date=_days_ago(1))
         s, e = graph.student()
-        graph.grade(a, s, e, is_released=False)
-        cell = _book(client, graph).json()["rows"][0]["cells"][0]
-        assert cell["is_released"] is False
+        graph.grade(closed, s, e, status="excused", score=None)
+        graph.grade(live, s, e, status="graded", score="80")
+        row = _book(client, graph).json()["rows"][0]
+        cell = next(c for c in row["cells"] if c["assessment_id"] == str(closed.id))
+        assert cell["auto_zero"] is False
+        assert row["term_numeric"] == 80.0
+
+    def test_a_blank_on_an_open_column_does_not_count_yet(self, client, graph) -> None:
+        graph.assessment(max_score="100", assessment_date=_days_ago(1))
+        scored = graph.assessment(max_score="100", assessment_date=_days_ago(1))
+        s, e = graph.student()
+        graph.grade(scored, s, e, status="graded", score="80")
+        assert _book(client, graph).json()["rows"][0]["term_numeric"] == 80.0
 
     def test_letter_present_only_for_graded_with_score(self, client, graph) -> None:
         a = graph.assessment(max_score="20")
@@ -824,82 +852,67 @@ class TestGradeEntry:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-class TestRelease:
-    def test_whole_column_release_resets_per_row_overrides(self, client, graph, db_session) -> None:
-        """The latent bug this change fixes.
+class TestMarkingWindowEntry:
+    """D47 — `PUT /assessments/{id}/grades` against the 5-day window."""
 
-        The read path is `grade.is_released ?? assessment.is_released`, so a row
-        left at False by an earlier per-student unrelease would keep overriding the
-        column and stay hidden after a whole-assessment release.
-        """
-        a = graph.assessment(max_score="20", is_released=False)
-        s, e = graph.student()
-        graph.grade(a, s, e, status="graded", score="10", is_released=False)
+    def _save(self, client, graph, a, s, score="15"):
+        return client.put(
+            f"{A}/{a.id}/grades",
+            json={"entries": [{"student_id": str(s.id), "status": "graded", "score": score}]},
+            headers=graph.H,
+        )
 
-        r = client.post(f"{A}/{a.id}/release", headers=graph.H)
-        assert r.status_code == 200
-        db_session.expire_all()
-        row = db_session.scalar(select(AssessmentGrade).where(AssessmentGrade.assessment_id == a.id))
-        assert row.is_released is None  # reset, so the column now governs
-        cell = _book(client, graph).json()["rows"][0]["cells"][0]
-        assert cell["is_released"] is True
+    def test_entry_on_the_last_open_day_is_accepted(self, client, graph) -> None:
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(5))
+        s, _ = graph.student()
+        assert self._save(client, graph, a, s).status_code == 200
 
-    def test_released_count_matches_grade_rows(self, client, graph) -> None:
-        a = graph.assessment(max_score="20")
-        for _ in range(3):
-            s, e = graph.student()
-            graph.grade(a, s, e, status="graded", score="10")
-        body = client.post(f"{A}/{a.id}/release", headers=graph.H).json()
-        assert body["released_count"] == 3
-        assert body["is_released"] is True
-
-    def test_per_student_release_flips_only_named_rows(self, client, graph, db_session) -> None:
-        a = graph.assessment(max_score="20", is_released=False)
-        s1, e1 = graph.student()
-        s2, e2 = graph.student()
-        graph.grade(a, s1, e1, status="graded", score="10")
-        graph.grade(a, s2, e2, status="graded", score="12")
-
-        body = client.post(
-            f"{A}/{a.id}/release", json={"student_ids": [str(s1.id)]}, headers=graph.H
-        ).json()
-        assert body["released_count"] == 1
-        # The assessment column is deliberately untouched by a per-student call.
-        assert body["is_released"] is False
-        db_session.expire_all()
-        rows = {g.student_id: g for g in db_session.scalars(
-            select(AssessmentGrade).where(AssessmentGrade.assessment_id == a.id)
-        ).all()}
-        assert rows[s1.id].is_released is True
-        assert rows[s2.id].is_released is None
-
-    def test_per_student_unrelease_mirrors(self, client, graph, db_session) -> None:
-        a = graph.assessment(max_score="20", is_released=True)
-        s, e = graph.student()
-        graph.grade(a, s, e, status="graded", score="10")
-        client.post(f"{A}/{a.id}/unrelease", json={"student_ids": [str(s.id)]}, headers=graph.H)
-        db_session.expire_all()
-        row = db_session.scalar(select(AssessmentGrade).where(AssessmentGrade.assessment_id == a.id))
-        assert row.is_released is False
-
-    def test_no_body_still_works_backwards_compatible(self, client, graph) -> None:
-        """The frontend sends no body; existing callers must not break."""
-        a = graph.assessment()
-        assert client.post(f"{A}/{a.id}/release", headers=graph.H).status_code == 200
-        assert client.post(f"{A}/{a.id}/unrelease", headers=graph.H).status_code == 200
-
-    def test_release_on_archived_year_409(self, client, graph, db_session) -> None:
-        from app.core.timeutil import utcnow
-
-        a = graph.assessment()
-        graph.year.archived_at = utcnow()
-        db_session.flush()
-        r = client.post(f"{A}/{a.id}/release", headers=graph.H)
+    def test_entry_after_the_window_closes_409(self, client, graph) -> None:
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
+        s, _ = graph.student()
+        r = self._save(client, graph, a, s)
         assert r.status_code == 409
+        err = _assert_envelope(r.json(), code="marking_closed")
+        assert err["closed_at"] is not None
 
-    def test_release_by_non_owner_404(self, client, graph) -> None:
-        a = graph.assessment(cs_id=graph.other_cs.id)
-        assert client.post(f"{A}/{a.id}/release", headers=graph.H).status_code == 404
+    def test_a_refused_batch_writes_nothing(self, client, graph, db_session) -> None:
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
+        s, _ = graph.student()
+        self._save(client, graph, a, s)
+        db_session.expire_all()
+        assert db_session.scalar(
+            select(AssessmentGrade).where(AssessmentGrade.assessment_id == a.id)
+        ) is None
+
+    def test_a_reopen_lets_entry_back_in(self, client, graph, db_session) -> None:
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(10))
+        s, _ = graph.student()
+        a.reopened_until = utcnow() + timedelta(days=1)
+        db_session.flush()
+        assert self._save(client, graph, a, s).status_code == 200
+
+    def test_an_expired_reopen_locks_it_again(self, client, graph, db_session) -> None:
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(10))
+        s, _ = graph.student()
+        a.reopened_until = utcnow() - timedelta(minutes=1)
+        db_session.flush()
+        assert self._save(client, graph, a, s).status_code == 409
+
+    def test_the_dean_is_not_exempt(self, client, graph) -> None:
+        """The Dean cannot use this route at all (403); the way back in is a reopen."""
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
+        s, _ = graph.student()
+        r = client.put(
+            f"{A}/{a.id}/grades",
+            json={"entries": [{"student_id": str(s.id), "status": "graded", "score": 1}]},
+            headers=graph.P,
+        )
+        assert r.status_code == 403
+
+    def test_release_routes_are_gone(self, client, graph) -> None:
+        a = graph.assessment()
+        for path in ("release", "unrelease"):
+            assert client.post(f"{A}/{a.id}/{path}", headers=graph.H).status_code in (404, 405)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -908,34 +921,29 @@ class TestRelease:
 # grades. This suite is about WHAT a student sees, not WHETHER they may — the "may
 # not" case is `tests/test_student_grade_visibility.py` — so it opts in explicitly.
 class TestMyGrades:
-    def test_only_released_assessments_appear(self, client, graph) -> None:
-        shown = graph.assessment(max_score="20", is_released=True)
-        hidden = graph.assessment(max_score="20", is_released=False)
-        s, e = graph.student(with_login=True)
-        graph.grade(shown, s, e, status="graded", score="18")
-        graph.grade(hidden, s, e, status="graded", score="4")
-
+    def test_a_saved_mark_is_visible_at_once(self, client, graph) -> None:
+        """D47 — no release step: saving IS releasing."""
+        a = graph.assessment(max_score="20", assessment_date=_days_ago(1))
+        s, _e = graph.student(with_login=True)
+        r = client.put(
+            f"{A}/{a.id}/grades",
+            json={"entries": [{"student_id": str(s.id), "status": "graded", "score": 18}]},
+            headers=graph.H,
+        )
+        assert r.status_code == 200, r.text
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
         subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
-        ids = {x["assessment_id"] for x in subject["assessments"]}
-        assert str(shown.id) in ids
-        assert str(hidden.id) not in ids
+        item = next(x for x in subject["assessments"] if x["assessment_id"] == str(a.id))
+        assert item["score"] == 18.0
+        assert subject["term_numeric"] == 90.0
 
-    def test_released_but_pending_is_excluded(self, client, graph) -> None:
-        a = graph.assessment(is_released=True)
+    def test_a_pending_mark_on_an_open_assessment_is_not_listed(self, client, graph) -> None:
+        a = graph.assessment(assessment_date=_days_ago(1))
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="pending", score=None)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
         subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
         assert subject["assessments"] == []
-
-    def test_per_row_release_exposes_an_unreleased_assessment(self, client, graph) -> None:
-        a = graph.assessment(max_score="20", is_released=False)
-        s, e = graph.student(with_login=True)
-        graph.grade(a, s, e, status="graded", score="18", is_released=True)
-        body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
-        subject = next(x for x in body["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
-        assert [x["assessment_id"] for x in subject["assessments"]] == [str(a.id)]
 
     def test_score_is_null_for_a_non_graded_status(self, client, graph) -> None:
         a = graph.assessment(max_score="20", is_released=True)
@@ -988,20 +996,20 @@ class TestMyGrades:
         assert subject["term_numeric"] == teacher_row["term_numeric"]
         assert subject["term_letter"] == teacher_row["term_letter"]
 
-    def test_unreleased_work_lowers_only_the_teachers_view(self, client, graph) -> None:
-        released = graph.assessment(max_score="100", weight="1", is_released=True)
-        secret = graph.assessment(max_score="100", weight="1", is_released=False)
+    def test_an_automatic_zero_is_listed_and_both_views_agree(self, client, graph) -> None:
+        marked = graph.assessment(max_score="100", weight="1", assessment_date=_days_ago(1))
+        missed = graph.assessment(max_score="100", weight="1", assessment_date=_days_ago(6))
         s, e = graph.student(with_login=True)
-        graph.grade(released, s, e, status="graded", score="90")
-        graph.grade(secret, s, e, status="graded", score="10")
+        graph.grade(marked, s, e, status="graded", score="90")
 
         teacher_row = next(
             r for r in _book(client, graph).json()["rows"] if r["student"]["id"] == str(s.id)
         )
         mine = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
         subject = next(x for x in mine["by_subject"] if x["offering"]["offering"]["id"] == str(graph.cs.id))
-        assert teacher_row["term_numeric"] == 50.0
-        assert subject["term_numeric"] == 90.0
+        zero = next(x for x in subject["assessments"] if x["assessment_id"] == str(missed.id))
+        assert zero["auto_zero"] is True and zero["score"] is None
+        assert teacher_row["term_numeric"] == subject["term_numeric"] == 45.0
 
     def test_inactive_offering_still_listed_for_a_past_year(self, client, graph, db_session) -> None:
         graph.cs.is_active = False

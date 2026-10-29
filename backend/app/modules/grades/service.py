@@ -6,7 +6,7 @@ rows, hand them over as dataclasses, and shape the response.
 
 Scoping: P/S read everything, a teacher reads only offerings they own (denial is a
 **404**, not a 403 — api-spec §3.3 no-existence-leak), and a student reads only
-their own released results via `/grades/me`.
+their own results via `/grades/me`.
 
 Three behaviours here deliberately differ from other modules; each is commented at
 its site: `class_subjects.is_active` is NOT filtered, the semester is resolved
@@ -25,7 +25,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.common.enums import AssessmentStatus, GradeStatus, Role
+from app.common.enums import GradeStatus, Role
 from app.core.errors import Conflict, NotFound, ValidationError
 from app.core.rbac import (
     _teacher_profile_id,
@@ -35,7 +35,7 @@ from app.core.rbac import (
     teacher_offering_ids,
 )
 from app.core.timeutil import ensure_aware, utcnow
-from app.modules.assessments import release_nudge
+from app.modules.assessments import marking
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.queries import (
@@ -241,6 +241,24 @@ def _assert_midterm_not_frozen(db: Session, assessment: Assessment, actor: User)
                 "midterm_submission_start": start.isoformat() if start else None,
                 "midterm_submission_end": end.isoformat() if end else None,
             },
+        )
+
+
+def _assert_marking_open(assessment: Assessment) -> None:
+    """409 `marking_closed` once the assessment's marking window has ended (D47).
+
+    No role is exempt: the way back in is a reopen request the Dean approves
+    (`assessments/reopen.py`), which moves `reopened_until`. The 409 names the
+    instant it closed so the UI can say so instead of "locked".
+    """
+    state = marking.marking_state(assessment)
+    if not state.open:
+        closed = state.effective_closes_at
+        raise Conflict(
+            "The marking window for this assessment has closed. Ask the Dean to "
+            "reopen it to enter or change marks.",
+            code="marking_closed",
+            extra={"closed_at": closed.isoformat() if closed else None},
         )
 
 
@@ -621,32 +639,39 @@ def _grade_inputs(
             year,
             school,
         )
-        effective_release = (
-            a.is_released if grade is None or grade.is_released is None else grade.is_released
-        )
         out.append(
             calc.GradeInput(
                 assessment_id=a.id,
                 max_score=_dec(a.max_score) or Decimal(0),
                 weight=_dec(a.weight) or Decimal(0),
-                assessment_status=a.status,
                 policy=policy,
                 category_id=a.category_id,
                 grade_status=grade.status if grade is not None else None,
                 score=_dec(grade.score) if grade is not None else None,
                 makeup_score=_dec(grade.makeup_score) if grade is not None else None,
-                is_released=bool(effective_release),
+                marking_closed=not marking.is_marking_open(a),
             )
         )
     return out
+
+
+def _is_auto_zero(grade: AssessmentGrade | None, marking_open: bool) -> bool:
+    """D47: a blank mark that now counts as 0 — mirrors `calc._contribution_for`.
+
+    Absent counts as blank (the client retired it as a separate choice) unless a
+    makeup was recorded; excused and exempt never do.
+    """
+    if marking_open:
+        return False
+    if grade is None or grade.status == GradeStatus.PENDING:
+        return True
+    return grade.status == GradeStatus.ABSENT and grade.makeup_score is None
 
 
 def _assessments_for_many(
     db: Session,
     cs_ids: list[uuid.UUID],
     semester_id: uuid.UUID | None,
-    *,
-    exclude_draft: bool = False,
 ) -> dict[uuid.UUID, list[Assessment]]:
     """Batch variant of `_assessments_for` — ONE query across many offerings.
 
@@ -661,8 +686,6 @@ def _assessments_for_many(
     )
     if semester_id is not None:
         stmt = stmt.where(Assessment.semester_id == semester_id)
-    if exclude_draft:
-        stmt = stmt.where(Assessment.status != AssessmentStatus.DRAFT)
 
     out: dict[uuid.UUID, list[Assessment]] = defaultdict(list)
     for a in db.scalars(stmt).all():
@@ -775,6 +798,9 @@ def get_gradebook(
     # `Session.get` serves repeats from the identity map without touching the database.
     viewer_is_lecturer = actor.role == Role.TEACHER
 
+    # D47 — resolved once per assessment, not per cell.
+    marking_states = {a.id: marking.marking_state(a) for a in assessments}
+
     rows: list[GradebookRow] = []
     for student, enrollment_id, is_member in ordered:
         student_grades = by_student.get(student.id, {})
@@ -783,9 +809,6 @@ def get_gradebook(
             g = student_grades.get(a.id)
             status = g.status if g is not None else GradeStatus.PENDING
             score = _dec(g.score) if g is not None else None
-            released = (
-                a.is_released if g is None or g.is_released is None else g.is_released
-            )
             letter = None
             if status == GradeStatus.GRADED and score is not None:
                 letter = calc.letter_for(calc.percentage_for(score, a.max_score), bands)
@@ -808,7 +831,7 @@ def get_gradebook(
                     status=status,
                     score=_f(score),
                     makeup_score=_f(g.makeup_score) if g is not None else None,
-                    is_released=bool(released),
+                    auto_zero=_is_auto_zero(g, marking_states[a.id].open),
                     letter=letter,
                     can_request_revision=can_revise,
                     revision_blocked_reason=blocked_reason,
@@ -820,7 +843,6 @@ def get_gradebook(
             categories=category_inputs,
             uncategorized_drop_lowest=uncategorized_drop,
             bands=bands,
-            released_only=False,
         )
         rows.append(
             GradebookRow(
@@ -857,12 +879,13 @@ def get_gradebook(
                 max_score=_f(a.max_score),
                 weight=_f(a.weight),
                 assessment_date=a.assessment_date,
-                status=a.status,
-                is_released=a.is_released,
-                # Drafts render as columns but reject entry.
-                is_editable=a.status != AssessmentStatus.DRAFT,
                 graded_count=stats[a.id]["graded"],
                 entered_count=stats[a.id]["entered"],
+                marking_open=marking_states[a.id].open,
+                marking_closes_at=marking_states[a.id].closes_at,
+                reopened_until=marking_states[a.id].reopened_until,
+                effective_closes_at=marking_states[a.id].effective_closes_at,
+                days_left=marking_states[a.id].days_left,
             )
             for a in assessments
         ],
@@ -915,6 +938,7 @@ def upsert_grades(
     # D42 §5 — the end-of-session deadline check that used to sit here is gone. The
     # mid-session freeze is the only window that stops grade entry now.
     _assert_midterm_not_frozen(db, assessment, actor)
+    _assert_marking_open(assessment)
 
     entries = payload.entries
     max_score = _dec(assessment.max_score) or Decimal(0)
@@ -1104,7 +1128,6 @@ def upsert_grades(
         row.updated_by = actor.id
         if entry.status == GradeStatus.GRADED and score is not None:
             row.graded_at = now
-        # `is_released` is deliberately untouched — releasing is its own endpoint.
 
         letter = (
             calc.letter_for(calc.percentage_for(score, assessment.max_score), bands)
@@ -1200,11 +1223,11 @@ def get_my_grades(
     academic_year_id: uuid.UUID | None,
     semester_id: uuid.UUID | None = None,
 ) -> MyGrades:
-    """A student's own released results, grouped by subject.
+    """A student's own results, grouped by subject.
 
-    Release filtering happens twice on purpose: unreleased assessments are dropped
-    from the listing, AND the term average is computed with `released_only=True`,
-    so the number a student sees is always derivable from the rows shown to them.
+    D47: a mark is visible the moment it is saved — there is no release step. A
+    blank mark on an assessment whose marking window has closed is listed as an
+    `auto_zero` row, because it counts as 0 in the term average shown beside it.
 
     `semester_id` narrows within the resolved year (the student's global switcher picks
     a year·semester pair). It is threaded into the ONE `_assessments_for` call below,
@@ -1316,21 +1339,20 @@ def get_my_grades(
         listed: list[MyGradeAssessment] = []
         for a in assessments:
             g = student_grades.get(a.id)
-            released = a.is_released if g is None or g.is_released is None else g.is_released
-            if not released:
+            auto_zero = _is_auto_zero(g, marking.is_marking_open(a))
+            # Only surface rows that carry a real result (or an automatic 0).
+            if not auto_zero and (g is None or g.status == GradeStatus.PENDING):
                 continue
-            # Only surface rows that carry a real result.
-            if g is None or g.status == GradeStatus.PENDING:
-                continue
-            score = _dec(g.score) if g.status == GradeStatus.GRADED else None
+            score = _dec(g.score) if g is not None and g.status == GradeStatus.GRADED else None
             listed.append(
                 MyGradeAssessment(
                     assessment_id=a.id,
                     title=a.title,
                     max_score=_f(a.max_score),
                     assessment_date=a.assessment_date,
-                    status=g.status,
+                    status=g.status if g is not None else GradeStatus.PENDING,
                     score=_f(score),
+                    auto_zero=auto_zero,
                     letter=(
                         calc.letter_for(calc.percentage_for(score, a.max_score), bands)
                         if score is not None
@@ -1344,7 +1366,6 @@ def get_my_grades(
             categories=category_inputs,
             uncategorized_drop_lowest=uncategorized_drop,
             bands=bands,
-            released_only=True,
         )
         teachers = teachers_by_cs.get(cs.id, [])
         lead = next((t for t, is_lead in teachers if is_lead), None)
@@ -1382,16 +1403,10 @@ class StudentAssessmentLineData:
     #: `pending` when no `assessment_grades` row exists — schema §10.2b treats
     #: "no row" and "pending" identically.
     status: GradeStatus
-    #: Withheld (`None`) unless the row is released AND its status is `graded`.
+    #: `None` unless the status is `graded`.
     score: float | None
-    #: Effective release flag: `grade.is_released ?? assessment.is_released`.
-    is_released: bool
-    #: When a principal/secretary last nudged this assessment's teacher to release
-    #: (UTC, aware), or `None` if never. Read from `audit_log`, not a column — see
-    #: `assessments/release_nudge.py`. Present on EVERY line, not just the ones
-    #: currently awaiting release, so the tab can still show "reminded 2h ago" on a
-    #: row the teacher has since published.
-    last_nudged_at: datetime | None = None
+    #: D47 — see `GradebookCell.auto_zero`.
+    auto_zero: bool = False
 
 
 @dataclass(frozen=True)
@@ -1430,11 +1445,6 @@ def student_assessment_groups(
     Three behaviours deliberately differ from `get_my_grades` (the student's own
     view of the same data):
 
-    * **`released_only=False`.** Principal / secretary / teacher see the true
-      working average, the same number the gradebook shows. A student's own term
-      grade can therefore legitimately read lower while results are unreleased.
-    * **Unreleased assessments are still listed** — only the `score` is withheld.
-      The student's view drops the row entirely.
     * **Rows with no grade yet are listed as `pending`** rather than dropped, so
       the tab shows the full plan of work for the term.
 
@@ -1471,10 +1481,7 @@ def student_assessment_groups(
         return []
 
     cs_ids = [cs.id for cs, _ in offerings]
-    # Draft assessments stay internal-only on this screen. Excluding them cannot
-    # move a term grade either — `calc.compute_term_grade` only counts
-    # assessments whose LIFECYCLE status is `graded`.
-    assessments_by_cs = _assessments_for_many(db, cs_ids, None, exclude_draft=True)
+    assessments_by_cs = _assessments_for_many(db, cs_ids, None)
 
     all_ids = [a.id for rows in assessments_by_cs.values() for a in rows]
     grades_by_assessment: dict[uuid.UUID, AssessmentGrade] = (
@@ -1490,8 +1497,6 @@ def student_assessment_groups(
         if all_ids
         else {}
     )
-    # ONE grouped audit_log read for every assessment on the tab, not one per row.
-    nudges = release_nudge.last_nudged_at_bulk(db, all_ids)
 
     groups: list[StudentSubjectAssessmentsData] = []
     for cs, subject in offerings:
@@ -1511,9 +1516,6 @@ def student_assessment_groups(
         lines: list[StudentAssessmentLineData] = []
         for a in assessments:
             g = student_grades.get(a.id)
-            released = bool(
-                a.is_released if g is None or g.is_released is None else g.is_released
-            )
             graded = g is not None and g.status == GradeStatus.GRADED
             lines.append(
                 StudentAssessmentLineData(
@@ -1523,9 +1525,8 @@ def student_assessment_groups(
                     weight=_f(a.weight),
                     assessment_date=a.assessment_date,
                     status=g.status if g is not None else GradeStatus.PENDING,
-                    score=_f(g.score) if (released and graded) else None,
-                    is_released=released,
-                    last_nudged_at=nudges.get(a.id),
+                    score=_f(g.score) if graded else None,
+                    auto_zero=_is_auto_zero(g, marking.is_marking_open(a)),
                 )
             )
 
@@ -1534,7 +1535,6 @@ def student_assessment_groups(
             categories=category_inputs,
             uncategorized_drop_lowest=uncategorized_drop,
             bands=bands,
-            released_only=False,
         )
         groups.append(
             StudentSubjectAssessmentsData(
@@ -1845,8 +1845,6 @@ def list_term_grades(
                 categories=category_inputs,
                 uncategorized_drop_lowest=uncategorized_drop,
                 bands=bands,
-                # A student reading their own term grade only ever sees released work.
-                released_only=is_student,
             )
             for student in students
         }

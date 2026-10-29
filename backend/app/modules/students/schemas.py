@@ -266,9 +266,8 @@ class StudentAssessmentLine(BaseModel):
 
     `status` is the **student's grade status** — `pending` when no
     `assessment_grades` row exists yet — NOT the assessment's lifecycle status.
-    `score` is withheld (`null`) unless the result is released AND graded; the row
-    itself is still listed, because the viewer here is an admin/teacher rather
-    than the student (contrast `GET /grades/me`, which drops unreleased rows).
+    `score` is `null` unless the result is graded; the row itself is still listed,
+    because the viewer here is an admin/teacher who wants the full plan of work.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -279,12 +278,8 @@ class StudentAssessmentLine(BaseModel):
     assessment_date: date | None = None
     status: GradeStatus
     score: float | None = None
-    is_released: bool
-    #: When a principal/secretary last reminded the teacher to release this
-    #: assessment (UTC), or `null` if never. Lets the Grades tab render
-    #: "Reminded 2h ago" and disable the button for the remainder of the cooldown,
-    #: instead of letting the user click into a 429.
-    last_nudged_at: datetime | None = None
+    #: D47 — no mark and the marking window has closed: counts as 0.
+    auto_zero: bool = False
 
 
 class StudentTermGrade(BaseModel):
@@ -317,10 +312,6 @@ class StudentAssessmentsResponse(BaseModel):
     """
 
     items: list[StudentAssessmentGroup] = Field(default_factory=list)
-    #: The `POST /assessments/{id}/nudge-release` cooldown, served here so the SPA
-    #: computes "still within the cooldown" from the server's window rather than a
-    #: hardcoded copy that would silently drift if the window is retuned.
-    nudge_cooldown_seconds: int = 0
 
 
 class StudentYearItem(BaseModel):

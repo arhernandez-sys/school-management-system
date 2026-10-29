@@ -95,6 +95,11 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
         Boolean(), nullable=False, server_default=text("false")
     )
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # D47: set when the Dean approves a reopen request; extends the marking window
+    # (assessments/marking.py). NULL = never reopened.
+    reopened_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Per-assessment policy overrides (DB-14, highest precedence); NULL = inherit.
     absent_as_zero: Mapped[bool | None] = mapped_column(Boolean(), nullable=True)
     allow_makeup: Mapped[bool | None] = mapped_column(Boolean(), nullable=True)

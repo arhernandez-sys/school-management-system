@@ -53,7 +53,7 @@ def inactive(graph, db_session) -> _Graph:
 
 
 def _assessment_in(graph: _Graph, semester_id) -> Assessment:
-    a = graph.assessment(status="published")
+    a = graph.assessment()
     a.semester_id = semester_id
     graph._db.flush()
     return a
@@ -95,12 +95,10 @@ class TestInactiveSessionIsReadOnly:
         assert r.status_code == 409
         _assert_envelope(r.json(), code="session_inactive")
 
-    def test_update_delete_status_release_blocked(self, client, inactive) -> None:
+    def test_update_delete_blocked(self, client, inactive) -> None:
         a = _assessment_in(inactive, inactive.inactive_sem.id)
         for resp in (
             client.patch(f"{A}/{a.id}", headers=inactive.H, json={"title": "Renamed"}),
-            client.post(f"{A}/{a.id}/status", headers=inactive.H, json={"status": "draft"}),
-            client.post(f"{A}/{a.id}/release", headers=inactive.H),
             client.delete(f"{A}/{a.id}", headers=inactive.H),
         ):
             assert resp.status_code == 409, resp.text
@@ -143,7 +141,7 @@ class TestInactiveSessionIsReadOnly:
         assert mine and mine[0]["can_edit"] is False
 
     def test_active_session_still_writable(self, client, graph) -> None:
-        a = graph.assessment(status="published")
+        a = graph.assessment()
         r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"title": "Renamed"})
         assert r.status_code == 200, r.text
 

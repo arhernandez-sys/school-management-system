@@ -1120,7 +1120,6 @@ class TestStudentAssessments:
         body = resp.json()
         assert isinstance(body, dict) and set(body.keys()) == {
             "items",
-            "nudge_cooldown_seconds",
         }, "must be an {items:[...]} envelope, not a bare array"
         groups = {g["offering_id"]: g for g in body["items"]}
         assert {str(cs_a.id), str(cs_z.id)} <= set(groups)
@@ -1132,55 +1131,24 @@ class TestStudentAssessments:
         assert group["subject"]["name"] == f"AAA {tag}"
         assert set(group["term_grade"].keys()) == {"numeric", "letter"}
         assert [a["title"] for a in group["assessments"]] == ["A-Quiz"]
-        # `last_nudged_at` arrives with the release-nudge feature. It belongs on the
-        # LINE, not just in the envelope: `RemindTeacherButton` computes the
-        # remaining cooldown per assessment from `last_nudged_at` + the envelope's
-        # `nudge_cooldown_seconds`, and `frontend/src/features/students/types.ts:64`
-        # declares it `string | null` — so a nullable key that is always PRESENT.
-        # (This assertion was missed when the feature landed; the envelope-level one
-        # above was updated, this one was not.)
+        # D47 — release and the release nudge are gone; `auto_zero` replaces them.
         assert set(group["assessments"][0].keys()) == {
             "id", "title", "max_score", "weight",
-            "assessment_date", "status", "score", "is_released",
-            "last_nudged_at",
+            "assessment_date", "status", "score", "auto_zero",
         }
         # Ordered by subject name.
         ordered = [g["offering_id"] for g in body["items"]]
         assert ordered.index(str(cs_a.id)) < ordered.index(str(cs_z.id))
 
-    def test_assessments_drafts_excluded(
+    def test_assessments_a_graded_row_surfaces_its_score(
         self, client, make_user, auth_headers, db_session
     ) -> None:
-        section = _make_section(db_session)
-        cs = _make_class_subject(db_session, section=section)
-        student = _make_student(db_session)
-        _enroll(db_session, student=student, section=section)
-        _make_assessment(
-            db_session, class_subject=cs, title="Published Test",
-            status=AssessmentStatus.PUBLISHED,
-        )
-        _make_assessment(
-            db_session, class_subject=cs, title="Draft Test", status=AssessmentStatus.DRAFT
-        )
-        principal = make_user(role=Role.PRINCIPAL)
-        resp = self._get(client, auth_headers, student.id, user=principal)
-        assert resp.status_code == 200, resp.text
-        titles = {
-            a["title"] for g in resp.json()["items"] for a in g["assessments"]
-        }
-        assert "Published Test" in titles
-        assert "Draft Test" not in titles, "draft assessments are internal-only"
-
-    def test_assessments_unreleased_row_is_listed_but_score_withheld(
-        self, client, make_user, auth_headers, db_session
-    ) -> None:
-        """Unlike the student's own /grades/me view, an admin/teacher still SEES the
-        row; only `score` is withheld until release."""
+        """D47 — no release step, so the score is never withheld."""
         section = _make_section(db_session)
         cs = _make_class_subject(db_session, section=section)
         student = _make_student(db_session)
         enr = _enroll(db_session, student=student, section=section)
-        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=False)
+        a = _make_assessment(db_session, class_subject=cs, max_score=50)
         _make_grade(
             db_session, assessment=a, student=student, enrollment=enr,
             status=GradeStatus.GRADED, score=40,
@@ -1190,48 +1158,9 @@ class TestStudentAssessments:
         assert resp.status_code == 200, resp.text
         line = resp.json()["items"][0]["assessments"][0]
         assert line["id"] == str(a.id)
-        assert line["is_released"] is False
         assert line["status"] == "graded", "the STUDENT's grade status, not the assessment's"
-        assert line["score"] is None, "score is withheld while unreleased"
-
-    def test_assessments_released_graded_row_surfaces_score(
-        self, client, make_user, auth_headers, db_session
-    ) -> None:
-        section = _make_section(db_session)
-        cs = _make_class_subject(db_session, section=section)
-        student = _make_student(db_session)
-        enr = _enroll(db_session, student=student, section=section)
-        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=True)
-        _make_grade(
-            db_session, assessment=a, student=student, enrollment=enr,
-            status=GradeStatus.GRADED, score=40,
-        )
-        principal = make_user(role=Role.PRINCIPAL)
-        resp = self._get(client, auth_headers, student.id, user=principal)
-        assert resp.status_code == 200, resp.text
-        line = resp.json()["items"][0]["assessments"][0]
-        assert line["is_released"] is True
         assert line["score"] == 40.0
-
-    def test_assessments_grade_row_release_overrides_assessment(
-        self, client, make_user, auth_headers, db_session
-    ) -> None:
-        """`is_released` = grade.is_released when set, else the assessment's."""
-        section = _make_section(db_session)
-        cs = _make_class_subject(db_session, section=section)
-        student = _make_student(db_session)
-        enr = _enroll(db_session, student=student, section=section)
-        a = _make_assessment(db_session, class_subject=cs, max_score=50, is_released=False)
-        _make_grade(
-            db_session, assessment=a, student=student, enrollment=enr,
-            status=GradeStatus.GRADED, score=45, is_released=True,
-        )
-        principal = make_user(role=Role.PRINCIPAL)
-        resp = self._get(client, auth_headers, student.id, user=principal)
-        assert resp.status_code == 200, resp.text
-        line = resp.json()["items"][0]["assessments"][0]
-        assert line["is_released"] is True
-        assert line["score"] == 45.0
+        assert line["auto_zero"] is False
 
     def test_assessments_status_defaults_pending_with_no_grade_row(
         self, client, make_user, auth_headers, db_session
@@ -1255,17 +1184,12 @@ class TestStudentAssessments:
         self, client, make_user, auth_headers, db_session
     ) -> None:
         """One graded 40/50 assessment, weight 1, no categories → 80.00. The number
-        is produced by grades/calc.py, not recomputed in the Students module. It is
-        computed with released_only=False, so it appears even while UNRELEASED —
-        this deliberately differs from the student's own /grades/me view."""
+        is produced by grades/calc.py, not recomputed in the Students module."""
         section = _make_section(db_session)
         cs = _make_class_subject(db_session, section=section)
         student = _make_student(db_session)
         enr = _enroll(db_session, student=student, section=section)
-        a = _make_assessment(
-            db_session, class_subject=cs, max_score=50, weight=1,
-            status=AssessmentStatus.GRADED, is_released=False,
-        )
+        a = _make_assessment(db_session, class_subject=cs, max_score=50, weight=1)
         _make_grade(
             db_session, assessment=a, student=student, enrollment=enr,
             status=GradeStatus.GRADED, score=40,
@@ -1275,7 +1199,7 @@ class TestStudentAssessments:
         assert resp.status_code == 200, resp.text
         group = resp.json()["items"][0]
         assert group["term_grade"]["numeric"] == 80.0
-        assert group["assessments"][0]["score"] is None, "still withheld on the line"
+        assert group["assessments"][0]["score"] == 40.0
 
     def test_assessments_academic_year_scopes_to_that_years_section(
         self, client, make_user, auth_headers, db_session

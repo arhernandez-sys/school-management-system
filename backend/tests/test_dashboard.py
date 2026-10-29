@@ -432,15 +432,13 @@ class TestTeacherVariant:
         body = client.get(DB, headers=graph.T).json()
         assert set(body.keys()) == {
             "role", "user_full_name", "academic_year_name", "semester_name", "stats",
-            "today_classes", "recent_assessments", "awaiting_release",
-            "recent_announcements",
+            "today_classes", "recent_assessments", "recent_announcements",
         }
 
     def test_stats_keys(self, client, graph) -> None:
         stats = client.get(DB, headers=graph.T).json()["stats"]
         assert set(stats.keys()) == {
-            "my_offerings", "attendance_due_today",
-            "ungraded_items", "awaiting_release_items",
+            "my_offerings", "attendance_due_today", "ungraded_items",
         }
 
     def test_scoped_to_own_sections_only(self, client, graph) -> None:
@@ -500,162 +498,37 @@ class TestTeacherVariant:
         body = client.get(DB, headers=graph.T).json()
         assert body["today_classes"][0]["attendance_recorded"] is False
 
-    def test_ungraded_items_counts_published_and_grading_only(self, client, graph) -> None:
-        graph.assessment(status="published")
-        graph.assessment(status="grading")
-        graph.assessment(status="draft")
-        graph.assessment(status="graded")
+    def test_ungraded_items_counts_assessments_whose_window_is_open(self, client, graph) -> None:
+        """D47 — "still to mark" is an open marking window; a closed one is done."""
+        graph.assessment(assessment_date=school_today())
+        graph.assessment(assessment_date=school_today() - timedelta(days=5))
+        graph.assessment(assessment_date=school_today() - timedelta(days=6))
         body = client.get(DB, headers=graph.T).json()
         assert body["stats"]["ungraded_items"] == 2
 
     def test_recent_assessments_shape_and_scope(self, client, graph) -> None:
-        mine = graph.assessment(status="published", assessment_date=date(2025, 10, 20))
-        theirs = graph.assessment(status="published", cs_id=graph.other_cs.id)
+        mine = graph.assessment(assessment_date=school_today())
+        theirs = graph.assessment(cs_id=graph.other_cs.id)
         rows = client.get(DB, headers=graph.T).json()["recent_assessments"]
         ids = {r["id"] for r in rows}
         assert str(mine.id) in ids
         assert str(theirs.id) not in ids
         assert set(rows[0].keys()) == {
-            "id", "title", "offering", "assessment_date", "status"
+            "id", "title", "offering", "offering_id", "assessment_date",
+            "marking_closes_at", "days_left",
         }
+
+    def test_recent_assessments_soonest_closing_first(self, client, graph) -> None:
+        later = graph.assessment(assessment_date=school_today())
+        sooner = graph.assessment(assessment_date=school_today() - timedelta(days=4))
+        rows = client.get(DB, headers=graph.T).json()["recent_assessments"]
+        assert [r["id"] for r in rows[:2]] == [str(sooner.id), str(later.id)]
+        assert rows[0]["days_left"] == 1
 
     def test_recent_assessments_capped_at_six(self, client, graph) -> None:
         for i in range(9):
-            graph.assessment(status="published", assessment_date=date(2025, 10, 1 + i))
+            graph.assessment(assessment_date=school_today() - timedelta(days=i % 5))
         assert len(client.get(DB, headers=graph.T).json()["recent_assessments"]) <= 6
-
-
-# ════════════════════════════════════════════════════════════════════════════
-class TestTeacherAwaitingRelease:
-    """`stats.awaiting_release_items` + the `awaiting_release` queue.
-
-    The distinction that matters: `ungraded_items` is work the teacher has yet to
-    MARK; this is work already marked but still HIDDEN from students. Conflating the
-    two would make the tile lie in both directions, so the first two tests pin that
-    each figure moves independently of the other.
-    """
-
-    def _awaiting(self, client, graph) -> dict:
-        return client.get(DB, headers=graph.T).json()
-
-    def test_counts_graded_but_unreleased(self, client, graph) -> None:
-        a = graph.assessment(status="graded", is_released=False)
-        graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 1
-        assert [r["id"] for r in body["awaiting_release"]] == [str(a.id)]
-
-    def test_does_not_count_already_released(self, client, graph) -> None:
-        a = graph.assessment(status="graded", is_released=True)
-        graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 0
-        assert body["awaiting_release"] == []
-
-    def test_does_not_count_ungraded(self, client, graph) -> None:
-        """A pending row is unmarked work — it belongs to `ungraded_items`, and
-        releasing it would reveal nothing."""
-        a = graph.assessment(status="grading", is_released=False)
-        graph.grade(a, graph.student, graph.enrollment, status="pending", score=None)
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 0
-        assert body["stats"]["ungraded_items"] == 1
-
-    def test_absent_and_excused_do_not_count(self, client, graph) -> None:
-        """Neither carries a score to reveal, so neither is awaiting release."""
-        absent = graph.assessment(status="graded", is_released=False)
-        graph.grade(absent, graph.student, graph.enrollment, status="absent", score=None)
-        excused = graph.assessment(status="graded", is_released=False)
-        peer, peer_enr = graph.add_student()
-        graph.grade(excused, peer, peer_enr, status="excused", score=None)
-        assert self._awaiting(client, graph)["stats"]["awaiting_release_items"] == 0
-
-    def test_per_student_unrelease_overrides_a_released_column(self, client, graph) -> None:
-        """`grade.is_released ?? assessment.is_released` — a straggler left hidden by
-        a per-student unrelease still counts even though the column reads released."""
-        a = graph.assessment(status="graded", is_released=True)
-        graph.grade(
-            a, graph.student, graph.enrollment, status="graded", score="80",
-            is_released=False,
-        )
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 1
-        assert body["awaiting_release"][0]["graded_unreleased_count"] == 1
-
-    def test_per_student_release_overrides_an_unreleased_column(self, client, graph) -> None:
-        a = graph.assessment(status="graded", is_released=False)
-        graph.grade(
-            a, graph.student, graph.enrollment, status="graded", score="80",
-            is_released=True,
-        )
-        assert self._awaiting(client, graph)["stats"]["awaiting_release_items"] == 0
-
-    def test_counts_assessments_not_students(self, client, graph) -> None:
-        """One assessment with three waiting students is ONE outstanding action."""
-        a = graph.assessment(status="graded", is_released=False)
-        graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        for _ in range(2):
-            peer, peer_enr = graph.add_student()
-            graph.grade(a, peer, peer_enr, status="graded", score="70")
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 1
-        assert body["awaiting_release"][0]["graded_unreleased_count"] == 3
-
-    def test_scoped_to_own_offerings(self, client, graph) -> None:
-        mine = graph.assessment(status="graded", is_released=False)
-        graph.grade(mine, graph.student, graph.enrollment, status="graded", score="80")
-        theirs = graph.assessment(status="graded", is_released=False, cs_id=graph.other_cs.id)
-        peer, peer_enr = graph.add_student(section=graph.other_section)
-        graph.grade(theirs, peer, peer_enr, status="graded", score="80")
-
-        ids = {r["id"] for r in self._awaiting(client, graph)["awaiting_release"]}
-        assert str(mine.id) in ids
-        assert str(theirs.id) not in ids
-        # ...and the other teacher sees the mirror image.
-        other = client.get(DB, headers=graph.T2).json()
-        assert {r["id"] for r in other["awaiting_release"]} == {str(theirs.id)}
-
-    def test_item_shape_carries_the_gradebook_link(self, client, graph) -> None:
-        a = graph.assessment(status="graded", is_released=False, assessment_date=date(2025, 10, 9))
-        graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        row = self._awaiting(client, graph)["awaiting_release"][0]
-        assert set(row.keys()) == {
-            "id", "title", "offering", "assessment_date", "status",
-            "offering_id", "graded_unreleased_count",
-        }
-        # The tile deep-links by OFFERING, so this id must be present and correct.
-        assert row["offering_id"] == str(graph.cs.id)
-        assert row["offering"]["id"] == str(graph.cs.id)
-
-    def test_list_capped_but_count_is_not(self, client, graph) -> None:
-        for i in range(8):
-            a = graph.assessment(
-                status="graded", is_released=False, assessment_date=date(2025, 10, 1 + i)
-            )
-            graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 8
-        assert len(body["awaiting_release"]) == 6
-
-    def test_oldest_first(self, client, graph) -> None:
-        for offset in (10, 3, 6):
-            a = graph.assessment(
-                status="graded", is_released=False,
-                assessment_date=date(2025, 10, 1) + timedelta(days=offset),
-            )
-            graph.grade(a, graph.student, graph.enrollment, status="graded", score="80")
-        dates = [r["assessment_date"] for r in self._awaiting(client, graph)["awaiting_release"]]
-        assert dates == sorted(dates)
-
-    def test_teacher_with_nothing_hidden_sees_an_empty_queue(self, client, graph) -> None:
-        body = self._awaiting(client, graph)
-        assert body["stats"]["awaiting_release_items"] == 0
-        assert body["awaiting_release"] == []
-
-    def test_only_teachers_get_the_queue(self, client, graph) -> None:
-        """It is a teacher-variant field; no other role's payload gains it."""
-        for headers in (graph.P, graph.S, graph.U):
-            assert "awaiting_release" not in client.get(DB, headers=headers).json()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -708,13 +581,13 @@ class TestStudentVariant:
         rows = client.get(DB, headers=graph.U).json()["my_classes"]
         assert any(r["teacher_name"] == "Unassigned" for r in rows)
 
-    def test_unreleased_grades_never_reach_the_student(self, client, graph) -> None:
-        """The single most important assertion in this suite."""
-        secret = graph.assessment(status="graded", max_score="100", is_released=False)
-        graph.grade(secret, graph.student, graph.enrollment, score="10")
+    def test_a_saved_grade_reaches_the_student_at_once(self, client, graph) -> None:
+        """D47 — no release step. Saving a mark is what publishes it."""
+        a = graph.assessment(max_score="100")
+        graph.grade(a, graph.student, graph.enrollment, score="10")
         body = client.get(DB, headers=graph.U).json()
-        assert body["recent_grades"] == []
-        assert body["stats"]["term_average"] is None
+        assert [g["assessment_id"] for g in body["recent_grades"]] == [str(a.id)]
+        assert body["stats"]["term_average"] == 10.0
 
     def test_released_grades_do_reach_the_student(self, client, graph) -> None:
         shown = graph.assessment(status="graded", max_score="100", is_released=True)
@@ -726,14 +599,12 @@ class TestStudentVariant:
         assert body["stats"]["term_average"] == 90.0
         assert body["stats"]["term_letter"] == "A"
 
-    def test_term_average_excludes_unreleased_from_the_mean(self, client, graph) -> None:
-        shown = graph.assessment(status="graded", max_score="100", is_released=True)
-        secret = graph.assessment(status="graded", max_score="100", is_released=False)
-        graph.grade(shown, graph.student, graph.enrollment, score="90")
-        graph.grade(secret, graph.student, graph.enrollment, score="10")
+    def test_a_missed_assessment_counts_as_zero_once_closed(self, client, graph) -> None:
+        marked = graph.assessment(max_score="100")
+        graph.assessment(max_score="100", assessment_date=school_today() - timedelta(days=6))
+        graph.grade(marked, graph.student, graph.enrollment, score="90")
         body = client.get(DB, headers=graph.U).json()
-        # A release-agnostic mean would report 50.
-        assert body["stats"]["term_average"] == 90.0
+        assert body["stats"]["term_average"] == 45.0
 
     def test_recent_grades_shape(self, client, graph) -> None:
         a = graph.assessment(status="graded", max_score="50", is_released=True)
@@ -745,15 +616,10 @@ class TestStudentVariant:
         assert row["max_score"] == 50.0
         assert row["letter"] == "B"  # 80%
 
-    def test_upcoming_excludes_drafts(self, client, graph) -> None:
-        """The mock includes drafts — a real scope leak, not copied."""
-        future = school_today() + timedelta(days=7)
-        published = graph.assessment(status="published", assessment_date=future)
-        draft = graph.assessment(status="draft", assessment_date=future)
+    def test_upcoming_lists_future_assessments(self, client, graph) -> None:
+        future = graph.assessment(assessment_date=school_today() + timedelta(days=7))
         body = client.get(DB, headers=graph.U).json()
-        ids = {r["id"] for r in body["upcoming_assessments"]}
-        assert str(published.id) in ids
-        assert str(draft.id) not in ids
+        assert str(future.id) in {r["id"] for r in body["upcoming_assessments"]}
 
     def test_upcoming_excludes_past_dates(self, client, graph) -> None:
         graph.assessment(status="published", assessment_date=school_today() - timedelta(days=3))
@@ -908,10 +774,10 @@ class TestDeanKpiSet:
         self, client, graph
     ) -> None:
         before = self._stats(client, graph)["outstanding_grade_submissions"]
-        graph.assessment(status="published")
-        graph.assessment(status="grading")
-        graph.assessment(status="graded")   # finished — not outstanding
-        graph.assessment(status="draft")    # not yet issued — not outstanding either
+        graph.assessment(assessment_date=school_today())
+        graph.assessment(assessment_date=school_today() - timedelta(days=5))
+        # Window closed — no longer outstanding (D47).
+        graph.assessment(assessment_date=school_today() - timedelta(days=6))
         assert self._stats(client, graph)["outstanding_grade_submissions"] == before + 2
 
     def test_it_is_the_same_figure_the_lecturers_own_tile_shows(

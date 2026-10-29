@@ -17,7 +17,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.common.enums import AnnouncementAudience, AssessmentStatus
+from app.common.enums import AnnouncementAudience
 from app.common.schemas import OfferingRef
 
 
@@ -135,7 +135,7 @@ class AdminStats(BaseModel):
     #: two wrong answers. The tile says "to date" so the number is not misread.
     graduates: int = 0
     #: §42 "outstanding grade submissions" — assessments in the active session still
-    #: being MARKED (lifecycle `published` or `grading`), college-wide.
+    #: being MARKED (D47: marking window open), college-wide.
     #:
     #: The SAME predicate as the Lecturer's own `ungraded_items` tile, deliberately: this
     #: is that figure summed over every lecturer, and a Dean asking "who is behind on
@@ -217,18 +217,9 @@ class TeacherStats(BaseModel):
     #: tertiary model does not have.
     my_offerings: int = 0
     attendance_due_today: int = 0
-    #: Assessments still being MARKED — lifecycle status `published` or `grading`.
+    #: Assessments still being MARKED — D47: their marking window is open.
     #: The teacher's remaining marking workload.
     ungraded_items: int = 0
-    #: Assessments already MARKED but still HIDDEN from students — at least one
-    #: grade row is `graded` while its effective release flag is false.
-    #:
-    #: Deliberately NOT the same figure as `ungraded_items`, and the two never
-    #: overlap in meaning: `ungraded_items` is work the teacher has yet to do,
-    #: this is work the teacher has finished but not yet published. An assessment
-    #: can appear in both (partially marked, nothing released) — that is correct,
-    #: it has two outstanding actions. See `assessments/release_nudge.py`.
-    awaiting_release_items: int = 0
 
 
 class TeacherTodayOffering(BaseModel):
@@ -240,30 +231,12 @@ class TeacherAssessmentItem(BaseModel):
     id: UUID
     title: str
     offering: OfferingRef | None = None
-    assessment_date: date | None = None
-    #: Enum-typed for the same reason as `DashboardAnnouncement.audience`.
-    status: AssessmentStatus
-
-
-class TeacherAwaitingReleaseItem(TeacherAssessmentItem):
-    """An assessment holding marked-but-hidden work — the awaiting-release tile's rows.
-
-    Extends `TeacherAssessmentItem` (same id/title/offering/date/status) and
-    adds the two things the row needs to be ACTIONABLE rather than merely informative:
-
-    * `offering_id` — the gradebook is addressed by offering, not by assessment
-      (`/grades?offering_id=…`), and the base item deliberately does not carry
-      one. Without it the tile could only link to the gradebook picker.
-    * `graded_unreleased_count` — how many students are still waiting, so the teacher
-      can tell a whole unreleased column from one straggler left hidden by an earlier
-      per-student unrelease.
-
-    `status` here is inherited and remains the ASSESSMENT lifecycle status, not a
-    grade status.
-    """
-
+    #: The gradebook is addressed by offering (`/grades?offering_id=…`).
     offering_id: UUID
-    graded_unreleased_count: int = 0
+    assessment_date: date | None = None
+    #: D47 — when entry locks, and whole school-local days left (0 = today).
+    marking_closes_at: datetime | None = None
+    days_left: int | None = None
 
 
 class TeacherDashboard(_Base):
@@ -271,9 +244,6 @@ class TeacherDashboard(_Base):
     stats: TeacherStats
     today_classes: list[TeacherTodayOffering] = Field(default_factory=list)
     recent_assessments: list[TeacherAssessmentItem] = Field(default_factory=list)
-    #: Standing "what have I marked but not published?" queue. Capped like the other
-    #: cards; `stats.awaiting_release_items` counts the full set.
-    awaiting_release: list[TeacherAwaitingReleaseItem] = Field(default_factory=list)
     recent_announcements: list[DashboardAnnouncement] = Field(default_factory=list)
 
 

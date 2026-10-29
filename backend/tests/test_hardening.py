@@ -6,8 +6,7 @@ Covers the five things that were added and could silently not work:
   2. client-IP resolution behind a proxy, and its spoof-safety (`app/core/net.py`);
   3. the security-headers middleware, incl. HSTS being local-only;
   4. the readiness probe failing 503 WITHOUT dragging `/health` down with it;
-  5. the retention purge job's dry-run accounting and its refusal to delete a
-     release-nudge row that is still inside its cooldown.
+  5. the retention purge job's dry-run accounting.
 
 Most cases here are DB-FREE on purpose. The limiter guard runs before the service
 call, and the `/auth/refresh` CSRF-header rejection returns before any query, so
@@ -618,75 +617,22 @@ def test_purge_deletes_aged_rows_but_spares_recent_ones(db_session) -> None:  # 
 
 
 @pytest.mark.requires_db
-def test_purge_never_deletes_a_nudge_row_inside_its_cooldown(db_session) -> None:  # noqa: ANN001
-    """`audit_log` is load-bearing, not just forensic.
-
-    `assessments/release_nudge.py` derives the 4-hour re-nudge cooldown by reading
-    back the most recent `grade.release_nudge` row — there is no other copy of
-    that state. Purging one silently resets the cooldown and the teacher starts
-    getting the repeat reminders the cooldown exists to prevent; nothing errors.
-
-    The 365-day default could never collide with a 4-hour window, so the guard is
-    only reachable through misconfiguration — which is exactly what this test
-    simulates with `retention_audit_log_days=0`.
-    """
+def test_purge_collects_audit_rows_past_retention(db_session) -> None:  # noqa: ANN001
+    """D47 retired the release nudge, the one audit row that used to be load-bearing
+    state, so `audit_log` now ages out on the retention window alone."""
     from app.core.timeutil import utcnow
     from app.jobs.purge import run_purge
-    from app.modules.assessments import release_nudge
-    from app.modules.settings.models import AuditLog
-
-    now = utcnow()
-    assessment_id = uuid.uuid4()
-    fresh_nudge = AuditLog(
-        action=release_nudge.NUDGE_ACTION,
-        entity_type=release_nudge.NUDGE_ENTITY_TYPE,
-        entity_id=assessment_id,
-        created_at=now - timedelta(minutes=5),  # well inside the 4h cooldown
-    )
-    ordinary = AuditLog(
-        action="test.hardening_probe",
-        entity_type="assessment",
-        entity_id=uuid.uuid4(),
-        created_at=now - timedelta(minutes=5),
-    )
-    db_session.add_all([fresh_nudge, ordinary])
-    db_session.flush()
-
-    settings = Settings(retention_audit_log_days=0)  # misconfiguration
-
-    report = run_purge(db_session, settings, dry_run=True, only=("audit_log",))
-    audit = next(r for r in report.results if r.table == "audit_log")
-    assert audit.protected >= 1, "the in-cooldown nudge must be reported as spared"
-
-    # And the real run must honour it.
-    run_purge(db_session, settings, only=("audit_log",), batch_size=500)
-
-    assert db_session.get(AuditLog, fresh_nudge.id) is not None, (
-        "purging an in-cooldown nudge would silently reset the cooldown"
-    )
-    assert db_session.get(AuditLog, ordinary.id) is None, (
-        "ordinary aged-out audit rows must still be collected"
-    )
-    # The derived state the feature actually reads is intact.
-    assert release_nudge.last_nudged_at(db_session, assessment_id) is not None
-
-
-@pytest.mark.requires_db
-def test_purge_collects_a_nudge_row_past_its_cooldown(db_session) -> None:  # noqa: ANN001
-    """The guard is a cooldown exemption, not a permanent one — a year-old nudge
-    is history and must age out like anything else."""
-    from app.core.timeutil import utcnow
-    from app.jobs.purge import run_purge
-    from app.modules.assessments import release_nudge
     from app.modules.settings.models import AuditLog
 
     stale = AuditLog(
-        action=release_nudge.NUDGE_ACTION,
-        entity_type=release_nudge.NUDGE_ENTITY_TYPE,
-        entity_id=uuid.uuid4(),
+        action="grade.update", entity_type="assessment", entity_id=uuid.uuid4(),
         created_at=utcnow() - timedelta(days=400),
     )
-    db_session.add(stale)
+    fresh = AuditLog(
+        action="grade.update", entity_type="assessment", entity_id=uuid.uuid4(),
+        created_at=utcnow() - timedelta(days=1),
+    )
+    db_session.add_all([stale, fresh])
     db_session.flush()
 
     run_purge(
@@ -696,3 +642,4 @@ def test_purge_collects_a_nudge_row_past_its_cooldown(db_session) -> None:  # no
         batch_size=500,
     )
     assert db_session.get(AuditLog, stale.id) is None
+    assert db_session.get(AuditLog, fresh.id) is not None

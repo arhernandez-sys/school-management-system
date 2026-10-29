@@ -398,6 +398,11 @@ class TestTheClosedWindowLock:
         student, enrollment = graph.student()
         grade = graph.grade(a, student, enrollment, score="60")
         backdate(graph, assessment=a, grade=grade)
+        # D47 — backdating the assessment 60 days also closes its 5-day marking
+        # window, which would 409 `marking_closed` before this rule is reached. Held
+        # open as a Dean-approved reopen would, so these tests see the D45 lock only.
+        a.reopened_until = _utc(+1)
+        db_session.flush()
         return a, student, grade
 
     def test_a_pre_window_mark_cannot_be_edited_directly(
@@ -468,6 +473,8 @@ class TestTheClosedWindowLock:
         student, enrollment = graph.student()
         grade = graph.grade(a, student, enrollment, score="60")
         backdate(graph, assessment=a, grade=grade)
+        a.reopened_until = _utc(+1)  # D47 — see `_settled`
+        db_session.flush()
         assert _save(client, graph, a, student, score="95").status_code == 200
 
     def test_inside_the_window_the_FREEZE_still_owns_the_refusal(

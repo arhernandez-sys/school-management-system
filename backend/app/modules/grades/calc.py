@@ -33,7 +33,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from app.common.enums import AssessmentStatus, GradeStatus
+from app.common.enums import GradeStatus
 
 __all__ = [
     "BandInput",
@@ -168,15 +168,14 @@ class GradeInput:
     assessment_id: uuid.UUID
     max_score: Decimal
     weight: Decimal
-    assessment_status: AssessmentStatus
     policy: EffectivePolicy
     category_id: uuid.UUID | None = None
     grade_status: GradeStatus | None = None
     score: Decimal | None = None
     makeup_score: Decimal | None = None
-    #: Effective release flag, i.e. `grade.is_released ?? assessment.is_released`.
-    #: Only consulted when `compute_term_grade(..., released_only=True)`.
-    is_released: bool = False
+    #: D47: the assessment's marking window has closed (assessments/marking.py).
+    #: A blank mark then counts as 0 instead of being excluded.
+    marking_closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -237,7 +236,6 @@ class TermGradeRequest:
     categories: Sequence[CategoryInput] = ()
     uncategorized_drop_lowest: int = 0
     bands: Sequence[BandInput] = ()
-    released_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -518,13 +516,20 @@ def _contribution_for(grade: GradeInput) -> _Contribution | None:
         makeup = _dec(grade.makeup_score)
         if grade.policy.allow_makeup and makeup is not None:
             effective = makeup
-        elif grade.policy.absent_as_zero:
+        elif grade.policy.absent_as_zero or grade.marking_closed:
             effective = _ZERO
         else:
             return None
+    elif status in (GradeStatus.EXCUSED, GradeStatus.EXEMPT):
+        # Excluded from numerator AND weight base (§10.2b), even once the
+        # marking window has closed — excusing a student is the point.
+        return None
+    elif grade.marking_closed:
+        # D47: pending / no grade row after the marking window closed. The
+        # lecturer had the window to enter a mark; a blank now counts as 0.
+        effective = _ZERO
     else:
-        # pending / excused / exempt / no grade row -> excluded from numerator
-        # AND weight base (§10.2b).
+        # pending / no grade row while marking is still open -> excluded.
         return None
 
     return _Contribution(
@@ -553,17 +558,12 @@ def compute_term_grade(
     categories: Sequence[CategoryInput] = (),
     uncategorized_drop_lowest: int = 0,
     bands: Sequence[BandInput] = (),
-    released_only: bool = False,
 ) -> TermGrade:
     """Weighted term grade for one (student, class_subject, semester) (§10.2).
 
-    Only assessments whose **lifecycle** status is `graded` contribute. That is
-    the safety valve for in-flight marking: an assessment still in `grading`
-    shows as a gradebook column but must not swing anyone's average.
-
-    With `released_only=True` (the student-facing path) a grade is additionally
-    skipped unless its effective release flag is set, so a student's average only
-    ever reflects what they can actually see.
+    D47: every assessment counts — there is no publish/release step any more. A
+    saved mark counts the moment it is saved; a blank one is excluded while the
+    marking window is open and counts as 0 once it has closed (`_contribution_for`).
 
     Aggregation is two-level when any supplied category carries weight > 0
     (grades -> category %, categories -> by `category.weight`), otherwise a flat
@@ -572,10 +572,6 @@ def compute_term_grade(
     """
     contributions: list[_Contribution] = []
     for grade in grades:
-        if grade.assessment_status != AssessmentStatus.GRADED:
-            continue
-        if released_only and not grade.is_released:
-            continue
         contribution = _contribution_for(grade)
         if contribution is not None:
             contributions.append(contribution)
@@ -676,7 +672,6 @@ def compute_term_grades_bulk(
             categories=request.categories,
             uncategorized_drop_lowest=request.uncategorized_drop_lowest,
             bands=request.bands,
-            released_only=request.released_only,
         )
         for key, request in requests.items()
     }

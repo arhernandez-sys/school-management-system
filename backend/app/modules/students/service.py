@@ -48,7 +48,6 @@ from app.core.rbac import (
     teacher_offering_ids,
 )
 from app.core.timeutil import school_today
-from app.modules.assessments import release_nudge
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.queries import year_of_offering
 from app.modules.offerings.models import ClassEnrollment, Course, CourseOffering
@@ -1517,15 +1516,13 @@ def list_student_assessments(
                         assessment_date=line.assessment_date,
                         status=line.status,
                         score=line.score,
-                        is_released=line.is_released,
-                        last_nudged_at=line.last_nudged_at,
+                        auto_zero=line.auto_zero,
                     )
                     for line in g.assessments
                 ],
             )
             for g in groups
         ],
-        nudge_cooldown_seconds=release_nudge.NUDGE_COOLDOWN_SECONDS,
     )
 
 
