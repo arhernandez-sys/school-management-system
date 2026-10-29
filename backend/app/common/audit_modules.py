@@ -40,6 +40,7 @@ RECORD_LABELS: dict[str, str] = {
     "grade": "Grade",
     "assessment_grade": "Grade",
     "grade_revision": "Grade revision request",
+    "assessment_reopen": "Marking reopen request",
     "report_card": "Report card",
     "assessment": "Assessment",
     "assessment_category": "Assessment group",
@@ -88,6 +89,7 @@ def record_label_for(entity_type: str | None) -> str | None:
 #: Ordered longest-prefix-first; the first match wins.
 _MODULE_RULES: tuple[tuple[str, str], ...] = (
     ("grade_revision.", "Grades"),
+    ("assessment_reopen.", "Assessments"),
     ("report_card.", "Grades"),
     ("grade.", "Grades"),
     ("assessment_policy.", "Assessments"),
@@ -164,6 +166,10 @@ ACTION_LABELS: dict[str, str] = {
     "assessment.update": "Assessment changed",
     "assessment.delete": "Assessment removed",
     "assessment.status_change": "Assessment status changed",
+    "assessment_reopen.request": "Marking reopen requested",
+    "assessment_reopen.withdraw": "Marking reopen withdrawn",
+    "assessment_reopen.approved": "Marking reopened by the Dean",
+    "assessment_reopen.denied": "Marking reopen declined",
     "assessment_policy.update": "Grading policy changed",
     "category.create": "Assessment category created",
     "category.update": "Assessment category changed",

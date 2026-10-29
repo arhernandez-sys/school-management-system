@@ -24,7 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.common.enums import AssessmentStatus
+from app.common.enums import AssessmentStatus, GradeRevisionStatus
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
 from app.db.types import GUID, enum_col
 
@@ -118,4 +118,60 @@ class Assessment(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
             "semester_id",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+    )
+
+
+class AssessmentReopenRequest(Base, TimestampMixin):
+    """A Lecturer asks the Dean to reopen a closed marking window (D47).
+
+    Modelled on `grade_revision_requests` (D30 §D7) and for the same reasons: the Lecturer
+    asks, the Dean decides, the ruling is the record. Approval sets
+    `assessments.reopened_until`, which `assessments/marking.py` reads as an extension of
+    the window — nothing else about grading changes.
+
+    **At most ONE open request per assessment**: `pending_flag` is a STORED generated
+    column, `IF(status = 'pending', 1, NULL)`, under the unique `uq_assessment_reopen_open
+    (assessment_id, pending_flag)`. It is deliberately NOT mapped — an ORM that thought it
+    could set a generated column gets MariaDB 3105 on every insert.
+    """
+
+    __tablename__ = "assessment_reopen_requests"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("assessments.id", ondelete="CASCADE", name="fk_assessment_reopen_assessment"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("users.id", ondelete="RESTRICT", name="fk_assessment_reopen_requested_by"),
+        nullable=False,
+    )
+    #: Required — "I forgot" is a reason; an empty request gives the Dean nothing to weigh.
+    reason: Mapped[str] = mapped_column(Text(), nullable=False)
+    status: Mapped[GradeRevisionStatus] = mapped_column(
+        enum_col(GradeRevisionStatus), nullable=False, server_default=text("'pending'")
+    )
+    #: Days the Dean granted on approval; NULL while pending or when denied.
+    granted_days: Mapped[int | None] = mapped_column(SmallInteger(), nullable=True)
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_assessment_reopen_decided_by"),
+        nullable=True,
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text(), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status = 'pending' OR decided_at IS NOT NULL",
+            name="ck_assessment_reopen_decided",
+        ),
+        CheckConstraint(
+            "granted_days IS NULL OR granted_days BETWEEN 1 AND 14",
+            name="ck_assessment_reopen_days",
+        ),
+        Index("ix_assessment_reopen_status", "status"),
+        Index("ix_assessment_reopen_requested_by", "requested_by_user_id"),
     )

@@ -35,7 +35,7 @@ from app.core.rbac import (
     teacher_offering_ids,
 )
 from app.core.timeutil import ensure_aware, utcnow
-from app.modules.assessments import marking
+from app.modules.assessments import marking, reopen
 from app.modules.assessments.models import Assessment, AssessmentCategory
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
 from app.modules.offerings.queries import (
@@ -800,6 +800,9 @@ def get_gradebook(
 
     # D47 — resolved once per assessment, not per cell.
     marking_states = {a.id: marking.marking_state(a) for a in assessments}
+    pending_reopens = reopen.pending_ids_by_assessment(db, assessment_ids)
+    # Only the owning lecturer may ask; `can_edit` already means "owner, live session".
+    may_request_reopen = can_edit and actor.role in (Role.TEACHER, Role.HOD)
 
     rows: list[GradebookRow] = []
     for student, enrollment_id, is_member in ordered:
@@ -886,6 +889,12 @@ def get_gradebook(
                 reopened_until=marking_states[a.id].reopened_until,
                 effective_closes_at=marking_states[a.id].effective_closes_at,
                 days_left=marking_states[a.id].days_left,
+                can_request_reopen=(
+                    may_request_reopen
+                    and not marking_states[a.id].open
+                    and a.id not in pending_reopens
+                ),
+                pending_reopen_request_id=pending_reopens.get(a.id),
             )
             for a in assessments
         ],

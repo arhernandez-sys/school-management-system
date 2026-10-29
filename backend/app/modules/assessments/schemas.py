@@ -16,6 +16,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.common.enums import GradeRevisionStatus
 from app.common.schemas import OfferingRef
 
 
@@ -145,3 +146,56 @@ class CategoryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     weight: float | None = Field(default=None, ge=0)
     drop_lowest_count: int | None = Field(default=None, ge=0)
+
+
+# ── D47 — reopen requests ──────────────────────────────────────────────────────
+class ReopenRequestCreate(BaseModel):
+    """POST /assessments/{id}/reopen-requests — the LECTURER asks."""
+
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ReopenDecisionRequest(BaseModel):
+    """POST /assessment-reopen-requests/{id}/decision — DEAN ONLY."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: GradeRevisionStatus = Field(description="approved or denied")
+    #: How long entry stays open, counted in school days from today: approval opens
+    #: entry until 23:59 America/Belize on `today + granted_days`. Ignored on a denial.
+    granted_days: int = Field(default=2, ge=1, le=14)
+    decision_note: str | None = Field(default=None, max_length=2000)
+
+
+class ReopenRequestRead(BaseModel):
+    """One request, fat enough for the Dean's queue to need no second call."""
+
+    id: UUID
+    assessment_id: UUID
+    assessment_title: str = ""
+    assessment_date: date | None = None
+    max_score: float | None = None
+    offering: OfferingRef | None = None
+    status: GradeRevisionStatus
+    reason: str
+    granted_days: int | None = None
+    decision_note: str | None = None
+    decided_at: datetime | None = None
+    created_at: datetime
+    #: When the original window closed, and (after approval) until when it is reopened.
+    marking_closes_at: datetime | None = None
+    reopened_until: datetime | None = None
+    #: Students on the roster with no mark — what the Lecturer still has to enter, and
+    #: what will count as 0 if the request is denied.
+    blank_count: int = 0
+    requested_by_user_id: UUID
+    requested_by_name: str = ""
+    decided_by_user_id: UUID | None = None
+    decided_by_name: str | None = None
+    can_withdraw: bool = False
+
+
+class ReopenRequestList(BaseModel):
+    items: list[ReopenRequestRead] = Field(default_factory=list)
+    #: Awaiting the CALLER's decision — non-zero only for the Dean.
+    pending_for_me: int = 0

@@ -101,6 +101,8 @@ class UnreadCountResponse(BaseModel):
     #: nobody else can rule on one. A Lecturer still sees their own requests and their
     #: outcomes in the queue; the badge just does not nag them about work they cannot do.
     pending_grade_revisions: int = 0
+    #: D47 — marking-window reopen requests awaiting the caller (Dean only).
+    pending_assessment_reopens: int = 0
 
 
 class TargetOfferingsResponse(BaseModel):

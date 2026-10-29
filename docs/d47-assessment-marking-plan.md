@@ -117,7 +117,7 @@ Dropping them would be a separate cleanup.
 Tick each box when its commit lands.
 
 - [x] 1. **Backend core:** SQL file, `marking.py`, calc change, `upsert_grades` guard, gradebook fields, removal of status/release/nudge, dashboard counters, tests.
-- [ ] 2. **Reopen requests:** table, service/routes, bell, audit labels, tests.
+- [x] 2. **Reopen requests:** table, service/routes, bell, audit labels, tests.
 - [ ] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
 - [ ] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
 - [ ] 5. **Frontend reopen queue and print dialog/filters.**
@@ -142,3 +142,7 @@ Tick each box when its commit lands.
 - **Phase 1 (28 Oct 2026).** Full suite on `sims_test` (with `d47_assessment_marking.sql` applied): 2204 passed, 2 failed. The 2 are the known `test_settings.py` semester tests (`sims_test`'s active year has fewer than two semesters), which also fail without D47.
   - Two guards were added that the plan didn't spell out: an assessment's date can't be moved once its window has closed (moving it would reopen the window), and a closed assessment can't be deleted (that would erase its automatic zeros). A new assessment whose date is more than 5 days back is refused with 422 `marking_window_passed`.
   - The grade write API still accepts the `absent` / `exempt` / makeup statuses. The new UI sends only `graded` / `excused` / blank.
+- **Phase 2 (28 Oct 2026).** `assessments/reopen.py` + `assessment_reopen_requests`. Endpoints: `POST /assessments/{id}/reopen-requests`, `GET /assessment-reopen-requests`, `DELETE /assessment-reopen-requests/{id}` (withdraw) and `POST /assessment-reopen-requests/{id}/decision`.
+  - An approval opens entry until 23:59 Belize on `today + granted_days` (1–14 days, default 2).
+  - `status` reuses the `GradeRevisionStatus` vocabulary (pending / approved / denied).
+  - Tests: `test_assessment_reopen.py`, 25 of them.

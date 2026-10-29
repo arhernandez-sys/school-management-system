@@ -39,6 +39,7 @@ from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.db import session as db_session
 from app.modules.assessments.router import categories_router as assessment_categories_router
+from app.modules.assessments.router import reopen_router as assessment_reopen_router
 from app.modules.assessments.router import router as assessments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.announcements.router import router as announcements_router
@@ -90,6 +91,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     grades_router,  # 7.6 — serves /api/v1/grades/* (api-spec §7)
     assessment_grades_router,  # 7.6 — PUT /api/v1/assessments/{id}/grades (the grade write)
     grade_revisions_router,  # D30 5 — /api/v1/grade-revisions/* (the Dean's queue, §D7)
+    assessment_reopen_router,  # D47 — /api/v1/assessment-reopen-requests/* (Dean decides)
     attendance_router,  # 7.7 — serves /api/v1/attendance/* (api-spec §8)
     announcements_router,  # 7.8 — serves /api/v1/announcements/* (api-spec §9)
     dashboard_router,  # 7.9a — serves GET /api/v1/dashboard (api-spec §5 Module 2)

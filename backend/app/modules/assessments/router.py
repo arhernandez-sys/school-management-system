@@ -1,9 +1,10 @@
 """Assessments routers (api-spec Module 6) — assessments + assessment categories.
 
-Thin transport; the service owns DB + transactions. Two routers are exported and
+Thin transport; the service owns DB + transactions. Three routers are exported and
 mounted under `/api/v1`:
-  * `router`            prefix /assessments  — assessment CRUD
+  * `router`            prefix /assessments  — assessment CRUD + `POST /{id}/reopen-requests`
   * `categories_router` prefix /offerings    — per-offering categories
+  * `reopen_router`     prefix /assessment-reopen-requests — the Dean's reopen queue (D47)
 
 Writes are teacher-only (+ ownership, enforced in the service). Reads are scoped.
 Route order: /assessments/offerings is declared BEFORE /assessments/{id} so
@@ -18,11 +19,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.common.enums import Role
+from app.common.enums import GradeRevisionStatus, Role
 from app.common.schemas import ErrorResponse, Page
 from app.core.deps import get_current_user, get_db, require_role
 from app.core.pagination import PageParams, page_params
-from app.modules.assessments import service
+from app.modules.assessments import reopen, service
 from app.modules.assessments.schemas import (
     AssessmentCreateRequest,
     AssessmentDetail,
@@ -33,11 +34,16 @@ from app.modules.assessments.schemas import (
     CategoryList,
     CategoryUpdateRequest,
     OfferingPickerList,
+    ReopenDecisionRequest,
+    ReopenRequestCreate,
+    ReopenRequestList,
+    ReopenRequestRead,
 )
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/assessments", tags=["assessments"])
 categories_router = APIRouter(prefix="/offerings", tags=["assessments"])
+reopen_router = APIRouter(prefix="/assessment-reopen-requests", tags=["assessments"])
 
 _ERR = {"model": ErrorResponse}
 #: D43 — the HOD is a lecturer; ownership limits them to their own offerings.
@@ -46,6 +52,9 @@ _any = get_current_user
 # Categories are the offering's grading policy: its lecturer OR the Dean (see
 # `service._assert_can_write_categories`).
 _category_writer = require_role(Role.TEACHER, Role.HOD, Role.PRINCIPAL)
+#: D47 — reopen requests: the lecturer roles ask, the Dean decides, the Auditor reads.
+_reopen_reader = require_role(Role.PRINCIPAL, Role.TEACHER, Role.HOD, Role.AUDITOR)
+_dean = require_role(Role.PRINCIPAL)
 
 
 @router.get("", response_model=Page[AssessmentListItem],
@@ -196,3 +205,58 @@ def delete_category(
         category_id=category_id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D47 — reopen a closed marking window
+# ══════════════════════════════════════════════════════════════════════════════
+@router.post("/{assessment_id}/reopen-requests", response_model=ReopenRequestRead,
+             status_code=status.HTTP_201_CREATED,
+             summary="Ask the Dean to reopen marking (lecturer; owns the offering; D47)",
+             responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR})
+def create_reopen_request(
+    assessment_id: uuid.UUID,
+    payload: ReopenRequestCreate,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_teacher),
+) -> ReopenRequestRead:
+    """409 `marking_open` while the window is still open (just enter the marks) and
+    `reopen_already_pending` when one is already waiting."""
+    return reopen.create_request(db, actor=actor, assessment_id=assessment_id, payload=payload)
+
+
+@reopen_router.get("", response_model=ReopenRequestList,
+                   summary="Reopen queue — Dean sees all, Lecturer sees their own (D47)",
+                   responses={401: _ERR, 403: _ERR, 422: _ERR})
+def list_reopen_requests(
+    status_filter: Annotated[GradeRevisionStatus | None, Query(alias="status")] = None,
+    offering_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_reopen_reader),
+) -> ReopenRequestList:
+    return reopen.list_requests(db, actor=actor, status=status_filter, offering_id=offering_id)
+
+
+@reopen_router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT,
+                      summary="Withdraw your own PENDING reopen request",
+                      responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR})
+def withdraw_reopen_request(
+    request_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_teacher),
+) -> Response:
+    reopen.withdraw_request(db, actor=actor, request_id=request_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@reopen_router.post("/{request_id}/decision", response_model=ReopenRequestRead,
+                    summary="Approve (with days) or deny a reopen request — DEAN ONLY",
+                    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR})
+def decide_reopen_request(
+    request_id: uuid.UUID,
+    payload: ReopenDecisionRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_dean),
+) -> ReopenRequestRead:
+    """Approval opens entry until 23:59 America/Belize on `today + granted_days`."""
+    return reopen.decide_request(db, actor=actor, request_id=request_id, payload=payload)

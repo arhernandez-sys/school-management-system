@@ -3,7 +3,9 @@
 --
 -- 1. `assessments.reopened_until` — set when the Dean approves a reopen request; it
 --    extends the 5-day marking window (backend/app/modules/assessments/marking.py).
--- 2. The publish/release lifecycle is retired. `status` and `is_released` stay as
+-- 2. `assessment_reopen_requests` — a Lecturer asks the Dean to reopen a closed window
+--    (assessments/reopen.py). One open request per assessment (`pending_flag`).
+-- 3. The publish/release lifecycle is retired. `status` and `is_released` stay as
 --    columns but no code reads them; every row is set to the values that mean "live,
 --    counted", which is also what new rows are created with.
 --
@@ -31,3 +33,28 @@ UPDATE `assessments`
 ALTER TABLE `assessments`
   ALTER COLUMN `status` SET DEFAULT 'graded',
   ALTER COLUMN `is_released` SET DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS `assessment_reopen_requests` (
+  `id` uuid NOT NULL DEFAULT uuid_v4() COMMENT 'PK',
+  `assessment_id` uuid NOT NULL COMMENT 'FK -> assessments (the closed marking window)',
+  `requested_by_user_id` uuid NOT NULL COMMENT 'FK -> users (the Lecturer)',
+  `reason` text NOT NULL COMMENT 'Why marking was missed. Required.',
+  `status` enum('pending','approved','denied') NOT NULL DEFAULT 'pending',
+  `granted_days` smallint(6) DEFAULT NULL COMMENT 'Days the Dean granted on approval',
+  `decided_by_user_id` uuid DEFAULT NULL COMMENT 'FK -> users (the Dean)',
+  `decided_at` datetime DEFAULT NULL,
+  `decision_note` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT NULL ON UPDATE current_timestamp(),
+  `pending_flag` tinyint(1) GENERATED ALWAYS AS (if(`status` = 'pending',1,NULL)) STORED,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_assessment_reopen_open` (`assessment_id`,`pending_flag`),
+  KEY `ix_assessment_reopen_status` (`status`),
+  KEY `ix_assessment_reopen_requested_by` (`requested_by_user_id`),
+  KEY `fk_assessment_reopen_decided_by` (`decided_by_user_id`),
+  CONSTRAINT `fk_assessment_reopen_assessment` FOREIGN KEY (`assessment_id`) REFERENCES `assessments` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_assessment_reopen_requested_by` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_assessment_reopen_decided_by` FOREIGN KEY (`decided_by_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `ck_assessment_reopen_decided` CHECK (`status` = 'pending' or `decided_at` is not null),
+  CONSTRAINT `ck_assessment_reopen_days` CHECK (`granted_days` is null or `granted_days` between 1 and 14)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;

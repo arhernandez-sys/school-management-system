@@ -414,6 +414,7 @@ def unread_count(db: Session, *, actor: User) -> UnreadCountResponse:
     Imported inside the function: `grades.revisions` imports `core.rbac`, and a top-level
     import here would widen this module's import graph for one integer.
     """
+    from app.modules.assessments import reopen as assessment_reopens
     from app.modules.grades import revisions as grade_revisions
 
     announcements = (
@@ -425,10 +426,12 @@ def unread_count(db: Session, *, actor: User) -> UnreadCountResponse:
         or 0
     )
     revisions = grade_revisions.pending_for_actor(db, actor=actor)
+    reopens = assessment_reopens.pending_for_actor(db, actor=actor)
     return UnreadCountResponse(
-        unread_count=announcements + revisions,
+        unread_count=announcements + revisions + reopens,
         unread_announcements=announcements,
         pending_grade_revisions=revisions,
+        pending_assessment_reopens=reopens,
     )
 
 
