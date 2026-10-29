@@ -624,26 +624,29 @@ Tables: `assessments`, `assessment_categories`. **Created independently of any s
   | `weight` | number | no | **≥ 0**, default 1.00 |
   | `assessment_date` | date? | no | |
   | `absent_as_zero` / `allow_makeup` / `drop_lowest_count` | bool?/bool?/int? | no | per-assessment policy overrides (DB-14); `null` = inherit |
-- **Success `201`:** `AssessmentDetail` (status `draft`, `is_released=false`). Optionally seeds `pending` grade rows for the current section roster (see §5.7 note).
+- **Success `201`:** `AssessmentDetail`. **D47:** live at once — no draft, no release; carries the marking-window fields (`marking_open`, `marking_closes_at`, `reopened_until`, `effective_closes_at`, `days_left`). A date whose 5-day window has already passed → `422 marking_window_passed`.
 - **Errors:** `404 class_subject_not_found` (or not owned — same code, §3.3), `422`, `409 category_subject_mismatch`, `409 year_archived`.
 
 #### `PATCH /assessments/{id}`
 - **Authz:** `require_role(teacher)` + `assert_teacher_owns_class_subject` (resolved from the assessment).
 - **Success `200`:** `AssessmentDetail`. Lowering `max_score` re-validates existing grades → `409 scores_exceed_new_max` (lists offending students) so the teacher fixes scores first. **`status` is NOT settable here** — lifecycle transitions go through the dedicated endpoint below (M1), so the legal-transition set is enforced and audited in one place.
 
-#### `POST /assessments/{id}/status` — assessment lifecycle transition (M1; FR-ASMT-04, AC 5.3)
-- **Purpose:** move an assessment through `draft → published → grading → graded` (the `AssessmentStatus` the dashboard/list filter and AC 5.3 depend on). Created assessments default to `draft` (§5.6 `POST`).
-- **Authz:** `require_role(teacher)` + `assert_teacher_owns_class_subject` (resolved from the assessment).
-- **Request body:** `{ status: AssessmentStatus }`.
-- **Legal transitions (forward, with one rollback for correction):**
-  - `draft → published` — the assessment is visible to students (title/type/date/max; scores still gated by `is_released`, §8.3).
-  - `published → grading` — the teacher has started entering scores (a UI signal; grade entry itself is allowed in `published` or `grading`).
-  - `grading → graded` — all intended scores are in (no `pending` rows the teacher considers outstanding; not hard-enforced — a teacher may mark `graded` with some `excused`/`exempt`).
-  - `published → draft` and `grading → published` — **single-step rollback** allowed for correcting a premature transition.
-  - Any other jump (e.g. `draft → graded`, `graded → draft`) → **`422 invalid_transition`** (body names the current and attempted status).
-  - **Release (`is_released`) is orthogonal** to `status` and is controlled only by `POST /assessments/{id}/release` (§5.7) — `graded` does **not** imply released, and an assessment can be released while still `grading`.
-- **Success `200`:** `AssessmentDetail`. Writes `audit_log("assessment.status_change", from/to)`.
-- **Errors:** `422 invalid_transition`, `404` (not found/owned), `409 year_archived`.
+#### ~~`POST /assessments/{id}/status`~~ — **REMOVED by D47 (28 Oct 2026)**
+- The `draft → published → grading → graded` lifecycle and the separate release step are retired at the client's instruction. An assessment is live from creation and a saved mark counts toward the term grade immediately. `assessments.status` / `is_released` remain as columns, always `graded` / `1`, and nothing reads them.
+
+#### D47 — the marking window and reopen requests
+- **Rule** (`backend/app/modules/assessments/marking.py`): marks may be entered until 23:59 America/Belize on `assessment_date` (or the creation day) **+ 5 days**, or until `reopened_until` if that is later. After that `PUT /assessments/{id}/grades` → **`409 marking_closed`** (`closed_at` in the body), and a blank mark (no row, `pending`, or `absent` without a makeup) counts as **0** in the term grade; `excused`/`exempt` never do. Gradebook cells and student lines carry `auto_zero`.
+- `PATCH` cannot move the date of a closed assessment, and `DELETE` refuses a closed one (both `409 marking_closed`).
+- `POST /assessments/{id}/reopen-requests` `{reason}` — owning lecturer/HOD, window closed (`409 marking_open` otherwise), one pending per assessment (`409 reopen_already_pending`).
+- `GET /assessment-reopen-requests?status=&offering_id=` — Dean/Auditor all, lecturer own, HOD own + programme; `{items, pending_for_me}`.
+- `DELETE /assessment-reopen-requests/{id}` — requester withdraws a pending one.
+- `POST /assessment-reopen-requests/{id}/decision` `{status, granted_days=2 (1–14), decision_note}` — **Dean only**. Approval sets `reopened_until` to 23:59 Belize on today + `granted_days` (never earlier than it already was).
+- The bell (`GET /announcements/unread-count`) adds `pending_assessment_reopens`.
+
+#### D47 — `GET /grades/assessment-report`
+- **Authz:** Dean, lecturer, HOD. A lecturer gets **only the offerings they teach**: `teacher_id` is ignored and a named offering they do not teach is `404`.
+- **Query:** `academic_year_id?`, `semester_id?`, `offering_id?`, `student_id?`, `teacher_id?`. With no year, session, offering or student, the active session is used.
+- **Success `200`:** `{ generated_at, total_offerings, truncated, offerings: [{ offering, semester, assessments:[{id,title,category_name,assessment_date,max_score,marking_open,effective_closes_at}], rows:[{student, cells, term_numeric, term_letter}] }] }`. At most 60 offerings. Built from `get_gradebook`, so the marks and % match the gradebook exactly.
 
 #### `DELETE /assessments/{id}`
 - **Authz:** `require_role(teacher)` + ownership.
@@ -868,14 +871,10 @@ Tables: `assessment_grades`, `term_grade_snapshots`, `grade_revision_requests`. 
 - **Query:** `academic_year_id?`, `semester_id?`, `class_subject_id?`.
 - `academic_year_id` resolves which section's offerings are listed; `semester_id` (declared 2026-07-29 — specified before then but silently dropped) narrows within it. **`semester_id` also narrows the term average**, because it is threaded into the single `_assessments_for` call that feeds both the rows and `compute_term_grade` — so the number stays derivable from the marks shown instead of averaging the whole year beneath a one-semester heading.
 - An explicitly-requested year or semester the student has no data in returns **empty**, never another period's marks — see the fallback guard in `get_my_grades` (defect fixed 2026-07-29). The current-enrollment fallback survives **only** for the "no year requested" case.
-- **Success `200`:** `MyGrades { by_subject:{ class_subject: ClassSubjectRef, teacher?: TeacherRef, assessments:{ title, type, max_score, score?, status, letter?, assessment_date? }[], term_numeric?, term_letter? }[] }` — **unreleased assessments are excluded entirely** server-side.
+- **Success `200`:** `MyGrades { by_subject:{ class_subject: ClassSubjectRef, teacher?: TeacherRef, assessments:{ title, type, max_score, score?, status, letter?, assessment_date? }[], term_numeric?, term_letter? }[] }` — D47: every saved mark is listed, plus `auto_zero` rows for blanks on closed assessments.
 
-#### `POST /assessments/{assessment_id}/release` / `POST /assessments/{assessment_id}/unrelease` — release control (FR-GRD-09)
-- **Purpose:** release/retract an assessment's grades to the section's students — consequential, server-enforced (UI §7.7; architecture §8.5).
-- **Authz:** `require_role(teacher)` + `assert_teacher_owns_class_subject`.
-- **Request body (release):** `{ student_ids?: uuid[] }` — omit to release the whole assessment (`assessments.is_released=true`, the common case); supply ids for per-row release (`assessment_grades.is_released`). Unrelease mirrors.
-- **Success `200`:** `{ assessment_id, is_released, released_count }`. `audit_log("grade.release"/"grade.unrelease")`. Effect: flips the value the **server-side read filter** keys on; students start/stop receiving the data on their next read — **not** a client hide.
-- **Errors:** `404`, `409 year_archived`.
+#### ~~`POST /assessments/{assessment_id}/release` / `/unrelease`~~ — **REMOVED by D47**
+- Saving a mark releases it. `/nudge-release` went with it.
 
 #### `PUT /classes/{class_id}/subjects/{class_subject_id}/drop-lowest` — teacher-set drop-lowest (D25, FR-GRD-11)
 - **Purpose:** the teacher sets the **offering-level** stored drop-lowest fallback. Persisted; applied automatically by compute-on-read.

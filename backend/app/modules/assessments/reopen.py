@@ -63,7 +63,9 @@ def _request_or_404(db: Session, request_id: uuid.UUID) -> AssessmentReopenReque
 
 
 def _blank_count(db: Session, assessment: Assessment) -> int:
-    """Roster members with no mark: active enrolments minus results that are not pending."""
+    """Roster members with no mark — exactly the ones `calc` zeroes once the window is
+    closed: no row, `pending`, or `absent` with no makeup (`grades.service._is_auto_zero`).
+    Graded, excused, exempt and an absent-with-makeup all count as marked."""
     from app.modules.grades.models import AssessmentGrade
 
     enrolled = select(ClassEnrollment.student_id).where(
@@ -79,6 +81,10 @@ def _blank_count(db: Session, assessment: Assessment) -> int:
             .where(
                 AssessmentGrade.assessment_id == assessment.id,
                 AssessmentGrade.status != GradeStatus.PENDING,
+                or_(
+                    AssessmentGrade.status != GradeStatus.ABSENT,
+                    AssessmentGrade.makeup_score.is_not(None),
+                ),
                 AssessmentGrade.student_id.in_(enrolled),
             )
         )

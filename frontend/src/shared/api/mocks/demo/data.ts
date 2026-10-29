@@ -56,6 +56,7 @@ import type {
   DemoAssessmentCategory,
   DemoAssessmentGrade,
   DemoAssessmentPolicy,
+  DemoAssessmentReopenRequest,
   DemoAttendanceRecord,
   DemoCourse,
   DemoCoursePrerequisite,
@@ -924,8 +925,21 @@ for (const off of offerings) {
 //
 // Semester-1 rows are anchored to DEMO_TODAY (2025-10-15), inside that term's window.
 // Semester-2 rows carry absolute dates inside `sem-2025-2` (2026-01-19 → 2026-06-26), which
-// is after DEMO_TODAY — so they are `published`/unreleased: an upcoming term, which is both
-// realistic and what a student would expect to see there.
+// is after DEMO_TODAY — an upcoming term with nothing marked yet.
+//
+// **D47 — there is no draft/published/graded lifecycle and no release step.** Every row is
+// live from creation and a saved mark counts at once. What varies instead is the 5-day
+// MARKING WINDOW (`selectors.markingStateFor`), and the offsets below put the template rows
+// in its states relative to DEMO_TODAY:
+//
+//   Quiz 1      -30 days  → LOCKED (closed 2025-09-20); only the rolled pending/absent rows
+//                            become automatic zeros
+//   Quiz 2      -16 days  → LOCKED (closed 2025-10-04)
+//   Unit Test 1  -4 days  → OPEN, closes TOMORROW (days_left 1)
+//   Project      +7 days  → OPEN, 12 days left, nothing marked yet
+//
+// Unit Test 1 sat at -9 before D47. It MOVED rather than a template being added, so the
+// grade PRNG below consumes exactly the same rolls and every other seeded mark is unchanged.
 const assessments: DemoAssessment[] = [];
 let asmtCounter = 0;
 interface AsmtTemplate {
@@ -937,24 +951,30 @@ interface AsmtTemplate {
   offsetDays: number;
   /** Absolute date, for a term whose window is nowhere near DEMO_TODAY. */
   date?: string;
-  status: DemoAssessment['status'];
-  released: boolean;
+  /** Whether marks were entered for it (the old `status === 'graded'` seed switch). */
+  marked: boolean;
 }
 const SEM1_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
-  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, status: 'graded', released: true },
-  { title: 'Quiz 2', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, status: 'graded', released: true },
-  { title: 'Unit Test 1', catSuffix: 't', max: 50, weight: 1, offsetDays: -9, status: 'graded', released: false },
-  { title: 'Project', catSuffix: null, max: 100, weight: 1, offsetDays: 7, status: 'published', released: false },
+  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: -30, marked: true },
+  { title: 'Quiz 2', catSuffix: 'q', max: 20, weight: 1, offsetDays: -16, marked: true },
+  { title: 'Unit Test 1', catSuffix: 't', max: 50, weight: 1, offsetDays: -4, marked: true },
+  { title: 'Project', catSuffix: null, max: 100, weight: 1, offsetDays: 7, marked: false },
 ];
 const SEM2_ASMT_TEMPLATES: readonly AsmtTemplate[] = [
-  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', status: 'published', released: false },
-  { title: 'Mid-Session Exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', status: 'published', released: false },
+  { title: 'Quiz 1', catSuffix: 'q', max: 20, weight: 1, offsetDays: 0, date: '2026-02-10', marked: false },
+  { title: 'Mid-Session Exam', catSuffix: 't', max: 100, weight: 2, offsetDays: 0, date: '2026-03-18', marked: false },
 ];
+/** Assessment ids whose marks are seeded (see `AsmtTemplate.marked`). */
+const markedAssessmentIds = new Set<string>();
+/** An assessment row is created a week before it is held — a plausible authoring lead. */
+const createdBefore = (date: string): string => `${addDays(date, -7)}T15:00:00Z`;
 for (const off of offerings) {
   if (off.is_archived) continue;
   const templates = off.semester_id === SEM_ACTIVE ? SEM1_ASMT_TEMPLATES : SEM2_ASMT_TEMPLATES;
   for (const tmpl of templates) {
     asmtCounter += 1;
+    const date = tmpl.date ?? addDays(DEMO_TODAY, tmpl.offsetDays);
+    if (tmpl.marked) markedAssessmentIds.add(`asmt-${asmtCounter}`);
     assessments.push({
       id: `asmt-${asmtCounter}`,
       offering_id: off.id,
@@ -964,9 +984,9 @@ for (const off of offerings) {
       title: tmpl.title,
       max_score: tmpl.max,
       weight: tmpl.weight,
-      assessment_date: tmpl.date ?? addDays(DEMO_TODAY, tmpl.offsetDays),
-      status: tmpl.status,
-      is_released: tmpl.released,
+      assessment_date: date,
+      created_at: createdBefore(date),
+      reopened_until: null,
     });
   }
 }
@@ -983,7 +1003,7 @@ for (const asmt of assessments) {
     gradeCounter += 1;
     let status: GradeStatus;
     let score: number | null = null;
-    if (asmt.status === 'graded') {
+    if (markedAssessmentIds.has(asmt.id)) {
       // Mostly graded; sprinkle absent/excused/pending to exercise all states.
       const roll = rngGrade();
       if (roll < 0.06) status = 'absent';
@@ -1011,10 +1031,139 @@ for (const asmt of assessments) {
       status,
       score,
       makeup_score: null,
-      is_released: null, // inherit assessment.is_released
     });
   }
 }
+
+// ── D47: the demo Lecturer's marking-window scenarios ───────────────────────────
+//
+// The templates above put every offering's work in the LOCKED and OPEN states, but only
+// through the PRNG: whether a given locked column has a blank in it is luck. The marking
+// window is the point of D47, so the demo Lecturer's (Maria Reyes, teach-1) own Algebra
+// section carries one column per state, by hand:
+//
+//   Lab Practical      held -9  → LOCKED, four blanks → automatic zeros, one excused (never
+//                                  zeroed), and NO request yet: "Ask the Dean to reopen"
+//   Problem Set 2      held -7  → LOCKED, three blanks, a reopen request PENDING with the
+//                                  Dean (the queue row and the bell badge)
+//   Essay Draft        held -12 → closed 2025-10-08, REOPENED by the Dean on 2025-10-14 for
+//                                  2 days, so open again until the end of 2025-10-16
+//   Quiz 3             held -5  → OPEN, closes TODAY (days_left 0), half marked
+//   Reading Response   no date  → OPEN; created 2025-10-13, so the window runs from the
+//                                  CREATION day (marking.py's fallback), 3 days left
+//
+// The blanks are never Freddy Lopez (stu-1) or John Garcia (stu-2): their report cards and
+// timetables are the walkthrough, and an automatic zero would move their GPA.
+const LECTURER_OFFERING = offeringByKey('MATH1110-01');
+const lecturerRoster = activeRoster(LECTURER_OFFERING.id);
+const blankCandidates = lecturerRoster.filter((st) => st.id !== 'stu-1' && st.id !== 'stu-2');
+let lecAsmtCounter = 0;
+let lecGradeCounter = 0;
+function lecturerAssessment(spec: {
+  title: string;
+  catSuffix: 'q' | 't' | null;
+  max: number;
+  date: string | null;
+  createdAt?: string;
+  reopenedUntil?: string | null;
+}): DemoAssessment {
+  lecAsmtCounter += 1;
+  const row: DemoAssessment = {
+    id: `asmt-lec-${lecAsmtCounter}`,
+    offering_id: LECTURER_OFFERING.id,
+    semester_id: LECTURER_OFFERING.semester_id,
+    category_id: spec.catSuffix ? `cat-${LECTURER_OFFERING.id}-${spec.catSuffix}` : null,
+    title: spec.title,
+    max_score: spec.max,
+    weight: 1,
+    assessment_date: spec.date,
+    created_at: spec.createdAt ?? createdBefore(spec.date ?? DEMO_TODAY),
+    reopened_until: spec.reopenedUntil ?? null,
+  };
+  assessments.push(row);
+  return row;
+}
+/**
+ * Seed marks for one lecturer column. `blank` students get NO row (the commonest blank);
+ * `overrides` pin a status on a specific student; everyone else is graded with a
+ * deterministic score from a seeded PRNG.
+ */
+function seedLecturerMarks(
+  asmt: DemoAssessment,
+  opts: {
+    blank: DemoStudent[];
+    overrides?: Array<[DemoStudent | undefined, GradeStatus]>;
+    seed: number;
+  },
+): void {
+  const rng = makeRng(opts.seed);
+  const blankIds = new Set(opts.blank.map((st) => st.id));
+  const pinned = new Map<string, GradeStatus>();
+  for (const [stu, status] of opts.overrides ?? []) if (stu) pinned.set(stu.id, status);
+  for (const stu of lecturerRoster) {
+    const roll = rng();
+    if (blankIds.has(stu.id)) continue;
+    const enr = activeEnrollment(stu.id, asmt.offering_id);
+    if (!enr) continue;
+    const status: GradeStatus = pinned.get(stu.id) ?? 'graded';
+    lecGradeCounter += 1;
+    assessment_grades.push({
+      id: `grd-lec-${lecGradeCounter}`,
+      assessment_id: asmt.id,
+      student_id: stu.id,
+      enrollment_id: enr.id,
+      status,
+      score:
+        status === 'graded'
+          ? Math.round(Math.min(1, Math.max(0.5, 0.82 + (roll - 0.5) * 0.3)) * asmt.max_score)
+          : null,
+      makeup_score: null,
+    });
+  }
+}
+
+const labPractical = lecturerAssessment({
+  title: 'Lab Practical', catSuffix: 't', max: 25, date: addDays(DEMO_TODAY, -9),
+});
+seedLecturerMarks(labPractical, {
+  // Two with no row at all, one row left `pending`, one `absent` with no makeup: all four
+  // count as 0 now that the window is closed (`calc._contribution_for`). The `excused`
+  // one never does.
+  blank: blankCandidates.slice(0, 2),
+  overrides: [
+    [blankCandidates[2], 'pending'],
+    [blankCandidates[3], 'absent'],
+    [blankCandidates[4], 'excused'],
+  ],
+  seed: 4701,
+});
+
+const problemSet2 = lecturerAssessment({
+  title: 'Problem Set 2', catSuffix: 'q', max: 10, date: addDays(DEMO_TODAY, -7),
+});
+seedLecturerMarks(problemSet2, { blank: blankCandidates.slice(5, 8), seed: 4702 });
+
+// Reopened: the original window ended 2025-10-08 23:59 Belize; the Dean approved 2 days on
+// 2025-10-14, which `reopen.reopen_until_for` turns into 23:59:59 Belize on 2025-10-16,
+// i.e. 05:59:59Z the next morning. (Approved "today + 2" from 2025-10-14.)
+const essayDraft = lecturerAssessment({
+  title: 'Essay Draft', catSuffix: 't', max: 40, date: addDays(DEMO_TODAY, -12),
+  reopenedUntil: `${addDays(DEMO_TODAY, 2)}T05:59:59Z`,
+});
+seedLecturerMarks(essayDraft, { blank: blankCandidates.slice(8, 10), seed: 4703 });
+
+const quiz3 = lecturerAssessment({
+  title: 'Quiz 3', catSuffix: 'q', max: 20, date: addDays(DEMO_TODAY, -5),
+});
+seedLecturerMarks(quiz3, {
+  blank: lecturerRoster.filter((_, i) => i % 2 === 1),
+  seed: 4704,
+});
+
+lecturerAssessment({
+  title: 'Reading Response', catSuffix: null, max: 10, date: null,
+  createdAt: `${addDays(DEMO_TODAY, -2)}T16:00:00Z`,
+});
 
 // ── Attendance: recent ~2 weeks of daily per-offering records ───────────────────
 //
@@ -1519,8 +1668,8 @@ for (const off of histOfferings) {
       max_score: tmpl.max,
       weight: 1,
       assessment_date: addDays(HIST_ANCHOR, tmpl.offsetDays),
-      status: 'graded',
-      is_released: true,
+      created_at: createdBefore(addDays(HIST_ANCHOR, tmpl.offsetDays)),
+      reopened_until: null,
     });
   }
 }
@@ -1552,7 +1701,6 @@ for (const asmt of histAssessments) {
       status,
       score,
       makeup_score: null,
-      is_released: true,
     });
   }
 }
@@ -2120,7 +2268,7 @@ const student_program_history: DemoStudentProgramHistory[] = students
 // anything: the Dean's queue has a row to rule on and the bell badge has something to
 // count, while the Lecturer sees their own request with its status.
 //
-// Filed against the first GRADED, RELEASED result belonging to the demo Lecturer's own
+// Filed against the first GRADED result belonging to the demo Lecturer's own
 // offerings — anything else would be refused by the same rules the real backend applies
 // (the grade must exist and be `graded`, and the Lecturer must own the offering), so
 // picking it by search rather than by hand keeps the seed honest as the dataset changes.
@@ -2130,7 +2278,7 @@ const revisableGrade = (() => {
     offerings.filter((o) => o.teacher_ids.includes(teacherId!)).map((o) => o.id),
   );
   const ownedAssessments = new Set(
-    assessments.filter((a) => owned.has(a.offering_id) && a.status === 'graded').map((a) => a.id),
+    assessments.filter((a) => owned.has(a.offering_id)).map((a) => a.id),
   );
   return assessment_grades.find(
     (g) => ownedAssessments.has(g.assessment_id) && g.status === 'graded' && g.score != null,
@@ -2159,6 +2307,39 @@ const grade_revision_requests: DemoGradeRevisionRequest[] = revisableGrade
       },
     ]
   : [];
+
+// ── Marking-window reopen requests (D47) ────────────────────────────────────────
+//
+// One PENDING (Problem Set 2: the Dean's queue row and the bell badge) and the APPROVED
+// one behind Essay Draft's `reopened_until`, so the queue shows a decided row too.
+const assessment_reopen_requests: DemoAssessmentReopenRequest[] = [
+  {
+    id: 'reopen-seed-1',
+    assessment_id: essayDraft.id,
+    requested_by_user_id: 'user-teach-1',
+    reason: 'Two essays were handed in late with a medical note; I need to enter their marks.',
+    status: 'approved',
+    granted_days: 2,
+    decided_by_user_id: principalUserId,
+    decided_at: '2025-10-14T14:10:00Z',
+    decision_note: 'Approved for two days.',
+    created_at: '2025-10-13T20:45:00Z',
+  },
+  {
+    id: 'reopen-seed-2',
+    assessment_id: problemSet2.id,
+    requested_by_user_id: 'user-teach-1',
+    reason:
+      'Three scripts were in the department photocopier tray and only came back today. ' +
+      'They are marked; I need the window open to enter them.',
+    status: 'pending',
+    granted_days: null,
+    decided_by_user_id: null,
+    decided_at: null,
+    decision_note: null,
+    created_at: '2025-10-14T16:20:00Z',
+  },
+];
 
 // ── D35: a few non-ordinary course statuses ─────────────────────────────────────
 //
@@ -2217,6 +2398,7 @@ export const DEMO_DATASET: DemoDataset = {
   credit_transfer_requests,
   student_program_history,
   grade_revision_requests,
+  assessment_reopen_requests,
 };
 
 // Convenience exported id constants module agents may reference in tests/handlers.

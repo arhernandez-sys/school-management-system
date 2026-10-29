@@ -14,6 +14,7 @@ import {
 import type { DemoAnnouncement, DemoOffering, DemoUser } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
 import { pendingRevisionsFor } from './revisions';
+import { pendingReopensFor } from './reopens';
 
 /**
  * MSW handlers for the ANNOUNCEMENTS module (api-spec §5 Module 9) — DEMO.
@@ -38,7 +39,7 @@ import { pendingRevisionsFor } from './revisions';
  *
  * Endpoints (api-spec §5 Module 9):
  *   GET    /announcements                — targeted feed, Page[AnnouncementListItem]
- *   GET    /announcements/unread-count   — { unread_count }
+ *   GET    /announcements/unread-count   — { unread_count, + the three components }
  *   GET    /announcements/target-offerings — offerings the caller may target (compose picker)
  *   GET    /announcements/{id}           — AnnouncementDetail (404 if not targeted)
  *   POST   /announcements                — create (per-audience ownership rule)
@@ -199,11 +200,15 @@ export const announcementsHandlers = [
   http.get(`${API_BASE_URL}/announcements/unread-count`, ({ cookies }) => {
     const user = currentUser(cookies);
     const announcements = unreadCountForUser(user.id);
-    const revisions = pendingRevisionsFor(cookies['sis_mock_session'] ?? 'principal');
+    const role = cookies['sis_mock_session'] ?? 'principal';
+    const revisions = pendingRevisionsFor(role);
+    // D47 — marking-window reopen requests awaiting the Dean; summed into the badge.
+    const reopens = pendingReopensFor(role);
     return HttpResponse.json({
-      unread_count: announcements + revisions,
+      unread_count: announcements + revisions + reopens,
       unread_announcements: announcements,
       pending_grade_revisions: revisions,
+      pending_assessment_reopens: reopens,
     });
   }),
 

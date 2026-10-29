@@ -3,8 +3,11 @@ import { API_BASE_URL } from '@shared/api/client';
 import {
   DEMO_DATASET,
   DEMO_TODAY,
+  assessmentsForOffering,
   computeTermGrade,
   getActiveGradingScale,
+  isAutoZero,
+  isMarkingOpen,
   getActiveSemester,
   gpaFor,
   gradePointFor,
@@ -33,7 +36,6 @@ import type {
   DemoStudent,
 } from '@shared/api/mocks/demo/dataset';
 import { errorResponse, listParamsFrom } from './_helpers';
-import { NUDGE_COOLDOWN_SECONDS, lastNudgedAt } from './_nudges';
 
 /**
  * MSW handlers for the STUDENTS module (api-spec §5 Module 3) — DEMO.
@@ -303,9 +305,10 @@ function assessmentsForStudent(
   return offerings.map((offering) => {
     const course = getCourse(offering.course_id);
     const term = computeTermGrade(student.id, offering.id);
-    const assessments = D.assessments
-      .filter((a) => a.offering_id === offering.id)
-      .map((a) => assessmentLine(a, student.id));
+    // Server column order (date, undated last, then title) — `assessmentsForOffering`.
+    const assessments = assessmentsForOffering(offering.id).map((a) =>
+      assessmentLine(a, student.id),
+    );
     return {
       offering_id: offering.id,
       subject: course
@@ -321,9 +324,8 @@ function assessmentLine(a: DemoAssessment, studentId: string) {
   const grade = D.assessment_grades.find(
     (g) => g.assessment_id === a.id && g.student_id === studentId,
   );
-  const released = grade?.is_released ?? a.is_released;
-  // Scores are only surfaced once released (mirrors the server-side release filter).
-  const score = released && grade?.status === 'graded' ? grade.score : null;
+  // D47 — no release step: the score is shown whenever the result is graded, and a blank
+  // on a closed marking window is flagged as the automatic 0 it counts as.
   return {
     id: a.id,
     title: a.title,
@@ -331,12 +333,8 @@ function assessmentLine(a: DemoAssessment, studentId: string) {
     weight: a.weight,
     assessment_date: a.assessment_date,
     status: grade?.status ?? 'pending',
-    score,
-    is_released: released,
-    // Read back from the demo nudge log, exactly as the real API derives it from
-    // the most recent `grade.release_nudge` audit row. Drives the "Reminded 2h ago"
-    // disabled state on the principal's Remind-teacher action.
-    last_nudged_at: lastNudgedAt(a.id),
+    score: grade?.status === 'graded' ? grade.score : null,
+    auto_zero: isAutoZero(grade, isMarkingOpen(a)),
   };
 }
 
@@ -595,12 +593,7 @@ export const studentsHandlers = [
     const resolved = resolveScopedStudent(role, String(params.studentId));
     if ('error' in resolved) return resolved.error;
     const yearId = new URL(request.url).searchParams.get('academic_year_id');
-    // `nudge_cooldown_seconds` rides in the envelope so the SPA never keeps its own
-    // copy of the window — the server owns it and can retune without a frontend release.
-    return HttpResponse.json({
-      items: assessmentsForStudent(resolved.student, yearId, role),
-      nudge_cooldown_seconds: NUDGE_COOLDOWN_SECONDS,
-    });
+    return HttpResponse.json({ items: assessmentsForStudent(resolved.student, yearId, role) });
   }),
 
   // ── GET /students/{id} — detail header ──────────────────────────────────────────

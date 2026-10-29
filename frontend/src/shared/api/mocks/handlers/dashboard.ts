@@ -19,6 +19,8 @@ import {
   getStudent,
   getTeacher,
   gpaFor,
+  isMarkingOpen,
+  markingStateFor,
   gradeDistribution,
   letterFor,
   offeringLabel,
@@ -180,12 +182,21 @@ function adminPayload(user: DemoUser) {
    *  year to scope by. The tile says "to date". */
   const graduates = D.students.filter((st) => st.status === 'Graduated').length;
 
-  /** §42 — the same predicate as the lecturer's own `ungraded_items` tile. */
+  /**
+   * §42 — the same predicate as the lecturer's own `ungraded_items` tile: D47, assessments
+   * in the active session whose MARKING WINDOW is still open, on offerings of the active
+   * year (`_outstanding_grade_submissions`).
+   */
   const activeSemesterId = getActiveSemester()?.id;
+  const outstandingYearId = getActiveYear()?.id;
+  const activeYearOfferingIds = new Set(
+    (outstandingYearId ? offeringsForYear(outstandingYearId) : []).map((o) => o.id),
+  );
   const outstanding_grade_submissions = D.assessments.filter(
     (a) =>
       a.semester_id === activeSemesterId &&
-      (a.status === 'published' || a.status === 'grading'),
+      activeYearOfferingIds.has(a.offering_id) &&
+      isMarkingOpen(a),
   ).length;
 
   /**
@@ -397,61 +408,38 @@ function teacherPayload(user: DemoUser) {
     attendance_recorded: attendanceFor(offering.id, DEMO_TODAY).length > 0,
   }));
 
-  // Recent/upcoming assessments across owned offerings that still need action.
-  const recent_assessments = owned
+  /**
+   * D47 — "still to mark" is every assessment in the active session whose MARKING WINDOW is
+   * open (`_teacher_payload`). Soonest-closing first, because that is the one the lecturer
+   * must not miss; title breaks ties. The count is the full set, the card is capped at 6.
+   * `marking_closes_at` here is the EFFECTIVE close (a reopen included), as on the server.
+   */
+  const activeSemesterId = getActiveSemester()?.id;
+  const openToMark = owned
     .flatMap((offering) =>
       assessmentsForOffering(offering.id)
-        .filter((a) => a.status === 'published' || a.status === 'grading')
-        .map((a) => ({
-          id: a.id,
-          title: a.title,
-          offering: offeringRef(offering),
-          assessment_date: a.assessment_date,
-          status: a.status,
-        })),
+        .filter((a) => a.semester_id === activeSemesterId)
+        .map((a) => ({ a, offering, window: markingStateFor(a) }))
+        .filter((row) => row.window.open),
     )
-    .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''))
-    .slice(0, 6);
-
-  const ungraded_items = owned.reduce(
-    (n, offering) =>
-      n +
-      assessmentsForOffering(offering.id).filter(
-        (a) => a.status === 'published' || a.status === 'grading',
-      ).length,
-    0,
-  );
-
-  // Assessments MARKED but still HIDDEN from students. Deliberately NOT the same
-  // figure as `ungraded_items` (work still to do) — an assessment can be in both,
-  // which is correct: it has two outstanding actions. Same predicate as the
-  // backend's graded_unreleased_clause().
-  const awaiting_release = owned
-    .flatMap((offering) =>
-      assessmentsForOffering(offering.id)
-        .map((a) => {
-          const graded_unreleased_count = D.assessment_grades.filter(
-            (g) =>
-              g.assessment_id === a.id &&
-              g.status === 'graded' &&
-              (g.is_released === false || (g.is_released == null && !a.is_released)),
-          ).length;
-          return {
-            id: a.id,
-            title: a.title,
-            offering: offeringRef(offering),
-            assessment_date: a.assessment_date,
-            status: a.status,
-            // The flat id as well as the ref: the row LINKS to the gradebook, which is
-            // addressed by offering id, and a link target should not have to reach into a
-            // nested object.
-            offering_id: offering.id,
-            graded_unreleased_count,
-          };
-        })
-        .filter((row) => row.graded_unreleased_count > 0),
-    )
-    .sort((x, y) => (x.assessment_date ?? '').localeCompare(y.assessment_date ?? ''));
+    .sort(
+      (x, y) =>
+        Number(x.window.effective_closes_at === null) -
+          Number(y.window.effective_closes_at === null) ||
+        (x.window.effective_closes_at ?? '').localeCompare(y.window.effective_closes_at ?? '') ||
+        x.a.title.localeCompare(y.a.title),
+    );
+  const recent_assessments = openToMark.slice(0, 6).map(({ a, offering, window }) => ({
+    id: a.id,
+    title: a.title,
+    offering: offeringRef(offering),
+    // The gradebook is addressed by offering (`/grades?offering_id=…`).
+    offering_id: offering.id,
+    assessment_date: a.assessment_date,
+    marking_closes_at: window.effective_closes_at,
+    days_left: window.days_left,
+  }));
+  const ungraded_items = openToMark.length;
 
   return {
     role: 'teacher' as const,
@@ -464,18 +452,16 @@ function teacherPayload(user: DemoUser) {
       my_offerings: owned.length,
       attendance_due_today: today_classes.filter((c) => !c.attendance_recorded).length,
       ungraded_items,
-      awaiting_release_items: awaiting_release.length,
     },
     today_classes,
     recent_assessments,
-    awaiting_release,
     recent_announcements: announcementsForUser(user.id)
       .slice(0, 4)
       .map((a) => announcementView(a, user.id)),
   };
 }
 
-// ── Student — own data (released grades only) ───────────────────────────────────
+// ── Student — own data (D47: every saved mark, no release step) ───────────────────────────────────
 function studentPayload(user: DemoUser) {
   const student = D.students.find((s) => s.user_id === user.id);
   // Every offering the student takes this term.
@@ -506,7 +492,7 @@ function studentPayload(user: DemoUser) {
 
   // Credit-weighted term GPA (D30 §D5), from the same selectors the report card uses so
   // the dashboard tile and the printed document cannot disagree. Every offering the
-  // student sits contributes its credits; one with no released grade contributes 0
+  // student sits contributes its credits; one with no grade yet contributes 0
   // quality points (decision #4).
   const termGpa = student
     ? gpaFor(
@@ -517,18 +503,16 @@ function studentPayload(user: DemoUser) {
       )
     : { gpa: null, total_credits: 0 };
 
-  // Recent RELEASED grades only (unreleased is never sent — architecture §3.2/§8.5).
+  // Recent graded results. D47 — no release filter: a mark is visible once it is saved.
   const recent_grades = student
     ? offerings
         .flatMap((offering) =>
           assessmentsForOffering(offering.id)
-            .filter((a) => a.status === 'graded' && a.is_released)
             .map((a) => {
               const g = D.assessment_grades.find(
                 (row) => row.assessment_id === a.id && row.student_id === student.id,
               );
-              const released = g?.is_released ?? a.is_released;
-              if (!g || g.status !== 'graded' || g.score == null || !released) return null;
+              if (!g || g.status !== 'graded' || g.score == null) return null;
               return {
                 assessment_id: a.id,
                 title: a.title,
@@ -546,7 +530,8 @@ function studentPayload(user: DemoUser) {
         .map(({ _date, ...rest }) => rest)
     : [];
 
-  // Upcoming assessments (dated after DEMO_TODAY), soonest first.
+  // Upcoming assessments (dated after DEMO_TODAY), soonest first. D47 retired drafts, so
+  // nothing is hidden.
   const upcoming_assessments = offerings
     .flatMap((offering) =>
       assessmentsForOffering(offering.id)

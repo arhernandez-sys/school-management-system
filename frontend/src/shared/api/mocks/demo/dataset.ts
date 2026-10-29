@@ -90,6 +90,10 @@ export {
   DEMO_REPRESENTATIVE_USER_ID,
   currentDemoStudent,
   currentDemoTeacher,
+  currentDemoLecturer,
+  lecturerOfferingIds,
+  lecturerOwnsOffering,
+  demoUserIdFor,
   listStudents,
   listTeachers,
   listCourses,
@@ -99,6 +103,18 @@ export {
   enrolledCount,
   assessmentsForOffering,
   gradesForAssessment,
+  // D47 — the marking window (mirrors assessments/marking.py).
+  MARKING_WINDOW_DAYS,
+  schoolDateOf,
+  plusSchoolDays,
+  endOfSchoolDay,
+  markingStateFor,
+  isMarkingOpen,
+  markingFieldsFor,
+  isAutoZero,
+  reopenUntilFor,
+  pendingReopenFor,
+  reopenBlankCount,
   gradebookFor,
   midtermRevisionEligible,
   studentReligions,
@@ -122,7 +138,12 @@ export {
   listEvents,
 } from './selectors';
 
-export type { ListStudentsParams, ListTeachersParams, ListCoursesParams } from './selectors';
+export type {
+  ListStudentsParams,
+  ListTeachersParams,
+  ListCoursesParams,
+  DemoMarkingState,
+} from './selectors';
 
 export type {
   DemoDataset,
@@ -143,6 +164,7 @@ export type {
   DemoAssessmentCategory,
   DemoAssessment,
   DemoAssessmentGrade,
+  DemoAssessmentReopenRequest,
   DemoAttendanceRecord,
   DemoAnnouncement,
   DemoApplication,

@@ -20,6 +20,7 @@ import type {
   DemoAcademicYear,
   DemoAssessment,
   DemoAssessmentGrade,
+  DemoAssessmentReopenRequest,
   DemoCourse,
   DemoEnrollment,
   DemoEvent,
@@ -324,6 +325,40 @@ export function currentDemoTeacher(role: string | null | undefined): DemoTeacher
   return D.teachers.find((t) => t.user_id === DEMO_REPRESENTATIVE_USER_ID.teacher);
 }
 
+/**
+ * The lecturer profile behind a LECTURER-ROLE login — `teacher` OR `hod` (D43: a head is a
+ * lecturer too), mirroring `rbac._teacher_profile_id`. Undefined for every other role.
+ *
+ * The one resolver for "which offerings does this caller TEACH", so assessments, grades,
+ * reopen requests and the report all agree on who owns what. Before D47 the assessments
+ * handler hard-coded `teach-1` and grades resolved the teacher login only, so a head of
+ * department owned nothing on the grade screens.
+ */
+export function currentDemoLecturer(role: string | null | undefined): DemoTeacher | undefined {
+  return currentDemoTeacher(role) ?? currentDemoHodTeacher(role);
+}
+
+/** Offering ids the caller TEACHES (`rbac.teacher_offering_ids`); [] for a non-lecturer. */
+export function lecturerOfferingIds(role: string | null | undefined): string[] {
+  const lecturer = currentDemoLecturer(role);
+  if (!lecturer) return [];
+  return D.offerings.filter((o) => o.teacher_ids.includes(lecturer.id)).map((o) => o.id);
+}
+
+/** `rbac.assert_teacher_owns_offering` as a predicate: a `class_teachers` row exists. */
+export function lecturerOwnsOffering(
+  role: string | null | undefined,
+  offering: DemoOffering | undefined,
+): boolean {
+  const lecturer = currentDemoLecturer(role);
+  return Boolean(lecturer && offering && offering.teacher_ids.includes(lecturer.id));
+}
+
+/** The seeded user id a demo login acts as — authorship of requests, `can_withdraw`. */
+export function demoUserIdFor(role: string | null | undefined): string {
+  return (role && DEMO_REPRESENTATIVE_USER_ID[role]) || `user-${role ?? 'anonymous'}`;
+}
+
 // ── Students ────────────────────────────────────────────────────────────────────
 export interface ListStudentsParams extends DemoListParams {
   status?: string | null;
@@ -550,11 +585,180 @@ export function enrolledCount(offeringId: string): number {
 }
 
 // ── Assessments / grades ────────────────────────────────────────────────────────
+/**
+ * An offering's assessments in the server's column order (`grades.service.
+ * _assessments_for_many`): by date with undated LAST, then title, then id. The gradebook,
+ * the student tab and `/grades/me` all read through here, so they list columns alike.
+ */
 export function assessmentsForOffering(offeringId: string): DemoAssessment[] {
-  return D.assessments.filter((a) => a.offering_id === offeringId);
+  return D.assessments
+    .filter((a) => a.offering_id === offeringId)
+    .sort(
+      (x, y) =>
+        Number(x.assessment_date === null) - Number(y.assessment_date === null) ||
+        (x.assessment_date ?? '').localeCompare(y.assessment_date ?? '') ||
+        x.title.localeCompare(y.title) ||
+        x.id.localeCompare(y.id),
+    );
 }
 export function gradesForAssessment(assessmentId: string): DemoAssessmentGrade[] {
   return D.assessment_grades.filter((g) => g.assessment_id === assessmentId);
+}
+
+// ── D47 — the assessment MARKING WINDOW ─────────────────────────────────────────
+/**
+ * The mock mirror of `backend/app/modules/assessments/marking.py`, and the ONE place the
+ * demo decides whether an assessment is open for marking. Every handler that shows or
+ * enforces the window reads it from here — the gradebook columns, the 409 on a save, the
+ * automatic zeros in the term grade, the dashboards and the reopen workflow — so none of
+ * them can drift from the others.
+ *
+ * Every assessment has `MARKING_WINDOW_DAYS` school-local calendar days to be marked,
+ * counted from `assessment_date` (or the school-local day it was created, when undated).
+ * The window ends at 23:59:59 America/Belize on the last day; `reopened_until` (a Dean's
+ * approval) extends it, and the LATER of the two wins. Open while now <= that instant.
+ *
+ * "Now" is `DEMO_TODAY_ISO`, never the real clock: the dataset is deterministic, and the
+ * seed's open/closing/locked states are written against that instant.
+ */
+export const MARKING_WINDOW_DAYS = 5;
+/** America/Belize is UTC-6 all year (no DST), so a school-local date is a fixed shift. */
+const SCHOOL_UTC_OFFSET_MS = -6 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The school-local (America/Belize) calendar date of an instant — `to_school_date`. */
+export function schoolDateOf(instant: string): string {
+  return new Date(Date.parse(instant) + SCHOOL_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** A YYYY-MM-DD date plus whole calendar days. */
+export function plusSchoolDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * 23:59:59 America/Belize on `date`, as the aware-UTC instant the API serialises —
+ * pydantic's `2025-10-21T05:59:59Z` form, with no milliseconds.
+ */
+export function endOfSchoolDay(date: string): string {
+  return new Date(Date.parse(`${date}T23:59:59Z`) - SCHOOL_UTC_OFFSET_MS)
+    .toISOString()
+    .replace('.000Z', 'Z');
+}
+
+/** `marking.MarkingState`. */
+export interface DemoMarkingState {
+  open: boolean;
+  /** The ORIGINAL window end, ignoring any reopen. */
+  closes_at: string | null;
+  reopened_until: string | null;
+  /** When entry actually locks: the later of the two. */
+  effective_closes_at: string | null;
+  /** Whole school-local days until `effective_closes_at` (0 = closes today); null once closed. */
+  days_left: number | null;
+}
+
+/** `marking.marking_state`. */
+export function markingStateFor(a: DemoAssessment, nowIso: string = DEMO_TODAY_ISO): DemoMarkingState {
+  const start = a.assessment_date ?? (a.created_at ? schoolDateOf(a.created_at) : null);
+  const closes = start ? endOfSchoolDay(plusSchoolDays(start, MARKING_WINDOW_DAYS)) : null;
+  const reopened = a.reopened_until;
+  // `effective_closes_at`: with no original close (an unsaved row) the reopen is ignored,
+  // exactly as the server's `if closes is None or reopened is None: return closes`.
+  const effective =
+    closes === null || reopened === null
+      ? closes
+      : Date.parse(reopened) > Date.parse(closes)
+        ? reopened
+        : closes;
+  const open = effective === null || Date.parse(nowIso) <= Date.parse(effective);
+  let daysLeft: number | null = null;
+  if (open && effective !== null) {
+    daysLeft = Math.round(
+      (Date.parse(`${schoolDateOf(effective)}T00:00:00Z`) -
+        Date.parse(`${schoolDateOf(nowIso)}T00:00:00Z`)) /
+        DAY_MS,
+    );
+  }
+  return {
+    open,
+    closes_at: closes,
+    reopened_until: reopened,
+    effective_closes_at: effective,
+    days_left: daysLeft,
+  };
+}
+
+/** `marking.is_marking_open`. */
+export function isMarkingOpen(a: DemoAssessment): boolean {
+  return markingStateFor(a).open;
+}
+
+/** The five marking fields every assessment shape carries on the wire. */
+export function markingFieldsFor(a: DemoAssessment): {
+  marking_open: boolean;
+  marking_closes_at: string | null;
+  reopened_until: string | null;
+  effective_closes_at: string | null;
+  days_left: number | null;
+} {
+  const st = markingStateFor(a);
+  return {
+    marking_open: st.open,
+    marking_closes_at: st.closes_at,
+    reopened_until: st.reopened_until,
+    effective_closes_at: st.effective_closes_at,
+    days_left: st.days_left,
+  };
+}
+
+/**
+ * `grades.service._is_auto_zero` — a blank mark that now counts as 0. Mirrors
+ * `calc._contribution_for`: no row or `pending`, or `absent` without a makeup, once the
+ * window has closed. `excused` / `exempt` never are.
+ */
+export function isAutoZero(g: DemoAssessmentGrade | undefined, markingOpen: boolean): boolean {
+  if (markingOpen) return false;
+  if (!g || g.status === 'pending') return true;
+  return g.status === 'absent' && g.makeup_score == null;
+}
+
+/**
+ * `reopen.reopen_until_for` — 23:59:59 Belize on `today + days`, so "2 days" means through
+ * the end of the day after tomorrow, not 48 hours from the click.
+ */
+export function reopenUntilFor(days: number): string {
+  return endOfSchoolDay(plusSchoolDays(schoolDateOf(DEMO_TODAY_ISO), days));
+}
+
+/** The PENDING reopen request on an assessment, if any — at most one, as the unique index rules. */
+export function pendingReopenFor(assessmentId: string): DemoAssessmentReopenRequest | undefined {
+  return D.assessment_reopen_requests.find(
+    (r) => r.assessment_id === assessmentId && r.status === 'pending',
+  );
+}
+
+/**
+ * `reopen._blank_count` — active roster (in the assessment's own term) minus the results
+ * that are not `pending`.
+ */
+export function reopenBlankCount(a: DemoAssessment): number {
+  const roster = new Set(
+    D.enrollments
+      .filter(
+        (e) => e.offering_id === a.offering_id && e.semester_id === a.semester_id && !e.unenrolled_at,
+      )
+      .map((e) => e.student_id),
+  );
+  const marked = D.assessment_grades.filter(
+    // Mirrors `reopen._blank_count`: absent with no makeup is blank (it is auto-zeroed).
+    (g) =>
+      g.assessment_id === a.id &&
+      g.status !== 'pending' &&
+      !(g.status === 'absent' && g.makeup_score == null) &&
+      roster.has(g.student_id),
+  ).length;
+  return Math.max(0, roster.size - marked);
 }
 
 /**
@@ -622,7 +826,7 @@ export function gradebookFor(offeringId: string): {
       status: DemoAssessmentGrade['status'];
       score: number | null;
       makeup_score: number | null;
-      is_released: boolean;
+      auto_zero: boolean;
       letter?: string;
       can_request_revision: boolean;
       revision_blocked_reason: string | null;
@@ -643,6 +847,8 @@ export function gradebookFor(offeringId: string): {
   const extraStudents = D.students.filter((s) => gradedStudentIds.has(s.id) && !activeIds.has(s.id));
   const allStudents = [...activeStudents, ...extraStudents];
 
+  // D47 — resolved once per assessment, not per cell (as `get_gradebook` does).
+  const markingOpen = new Map(asmts.map((a) => [a.id, isMarkingOpen(a)]));
   const rows = allStudents.map((student) => {
     const isActive = activeIds.has(student.id);
     const enr = offering ? activeEnrollmentFor(student.id, offering.id) : undefined;
@@ -650,14 +856,13 @@ export function gradebookFor(offeringId: string): {
       const g = D.assessment_grades.find(
         (row) => row.assessment_id === a.id && row.student_id === student.id,
       );
-      const released = g?.is_released ?? a.is_released;
       const revision = midtermRevisionEligible(a, g);
       return {
         assessment_id: a.id,
         status: g?.status ?? ('pending' as DemoAssessmentGrade['status']),
         score: g?.score ?? null,
         makeup_score: g?.makeup_score ?? null,
-        is_released: released,
+        auto_zero: isAutoZero(g, markingOpen.get(a.id) ?? true),
         ...(g?.status === 'graded' && g.score != null
           ? { letter: letterFor((g.score / a.max_score) * 100) }
           : {}),
@@ -683,32 +888,46 @@ export function gradebookFor(offeringId: string): {
 
 /**
  * Weighted term grade for (student, offering) + derived letter. Weighted by each
- * assessment's `weight`; only `graded` rows count (pending/excused/exempt excluded,
- * api-spec §8.3). Returns { numeric, letter }.
+ * assessment's `weight`. Returns { numeric, letter }.
  *
- * There is no separate "in the active semester" qualifier any more: an offering IS a term,
- * so the assessments it holds are that term's by construction.
+ * **D47 — every assessment counts; there is no lifecycle or release filter.** A saved mark
+ * counts the moment it is saved. A BLANK (no row, `pending`, or `absent` without a
+ * makeup) is excluded while the assessment's marking window is open and counts as 0 once
+ * it has closed (`calc._contribution_for`); `excused` / `exempt` are never counted.
+ *
+ * `semesterId` narrows to one term, for `/grades/me`'s year·semester switcher. An offering
+ * IS a term, so it only ever matters when the caller passes a different one.
  */
 export function computeTermGrade(
   studentId: string,
   offeringId: string,
+  semesterId?: string | null,
 ): { numeric: number | null; letter: string | null; weight_base_used: number } {
-  const asmts = assessmentsForOffering(offeringId).filter((a) => a.status === 'graded');
+  const asmts = assessmentsForOffering(offeringId).filter(
+    (a) => !semesterId || a.semester_id === semesterId,
+  );
   let weightedSum = 0;
   let weightBase = 0;
   for (const a of asmts) {
     const g = D.assessment_grades.find(
       (row) => row.assessment_id === a.id && row.student_id === studentId,
     );
-    if (!g) continue;
+    const closed = !isMarkingOpen(a);
     let effectiveScore: number | null = null;
-    if (g.status === 'graded' && g.score != null) effectiveScore = g.score;
-    else if (g.status === 'absent') {
-      if (g.makeup_score != null) effectiveScore = g.makeup_score;
-      else if (D.assessment_policy.absent_as_zero) effectiveScore = 0;
-      else continue; // absent, not counted
+    if (g?.status === 'graded') {
+      // A makeup on a GRADED row is an approved revision and wins over the original.
+      effectiveScore = g.makeup_score ?? g.score;
+      if (effectiveScore == null) continue;
+    } else if (g?.status === 'absent') {
+      if (D.assessment_policy.allow_makeup && g.makeup_score != null) effectiveScore = g.makeup_score;
+      else if (D.assessment_policy.absent_as_zero || closed) effectiveScore = 0;
+      else continue; // absent, not counted while marking is open
+    } else if (g?.status === 'excused' || g?.status === 'exempt') {
+      continue; // excluded from numerator AND weight base, even once closed
+    } else if (closed) {
+      effectiveScore = 0; // D47 — no row / pending after the window closed
     } else {
-      continue; // pending / excused / exempt — excluded
+      continue; // no row / pending while marking is still open
     }
     const pct = (effectiveScore / a.max_score) * 100;
     weightedSum += pct * a.weight;
@@ -1052,12 +1271,9 @@ export function dashboardFor(role: string, userId?: string) {
         // `my_class_subjects` (offerings) — which were the same count the moment a class
         // taught one subject, so the dashboard showed the same figure twice under two names.
         my_offerings: owned.length,
+        // D47 — assessments whose marking window is still open.
         ungraded_items: owned.reduce(
-          (n, off) =>
-            n +
-            assessmentsForOffering(off.id).filter(
-              (a) => a.status === 'published' || a.status === 'grading',
-            ).length,
+          (n, off) => n + assessmentsForOffering(off.id).filter(isMarkingOpen).length,
           0,
         ),
       },

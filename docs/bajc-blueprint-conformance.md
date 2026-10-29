@@ -189,7 +189,10 @@ The MVP defined in blueprint §70 is **14 of 17 items complete**. See §4 below.
   point, passing flag). Nothing is hard-coded.
 - [ ] **§27 Final Grade Submission Workflow** — 🟡 **the mechanism differs from the blueprint.**
   There is no per-offering `Draft → Submitted → HOD Approved → Registrar Approved → Posted`
-  chain. What exists is: per-assessment release to students, a **mid-term freeze window**
+  chain. **D47 (28 Oct 2026, client instruction):** there is no release step either — a mark
+  counts the moment the lecturer saves it, each assessment has a **5-day marking window**
+  after which blanks count as 0, and a late lecturer asks the Dean to reopen it. Beyond that
+  there is a **mid-term freeze window**
   (D33 — blocks grade *entry*, not just revision), and an **academic-year archive freeze** that
   writes `term_grade_snapshots` and locks the year. Locking (§66) is therefore real, but it is
   time-and-term based, not an approval workflow, and the Dean has no explicit "post grades"

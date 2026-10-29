@@ -71,7 +71,7 @@ because the hop appeared in 17 places).
 | **Admissions** | Application → review → decision → student record, credit transfer, document checks | `deferred` is TERMINAL; `eligible` is deliberately not a decision. The SSN guard refuses only while an earlier application is still OPEN |
 | **Courses / Programmes** | The catalog, programme curricula, prerequisites, heads of programme | Prerequisite validation reads `course_prerequisites`; `prerequisites_text` is documentation and cannot be queried |
 | **Offerings** | One course, one session, sections, lecturers, roster, meetings | Capacity is a **warning**, never a gate. Prerequisites ARE a gate, overridable only by the Dean with a logged reason |
-| **Assessments** | Categories, weights, lifecycle (draft → published → grading → graded), release | Weights are **not** assumed to total 100 — see [`needs-attention.md`](needs-attention.md) |
+| **Assessments** | Categories, weights, the **5-day marking window** and reopen requests (D47), the printable assessment report | No publish/release step: a saved mark counts at once, and a blank counts as 0 once the window closes (`assessments/marking.py`). Weights are **not** assumed to total 100 — see [`needs-attention.md`](needs-attention.md) |
 | **Grades** | Gradebook, term grades, GPA, revisions, mid-term freeze | One engine (`grades/calc.py`). Nothing recomputes term-grade maths locally |
 | **Attendance** | Registers, summaries, per-student and per-class alerts | One tally (`_summarize`); **late counts as present**; the floor is configurable and compared *strictly below* |
 | **Reports** | Report card, transcript, offering grades, plus the four §53 institutional reports | Documents print frozen snapshots for archived years and compute live for the current one |
@@ -129,6 +129,7 @@ Three access decisions are load-bearing and were each reached the hard way:
 | **D43** | The **Auditor** and **HOD** roles; course print/PDF |
 | **D44** | The client's `sims_10` dump reconciled — diffed field by field, four of its decisions deliberately not reproduced |
 | **D45** | Meeting #4/#5: the yellow-highlighted blueprint sections. Phases 1, 2, 3A, 4, 7, 8, 9 complete |
+| **D47** | Assessments rework: the publish/release lifecycle is gone (save = released); a **5-day marking window** per assessment, after which blanks count as 0 and the lecturer asks the Dean to reopen; one-screen grading with one Save; **Print assessments** from the Grades page. Plan: [`d47-assessment-marking-plan.md`](d47-assessment-marking-plan.md) |
 
 ### D45 in detail (the current cycle)
 

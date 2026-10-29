@@ -223,6 +223,7 @@ export function GradeAssessmentsScreen() {
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
+        useFlexGap
         sx={{ mb: 2, alignItems: { sm: 'flex-start' }, flexWrap: 'wrap' }}
       >
         <YearSelect
@@ -249,6 +250,9 @@ export function GradeAssessmentsScreen() {
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
               disabled={teachers.length === 0}
+              // Show "All lecturers" rather than an empty box when nothing is picked.
+              SelectProps={{ displayEmpty: true }}
+              InputLabelProps={{ shrink: true }}
               sx={{ minWidth: 180 }}
             >
               <MenuItem value="">All lecturers</MenuItem>

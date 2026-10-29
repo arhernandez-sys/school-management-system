@@ -151,7 +151,7 @@ export function AssessmentReportPrintDialog({
                           <TableBody>
                             {section.rows.map((row) => (
                               <TableRow key={row.student.id}>
-                                <TableCell>
+                                <TableCell sx={{ whiteSpace: 'nowrap' }}>
                                   {row.student.full_name}
                                   <Typography variant="caption" color="text.secondary" component="div">
                                     {row.student.student_number}

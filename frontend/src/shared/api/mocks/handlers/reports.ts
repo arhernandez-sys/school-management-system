@@ -22,9 +22,10 @@ import {
   // D45 Phase 9 — the institutional reports.
   compareOfferings,
   demoHodProgramIds,
+  demoHodOfferingIds,
+  lecturerOfferingIds,
 } from '@shared/api/mocks/demo/dataset';
 import type {
-  DemoAssessment,
   DemoOffering,
   DemoSemester,
   DemoStudent,
@@ -155,21 +156,15 @@ function leadTeacherName(offering: DemoOffering): string | null {
   return id ? (getTeacher(id)?.full_name ?? null) : null;
 }
 
-/** Is every graded assessment counted toward this offering's term grade released? */
-function offeringFullyReleased(offering: DemoOffering): boolean {
-  const graded = D.assessments.filter(
-    (a: DemoAssessment) => a.offering_id === offering.id && a.status === 'graded',
-  );
-  if (graded.length === 0) return true;
-  return graded.every((a) => a.is_released);
-}
-
 /**
- * Assemble one ReportCard for a (student, semester). For a student caller
- * (`releaseFilter`), offerings with any unreleased graded assessment surface as
- * `status:"pending"` with no numeric (AC 5.5) — P/S/teacher always see the computed value.
+ * Assemble one ReportCard for a (student, semester).
+ *
+ * D47 — there is no release step, so nothing is ever withheld: every subject row is
+ * `status: "graded"` with its computed value, for every caller (`reports/service.
+ * _subject_results` now passes `True` where the per-offering release flag used to be). A
+ * blank on a closed marking window is already in that value as a 0.
  */
-function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFilter: boolean) {
+function buildReportCard(student: DemoStudent, semester: DemoSemester) {
   // One row per OFFERING the student sits, scoped to the card's own semester — a card is a
   // TERM record, and a year-wide list would print last term's courses on this term's card.
   const offerings = offeringsForStudent(student.id).filter(
@@ -180,17 +175,15 @@ function buildReportCard(student: DemoStudent, semester: DemoSemester, releaseFi
     .map((offering) => {
       const course = getCourse(offering.course_id);
       const term = computeTermGrade(student.id, offering.id);
-      const released = offeringFullyReleased(offering);
-      const pending = releaseFilter && !released;
       return {
         // The wire key stays `subject` (the server still spells the catalog entry that way
         // on report-card rows); it carries the COURSE.
         subject: { id: offering.course_id, name: course?.name ?? '', code: course?.code ?? '' },
         teacher: leadTeacherName(offering),
         credits: course?.credits ?? null,
-        numeric: pending ? null : term.numeric,
-        letter: pending ? null : term.letter,
-        status: pending ? ('pending' as const) : ('graded' as const),
+        numeric: term.numeric,
+        letter: term.letter,
+        status: 'graded' as const,
       };
     })
     .sort((a, b) => a.subject.name.localeCompare(b.subject.name));
@@ -274,7 +267,7 @@ function midtermKey(studentId: string, semesterId: string): string {
  * correcting a mark.
  */
 function freezeMidtermFor(student: DemoStudent, semester: DemoSemester): void {
-  const payload = buildReportCard(student, semester, false);
+  const payload = buildReportCard(student, semester);
   midtermSnapshots.set(midtermKey(student.id, semester.id), {
     payload: { ...payload, is_frozen: true, report_kind: 'midterm' as const },
     frozen_at: DEMO_TODAY_ISO,
@@ -503,12 +496,10 @@ export const reportsHandlers = [
     const semester =
       D.semesters.find((s) => s.id === url.searchParams.get('semester_id')) ?? getActiveSemester();
     if (!semester) return errorResponse(409, 'no_active_semester', 'No active session is configured.');
-    // D32 — a frozen card carries NO release filter: it is a document already issued, and
-    // re-applying "hide unreleased" would blank rows the student has already been shown.
     if (url.searchParams.get('kind') === 'midterm') {
       return midtermReportResponse(student, semester);
     }
-    return HttpResponse.json(buildReportCard(student, semester, true));
+    return HttpResponse.json(buildReportCard(student, semester));
   }),
 
   // ── Report card (by student_id; P/S any, teacher own students) ───────────────────
@@ -530,8 +521,7 @@ export const reportsHandlers = [
     if (url.searchParams.get('kind') === 'midterm') {
       return midtermReportResponse(student, semester);
     }
-    // Release filter only applies to student callers (P/S/teacher see computed values).
-    return HttpResponse.json(buildReportCard(student, semester, false));
+    return HttpResponse.json(buildReportCard(student, semester));
   }),
 
   /*
@@ -617,7 +607,17 @@ export const reportsHandlers = [
     const offeringId = url.searchParams.get('offering_id');
     if (!offeringId) return errorResponse(422, 'validation_error', 'offering_id is required.');
     const offering = getOffering(offeringId);
-    if (!offering) return errorResponse(404, 'offering_not_found', 'Offering not found.');
+    if (!offering) return errorResponse(404, 'not_found', 'Offering not found.');
+    // D47 — a lecturer reads only the courses they teach (a head of department also their
+    // programme's), exactly as the gradebook rules. The route had no check at all, so any
+    // lecturer could read any course's marks through it. 404, not 403: no existence leak.
+    if (role === 'teacher' || role === 'hod') {
+      const visible = new Set([
+        ...lecturerOfferingIds(role),
+        ...(role === 'hod' ? demoHodOfferingIds(role) : []),
+      ]);
+      if (!visible.has(offering.id)) return errorResponse(404, 'not_found', 'Offering not found.');
+    }
     // The roster of THIS offering, in its own term.
     const students = rosterFor(offering.id);
     const rows = students

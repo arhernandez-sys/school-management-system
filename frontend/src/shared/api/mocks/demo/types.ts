@@ -19,7 +19,6 @@ import type {
   StudentStatus,
   TeacherStatus,
   AcademicYearStatus,
-  AssessmentStatus,
   GradeStatus,
   AttendanceStatus,
   AnnouncementAudience,
@@ -443,8 +442,17 @@ export interface DemoAssessment {
   max_score: number;
   weight: number;
   assessment_date: string | null; // YYYY-MM-DD
-  status: AssessmentStatus;
-  is_released: boolean;
+  /**
+   * D47 — when the row was created (aware UTC instant). The marking window counts from
+   * `assessment_date`, or from the school-local day of this when no date is set
+   * (`backend/app/modules/assessments/marking.py::marking_start_date`).
+   *
+   * There is no `status` / `is_released` any more: D47 retired the publish/release
+   * lifecycle. An assessment is live from creation and a saved mark counts at once.
+   */
+  created_at: string;
+  /** D47 — set by the Dean's approval of a reopen request; extends the window. */
+  reopened_until: string | null;
 }
 
 // ── Assessment grades (per assessment × enrolled student) ───────────────────────
@@ -456,7 +464,6 @@ export interface DemoAssessmentGrade {
   status: GradeStatus;
   score: number | null; // present only when status=graded
   makeup_score: number | null;
-  is_released: boolean | null; // null => inherit assessment.is_released
 }
 
 // ── Attendance (per-offering, per-day) ──────────────────────────────────────────
@@ -781,6 +788,28 @@ export interface DemoGradeRevisionRequest {
   created_at: string;
 }
 
+// ── Marking-window reopen request (D47) ─────────────────────────────────────────
+/**
+ * A Lecturer's request to reopen an assessment whose 5-day marking window has closed, and
+ * the Dean's ruling — `assessment_reopen_requests` (`backend/app/modules/assessments/
+ * reopen.py`). One PENDING request per assessment, as the real unique index enforces.
+ *
+ * The request moves nothing; only an APPROVAL does, by setting the assessment's
+ * `reopened_until`. `granted_days` is recorded on approval only.
+ */
+export interface DemoAssessmentReopenRequest {
+  id: string;
+  assessment_id: string;
+  requested_by_user_id: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'denied';
+  granted_days: number | null;
+  decided_by_user_id: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  created_at: string;
+}
+
 // ── The whole dataset (one object) ──────────────────────────────────────────────
 export interface DemoDataset {
   school_profile: DemoSchoolProfile;
@@ -820,6 +849,8 @@ export interface DemoDataset {
   student_program_history: DemoStudentProgramHistory[];
   // D30 §D7 — the grade-revision approval workflow.
   grade_revision_requests: DemoGradeRevisionRequest[];
+  // D47 — marking-window reopen requests.
+  assessment_reopen_requests: DemoAssessmentReopenRequest[];
 }
 
 /** Generic pagination result the `paginate` helper returns (api-spec §4.1). */

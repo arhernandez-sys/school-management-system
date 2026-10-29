@@ -121,7 +121,7 @@ Tick each box when its commit lands.
 - [x] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
 - [x] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
 - [x] 5. **Frontend reopen queue and print dialog/filters.**
-- [ ] 6. **MSW demo parity**, then docs.
+- [x] 6. **MSW demo parity**, then docs.
 
 ## Verification
 - **Backend:** copy `sims` → `sims_test`, apply the SQL there, then run the full suite with `backend/.venv/Scripts/python.exe -m pytest` (~100 s). Add or replace tests:
@@ -158,3 +158,8 @@ Tick each box when its commit lands.
   - `tsc -b --force` and eslint are clean. The MSW demo is updated in phase 6.
 - **Phase 5 (28 Oct 2026).** A "Reopen Requests" tab under Grades (`AssessmentReopenScreen`), and the bell lists the Dean's pending reopens.
   - The Grades page gains a Course offering filter (everyone), a Student filter (Dean) and a **Print assessments** button (Dean, lecturers, HODs) that opens `AssessmentReportPrintDialog`.
+- **Phase 6 (28 Oct 2026).** The MSW demo mirrors D47 (new `handlers/reopens.ts`; the window rule is in `demo/selectors.ts`). The seed on MATH1110-01 has an open assessment, one closing today, a locked one with blanks, one reopened and one pending reopen request.
+  - `blank_count` now counts absent-with-no-makeup rows (they are auto-zeroed), in the backend and the mock alike.
+  - Verified with `frontend/scratchpad/probe_d47_marking.mjs` (97 checks on the handlers) and `probe_d47_screens.mjs` (real screens, headless Chrome). A save / print / Dean-reopen flow probe passed too.
+  - Backend: 2245 passed, plus the 2 known `test_settings` failures.
+  - **Not done:** `d47_assessment_marking.sql` has not been run on live `sims`.

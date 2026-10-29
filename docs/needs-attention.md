@@ -125,6 +125,20 @@ Rows are preserved; indexes and constraints come across untouched and need no re
 ⚠️ It has **not** been run anywhere, including the scratch database — you asked to run it
 yourself, so it is unexecuted SQL. Review it before running.
 
+### 13b. Run the D47 SQL with the D47 deploy — **every assessment screen fails until you do**
+
+```
+backend/db/mariadb/d47_assessment_marking.sql
+```
+
+It adds `assessments.reopened_until` and the `assessment_reopen_requests` table, and sets
+every existing assessment to the retired-but-harmless `status='graded'`, `is_released=1`.
+The new code maps `reopened_until`, so deploy and run it **together**. Re-runnable. Run on
+`sims_test` during development; ⚠️ **not yet run on `sims`**.
+
+Note for the client: the existing assessments are test data, so the 5-day rule applies to
+them as-is — any whose date is more than 5 days back is locked and its blanks count as 0.
+
 ### 14. Keep `sims_final.sql` current
 
 It is now the **only** provisioning artefact — the 20 numbered migrations were deleted on

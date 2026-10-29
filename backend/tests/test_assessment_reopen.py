@@ -292,3 +292,16 @@ class TestGradebookAndBell:
         lecturer = client.get(f"{ANN}/unread-count", headers=graph.H).json()
         assert lecturer["pending_assessment_reopens"] == 0
 
+
+
+def test_blank_count_includes_absent_without_makeup(client, graph, db_session) -> None:
+    """The count the Dean sees is exactly what will be zeroed: an absent row with no
+    makeup is auto-zeroed, so it is blank; excused is not."""
+    a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
+    s1, e1 = graph.student()
+    s2, e2 = graph.student()
+    graph.student()  # no row at all
+    graph.grade(a, s1, e1, status="absent", score=None)
+    graph.grade(a, s2, e2, status="excused", score=None)
+    body = _ask(client, graph, a).json()
+    assert body["blank_count"] == 2

@@ -24,6 +24,7 @@ import { offeringsHandlers } from './offerings';
 import { assessmentsHandlers } from './assessments';
 import { gradesHandlers } from './grades';
 import { revisionsHandlers } from './revisions';
+import { reopensHandlers } from './reopens';
 import { attendanceHandlers } from './attendance';
 import { announcementsHandlers } from './announcements';
 import { eventsHandlers } from './events';
@@ -54,6 +55,8 @@ export const handlers = [
   ...assessmentsHandlers,
   ...gradesHandlers,
   ...revisionsHandlers,
+  // D47 — marking-window reopen requests (lecturer asks, Dean decides).
+  ...reopensHandlers,
   ...attendanceHandlers,
   ...announcementsHandlers,
   ...eventsHandlers,
