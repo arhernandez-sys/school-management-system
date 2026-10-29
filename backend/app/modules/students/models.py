@@ -165,6 +165,14 @@ class StudentProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     completion_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     #: Stamped by `change_student_status` on a move to `graduated`, and editable after.
     graduation_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    #: The Dean's per-student exception to `students_can_view_grades` (21 Oct 2026): with
+    #: grades published to everyone, the Dean can still hold back named students. It can
+    #: only ever HIDE — it never exposes grades while the school-wide switch is off.
+    #: Enforced by `core.deps.require_student_grade_visibility`. `add_grades_withheld.sql`
+    #: adds it.
+    grades_withheld: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default=text("false")
+    )
     #: Stamped by `change_student_status` on a move to `DropOut`, and editable after.
     dropout_date: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     dropout_reason: Mapped[str | None] = mapped_column(String(250), nullable=True)

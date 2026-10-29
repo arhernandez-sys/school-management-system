@@ -1234,12 +1234,26 @@ def _student_payload(
         ).all()
     )
 
+    # The dashboard's own-grade block is a grade surface like `/grades/me`, so it obeys
+    # the same two gates (school-wide switch + the Dean's per-student hold). It is not
+    # behind `require_student_grade_visibility` because the rest of this page — classes,
+    # attendance, announcements — must stay reachable, so the grade fields are blanked
+    # here instead of the whole response being refused.
+    from app.modules.auth.service import student_can_view_own_grades
+
+    if not student_can_view_own_grades(db, actor):
+        term_average = term_letter = None
+        term_gpa_value = None
+        recent_grades = []
+    else:
+        term_gpa_value = _f(term_gpa.gpa)
+
     return StudentDashboard(
         **base,
         stats=StudentStats(
             term_average=term_average,
             term_letter=term_letter,
-            gpa=_f(term_gpa.gpa),
+            gpa=term_gpa_value,
             total_credits=int(term_gpa.total_credits),
             attendance_rate=_summarize(own_statuses).pct_present,
             upcoming_count=len(upcoming_assessments),

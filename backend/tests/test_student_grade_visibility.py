@@ -378,3 +378,150 @@ class TestTheGateIsTheServer:
             f"{G}/me", headers=auth_headers(user_id=registrar.id, role=Role.SECRETARY)
         )
         assert resp.status_code == 403, resp.text
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestTheDeansPerStudentHold:
+    """`student_profiles.grades_withheld` — the Dean publishes grades to everyone, then
+    holds back named students. It can only HIDE; it never exposes grades on its own."""
+
+    def _withhold(self, client, graph, student, withheld=True, headers=None):
+        return client.put(
+            f"{S}/{student.id}/grades-withheld",
+            headers=headers or graph.P,
+            json={"withheld": withheld},
+        )
+
+    def _second_student(self, graph):
+        assessment = graph.assessment(max_score="100", weight="1", is_released=True)
+        student, enrollment = graph.student(with_login=True)
+        graph.grade(assessment, student, enrollment, score="70", is_released=True)
+        return student
+
+    def test_a_withheld_student_is_refused_every_grade_surface(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        assert self._withhold(client, graph, student).status_code == 200
+        headers = graph.student_headers(student)
+        for path in (f"{G}/me", f"{G}/term?scope=me", f"{REPORTS}/report-card/me"):
+            resp = client.get(path, headers=headers)
+            assert resp.status_code == 403, (path, resp.text)
+            assert _error(resp.json())["code"] == "grades_hidden"
+
+    def test_other_students_are_unaffected(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        other = self._second_student(graph)
+        self._withhold(client, graph, student)
+        resp = client.get(f"{G}/me", headers=graph.student_headers(other))
+        assert resp.status_code == 200, resp.text
+
+    def test_lifting_the_hold_restores_access(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        self._withhold(client, graph, student)
+        resp = self._withhold(client, graph, student, withheld=False)
+        assert resp.json() == {"student_id": str(student.id), "grades_withheld": False}
+        assert client.get(f"{G}/me", headers=graph.student_headers(student)).status_code == 200
+
+    def test_the_hold_cannot_expose_grades_while_the_switch_is_off(
+        self, client, graph, enrolled_student
+    ) -> None:
+        student, _a, _g = enrolled_student
+        self._withhold(client, graph, student, withheld=False)
+        resp = client.get(f"{G}/me", headers=graph.student_headers(student))
+        assert resp.status_code == 403, resp.text
+
+    @pytest.mark.parametrize("who", ["S", "H", "student"])
+    def test_only_the_dean_may_set_it(self, client, graph, enrolled_student, who) -> None:
+        student, _a, _g = enrolled_student
+        headers = graph.student_headers(student) if who == "student" else getattr(graph, who)
+        resp = self._withhold(client, graph, student, withheld=False, headers=headers)
+        assert resp.status_code == 403, resp.text
+
+    def test_unknown_student_is_404(self, client, graph) -> None:
+        import uuid
+
+        resp = client.put(
+            f"{S}/{uuid.uuid4()}/grades-withheld", headers=graph.P, json={"withheld": True}
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_it_is_audited_once_per_decision(
+        self, client, graph, enrolled_student, db_session
+    ) -> None:
+        from sqlalchemy import func, select
+
+        from app.modules.settings.models import AuditLog
+
+        student, _a, _g = enrolled_student
+        self._withhold(client, graph, student)
+        self._withhold(client, graph, student)  # a double-click is not a second decision
+        count = db_session.scalar(
+            select(func.count()).select_from(AuditLog).where(
+                AuditLog.entity_id == student.id,
+                AuditLog.action == "student.grades_withheld",
+            )
+        )
+        assert count == 1
+
+    def test_the_session_reports_the_hold_to_that_student_only(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        other = self._second_student(graph)
+        self._withhold(client, graph, student)
+        me = client.get("/api/v1/auth/me", headers=graph.student_headers(student)).json()
+        them = client.get("/api/v1/auth/me", headers=graph.student_headers(other)).json()
+        assert me["grades_withheld"] is True
+        assert me["students_can_view_grades"] is True  # still the raw school-wide setting
+        assert them["grades_withheld"] is False
+
+    def test_staff_see_the_flag_and_the_student_does_not(
+        self, client, graph, enrolled_student
+    ) -> None:
+        student, _a, _g = enrolled_student
+        self._withhold(client, graph, student)
+        staff = client.get(f"{S}/{student.id}", headers=graph.P).json()
+        own = client.get(f"{S}/me", headers=graph.student_headers(student)).json()
+        assert staff["grades_withheld"] is True
+        assert own["grades_withheld"] is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestTheDashboardGradeBlockIsGated:
+    """The student dashboard carries a term average, GPA and recent marks. It is not
+    behind the route gate (the rest of the page must stay reachable), so the grade fields
+    are blanked instead — for the school-wide switch AND the per-student hold."""
+
+    D = "/api/v1/dashboard"
+
+    def _grade_fields(self, client, graph, student):
+        resp = client.get(self.D, headers=graph.student_headers(student))
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        return body["stats"]["term_average"], body["stats"]["gpa"], body["recent_grades"]
+
+    def test_shown_when_published(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        average, _gpa, recent = self._grade_fields(client, graph, student)
+        assert average is not None
+        assert recent
+
+    def test_blank_when_the_switch_is_off(self, client, graph, enrolled_student) -> None:
+        student, _a, _g = enrolled_student
+        assert self._grade_fields(client, graph, student) == (None, None, [])
+
+    def test_blank_for_a_withheld_student(
+        self, client, graph, enrolled_student, student_grades_visible
+    ) -> None:
+        student, _a, _g = enrolled_student
+        client.put(
+            f"{S}/{student.id}/grades-withheld", headers=graph.P, json={"withheld": True}
+        )
+        assert self._grade_fields(client, graph, student) == (None, None, [])

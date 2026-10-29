@@ -401,6 +401,16 @@ class TestOneTermPerWeek:
             "the twin must be a distinguishable offering, or this proves nothing"
         )
 
+    def test_student_week_follows_the_requested_term(self, client, graph, db_session) -> None:
+        """The student's top-bar session picks the term. Without `semester_id` the server
+        inferred the active one, so choosing the other session changed nothing here."""
+        twin, sem2 = self._second_term_twin(
+            graph, db_session, graph.math1, student=graph.freddy
+        )
+        r = client.get(ME, headers=graph.FREDDY, params={"semester_id": str(sem2.id)})
+        assert r.status_code == 200, r.text
+        assert _slots(r.json())[1] == [(graph.label(twin), "Room A")]
+
     def test_teacher_week_shows_the_active_term_only(self, client, graph, db_session) -> None:
         """The same narrowing applies to a lecturer teaching both terms."""
         self._second_term_twin(graph, db_session, graph.math1, teacher=graph.smith)

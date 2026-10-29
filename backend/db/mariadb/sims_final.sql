@@ -1201,6 +1201,7 @@ CREATE TABLE IF NOT EXISTS `student_profiles` (
   `transferred_from` varchar(250) DEFAULT NULL COMMENT 'D34 (client dump: transferedfrom). The institution a transfer student came from. Free text.',
   `completion_date` date DEFAULT NULL COMMENT 'Set when status becomes `Completed` (14 Oct 2026). Printed as Date of Completion on the transcript. NULL for everyone else.',
   `graduation_date` date DEFAULT NULL COMMENT 'D34 (client dump: graduationdate). Set when status becomes `graduated`. NULL for everyone else.',
+  `grades_withheld` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Dean''s per-student grade hold (21 Oct 2026). 1 = hidden from this student even while grades are published.',
   `dropout_date` datetime DEFAULT NULL COMMENT 'D34 (client dump: dropoutdate). Set when status becomes `DropOut`. NULL for everyone else.',
   `dropout_reason` varchar(250) DEFAULT NULL COMMENT 'D34 (client dump: dropoutreason). Why the student left. Free text.',
   `comments` text DEFAULT NULL COMMENT 'D34. Registrar''s free-text notes on the record. Not shown to the student.',

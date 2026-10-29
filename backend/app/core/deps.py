@@ -369,9 +369,12 @@ def require_student_grade_visibility(*roles: Role):
             # Imported here, not at module scope: `auth.service` imports `core.security`
             # and the users/settings models, and a top-level import would make every
             # module that touches `deps` drag that graph in.
-            from app.modules.auth.service import students_can_view_grades
+            from app.modules.auth.service import student_can_view_own_grades
 
-            if not students_can_view_grades(db):
+            # The school-wide switch AND the Dean's per-student hold. One message for
+            # both, deliberately: telling a student they were singled out is the Dean's
+            # conversation to have, not an error string's.
+            if not student_can_view_own_grades(db, user):
                 raise Forbidden(
                     "Grades are not published to students at the moment. Your lecturer "
                     "or the Dean can tell you your results.",

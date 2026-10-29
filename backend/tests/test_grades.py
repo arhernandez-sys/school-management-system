@@ -937,8 +937,39 @@ class TestMyGrades:
         assert item["score"] == 18.0
         assert subject["term_numeric"] == 90.0
 
+<<<<<<< HEAD
     def test_a_pending_mark_on_an_open_assessment_is_not_listed(self, client, graph) -> None:
         a = graph.assessment(assessment_date=_days_ago(1))
+=======
+    def test_every_enrolled_course_is_listed(self, client, graph) -> None:
+        """D29: a tertiary student sits several courses at once. Resolving ONE offering
+        (`.limit(1)`, the K-12 homeroom habit) showed the most recent enrollment only, so
+        every other course's released results never reached the student."""
+        mine = graph.assessment(max_score="20", is_released=True)
+        other = graph.assessment(max_score="20", is_released=True, cs_id=graph.other_cs.id)
+        s, e = graph.student(with_login=True)
+        e2 = ClassEnrollment(offering_id=graph.other_cs.id, student_id=s.id, semester_id=graph.sem.id)
+        graph._db.add(e2)
+        graph._db.flush()
+        graph.grade(mine, s, e, score="18")
+        graph.grade(other, s, e2, score="12")
+
+        body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
+        listed = {
+            x["offering"]["offering"]["id"]: [a["assessment_id"] for a in x["assessments"]]
+            for x in body["by_subject"]
+        }
+        assert listed == {str(graph.cs.id): [str(mine.id)], str(graph.other_cs.id): [str(other.id)]}
+
+    def test_an_unenrolled_course_is_not_listed(self, client, graph) -> None:
+        graph.assessment(is_released=True, cs_id=graph.other_cs.id)
+        s, _ = graph.student(with_login=True)
+        body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
+        assert [x["offering"]["offering"]["id"] for x in body["by_subject"]] == [str(graph.cs.id)]
+
+    def test_released_but_pending_is_excluded(self, client, graph) -> None:
+        a = graph.assessment(is_released=True)
+>>>>>>> 39f4cca3bc4e6e1fa04930d17b2fd88a5b7e7846
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="pending", score=None)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()

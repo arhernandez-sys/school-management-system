@@ -98,12 +98,15 @@ export function AssessmentsListScreen() {
   const optionsQuery = useOfferingPickerOptions(yearId);
   // Memoized because the reconcile effect below depends on it — a fresh `[]` literal on
   // every render would re-run that effect continuously.
-  // Staff see only the chosen session's offerings; an offering belongs to one session.
+  // Only the chosen session's offerings; an offering belongs to one session. Students
+  // take the session from the top-bar switcher, staff from the picker beside the year.
+  // (Students used to get the whole year here, so the dropdown ignored the switcher.)
+  const sessionId = isStudent ? selectedSemesterId : staffSession.sessionId;
   const options = useMemo(() => {
     const all = optionsQuery.data ?? [];
-    if (isStudent || !staffSession.sessionId) return all;
-    return all.filter((o) => o.semester?.id === staffSession.sessionId);
-  }, [optionsQuery.data, isStudent, staffSession.sessionId]);
+    if (!sessionId) return all;
+    return all.filter((o) => o.semester?.id === sessionId);
+  }, [optionsQuery.data, sessionId]);
   const selectedOption = options.find((o) => o.id === selectedOfferingId) ?? null;
 
   const setSelectedOfferingId = useCallback(
@@ -135,8 +138,9 @@ export function AssessmentsListScreen() {
    * every refetch.
    */
   useEffect(() => {
-    if (!isStudent || !selectedOfferingId || optionsQuery.isPending || options.length === 0)
-      return;
+    // No `options.length === 0` bail-out: a session with no courses must still clear
+    // the previous session's course, or its assessments stay on screen.
+    if (!isStudent || !selectedOfferingId || optionsQuery.isPending) return;
     if (!options.some((o) => o.id === selectedOfferingId)) setSelectedOfferingId('');
   }, [isStudent, selectedOfferingId, options, optionsQuery.isPending, setSelectedOfferingId]);
 

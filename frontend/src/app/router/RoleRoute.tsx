@@ -31,7 +31,7 @@ export function RoleRoute({ module, children }: { module: ModuleKey; children: R
   if (
     module === 'grades' &&
     user.role === 'student' &&
-    user.students_can_view_grades === false
+    (user.students_can_view_grades === false || user.grades_withheld === true)
   ) {
     return <Navigate to={ROUTES.forbidden} replace />;
   }

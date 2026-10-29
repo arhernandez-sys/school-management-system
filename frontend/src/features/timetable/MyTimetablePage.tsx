@@ -37,8 +37,9 @@ import { useMyTimetable } from './hooks/useTimetable';
 export function MyTimetablePage() {
   const { user } = useAuth();
   const isTeacher = user?.role === 'teacher';
-  const { selectedYearId, selectedPeriod } = useSelectedYear();
-  const query = useMyTimetable(selectedYearId);
+  const { selectedYearId, selectedSemesterId, selectedPeriod } = useSelectedYear();
+  // Students follow the top-bar session; a lecturer has no switcher (semester stays unset).
+  const query = useMyTimetable(selectedYearId, isTeacher ? undefined : selectedSemesterId);
 
   const view = query.data;
   const totalEntries = view?.days.reduce((n, d) => n + d.entries.length, 0) ?? 0;
