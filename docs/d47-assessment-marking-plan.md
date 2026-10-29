@@ -118,7 +118,7 @@ Tick each box when its commit lands.
 
 - [x] 1. **Backend core:** SQL file, `marking.py`, calc change, `upsert_grades` guard, gradebook fields, removal of status/release/nudge, dashboard counters, tests.
 - [x] 2. **Reopen requests:** table, service/routes, bell, audit labels, tests.
-- [ ] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
+- [x] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
 - [ ] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
 - [ ] 5. **Frontend reopen queue and print dialog/filters.**
 - [ ] 6. **MSW demo parity**, then docs.
@@ -146,3 +146,9 @@ Tick each box when its commit lands.
   - An approval opens entry until 23:59 Belize on `today + granted_days` (1–14 days, default 2).
   - `status` reuses the `GradeRevisionStatus` vocabulary (pending / approved / denied).
   - Tests: `test_assessment_reopen.py`, 25 of them.
+- **Phase 3 (28 Oct 2026).** `GET /grades/assessment-report` (`grades/assessment_report.py`) is open to the Dean, lecturers and HODs.
+  - It is built from `get_gradebook`, so the printed marks and term % are the on-screen ones.
+  - With no term, offering or student given, it uses the active session. It returns at most 60 offerings, and `truncated` says when there were more.
+  - A lecturer's `teacher_id` is ignored.
+  - `GET /reports/offering-grades` now enforces lecturer ownership (it had none).
+  - Full suite: 2244 passed, plus the same 2 known `test_settings` failures.

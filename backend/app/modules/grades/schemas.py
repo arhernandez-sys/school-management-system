@@ -342,3 +342,37 @@ class GradeRevisionList(BaseModel):
     #: Awaiting the CALLER's decision. Non-zero only for the Dean, which is what makes it
     #: safe to drive a notification badge from (§D8).
     pending_for_me: int = 0
+
+
+# ── GET /grades/assessment-report (D47) ────────────────────────────────────────
+class AssessmentReportColumn(BaseModel):
+    id: UUID
+    title: str
+    category_name: str | None = None
+    assessment_date: date | None = None
+    max_score: float
+    marking_open: bool = True
+    effective_closes_at: datetime | None = None
+
+
+class AssessmentReportRow(BaseModel):
+    student: StudentRef
+    #: The gradebook's own cells — status, score, `auto_zero` — in column order.
+    cells: list[GradebookCell] = Field(default_factory=list)
+    term_numeric: float | None = None
+    term_letter: str | None = None
+
+
+class AssessmentReportOffering(BaseModel):
+    offering: GradesOfferingRef | None = None
+    semester: SemesterRef | None = None
+    assessments: list[AssessmentReportColumn] = Field(default_factory=list)
+    rows: list[AssessmentReportRow] = Field(default_factory=list)
+
+
+class AssessmentReport(BaseModel):
+    generated_at: datetime
+    #: How many offerings matched the filters; `offerings` holds at most the first 60.
+    total_offerings: int = 0
+    truncated: bool = False
+    offerings: list[AssessmentReportOffering] = Field(default_factory=list)

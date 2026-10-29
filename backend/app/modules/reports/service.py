@@ -34,6 +34,7 @@ from app.common.enums import (
 )
 from app.core.errors import Forbidden, NotFound
 from app.core.pagination import PageParams
+from app.core.rbac import hod_offering_ids, hod_program_ids, teacher_offering_ids
 from app.core.timeutil import ensure_aware, utcnow
 from app.modules.assessments import marking
 from app.modules.assessments.models import Assessment, AssessmentCategory
@@ -1133,6 +1134,15 @@ def get_offering_grades(
     )
     if cs is None:
         raise NotFound("Offering not found.", code="not_found")
+    # D47 — a lecturer reads only the courses they teach (a head of department also their
+    # programme's), exactly as the gradebook rules; this route had no check at all, so any
+    # lecturer could read any course's marks through it. 404, not 403: no existence leak.
+    if actor.role in (Role.TEACHER, Role.HOD):
+        visible = set(teacher_offering_ids(db, actor))
+        if actor.role == Role.HOD:
+            visible |= set(hod_offering_ids(db, hod_program_ids(db, actor)))
+        if cs.id not in visible:
+            raise NotFound("Offering not found.", code="not_found")
     section = cs  # D31: the offering IS the section
     subject = db.get(Course, cs.course_id)
     if subject is None:  # pragma: no cover - the FK guarantees this

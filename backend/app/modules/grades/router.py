@@ -57,6 +57,7 @@ from app.modules.grades import revisions as revisions_service
 from app.modules.grades import service
 from app.modules.grades.schemas import (
     GradeRevisionCreateRequest,
+    AssessmentReport,
     GradeRevisionDecisionRequest,
     GradeRevisionList,
     GradeRevisionRead,
@@ -96,6 +97,8 @@ _any_role = require_student_grade_visibility(
 )
 #: A grade REVISION is decided by the Dean alone (D30 §D7, §D14).
 _dean = require_role(Role.PRINCIPAL)
+#: D47 — the printable assessment report: the Dean, and lecturers for their own courses.
+_report = require_role(Role.PRINCIPAL, Role.TEACHER, Role.HOD)
 
 
 @router.get(
@@ -132,6 +135,33 @@ def get_gradebook(
     P/S read with `can_edit=false`."""
     return service.get_gradebook(
         db, actor=actor, offering_id=offering_id, semester_id=semester_id
+    )
+
+
+@router.get(
+    "/assessment-report",
+    response_model=AssessmentReport,
+    summary="Printable assessment report — Dean filters freely, lecturers get their own (D47)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
+)
+def get_assessment_report(
+    academic_year_id: Annotated[uuid.UUID | None, Query()] = None,
+    semester_id: Annotated[uuid.UUID | None, Query()] = None,
+    offering_id: Annotated[uuid.UUID | None, Query()] = None,
+    student_id: Annotated[uuid.UUID | None, Query()] = None,
+    teacher_id: Annotated[uuid.UUID | None, Query()] = None,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_report),
+) -> AssessmentReport:
+    """One section per offering, built from the gradebook itself so the printed marks and
+    term % are the ones on screen. A lecturer's `teacher_id` is ignored and an offering
+    they do not teach is a 404; with no term, offering or student named, the current
+    session is assumed. At most 60 offerings — `truncated` says when there were more."""
+    from app.modules.grades import assessment_report
+
+    return assessment_report.build_report(
+        db, actor=actor, academic_year_id=academic_year_id, semester_id=semester_id,
+        offering_id=offering_id, student_id=student_id, teacher_id=teacher_id,
     )
 
 
