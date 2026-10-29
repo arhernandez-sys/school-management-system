@@ -6,6 +6,7 @@ import {
   useNotificationCounts,
 } from '@features/announcements/hooks/useAnnouncements';
 import { useGradeRevisions } from '@features/grades/hooks/useRevisions';
+import { useReopenRequests } from '@features/grades/hooks/useReopenRequests';
 import { ROUTES } from '@shared/constants/routes';
 import type { NotificationItem } from './NotificationsBell';
 import { isLecturerRole } from '@shared/auth/permissions';
@@ -22,7 +23,8 @@ import { isLecturerRole } from '@shared/auth/permissions';
  * composed from two sources the app already serves —
  *
  *   * unread ANNOUNCEMENTS, which every role may have;
- *   * pending GRADE REVISIONS awaiting the viewer's decision, which only the Dean has.
+ *   * pending GRADE REVISIONS awaiting the viewer's decision, which only the Dean has;
+ *   * pending MARKING REOPEN requests (D47), likewise the Dean's alone.
  *
  * The badge count comes from `/announcements/unread-count`, which the server already sums
  * across both. This hook does not re-add them: a count assembled in the browser would drift
@@ -54,6 +56,7 @@ export function useNotifications(): NotificationsState {
   const counts = useNotificationCounts();
   const announcements = useAnnouncementsList({ page: 1, page_size: MAX_PER_SOURCE });
   const revisions = useGradeRevisions(canSeeRevisions ? { status: 'pending' } : {});
+  const reopens = useReopenRequests('pending', role === 'principal');
 
   const items = useMemo<NotificationItem[]>(() => {
     const out: NotificationItem[] = [];
@@ -65,6 +68,16 @@ export function useNotifications(): NotificationsState {
           id: `revision:${row.id}`,
           title: `Grade revision · ${row.student?.full_name ?? 'a student'}`,
           preview: `${row.offering?.label ?? row.offering?.course.name ?? 'a course'} · ${row.original_score ?? '—'} → ${row.proposed_score} · asked by ${row.requested_by_name}`,
+        });
+      }
+    }
+
+    if (role === 'principal') {
+      for (const row of (reopens.data?.items ?? []).slice(0, MAX_PER_SOURCE)) {
+        out.push({
+          id: `reopen:${row.id}`,
+          title: `Reopen marking · ${row.assessment_title}`,
+          preview: `${row.offering?.label ?? 'a course'} · ${row.blank_count} without a mark · asked by ${row.requested_by_name}`,
         });
       }
     }
@@ -81,12 +94,16 @@ export function useNotifications(): NotificationsState {
       });
     }
     return out;
-  }, [announcements.data, canSeeRevisions, revisions.data, role]);
+  }, [announcements.data, canSeeRevisions, revisions.data, reopens.data, role]);
 
   const onSelect = (id: string) => {
     const [kind, targetId] = id.split(':');
     if (kind === 'revision') {
       navigate(ROUTES.gradeRevisions);
+      return;
+    }
+    if (kind === 'reopen') {
+      navigate(ROUTES.gradeReopens);
       return;
     }
     if (kind === 'announcement' && targetId) {

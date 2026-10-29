@@ -120,7 +120,7 @@ Tick each box when its commit lands.
 - [x] 2. **Reopen requests:** table, service/routes, bell, audit labels, tests.
 - [x] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
 - [x] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
-- [ ] 5. **Frontend reopen queue and print dialog/filters.**
+- [x] 5. **Frontend reopen queue and print dialog/filters.**
 - [ ] 6. **MSW demo parity**, then docs.
 
 ## Verification
@@ -156,3 +156,5 @@ Tick each box when its commit lands.
   - Deleted: `statusMeta.ts`, `RemindTeacherButton`, and the status / release / nudge hooks.
   - Shared wording lives in `features/grades/marking.ts`.
   - `tsc -b --force` and eslint are clean. The MSW demo is updated in phase 6.
+- **Phase 5 (28 Oct 2026).** A "Reopen Requests" tab under Grades (`AssessmentReopenScreen`), and the bell lists the Dean's pending reopens.
+  - The Grades page gains a Course offering filter (everyone), a Student filter (Dean) and a **Print assessments** button (Dean, lecturers, HODs) that opens `AssessmentReportPrintDialog`.

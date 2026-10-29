@@ -79,11 +79,13 @@ export interface GradeRevisionDecisionPayload {
   decision_note?: string | null;
 }
 
-/** The bell payload. `unread_count` is the SUM of the two components (§D8). */
+/** The bell payload. `unread_count` is the SUM of the components (§D8). */
 export interface UnreadCount {
   unread_count: number;
   unread_announcements: number;
   pending_grade_revisions: number;
+  /** D47 — marking-window reopen requests awaiting the Dean. */
+  pending_assessment_reopens: number;
 }
 
 export const REVISION_STATUS_LABEL: Record<GradeRevisionStatus, string> = {

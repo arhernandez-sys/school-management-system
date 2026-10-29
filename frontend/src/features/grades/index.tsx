@@ -7,14 +7,16 @@ import { GradeAssessmentsScreen } from './GradeAssessmentsScreen';
 import { AssessmentGradingScreen } from './AssessmentGradingScreen';
 import { MyGradesScreen } from './MyGradesScreen';
 import { GradeRevisionsScreen } from './GradeRevisionsScreen';
+import { AssessmentReopenScreen } from './AssessmentReopenScreen';
 
 /**
  * Grades module (Phase 7) — a tabbed, nested-routed container mounted at `/grades/*`
  * (mirrors features/settings/index.tsx and features/reports/index.tsx). Role-shaped:
- *  - Student → "My Grades" (own released grades, read-only), no sub-tabs.
+ *  - Student → "My Grades" (own grades, read-only), no sub-tabs.
  *  - Lecturer / Dean / Registrar → a grid of COURSE OFFERINGS; opening one lists its
  *    assessments, and opening an assessment grades everyone enrolled in that offering.
- *  - Lecturer / Dean ALSO get the **Grade Revision** tab.
+ *  - Lecturer / Dean ALSO get the **Grade Revision** and **Reopen Requests** tabs (D47 —
+ *    a lecturer asks the Dean to reopen a closed 5-day marking window).
  *
  * The offering selection is URL-persisted via `?offering_id=` and the year via `?year=`.
  * Route visibility is UX-only; the server (mocked here) is authoritative.
@@ -44,7 +46,11 @@ export function GradesPage() {
   const tabs = useMemo<GradesTab[]>(() => {
     if (isStudent) return [];
     const base: GradesTab[] = [{ label: 'Gradebook', path: '' }];
-    if (canSeeRevisions) base.push({ label: 'Grade Revision', path: 'revisions' });
+    if (canSeeRevisions) {
+      base.push({ label: 'Grade Revision', path: 'revisions' });
+      // D47 — the same audience and the same Dean-decides shape.
+      base.push({ label: 'Reopen Requests', path: 'reopen-requests' });
+    }
     return base;
   }, [isStudent, canSeeRevisions]);
 
@@ -87,6 +93,10 @@ export function GradesPage() {
         <Route
           path="revisions"
           element={canSeeRevisions ? <GradeRevisionsScreen /> : <Navigate to=".." replace />}
+        />
+        <Route
+          path="reopen-requests"
+          element={canSeeRevisions ? <AssessmentReopenScreen /> : <Navigate to=".." replace />}
         />
         {/* Explicit sub-paths keep deep links stable if a viewer role changes. */}
         <Route path="me" element={<MyGradesScreen />} />

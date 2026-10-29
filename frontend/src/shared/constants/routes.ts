@@ -36,6 +36,8 @@ export const ROUTES = {
   gradeAssessment: '/grades/assessment',
   /** Grade-revision queue (D30 §D7) — the Dean decides, the Lecturer tracks their own. */
   gradeRevisions: '/grades/revisions',
+  /** D47 — lecturers' requests to reopen a closed marking window. */
+  gradeReopens: '/grades/reopen-requests',
   attendance: '/attendance',
   announcements: '/announcements',
   calendar: '/calendar',

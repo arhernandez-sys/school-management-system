@@ -14,11 +14,12 @@ export const reopenKeys = {
   list: (status?: ReopenRequestStatus) => [...reopenKeys.all, 'list', status ?? null] as const,
 };
 
-export function useReopenRequests(status?: ReopenRequestStatus) {
+export function useReopenRequests(status?: ReopenRequestStatus, enabled = true) {
   return useQuery({
     queryKey: reopenKeys.list(status),
     queryFn: ({ signal }) => fetchReopenRequests(status, signal),
     placeholderData: (prev) => prev,
+    enabled,
   });
 }
 
