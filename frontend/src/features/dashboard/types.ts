@@ -191,24 +191,17 @@ export interface TeacherTodayOffering {
   attendance_recorded: boolean;
 }
 
+/** D47 — an assessment whose marking window is still open, soonest-closing first. */
 export interface TeacherAssessmentItem {
   id: string;
   title: string;
   offering: OfferingRef | null;
-  assessment_date: string | null;
-  status: string;
-}
-
-/**
- * An assessment the lecturer has MARKED but not yet RELEASED to students.
- *
- * Extends the plain assessment item with the two fields that make the row actionable:
- * `offering_id` (the gradebook is addressed by offering, not by assessment) and how many
- * students are still waiting.
- */
-export interface TeacherAwaitingReleaseItem extends TeacherAssessmentItem {
   offering_id: string;
-  graded_unreleased_count: number;
+  assessment_date: string | null;
+  /** When entry locks (the later of the window and any reopen). */
+  marking_closes_at: string | null;
+  /** Whole school days left; 0 = closes today. */
+  days_left: number | null;
 }
 
 export interface TeacherDashboard extends DashboardBase {
@@ -217,18 +210,11 @@ export interface TeacherDashboard extends DashboardBase {
     /** ONE count, not two — see the D31 note at the top of this file. */
     my_offerings: number;
     attendance_due_today: number;
-    /** Assessments still being MARKED (published / grading). */
+    /** D47 — assessments whose marking window is still open. */
     ungraded_items: number;
-    /**
-     * Assessments already marked but still HIDDEN from students. Distinct from
-     * `ungraded_items`: that is work still to do, this is finished work not yet
-     * published. The two are counted separately and must not be summed.
-     */
-    awaiting_release_items: number;
   };
   today_classes: TeacherTodayOffering[];
   recent_assessments: TeacherAssessmentItem[];
-  awaiting_release: TeacherAwaitingReleaseItem[];
   recent_announcements: DashboardAnnouncement[];
 }
 

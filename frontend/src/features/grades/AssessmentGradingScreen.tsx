@@ -20,6 +20,7 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import LockClockIcon from '@mui/icons-material/LockClock';
 import {
   EmptyState,
   ErrorState,
@@ -32,9 +33,11 @@ import { ROUTES } from '@shared/constants/routes';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { GradeCell, type GradeCellValue } from './components/GradeCell';
 import { RequestRevisionDialog } from './components/RequestRevisionDialog';
-import { useGradebook, useSaveGrades, useSetRelease } from './hooks/useGrades';
+import { RequestReopenDialog } from './components/RequestReopenDialog';
+import { useGradebook, useSaveGrades } from './hooks/useGrades';
 import type { GradeEntry, RevisionBlockedReason } from './types';
-import { formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { closesOn, daysLeftLabel, markingBadge, MARKING_WINDOW_DAYS } from './marking';
 import { isLecturerRole } from '@shared/auth/permissions';
 import { useIsSessionActive } from '@shared/hooks';
 
@@ -69,12 +72,18 @@ const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
 /**
  * Per-assessment class grading page (`/grades/assessment/:assessmentId`).
  *
- * Reached from the assessment list: instead of the full students×assessments grid, the
- * teacher grades the WHOLE CLASS for a SINGLE assessment. Reuses the gradebook read
- * (roster + existing marks), filters to this one assessment's column, and saves via the
- * one grade-write path (PUT /assessments/{id}/grades). The Dean and Registrar see it
- * read-only; a lecturer who does not own the offering gets a clean not-authorized state
- * (the gradebook 404s — 404, not 403, so the response does not reveal that it exists).
+ * **D47 — one screen, one Save.** The lecturer opens the assessment and every student's
+ * mark box is already open; they type the marks (or tick Excused) and press the one Save
+ * button in the bar at the bottom. A saved mark IS the released mark — there is no publish
+ * or release step — and it counts toward the term grade at once.
+ *
+ * The box stays open for the 5-day MARKING WINDOW. After that the grid is read-only, blank
+ * marks show as "0 (auto)" (which is what the term grade counts them as), and the owning
+ * lecturer can ask the Dean to reopen it.
+ *
+ * Reuses the gradebook read (roster + existing marks) and the one grade-write path
+ * (PUT /assessments/{id}/grades). The Dean sees it read-only; a lecturer who does not own
+ * the offering gets a clean not-authorized state (the gradebook 404s).
  */
 export function AssessmentGradingScreen() {
   const navigate = useNavigate();
@@ -90,7 +99,7 @@ export function AssessmentGradingScreen() {
 
   const gradebookQuery = useGradebook(offeringId);
   const saveMut = useSaveGrades(offeringId);
-  const releaseMut = useSetRelease(offeringId);
+  const [reopenOpen, setReopenOpen] = useState(false);
 
   const [draft, setDraft] = useState<Map<string, GradeCellValue>>(new Map());
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -136,10 +145,9 @@ export function AssessmentGradingScreen() {
    */
   const midtermFrozen = gradebook?.midterm_frozen ?? false;
   const midtermEnd = gradebook?.midterm_submission_end ?? null;
-  const canEdit =
-    (gradebook?.can_edit ?? false) &&
-    (assessment?.is_editable ?? false) &&
-    !midtermFrozen;
+  // D47 — the marking window is the per-assessment lock; the server is the source of it.
+  const markingOpen = assessment?.marking_open ?? false;
+  const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !midtermFrozen;
 
   /**
    * D32 — is a Revision of Grades possible for ANY student on this assessment?
@@ -191,6 +199,7 @@ export function AssessmentGradingScreen() {
           return;
         }
       }
+      // A cleared box is sent as `pending` with no score: the student goes back to blank.
       entries.push({
         student_id: studentId,
         status: value.status,
@@ -230,8 +239,16 @@ export function AssessmentGradingScreen() {
     );
   }
 
+  const cellsHere = revisionCells;
+  const markedCount = cellsHere.filter((c) => c.status !== 'pending').length;
+  const blankCount = (gradebook?.rows ?? []).filter((r) => {
+    if (!r.is_active_member) return false;
+    const c = r.cells.find((x) => x.assessment_id === assessmentId);
+    return !c || c.status === 'pending';
+  }).length;
+
   return (
-    <Box sx={{ pb: dirtyCount > 0 ? 10 : 3, pt: 3 }}>
+    <Box sx={{ pb: canEdit ? 12 : 3, pt: 3 }}>
       <BackButton onClick={backToList} label="Back to assessments" />
 
       {gradebookQuery.isLoading && <LoadingState variant="table" rows={8} label="Loading roster" />}
@@ -269,32 +286,25 @@ export function AssessmentGradingScreen() {
                     .join(' · ')
                 : undefined
             }
-            primaryAction={
-              canEdit ? (
-                <Button
-                  variant="outlined"
-                  disabled={releaseMut.isPending}
-                  onClick={() =>
-                    releaseMut.mutate({ assessmentId, release: !assessment.is_released })
-                  }
-                >
-                  {assessment.is_released ? 'Unrelease grades' : 'Release grades'}
-                </Button>
-              ) : undefined
-            }
           />
 
           <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-            <Chip size="small" variant="outlined" label={`Max score ${assessment.max_score}`} />
+            <Chip size="small" variant="outlined" label={`Out of ${assessment.max_score}`} />
             {assessment.assessment_date && (
-              <Chip size="small" variant="outlined" label={assessment.assessment_date} />
+              <Chip
+                size="small"
+                variant="outlined"
+                label={formatSchoolDate(assessment.assessment_date)}
+              />
             )}
-            <StatusBadge
-              label={assessment.is_released ? 'Released' : 'Not released'}
-              kind={assessment.is_released ? 'success' : 'neutral'}
+            <StatusBadge {...markingBadge(assessment)} />
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`${markedCount} of ${cellsHere.length} marked`}
             />
             {midtermFrozen && <StatusBadge label="Mid-session frozen" kind="warning" />}
-            {!canEdit && !midtermFrozen && <StatusBadge label="Read-only" kind="neutral" />}
+            {!gradebook.can_edit && <StatusBadge label="Read-only" kind="neutral" />}
             <Box sx={{ flexGrow: 1 }} />
             {isLecturer && (
               <Button size="small" onClick={() => navigate(ROUTES.gradeRevisions)}>
@@ -302,6 +312,44 @@ export function AssessmentGradingScreen() {
               </Button>
             )}
           </Stack>
+          {/* D47 — the marking window, said BEFORE anyone types: when it closes while
+              open, and while closed what that means and the way back in. */}
+          {markingOpen && gradebook.can_edit && (
+            <Alert severity={assessment.days_left != null && assessment.days_left <= 1 ? 'warning' : 'info'} sx={{ mb: 2 }}>
+              <strong>
+                {assessment.reopened_until ? 'Reopened by the Dean' : 'Marking is open'} until the
+                end of {closesOn(assessment)}
+              </strong>{' '}
+              ({daysLeftLabel(assessment.days_left)}). Enter the marks and press{' '}
+              <strong>Save marks</strong> — they count toward the final grade as soon as they are
+              saved. Students still without a mark when it closes count as 0.
+            </Alert>
+          )}
+          {!markingOpen && (
+            <Alert
+              severity="warning"
+              icon={<LockClockIcon />}
+              sx={{ mb: 2 }}
+              action={
+                assessment.can_request_reopen ? (
+                  <Button color="inherit" size="small" onClick={() => setReopenOpen(true)}>
+                    Ask the Dean to reopen
+                  </Button>
+                ) : undefined
+              }
+            >
+              <strong>Marking closed on {closesOn(assessment)}.</strong>{' '}
+              {blankCount > 0
+                ? `${blankCount} ${blankCount === 1 ? 'student has' : 'students have'} no mark and ${blankCount === 1 ? 'counts' : 'count'} as 0.`
+                : 'Every student has a mark.'}{' '}
+              {assessment.pending_reopen_request_id
+                ? 'Your request to reopen it is waiting for the Dean.'
+                : gradebook.can_edit
+                  ? `Marks are entered within ${MARKING_WINDOW_DAYS} days of the assessment; the Dean can reopen it.`
+                  : ''}
+            </Alert>
+          )}
+
           {sessionActive === false && (
             <Alert severity="info" sx={{ mb: 2 }}>
               {gradebook.semester?.name ?? 'This session'} is not active. Its grades are
@@ -384,6 +432,7 @@ export function AssessmentGradingScreen() {
                               assessmentTitle={assessment.title}
                               editable={rowEditable}
                               dirty={draft.has(row.student.id)}
+                              autoZero={!draftValue && Boolean(cell?.auto_zero)}
                               onChange={(next) => handleChange(row.student.id, next)}
                             />
                           </Box>
@@ -437,6 +486,17 @@ export function AssessmentGradingScreen() {
       )}
 
       {assessment && (
+        <RequestReopenDialog
+          open={reopenOpen}
+          assessmentId={assessmentId}
+          assessmentTitle={assessment.title}
+          closedAt={assessment.effective_closes_at}
+          blankCount={blankCount}
+          onClose={() => setReopenOpen(false)}
+        />
+      )}
+
+      {assessment && (
         <RequestRevisionDialog
           open={revisionFor !== null}
           assessmentId={assessmentId}
@@ -448,8 +508,8 @@ export function AssessmentGradingScreen() {
         />
       )}
 
-      {/* Sticky save bar — appears only when there are unsaved edits. */}
-      <Slide direction="up" in={dirtyCount > 0} mountOnEnter unmountOnExit>
+      {/* D47 — the ONE save button, pinned to the bottom for as long as marking is open. */}
+      <Slide direction="up" in={canEdit} mountOnEnter unmountOnExit>
         <Paper
           elevation={8}
           sx={{
@@ -486,19 +546,25 @@ export function AssessmentGradingScreen() {
               </Alert>
             )}
             <Typography variant="body2" color="text.secondary" sx={{ mr: 'auto' }}>
-              <Box component="span" sx={{ color: 'warning.main', fontWeight: 700 }}>
-                ●
-              </Box>{' '}
-              {dirtyCount} unsaved {dirtyCount === 1 ? 'change' : 'changes'}
+              {dirtyCount > 0 ? (
+                <>
+                  <Box component="span" sx={{ color: 'warning.main', fontWeight: 700 }}>
+                    ●
+                  </Box>{' '}
+                  {dirtyCount} unsaved {dirtyCount === 1 ? 'change' : 'changes'}
+                </>
+              ) : (
+                'All marks saved'
+              )}
             </Typography>
             <Button
               onClick={() => {
                 setDraft(new Map());
                 setSaveError(null);
               }}
-              disabled={saveMut.isPending}
+              disabled={saveMut.isPending || dirtyCount === 0}
             >
-              Cancel
+              Discard
             </Button>
             <Button
               variant="contained"
@@ -507,10 +573,10 @@ export function AssessmentGradingScreen() {
               // already locked, but a draft entered before the deadline lapsed — or before
               // a refetch flipped the freeze on — could otherwise still be submitted into a
               // guaranteed 409. Same argument for both windows (D33).
-              disabled={saveMut.isPending || midtermFrozen}
+              disabled={saveMut.isPending || midtermFrozen || dirtyCount === 0}
               startIcon={saveMut.isPending ? <CircularProgress size={16} color="inherit" /> : undefined}
             >
-              {saveMut.isPending ? 'Saving…' : 'Save changes'}
+              {saveMut.isPending ? 'Saving…' : 'Save marks'}
             </Button>
           </Stack>
         </Paper>

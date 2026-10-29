@@ -7,7 +7,8 @@
  *   single write, so an optimistic patch would have to reconcile every cell against the
  *   server's recomputed term grades — instead we invalidate-and-refetch, which keeps the
  *   term-grade math authoritative in one place (the selector) and cannot drift.
- * - `useSetRelease` flips an assessment's release flag and refreshes.
+ * - D47 retired release: a saved mark counts at once. `useAssessmentReport` feeds the
+ *   print dialog; the reopen-request hooks live in `useReopenRequests.ts`.
  *
  * **D31** — the picker and the gradebook are keyed by `offeringId`, not `classSubjectId`.
  * The query keys changed with them, which is why a cached pre-D31 gradebook cannot be
@@ -18,10 +19,10 @@ import {
   fetchGradebook,
   fetchMyGrades,
   fetchOfferingOptions,
+  fetchAssessmentReport,
   saveAssessmentGrades,
-  setAssessmentRelease,
 } from '../api/gradesApi';
-import type { GradeEntry } from '../types';
+import type { AssessmentReportParams, GradeEntry } from '../types';
 
 export const gradeKeys = {
   all: ['grades'] as const,
@@ -32,6 +33,7 @@ export const gradeKeys = {
   // actually refetch instead of serving the previously-selected period from cache.
   me: (academicYearId?: string | null, semesterId?: string | null) =>
     [...gradeKeys.all, 'me', academicYearId ?? null, semesterId ?? null] as const,
+  report: (params: AssessmentReportParams) => [...gradeKeys.all, 'report', params] as const,
 };
 
 /** GET /grades/offerings — the picker (lecturer own / Dean·Registrar all), year-scoped. */
@@ -66,22 +68,16 @@ export function useSaveGrades(offeringId: string | null) {
   });
 }
 
-/** POST /assessments/{id}/release|unrelease. */
-export function useSetRelease(offeringId: string | null) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ assessmentId, release }: { assessmentId: string; release: boolean }) =>
-      setAssessmentRelease(assessmentId, release),
-    onSuccess: () => {
-      if (offeringId) {
-        void qc.invalidateQueries({ queryKey: gradeKeys.gradebook(offeringId) });
-      }
-      void qc.invalidateQueries({ queryKey: [...gradeKeys.all, 'me'] });
-    },
+/** GET /grades/assessment-report — fetched only while the print dialog is open. */
+export function useAssessmentReport(params: AssessmentReportParams, enabled: boolean) {
+  return useQuery({
+    queryKey: gradeKeys.report(params),
+    queryFn: ({ signal }) => fetchAssessmentReport(params, signal),
+    enabled,
   });
 }
 
-/** GET /grades/me — the student's own released grades (year-scoped). */
+/** GET /grades/me — the student's own grades (year-scoped). */
 export function useMyGrades(academicYearId?: string, semesterId?: string) {
   return useQuery({
     queryKey: gradeKeys.me(academicYearId, semesterId),

@@ -17,7 +17,6 @@ import EventBusyIcon from '@mui/icons-material/EventBusy';
 import RuleIcon from '@mui/icons-material/Rule';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { StatCard, StatusBadge, EmptyState } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
 import type {
@@ -25,6 +24,7 @@ import type {
   HodDashboard as HodDashboardData,
 } from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
+import { markingBadge, MARKING_WINDOW_DAYS } from '@features/grades/marking';
 
 export interface TeacherDashboardProps {
   /** D43 — also accepts the HOD variant, which is the same payload with an honest
@@ -40,15 +40,9 @@ function formatDate(iso: string | null): string {
   return formatSchoolDayMonth(iso);
 }
 
-/**
- * Deep link into the gradebook for one offering. The gradebook selects by
- * `?class_subject_id=` (a query param, not a path segment — see
- * `features/grades/GradeAssessmentsScreen.tsx`); with no id it opens the picker.
- */
-function gradebookLink(offeringId?: string): string {
-  return offeringId
-    ? `${ROUTES.grades}?offering_id=${encodeURIComponent(offeringId)}`
-    : ROUTES.grades;
+/** Straight into one assessment's grading screen (D47 — the marks go in there). */
+function gradingLink(assessmentId: string, offeringId: string): string {
+  return `${ROUTES.gradeAssessment}/${assessmentId}?offering_id=${encodeURIComponent(offeringId)}`;
 }
 
 /**
@@ -63,7 +57,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
   return (
     <Grid container spacing={3}>
       {/* Stat row */}
-      <Grid item xs={12} sm={6} lg={3}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
           label="My courses"
           value={stats.my_offerings}
@@ -72,7 +66,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
           to={ROUTES.offerings}
         />
       </Grid>
-      <Grid item xs={12} sm={6} lg={3}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
           label="Attendance due today"
           value={stats.attendance_due_today}
@@ -82,33 +76,16 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
           to={ROUTES.attendance}
         />
       </Grid>
-      <Grid item xs={12} sm={6} lg={3}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
-          label="Ungraded items"
+          label="Open for marking"
           value={stats.ungraded_items}
           icon={<RuleIcon />}
           color="info"
-          helperText="Still to mark"
+          helperText={`${MARKING_WINDOW_DAYS}-day window per assessment`}
           to={ROUTES.grades}
         />
       </Grid>
-      <Grid item xs={12} sm={6} lg={3}>
-        {/* Marked but not yet published — a DIFFERENT outstanding action from
-            "ungraded items", so it gets its own tile rather than being folded in.
-            Links to the offering with the oldest hidden work; falls back to the
-            gradebook picker when the queue is empty. */}
-        <StatCard
-          label="Awaiting release"
-          value={stats.awaiting_release_items}
-          icon={<VisibilityOffIcon />}
-          color={stats.awaiting_release_items > 0 ? 'warning' : 'success'}
-          helperText={
-            stats.awaiting_release_items > 0 ? 'Students cannot see these' : 'All released'
-          }
-          to={gradebookLink(data.awaiting_release[0]?.offering_id)}
-        />
-      </Grid>
-
       {/* Today's classes — hero */}
       <Grid item xs={12} lg={7}>
         <Card variant="outlined" sx={{ height: '100%' }}>
@@ -167,65 +144,6 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
         <AnnouncementsList title="Announcements" announcements={data.recent_announcements} />
       </Grid>
 
-      {/* Awaiting release — the standing "marked but still hidden" queue. Rendered
-          only when non-empty: an always-present empty card would add noise to the
-          common case where a teacher releases as they mark. */}
-      {data.awaiting_release.length > 0 && (
-        <Grid item xs={12}>
-          <Card variant="outlined">
-            <CardContent>
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
-              >
-                <Typography variant="h4" component="h3">
-                  Awaiting release
-                </Typography>
-                <StatusBadge
-                  label={`${stats.awaiting_release_items} to release`}
-                  kind="warning"
-                />
-              </Stack>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                Marked, but students still cannot see these results.
-              </Typography>
-              <List disablePadding>
-                {data.awaiting_release.map((a, i) => (
-                  <Box key={a.id}>
-                    {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}
-                      secondaryAction={
-                        <Button
-                          component={RouterLink}
-                          to={gradebookLink(a.offering_id)}
-                          size="small"
-                          variant="contained"
-                        >
-                          Release
-                        </Button>
-                      }
-                    >
-                      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
-                        <Typography variant="subtitle2" component="p" noWrap>
-                          {a.title}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" noWrap>
-                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
-                          · {a.graded_unreleased_count}{' '}
-                          {a.graded_unreleased_count === 1 ? 'student' : 'students'} waiting
-                        </Typography>
-                      </Stack>
-                    </ListItem>
-                  </Box>
-                ))}
-              </List>
-            </CardContent>
-          </Card>
-        </Grid>
-      )}
-
       {/* Upcoming / recent assessments */}
       <Grid item xs={12}>
         <Card variant="outlined">
@@ -236,7 +154,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
             >
               <Typography variant="h4" component="h3">
-                Assessments needing attention
+                Marking closing soonest
               </Typography>
               <Button component={RouterLink} to={ROUTES.grades} size="small">
                 Enter grades
@@ -245,8 +163,8 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
             {data.recent_assessments.length === 0 ? (
               <EmptyState
                 icon={<RuleIcon fontSize="inherit" />}
-                title="Nothing to grade"
-                description="No published or in-progress assessments right now."
+                title="Nothing to mark"
+                description="No assessment has its marking window open right now."
                 variant="card"
               />
             ) : (
@@ -254,8 +172,20 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                 {data.recent_assessments.map((a, i) => (
                   <Box key={a.id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}>
-                      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
+                    <ListItem
+                      sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}
+                      secondaryAction={
+                        <Button
+                          component={RouterLink}
+                          to={gradingLink(a.id, a.offering_id)}
+                          size="small"
+                          variant={a.days_left != null && a.days_left <= 1 ? 'contained' : 'outlined'}
+                        >
+                          Enter marks
+                        </Button>
+                      }
+                    >
+                      <Stack sx={{ minWidth: 0, flexGrow: 1, pr: 14 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {a.title}
                         </Typography>
@@ -265,8 +195,11 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                         </Typography>
                       </Stack>
                       <StatusBadge
-                        label={a.status === 'grading' ? 'In progress' : 'Published'}
-                        kind={a.status === 'grading' ? 'warning' : 'info'}
+                        {...markingBadge({
+                          marking_open: true,
+                          effective_closes_at: a.marking_closes_at,
+                          days_left: a.days_left,
+                        })}
                       />
                     </ListItem>
                   </Box>

@@ -231,15 +231,10 @@ export interface StudentAssessmentLine {
   weight: number;
   assessment_date: string | null;
   status: GradeStatus;
-  /** Only present once released + graded, else null. */
+  /** Null unless the result is graded. */
   score: number | null;
-  is_released: boolean;
-  /**
-   * When a principal/secretary last reminded the teacher to release this
-   * assessment (ISO, UTC), or null if never. Drives the "Reminded 2h ago"
-   * disabled state on the Remind-teacher action.
-   */
-  last_nudged_at: string | null;
+  /** D47 — no mark and the marking window has closed: counts as 0. */
+  auto_zero: boolean;
 }
 
 /**
@@ -259,21 +254,6 @@ export interface StudentAssessmentGroup {
 /** GET /students/{id}/assessments — the full envelope. */
 export interface StudentAssessmentsResponse {
   items: StudentAssessmentGroup[];
-  /**
-   * The nudge cooldown, served by the API so the SPA never keeps its own copy of
-   * the window (which would drift the moment the server value is retuned).
-   */
-  nudge_cooldown_seconds: number;
-}
-
-/** POST /assessments/{id}/nudge-release response. */
-export interface NudgeReleaseResult {
-  assessment_id: string;
-  awaiting_release_count: number;
-  teachers: { id: string; full_name: string }[];
-  last_nudged_at: string;
-  next_nudge_allowed_at: string;
-  cooldown_seconds: number;
 }
 
 /**

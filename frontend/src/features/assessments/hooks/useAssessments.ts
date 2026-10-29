@@ -22,7 +22,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@shared/api/client';
 import type { OfferingRef, Page } from '@shared/types/api';
-import type { AssessmentStatus } from '@shared/types/enums';
 
 export type { OfferingRef };
 
@@ -36,8 +35,12 @@ export interface AssessmentListItem {
   max_score: number;
   weight: number;
   assessment_date: string | null;
-  status: AssessmentStatus;
-  is_released: boolean;
+  /** D47 — the marking window; see `features/grades/types.ts` `GradebookAssessment`. */
+  marking_open: boolean;
+  marking_closes_at: string | null;
+  reopened_until: string | null;
+  effective_closes_at: string | null;
+  days_left: number | null;
 }
 
 export interface AssessmentDetail extends AssessmentListItem {
@@ -71,7 +74,6 @@ export interface AssessmentCategoryBody {
 
 export interface AssessmentListParams {
   offering_id?: string;
-  status?: AssessmentStatus;
   academic_year_id?: string;
   /**
    * Narrows within the year — sent by the student's global year·semester switcher so
@@ -262,17 +264,6 @@ export function useUpdateAssessment() {
   return useMutation({
     mutationFn: async ({ id, body }: { id: string; body: AssessmentUpdateBody }) => {
       const res = await api.patch<AssessmentDetail>(`/assessments/${id}`, body);
-      return res.data;
-    },
-    onSuccess: invalidate,
-  });
-}
-
-export function useSetAssessmentStatus() {
-  const invalidate = useInvalidateAssessments();
-  return useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: AssessmentStatus }) => {
-      const res = await api.post<AssessmentDetail>(`/assessments/${id}/status`, { status });
       return res.data;
     },
     onSuccess: invalidate,

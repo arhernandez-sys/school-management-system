@@ -12,17 +12,17 @@ import type { MyGradeSubject } from '../types';
 import { letterKind, statusPresentation } from './gradeDisplay';
 
 export interface OfferingGradesTableProps {
-  /** The offering whose released assessments are shown (student scope). */
+  /** The offering whose assessments are shown (student scope). */
   subject: MyGradeSubject;
 }
 
 /**
- * The per-offering released-grades table for the student "My Grades" view
- * (§7.7, student scope). Columns: Assessment / Type / Score / Grade. A graded row
- * shows its letter StatusBadge; a non-graded row shows the status presentation
- * (Absent / Excused / Exempt / Pending). Renders a friendly empty line when the
- * offering has no released grades yet. Read-only; the server already applies the
- * release filter, so unreleased assessments are never in the payload.
+ * The per-offering grades table for the student "My Grades" view (§7.7, student
+ * scope). Columns: Assessment / Score / Grade. A graded row shows its letter
+ * StatusBadge; a non-graded row shows the status presentation (Excused / Pending).
+ * D47 — a mark shows the moment the lecturer saves it, and an assessment nobody
+ * marked before its window closed shows as "0 · Not submitted", because that is
+ * what the course average counts it as.
  */
 export function OfferingGradesTable({ subject }: OfferingGradesTableProps) {
   const subjectName = subject.offering?.offering.course.name ?? 'Course';
@@ -30,7 +30,7 @@ export function OfferingGradesTable({ subject }: OfferingGradesTableProps) {
   if (subject.assessments.length === 0) {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>
-        No released grades yet.
+        No grades yet.
       </Typography>
     );
   }
@@ -54,11 +54,17 @@ export function OfferingGradesTable({ subject }: OfferingGradesTableProps) {
             <TableRow key={a.assessment_id} hover>
               <TableCell>{a.title}</TableCell>
               <TableCell align="right">
-                {a.status === 'graded' && a.score != null ? `${a.score} / ${a.max_score}` : '—'}
+                {a.status === 'graded' && a.score != null
+                  ? `${a.score} / ${a.max_score}`
+                  : a.auto_zero
+                    ? `0 / ${a.max_score}`
+                    : '—'}
               </TableCell>
               <TableCell align="center">
                 {a.status === 'graded' && a.letter ? (
                   <StatusBadge label={a.letter} kind={letterKind(a.letter)} />
+                ) : a.auto_zero ? (
+                  <StatusBadge label="Not submitted" kind="error" />
                 ) : (
                   <StatusBadge {...statusPresentation(a.status)} />
                 )}

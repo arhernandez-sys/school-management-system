@@ -119,7 +119,7 @@ Tick each box when its commit lands.
 - [x] 1. **Backend core:** SQL file, `marking.py`, calc change, `upsert_grades` guard, gradebook fields, removal of status/release/nudge, dashboard counters, tests.
 - [x] 2. **Reopen requests:** table, service/routes, bell, audit labels, tests.
 - [x] 3. **Print report endpoint** plus the `offering-grades` ownership fix, with tests.
-- [ ] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
+- [x] 4. **Frontend grading rework:** grading screen, GradeCell, offering list, deletions.
 - [ ] 5. **Frontend reopen queue and print dialog/filters.**
 - [ ] 6. **MSW demo parity**, then docs.
 
@@ -152,3 +152,7 @@ Tick each box when its commit lands.
   - A lecturer's `teacher_id` is ignored.
   - `GET /reports/offering-grades` now enforces lecturer ownership (it had none).
   - Full suite: 2244 passed, plus the same 2 known `test_settings` failures.
+- **Phase 4 (28 Oct 2026).** Grading screen, `GradeCell`, the offering's assessment list, the student tab, the teacher dashboard and My Grades follow D47.
+  - Deleted: `statusMeta.ts`, `RemindTeacherButton`, and the status / release / nudge hooks.
+  - Shared wording lives in `features/grades/marking.ts`.
+  - `tsc -b --force` and eslint are clean. The MSW demo is updated in phase 6.

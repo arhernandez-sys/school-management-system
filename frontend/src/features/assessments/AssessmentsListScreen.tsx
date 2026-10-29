@@ -5,9 +5,6 @@ import {
   Box,
   Button,
   IconButton,
-  ListItemText,
-  Menu,
-  MenuItem,
   Stack,
   Tooltip,
   Typography,
@@ -15,7 +12,6 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import GradingIcon from '@mui/icons-material/Grading';
 import {
   DataTable,
@@ -38,21 +34,21 @@ import {
   useOfferingPickerOptions,
   useCreateAssessment,
   useDeleteAssessment,
-  useSetAssessmentStatus,
   useUpdateAssessment,
   type AssessmentListItem,
 } from './hooks/useAssessments';
 import { AssessmentFormDialog, type AssessmentFormValues } from './components/AssessmentFormDialog';
 import { OfferingPicker } from './components/OfferingPicker';
-import { NEXT_STATUSES, STATUS_META, transitionLabel } from './statusMeta';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
+import { markingBadge } from '@features/grades/marking';
 
 const OFFERING_PARAM = 'offering_id';
 
 /**
  * Assessments list — the assessment-first authoring surface (API-9). You pick a COURSE
- * OFFERING (URL-persisted via `?offering_id=`), then create/edit assessment DEFINITIONS and
- * drive their status lifecycle (draft → published → grading → graded). Grade ENTRY lives in
- * the Grades module.
+ * OFFERING (URL-persisted via `?offering_id=`), then create/edit assessment DEFINITIONS. D47
+ * retired the status lifecycle: an assessment is live from creation, and the Marking column
+ * shows its 5-day window. Grade ENTRY lives in the Grades module.
  *
  * Scope, all of it SERVER-decided: the picker feed is scoped to the caller, so a lecturer
  * gets the offerings they teach and the Dean and Registrar get all. This screen no longer
@@ -165,7 +161,6 @@ export function AssessmentsListScreen() {
   // ── Mutations ──────────────────────────────────────────────────────────────────
   const createMut = useCreateAssessment();
   const updateMut = useUpdateAssessment();
-  const statusMut = useSetAssessmentStatus();
   const deleteMut = useDeleteAssessment();
 
   // ── Form dialog state ──────────────────────────────────────────────────────────
@@ -228,32 +223,6 @@ export function AssessmentsListScreen() {
     }
   };
 
-  // ── Status action menu ────────────────────────────────────────────────────────
-  const [statusAnchor, setStatusAnchor] = useState<HTMLElement | null>(null);
-  const [statusTarget, setStatusTarget] = useState<AssessmentListItem | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-
-  const openStatusMenu = (e: React.MouseEvent<HTMLElement>, a: AssessmentListItem) => {
-    setStatusAnchor(e.currentTarget);
-    setStatusTarget(a);
-  };
-  const closeStatusMenu = () => {
-    setStatusAnchor(null);
-    setStatusTarget(null);
-  };
-  const applyStatus = (to: AssessmentListItem['status']) => {
-    if (!statusTarget) return;
-    setStatusError(null);
-    const id = statusTarget.id;
-    statusMut.mutate(
-      { id, status: to },
-      {
-        onSuccess: closeStatusMenu,
-        onError: (err) => setStatusError(apiErrorMessage(err)),
-      },
-    );
-  };
-
   // ── Delete confirm ──────────────────────────────────────────────────────────────
   const [deleteTarget, setDeleteTarget] = useState<AssessmentListItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -282,18 +251,25 @@ export function AssessmentsListScreen() {
       field: 'assessment_date',
       headerName: 'Date',
       render: (a) =>
-        a.assessment_date ?? (
+        a.assessment_date ? (
+          formatSchoolDate(a.assessment_date)
+        ) : (
           <Typography variant="body2" color="text.disabled">
             —
           </Typography>
         ),
     },
     { field: 'max_score', headerName: 'Max', align: 'right', render: (a) => a.max_score },
-    {
-      field: 'status',
-      headerName: 'Status',
-      render: (a) => <StatusBadge label={STATUS_META[a.status].label} kind={STATUS_META[a.status].kind} />,
-    },
+    // A student has nothing to do with the marking window; staff do.
+    ...(isStudent
+      ? []
+      : [
+          {
+            field: 'marking_open',
+            headerName: 'Marking',
+            render: (a: AssessmentListItem) => <StatusBadge {...markingBadge(a)} />,
+          } as DataTableColumn<AssessmentListItem>,
+        ]),
   ];
 
   const openGrading = (a: AssessmentListItem) => {
@@ -305,7 +281,6 @@ export function AssessmentsListScreen() {
 
   const rowActions = canGrade
     ? (a: AssessmentListItem) => {
-        const nextStatuses = NEXT_STATUSES[a.status];
         return (
           <>
             <Tooltip title="Grade this class">
@@ -323,18 +298,6 @@ export function AssessmentsListScreen() {
                   <IconButton size="small" aria-label={`Edit ${a.title}`} onClick={() => openEdit(a)}>
                     <EditIcon fontSize="small" />
                   </IconButton>
-                </Tooltip>
-                <Tooltip title={nextStatuses.length ? 'Change status' : 'No further status changes'}>
-                  <span>
-                    <IconButton
-                      size="small"
-                      aria-label={`Change status of ${a.title}`}
-                      disabled={nextStatuses.length === 0}
-                      onClick={(e) => openStatusMenu(e, a)}
-                    >
-                      <MoreVertIcon fontSize="small" />
-                    </IconButton>
-                  </span>
                 </Tooltip>
                 <Tooltip title="Delete (only if no grades)">
                   <IconButton
@@ -484,27 +447,6 @@ export function AssessmentsListScreen() {
           />
         </>
       )}
-
-      {/* Status transition menu */}
-      <Menu anchorEl={statusAnchor} open={Boolean(statusAnchor)} onClose={closeStatusMenu}>
-        {statusTarget &&
-          NEXT_STATUSES[statusTarget.status].map((to) => (
-            <MenuItem
-              key={to}
-              disabled={statusMut.isPending}
-              onClick={() => applyStatus(to)}
-            >
-              <ListItemText>{transitionLabel(to, statusTarget.status)}</ListItemText>
-            </MenuItem>
-          ))}
-        {statusError && (
-          <MenuItem disabled>
-            <Alert severity="error" sx={{ py: 0 }}>
-              {statusError}
-            </Alert>
-          </MenuItem>
-        )}
-      </Menu>
 
       <AssessmentFormDialog
         open={formOpen}

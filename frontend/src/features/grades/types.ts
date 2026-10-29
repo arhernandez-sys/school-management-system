@@ -73,12 +73,25 @@ export interface GradebookAssessment {
   max_score: number;
   weight: number;
   assessment_date: string | null;
-  status: 'draft' | 'published' | 'grading' | 'graded';
-  is_released: boolean;
-  /** Non-draft assessments accept grade entry. */
-  is_editable: boolean;
   graded_count: number;
   entered_count: number;
+  /**
+   * D47 — the 5-day MARKING WINDOW (`backend/app/modules/assessments/marking.py`). Entry is
+   * accepted while `marking_open`; after that the server answers 409 `marking_closed` and a
+   * blank mark counts as 0. There is no publish or release step any more.
+   */
+  marking_open: boolean;
+  /** When the ORIGINAL window ended (23:59 Belize, 5 days after the assessment date). */
+  marking_closes_at: string | null;
+  /** Set once the Dean has approved a reopen request. */
+  reopened_until: string | null;
+  /** When entry actually locks — the later of the two above. */
+  effective_closes_at: string | null;
+  /** Whole school days left (0 = closes today); null once closed. */
+  days_left: number | null;
+  /** The owning lecturer may ask the Dean to reopen it (closed, nothing pending). */
+  can_request_reopen: boolean;
+  pending_reopen_request_id: string | null;
 }
 
 export interface GradebookCategory {
@@ -107,7 +120,11 @@ export interface GradebookCell {
   status: GradeStatus;
   score: number | null;
   makeup_score: number | null;
-  is_released: boolean;
+  /**
+   * D47 — no mark was entered and the marking window has closed, so this counts as 0 in
+   * the term grade. `score` stays null: nothing was written.
+   */
+  auto_zero: boolean;
   letter?: string;
   /**
    * D32 — may the viewing Lecturer file a Revision of Grades against this result?
@@ -196,6 +213,8 @@ export interface MyGradeAssessment {
   assessment_date: string | null;
   status: GradeStatus;
   score: number | null;
+  /** D47 — see `GradebookCell.auto_zero`. */
+  auto_zero: boolean;
   letter?: string;
 }
 
@@ -215,4 +234,85 @@ export interface MyGradeSubject {
 export interface MyGrades {
   student: StudentRef;
   by_subject: MyGradeSubject[];
+}
+
+// ── D47 — the printable assessment report (`GET /grades/assessment-report`) ─────────
+export interface AssessmentReportColumn {
+  id: string;
+  title: string;
+  category_name: string | null;
+  assessment_date: string | null;
+  max_score: number;
+  marking_open: boolean;
+  effective_closes_at: string | null;
+}
+
+export interface AssessmentReportRow {
+  student: StudentRef;
+  /** The gradebook's own cells, in column order. */
+  cells: GradebookCell[];
+  term_numeric: number | null;
+  term_letter: string | null;
+}
+
+export interface AssessmentReportOffering {
+  offering: GradesOfferingRef | null;
+  semester: { id: string; name: string; sequence: number } | null;
+  assessments: AssessmentReportColumn[];
+  rows: AssessmentReportRow[];
+}
+
+export interface AssessmentReport {
+  generated_at: string;
+  /** Offerings that matched; `offerings` holds at most the first 60. */
+  total_offerings: number;
+  truncated: boolean;
+  offerings: AssessmentReportOffering[];
+}
+
+export interface AssessmentReportParams {
+  academic_year_id?: string;
+  semester_id?: string;
+  offering_id?: string;
+  student_id?: string;
+  teacher_id?: string;
+}
+
+// ── D47 — reopen requests (`/assessment-reopen-requests`) ───────────────────────────
+export type ReopenRequestStatus = 'pending' | 'approved' | 'denied';
+
+export interface ReopenRequest {
+  id: string;
+  assessment_id: string;
+  assessment_title: string;
+  assessment_date: string | null;
+  max_score: number | null;
+  offering: OfferingRef | null;
+  status: ReopenRequestStatus;
+  reason: string;
+  granted_days: number | null;
+  decision_note: string | null;
+  decided_at: string | null;
+  created_at: string;
+  marking_closes_at: string | null;
+  reopened_until: string | null;
+  /** Roster members with no mark — what will count as 0 if this is denied. */
+  blank_count: number;
+  requested_by_user_id: string;
+  requested_by_name: string;
+  decided_by_user_id: string | null;
+  decided_by_name: string | null;
+  can_withdraw: boolean;
+}
+
+export interface ReopenRequestList {
+  items: ReopenRequest[];
+  /** Awaiting the caller's decision — non-zero only for the Dean. */
+  pending_for_me: number;
+}
+
+export interface ReopenDecisionPayload {
+  status: 'approved' | 'denied';
+  granted_days?: number;
+  decision_note?: string | null;
 }

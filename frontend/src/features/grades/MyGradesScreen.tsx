@@ -27,8 +27,8 @@ import { formatNumeric, letterKind } from './components/gradeDisplay';
 import { OfferingGradesTable } from './components/OfferingGradesTable';
 
 /**
- * "My Grades" (§7.7, student scope) — the student's own released grades. Read-only; the
- * server applies the release filter, so unreleased assessments are never in the payload.
+ * "My Grades" (§7.7, student scope) — the student's own grades. Read-only. D47: a mark
+ * appears as soon as the lecturer saves it; there is no release step.
  *
  * Two views over the SAME cached query, selected by the `?subject=<offering_id>` search
  * param (the same URL-selection convention as the staff grid's `?offering_id=`):
@@ -76,8 +76,8 @@ export function MyGradesScreen() {
         // browsing an archived year read a present-tense claim about past marks.
         subtitle={
           selectedPeriod
-            ? `Your released grades for ${selectedPeriod.label}, by course.`
-            : 'Your released grades, by course.'
+            ? `Your grades for ${selectedPeriod.label}, by course.`
+            : 'Your grades, by course.'
         }
       />
 
@@ -118,7 +118,7 @@ function SubjectGrid({ subjects, onOpen }: SubjectGridProps) {
         const id = subject.offering?.offering.id ?? null;
         const name = subject.offering?.offering.course.name ?? 'Course';
         const count = subject.assessments.length;
-        const caption = count > 0 ? `${count} ${count === 1 ? 'assessment' : 'assessments'}` : 'No released grades yet';
+        const caption = count > 0 ? `${count} ${count === 1 ? 'assessment' : 'assessments'}` : 'No grades yet';
 
         const body = (
           <CardContent sx={{ height: '100%' }}>

@@ -9,11 +9,17 @@
  */
 import { api } from '@shared/api/client';
 import type {
+  AssessmentReport,
+  AssessmentReportParams,
   Gradebook,
   GradeEntry,
   GradeEntryResponse,
   MyGrades,
   OfferingOptionsResponse,
+  ReopenDecisionPayload,
+  ReopenRequest,
+  ReopenRequestList,
+  ReopenRequestStatus,
 } from '../types';
 
 /** GET /grades/offerings — the role-scoped gradebook picker (year-scoped). */
@@ -43,20 +49,62 @@ export async function saveAssessmentGrades(
   return res.data;
 }
 
-/** POST /assessments/{id}/release | /unrelease — release control. */
-export async function setAssessmentRelease(
-  assessmentId: string,
-  release: boolean,
-): Promise<{ assessment_id: string; is_released: boolean; released_count: number }> {
-  const path = release ? 'release' : 'unrelease';
-  const res = await api.post<{ assessment_id: string; is_released: boolean; released_count: number }>(
-    `/assessments/${assessmentId}/${path}`,
+/**
+ * GET /grades/assessment-report — the printable report (D47). The Dean filters freely; a
+ * lecturer always gets only their own offerings, whatever is passed. Empty params are
+ * dropped so the request never carries a blank value.
+ */
+export async function fetchAssessmentReport(
+  params: AssessmentReportParams,
+  signal?: AbortSignal,
+): Promise<AssessmentReport> {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => Boolean(v)));
+  const res = await api.get<AssessmentReport>('/grades/assessment-report', {
+    params: clean,
+    signal,
+  });
+  return res.data;
+}
+
+/** POST /assessments/{id}/reopen-requests — the lecturer asks the Dean (D47). */
+export async function requestReopen(assessmentId: string, reason: string): Promise<ReopenRequest> {
+  const res = await api.post<ReopenRequest>(`/assessments/${assessmentId}/reopen-requests`, {
+    reason,
+  });
+  return res.data;
+}
+
+/** GET /assessment-reopen-requests — Dean: all; lecturer: their own. */
+export async function fetchReopenRequests(
+  status?: ReopenRequestStatus,
+  signal?: AbortSignal,
+): Promise<ReopenRequestList> {
+  const res = await api.get<ReopenRequestList>('/assessment-reopen-requests', {
+    params: status ? { status } : undefined,
+    signal,
+  });
+  return res.data;
+}
+
+/** POST /assessment-reopen-requests/{id}/decision — Dean only. */
+export async function decideReopen(
+  requestId: string,
+  payload: ReopenDecisionPayload,
+): Promise<ReopenRequest> {
+  const res = await api.post<ReopenRequest>(
+    `/assessment-reopen-requests/${requestId}/decision`,
+    payload,
   );
   return res.data;
 }
 
+/** DELETE /assessment-reopen-requests/{id} — the requester withdraws a pending one. */
+export async function withdrawReopen(requestId: string): Promise<void> {
+  await api.delete(`/assessment-reopen-requests/${requestId}`);
+}
+
 /**
- * GET /grades/me — the student's own released grades, scoped to the selected period.
+ * GET /grades/me — the student's own grades, scoped to the selected period.
  *
  * With `semesterId` supplied the term average is computed from that semester's rows
  * ONLY, so the number matches the assessments listed beside it; omitted, the response
