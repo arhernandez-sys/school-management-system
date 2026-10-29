@@ -16,7 +16,10 @@ import {
   listStudents,
   setStudentStatus,
   updateStudent,
+  getStudentDocuments,
+  replaceStudentDocuments,
 } from '../api/studentsApi';
+import type { DocumentRow } from '@features/admissions/types';
 import type { StudentWritePayload, StudentsListParams } from '../types';
 import type { StudentStatus } from '@shared/types/enums';
 
@@ -30,6 +33,7 @@ export const studentKeys = {
     [...studentKeys.all, 'me', academicYearId ?? null] as const,
   assessments: (id: string) => [...studentKeys.all, id, 'assessments'] as const,
   years: (id: string) => [...studentKeys.all, id, 'years'] as const,
+  documents: (id: string) => [...studentKeys.all, id, 'documents'] as const,
 };
 
 // ── Reads ──────────────────────────────────────────────────────────────────────
@@ -140,6 +144,27 @@ export function useUpdateStudent(studentId: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: studentKeys.detail(studentId) });
       void qc.invalidateQueries({ queryKey: [...studentKeys.all, 'list'] });
+    },
+  });
+}
+
+/** GET /students/{id}/documents — Section F; fetched while the edit form is open. */
+export function useStudentDocuments(studentId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: studentKeys.documents(studentId),
+    queryFn: ({ signal }) => getStudentDocuments(studentId, signal),
+    enabled,
+  });
+}
+
+/** PUT /students/{id}/documents. Also refreshes the application, which holds the rows. */
+export function useReplaceStudentDocuments(studentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (items: DocumentRow[]) => replaceStudentDocuments(studentId, items),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: studentKeys.documents(studentId) });
+      void qc.invalidateQueries({ queryKey: ['applications'], exact: false });
     },
   });
 }

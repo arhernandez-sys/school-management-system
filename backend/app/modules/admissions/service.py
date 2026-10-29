@@ -67,6 +67,7 @@ from app.modules.admissions.schemas import (
     CreditTransferUpdateRequest,
     DocumentReplaceRequest,
     DocumentRow,
+    StudentDocumentChecklist,
     EducationReplaceRequest,
     EducationRow,
     PendingApplicationDetail,
@@ -1297,15 +1298,28 @@ def replace_documents(
 ) -> ApplicationDetail:
     """PUT /applications/{id}/documents — reconciles the checklist (Registrar + Dean).
 
+    Refused once the application is decided (`_assert_editable`). After acceptance the
+    same checklist is kept up to date from the STUDENT record instead —
+    `replace_student_documents` — because papers keep arriving after enrolment.
+    """
+    row = _application_or_404(db, application_id)
+    _assert_editable(row)
+    _reconcile_documents(db, row, payload.items)
+    row.updated_by = actor.id
+    _audit(db, actor=actor, action="application.documents.replace", entity_id=row.id)
+    db.commit()
+    return _detail(db, row)
+
+
+def _reconcile_documents(db: Session, row: Application, items: list) -> None:  # noqa: ANN001
+    """Make `row`'s checklist match `items`.
+
     **Reconciled by id, not delete-and-reinsert.** `credit_transfer_requests` FKs three of
     these rows, and those FKs are `ON DELETE SET NULL` — so a blanket delete would
     silently strip a pending transfer of its CTA and transcript instead of failing. Rows
     still referenced are updated in place; a row the client dropped is only removed if
     nothing points at it.
     """
-    row = _application_or_404(db, application_id)
-    _assert_editable(row)
-
     existing = {
         d.id: d
         for d in db.scalars(
@@ -1316,7 +1330,7 @@ def replace_documents(
     }
     kept: set[uuid.UUID] = set()
 
-    for item in payload.items:
+    for item in items:
         target = existing.get(item.id) if item.id else None
         if target is None:
             target = ApplicationDocument(application_id=row.id, document_type=item.document_type)
@@ -1352,10 +1366,68 @@ def replace_documents(
             )
         db.delete(doc)
 
-    row.updated_by = actor.id
-    _audit(db, actor=actor, action="application.documents.replace", entity_id=row.id)
+
+
+def _student_application(db: Session, student_id: uuid.UUID) -> Application | None:
+    from app.modules.students.models import StudentProfile
+
+    student = db.scalar(
+        select(StudentProfile).where(
+            StudentProfile.id == student_id, StudentProfile.deleted_at.is_(None)
+        )
+    )
+    if student is None:
+        raise NotFound("Student not found.", code="not_found")
+    if student.application_id is None:
+        return None
+    return db.get(Application, student.application_id)
+
+
+def _student_documents(db: Session, app_row: Application | None) -> StudentDocumentChecklist:
+    if app_row is None:
+        return StudentDocumentChecklist(application_id=None, items=[])
+    rows = db.scalars(
+        select(ApplicationDocument).where(ApplicationDocument.application_id == app_row.id)
+    ).all()
+    return StudentDocumentChecklist(
+        application_id=app_row.id, items=[DocumentRow.model_validate(r) for r in rows]
+    )
+
+
+def get_student_documents(db: Session, *, student_id: uuid.UUID) -> StudentDocumentChecklist:
+    """GET /students/{id}/documents — the Section F checklist of the application the
+    student was admitted from."""
+    return _student_documents(db, _student_application(db, student_id))
+
+
+def replace_student_documents(
+    db: Session, *, actor: User, student_id: uuid.UUID, payload: DocumentReplaceRequest
+) -> StudentDocumentChecklist:
+    """PUT /students/{id}/documents — Section F, kept up to date AFTER enrolment.
+
+    The client asked for it: papers (a diploma, a social-security card) routinely arrive
+    after the student has been accepted and enrolled. The checklist still lives on the
+    application — it is the same Section F — so this writes there, deliberately WITHOUT
+    `_assert_editable`: only the checklist is opened, never the Section A–E answers that
+    the acceptance froze.
+
+    409 `no_application` for a student registered directly or imported, who has no
+    application to hold a checklist.
+    """
+    app_row = _student_application(db, student_id)
+    if app_row is None:
+        raise Conflict(
+            "This student was not admitted through an application, so there is no "
+            "document checklist to update.",
+            code="no_application",
+        )
+    _reconcile_documents(db, app_row, payload.items)
+    app_row.updated_by = actor.id
+    _audit(
+        db, actor=actor, action="application.documents.replace", entity_id=app_row.id,
+    )
     db.commit()
-    return _detail(db, row)
+    return _student_documents(db, app_row)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

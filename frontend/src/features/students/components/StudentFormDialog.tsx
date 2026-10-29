@@ -27,6 +27,9 @@ import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import { useReligions, religionOptions } from '@features/settings/hooks/useReligions';
 import type { StudentDetail, StudentWritePayload, YearOfStudy } from '../types';
 import { useOfferingOptions, YEAR_OF_STUDY_OPTIONS } from '../hooks/useOfferingOptions';
+import { DocumentChecklist } from '@features/admissions/components/DocumentChecklist';
+import type { DocumentRow } from '@features/admissions/types';
+import type { StudentDocumentChecklist } from '../api/studentsApi';
 
 export interface StudentFormDialogProps {
   open: boolean;
@@ -35,7 +38,14 @@ export interface StudentFormDialogProps {
   submitting: boolean;
   error?: string | null;
   fieldErrors?: Record<string, string[]>;
-  onSubmit: (values: StudentWritePayload) => void;
+  /**
+   * EDIT only — Section F, the document checklist of the application the student was
+   * admitted from (the client: papers keep arriving after enrolment). `undefined` while it
+   * loads; `application_id: null` when the student has no application.
+   */
+  documents?: StudentDocumentChecklist;
+  /** `documents` is passed only when the checklist was changed. */
+  onSubmit: (values: StudentWritePayload, documents?: DocumentRow[]) => void;
   onClose: () => void;
 }
 
@@ -81,8 +91,10 @@ function Row({ children }: { children: React.ReactNode }) {
  *
  * Deliberately absent, and each for its own reason:
  *
- * * **Documents** — the client excluded them, and there are no file bytes anywhere
- *   (OQ-DB5); Section F is a tick-list on the application.
+ * * **Documents, on CREATE only.** Section F is a tick-list that lives on the APPLICATION.
+ *   On EDIT it is shown and saved through `PUT /students/{id}/documents` (the client,
+ *   Oct 2026: papers keep arriving after a student is accepted and enrolled). A student
+ *   registered without an application has no checklist, and the section says so.
  * * **Prior education / credit transfer** — anchored on the APPLICATION by policy (§D4,
  *   brief §13), never on the student.
  * * **The LOGIN e-mail** — read-only. It lives on the linked `users` row and changing it
@@ -112,9 +124,18 @@ export function StudentFormDialog({
   submitting,
   error,
   fieldErrors,
+  documents,
   onSubmit,
   onClose,
 }: StudentFormDialogProps) {
+  // ── Section F · documents (edit only) ─────────────────────────────────────────
+  const [docs, setDocs] = useState<DocumentRow[]>([]);
+  const [docsDirty, setDocsDirty] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setDocs(documents?.items ?? []);
+    setDocsDirty(false);
+  }, [open, documents]);
   const editing = Boolean(student);
   // Both pickers are only needed by the CREATE form — enrolment and programme are
   // read-only on edit — so neither query is issued in that case.
@@ -339,7 +360,7 @@ export function StudentFormDialog({
       // Both create-only — the API rejects them on PATCH. See the component note.
       program_id: editing ? undefined : programId || null,
       offering_ids: editing ? undefined : offeringIds,
-    });
+    }, editing && docsDirty ? docs : undefined);
   };
 
   const err = (field: string) => fieldErrors?.[field]?.join(' ');
@@ -819,6 +840,37 @@ export function StudentFormDialog({
             helperText={err('enrollment_date')}
           />
         </Row>
+
+        {/* ═══ Section F · Documents to submit (edit only) ═══════════════════ */}
+        {editing && (
+          <>
+            <SectionBand>Documents to submit</SectionBand>
+            {documents === undefined ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading the document checklist…
+              </Typography>
+            ) : documents.application_id === null ? (
+              <Typography variant="body2" color="text.secondary">
+                This student was registered without an application, so there is no document
+                checklist to update.
+              </Typography>
+            ) : (
+              <>
+                <Typography variant="body2" color="text.secondary">
+                  Tick each paper as it is received — the same checklist as Section F of the
+                  application. The file itself is held on paper for now.
+                </Typography>
+                <DocumentChecklist
+                  value={docs}
+                  onChange={(next) => {
+                    setDocs(next);
+                    setDocsDirty(true);
+                  }}
+                />
+              </>
+            )}
+          </>
+        )}
 
         {/* ═══ Registry ═══════════════════════════════════════════════════════ */}
         {/* D34 — the remaining columns from the client's schema. Grouped last and after

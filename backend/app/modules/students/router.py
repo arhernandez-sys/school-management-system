@@ -48,6 +48,7 @@ from app.modules.students.schemas import (
     StudentUpdateRequest,
     StudentYearsResponse,
 )
+from app.modules.admissions.schemas import DocumentReplaceRequest, StudentDocumentChecklist
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/students", tags=["students"])
@@ -295,6 +296,45 @@ def update_student(
     """`status` is NOT editable here — use POST /students/{id}/status. Re-checks
     student_number uniqueness on change."""
     return service.update_student(
+        db, actor=actor, student_id=student_id, payload=payload
+    )
+
+
+@router.get(
+    "/{student_id}/documents",
+    response_model=StudentDocumentChecklist,
+    summary="The admission document checklist (Section F) for a student (P/S)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def get_student_documents(
+    student_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_manage),
+) -> StudentDocumentChecklist:
+    """The checklist of the application the student was admitted from; empty with a
+    null `application_id` when there is none."""
+    from app.modules.admissions import service as admissions_service
+
+    return admissions_service.get_student_documents(db, student_id=student_id)
+
+
+@router.put(
+    "/{student_id}/documents",
+    response_model=StudentDocumentChecklist,
+    summary="Update the admission document checklist after enrolment (P/S)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def replace_student_documents(
+    student_id: uuid.UUID,
+    payload: DocumentReplaceRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_manage),
+) -> StudentDocumentChecklist:
+    """Papers keep arriving after acceptance, so the checklist stays editable from the
+    student record. 409 `no_application` for a student with no application."""
+    from app.modules.admissions import service as admissions_service
+
+    return admissions_service.replace_student_documents(
         db, actor=actor, student_id=student_id, payload=payload
     )
 

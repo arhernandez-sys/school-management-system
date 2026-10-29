@@ -51,9 +51,9 @@ import {
   useUpdateApplication,
   useUpdatePendingApplication,
 } from '../hooks/useAdmissions';
+import { DocumentChecklist } from '../components/DocumentChecklist';
 import {
   DISTRICTS,
-  DOCUMENT_TYPES,
   type ApplicationDetail,
   isDecidedApplication,
   type ApplicationWritePayload,
@@ -1250,44 +1250,7 @@ export function ApplicationWizardScreen() {
               A checklist, not an upload. Tick what has been received; the file itself is held
               on paper for now.
             </Alert>
-            <Stack spacing={0.5}>
-              {DOCUMENT_TYPES.map((type) => {
-                const existing = documents.find((d) => d.document_type === type.value);
-                return (
-                  <FormControlLabel
-                    key={type.value}
-                    control={
-                      <Checkbox
-                        checked={existing?.received ?? false}
-                        onChange={(e) =>
-                          setDocuments((prev) => {
-                            const found = prev.find((d) => d.document_type === type.value);
-                            if (found) {
-                              return prev.map((d) =>
-                                d.document_type === type.value
-                                  ? { ...d, received: e.target.checked }
-                                  : d,
-                              );
-                            }
-                            return [
-                              ...prev,
-                              {
-                                document_type: type.value,
-                                file_name: null,
-                                content_type: null,
-                                size_bytes: null,
-                                received: e.target.checked,
-                              },
-                            ];
-                          })
-                        }
-                      />
-                    }
-                    label={type.label}
-                  />
-                );
-              })}
-            </Stack>
+            <DocumentChecklist value={documents} onChange={setDocuments} />
           </Stack>
         )}
 
@@ -1299,14 +1262,14 @@ export function ApplicationWizardScreen() {
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <DateField
-                label="Applicant signed"
+                label="Applicant signature date"
                 value={draft.applicant_signed_at}
                 onChange={(v) => set('applicant_signed_at', v)}
                 fullWidth
                 required
               />
               <DateField
-                label="Parent / guardian signed"
+                label="Parent/Guardian signature date"
                 value={draft.guardian_signed_at}
                 onChange={(v) => set('guardian_signed_at', v)}
                 fullWidth

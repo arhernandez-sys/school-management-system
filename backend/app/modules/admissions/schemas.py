@@ -96,6 +96,17 @@ class DocumentReplaceRequest(BaseModel):
     items: list[DocumentRow] = Field(default_factory=list, max_length=40)
 
 
+class StudentDocumentChecklist(BaseModel):
+    """GET/PUT /students/{id}/documents — Section F for an enrolled student.
+
+    `application_id` is null for a student with no application (registered directly or
+    imported); there is then no checklist and `items` is empty.
+    """
+
+    application_id: UUID | None = None
+    items: list[DocumentRow] = Field(default_factory=list)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Credit transfer (brief §13)
 # ──────────────────────────────────────────────────────────────────────────────

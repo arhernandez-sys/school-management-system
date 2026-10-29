@@ -46,7 +46,10 @@ import {
   useStudentDetail,
   useStudentYears,
   useUpdateStudent,
+  useStudentDocuments,
+  useReplaceStudentDocuments,
 } from './hooks/useStudents';
+import type { DocumentRow } from '@features/admissions/types';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
@@ -390,10 +393,12 @@ function StudentActions({ student }: { student: StudentDetail }) {
   const [toast, setToast] = useState<string | null>(null);
 
   const updateMut = useUpdateStudent(student.id);
+  const docsQuery = useStudentDocuments(student.id, editOpen);
+  const docsMut = useReplaceStudentDocuments(student.id);
   const statusMut = useSetStudentStatus(student.id);
   const deleteMut = useDeleteStudent();
 
-  const handleEdit = (values: StudentWritePayload) => {
+  const handleEdit = (values: StudentWritePayload, documents?: DocumentRow[]) => {
     setEditError(null);
     setEditFieldErrors(undefined);
     // Enrollment + student_number are immutable on edit; send only benign profile
@@ -414,7 +419,17 @@ function StudentActions({ student }: { student: StudentDetail }) {
     void _oids;
     void _pid;
     updateMut.mutate(patch, {
-      onSuccess: () => {
+      onSuccess: async () => {
+        // Section F saves second, and only when it was touched: the profile is the bigger
+        // edit, and a checklist failure must not read as the profile having failed.
+        if (documents) {
+          try {
+            await docsMut.mutateAsync(documents);
+          } catch (err) {
+            setEditError(`The profile was saved, but the document checklist was not: ${apiErrorMessage(err)}`);
+            return;
+          }
+        }
         setEditOpen(false);
         setToast('Student updated.');
       },
@@ -479,7 +494,8 @@ function StudentActions({ student }: { student: StudentDetail }) {
       <StudentFormDialog
         open={editOpen}
         student={student}
-        submitting={updateMut.isPending}
+        submitting={updateMut.isPending || docsMut.isPending}
+        documents={docsQuery.data}
         error={editError}
         fieldErrors={editFieldErrors}
         onSubmit={handleEdit}

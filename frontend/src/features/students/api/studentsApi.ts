@@ -10,6 +10,7 @@ import type {
   StudentsListParams,
 } from '../types';
 import type { StudentStatus } from '@shared/types/enums';
+import type { DocumentRow } from '@features/admissions/types';
 
 /**
  * Students transport (api-spec §5 Module 3). Calls the shared axios `client` directly
@@ -122,4 +123,32 @@ export async function setStudentStatus(id: string, status: StudentStatus): Promi
 /** DELETE /students/{id} — hard delete (409 has_academic_history). */
 export async function deleteStudent(id: string): Promise<void> {
   await api.delete(`/students/${id}`);
+}
+
+/**
+ * Section F for an enrolled student — the checklist of the application they were admitted
+ * from. `application_id` is null for a student registered directly or imported; there is
+ * then nothing to tick.
+ */
+export interface StudentDocumentChecklist {
+  application_id: string | null;
+  items: DocumentRow[];
+}
+
+/** GET /students/{id}/documents (Dean + Registrar). */
+export async function getStudentDocuments(
+  id: string,
+  signal?: AbortSignal,
+): Promise<StudentDocumentChecklist> {
+  const res = await api.get<StudentDocumentChecklist>(`/students/${id}/documents`, { signal });
+  return res.data;
+}
+
+/** PUT /students/{id}/documents — papers that arrive after enrolment. */
+export async function replaceStudentDocuments(
+  id: string,
+  items: DocumentRow[],
+): Promise<StudentDocumentChecklist> {
+  const res = await api.put<StudentDocumentChecklist>(`/students/${id}/documents`, { items });
+  return res.data;
 }

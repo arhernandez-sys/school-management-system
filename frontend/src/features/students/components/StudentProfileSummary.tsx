@@ -119,6 +119,13 @@ export interface StudentProfileSummaryProps {
 export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
   const offeringCount = student.current_offerings?.length ?? 0;
   const age = student.date_of_birth ? ageFrom(student.date_of_birth) : null;
+  // The session(s) the student is sitting courses in now. Prefer the ACTIVE one; a
+  // student with no current enrolment simply gets no session chip.
+  const sessions = (student.current_offerings ?? [])
+    .map((o) => o.semester)
+    .filter((sem): sem is NonNullable<typeof sem> => Boolean(sem));
+  const sessionLabel =
+    sessions.find((sem) => sem.is_active)?.name ?? sessions[0]?.name ?? null;
 
   // D29: the old Grade + Section tiles were read off the student's ONE homeroom. The year
   // of study is now the student's own field, and "how many courses" replaces the section
@@ -280,9 +287,10 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
               label={STUDENT_STATUS_LABEL[student.status]}
               kind={STUDENT_STATUS_KIND[student.status]}
             />
-            {/* D29: the header chip names the student's LEVEL, not a homeroom — they no
-                longer have one class that identifies them. */}
-            {student.year_of_study && <StatusBadge label={student.year_of_study} kind="info" />}
+            {/* The client: the chip beside the status names the student's SESSION — the
+                term of the courses they are sitting now. Year of study (First / Second) is
+                still in the details below. The active session wins when they span two. */}
+            {sessionLabel && <StatusBadge label={sessionLabel} kind="info" />}
           </Stack>
         </Stack>
 

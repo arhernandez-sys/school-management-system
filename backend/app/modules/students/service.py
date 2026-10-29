@@ -435,9 +435,11 @@ def _current_offerings_map(
     if not student_ids or semester_id is None:
         return {}
     rows = db.execute(
-        select(ClassEnrollment.student_id, CourseOffering, Course)
+        select(ClassEnrollment.student_id, CourseOffering, Course, Semester)
         .join(CourseOffering, ClassEnrollment.offering_id == CourseOffering.id)
         .join(Course, CourseOffering.course_id == Course.id)
+        # The session rides along so the profile card can name it (the client, Oct 2026).
+        .outerjoin(Semester, Semester.id == CourseOffering.semester_id)
         .where(
             ClassEnrollment.student_id.in_(student_ids),
             ClassEnrollment.semester_id == semester_id,
@@ -447,8 +449,8 @@ def _current_offerings_map(
         .order_by(*OFFERING_ORDER)
     ).all()
     out: dict[uuid.UUID, list[OfferingRef]] = {}
-    for sid, offering, course in rows:
-        out.setdefault(sid, []).append(offering_ref(offering, course))
+    for sid, offering, course, semester in rows:
+        out.setdefault(sid, []).append(offering_ref(offering, course, semester))
     return out
 
 
@@ -502,7 +504,7 @@ def _detail(
     detail = StudentDetail.model_validate(student)
     if academic_year_id is not None:
         base_offerings = [
-            offering_ref(offering, course)
+            offering_ref(offering, course, db.get(Semester, offering.semester_id))
             for offering, course in student_offerings_in_year(
                 db, student_id=student.id, academic_year_id=academic_year_id
             )
