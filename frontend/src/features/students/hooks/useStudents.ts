@@ -14,11 +14,7 @@ import {
   getStudentAssessments,
   getStudentYears,
   listStudents,
-<<<<<<< HEAD
-=======
-  nudgeRelease,
   setGradesWithheld,
->>>>>>> 39f4cca3bc4e6e1fa04930d17b2fd88a5b7e7846
   setStudentStatus,
   updateStudent,
   getStudentDocuments,

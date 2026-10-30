@@ -43,11 +43,7 @@ import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteStudent,
-<<<<<<< HEAD
-=======
-  useNudgeRelease,
   useSetGradesWithheld,
->>>>>>> 39f4cca3bc4e6e1fa04930d17b2fd88a5b7e7846
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,

@@ -937,10 +937,6 @@ class TestMyGrades:
         assert item["score"] == 18.0
         assert subject["term_numeric"] == 90.0
 
-<<<<<<< HEAD
-    def test_a_pending_mark_on_an_open_assessment_is_not_listed(self, client, graph) -> None:
-        a = graph.assessment(assessment_date=_days_ago(1))
-=======
     def test_every_enrolled_course_is_listed(self, client, graph) -> None:
         """D29: a tertiary student sits several courses at once. Resolving ONE offering
         (`.limit(1)`, the K-12 homeroom habit) showed the most recent enrollment only, so
@@ -967,9 +963,8 @@ class TestMyGrades:
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
         assert [x["offering"]["offering"]["id"] for x in body["by_subject"]] == [str(graph.cs.id)]
 
-    def test_released_but_pending_is_excluded(self, client, graph) -> None:
-        a = graph.assessment(is_released=True)
->>>>>>> 39f4cca3bc4e6e1fa04930d17b2fd88a5b7e7846
+    def test_a_pending_mark_on_an_open_assessment_is_not_listed(self, client, graph) -> None:
+        a = graph.assessment(assessment_date=_days_ago(1))
         s, e = graph.student(with_login=True)
         graph.grade(a, s, e, status="pending", score=None)
         body = client.get(f"{G}/me", headers=graph.student_headers(s)).json()
