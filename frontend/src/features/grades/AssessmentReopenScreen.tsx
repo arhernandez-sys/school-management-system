@@ -6,7 +6,6 @@ import {
   Card,
   CardContent,
   Chip,
-  Divider,
   MenuItem,
   Stack,
   TextField,
@@ -147,9 +146,11 @@ export function AssessmentReopenScreen() {
         <Stack spacing={1.5}>
           {rows.map((row) => (
             <Card key={row.id} variant="outlined">
-              <CardContent>
-                <Stack spacing={1.5}>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
+              {/* Two-column rows (left / right) keep each request to a few dense lines
+                  instead of a tall stack of one-fact paragraphs. */}
+              <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                <Stack spacing={0.75}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                       {row.assessment_title}
                     </Typography>
@@ -163,75 +164,92 @@ export function AssessmentReopenScreen() {
                       />
                     )}
                   </Stack>
-                  <Typography variant="body2" color="text.secondary">
-                    {[
+                  <TwoColumnLine
+                    left={[
                       row.offering?.label,
                       row.offering?.course.name,
                       row.assessment_date ? `held ${formatSchoolDate(row.assessment_date)}` : null,
-                      row.marking_closes_at ? `marking closed ${formatSchoolDate(row.marking_closes_at)}` : null,
                     ]
                       .filter(Boolean)
                       .join(' · ')}
-                  </Typography>
+                    right={[
+                      row.marking_closes_at ? `Marking closed ${formatSchoolDate(row.marking_closes_at)}` : null,
+                      row.status === 'approved' && row.reopened_until
+                        ? `open until ${formatSchoolDate(row.reopened_until)}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  />
                   <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                    <Box component="span" sx={{ color: 'text.secondary' }}>
+                      Reason:{' '}
+                    </Box>
                     {row.reason}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Requested by {row.requested_by_name} on {formatSchoolDateTime(row.created_at)}
-                    {row.decided_at &&
-                      ` · ${STATUS_LABEL[row.status].toLowerCase()} by ${row.decided_by_name ?? 'the Dean'} on ${formatSchoolDateTime(row.decided_at)}`}
-                    {row.status === 'approved' && row.reopened_until &&
-                      ` · open until the end of ${formatSchoolDate(row.reopened_until)}`}
-                  </Typography>
                   {row.decision_note && (
-                    <Alert severity={row.status === 'approved' ? 'success' : 'info'}>{row.decision_note}</Alert>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                      <Box
+                        component="span"
+                        sx={{ color: row.status === 'approved' ? 'success.main' : 'error.main', fontWeight: 600 }}
+                      >
+                        Dean's note:{' '}
+                      </Box>
+                      {row.decision_note}
+                    </Typography>
                   )}
+                  <TwoColumnLine
+                    caption
+                    left={`Requested by ${row.requested_by_name} on ${formatSchoolDateTime(row.created_at)}`}
+                    right={
+                      row.decided_at
+                        ? `${STATUS_LABEL[row.status]} by ${row.decided_by_name ?? 'the Dean'} on ${formatSchoolDateTime(row.decided_at)}`
+                        : null
+                    }
+                  />
                   {row.status === 'pending' && (isDean || row.can_withdraw) && (
-                    <>
-                      <Divider />
-                      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-                        {isDean && (
-                          <>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="success"
-                              onClick={() => {
-                                setDays('2');
-                                setNote('');
-                                setDecide({ row, approve: true });
-                              }}
-                            >
-                              Reopen
-                            </Button>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              color="error"
-                              onClick={() => {
-                                setNote('');
-                                setDecide({ row, approve: false });
-                              }}
-                            >
-                              Decline
-                            </Button>
-                          </>
-                        )}
-                        <Box sx={{ flexGrow: 1 }} />
-                        {row.can_withdraw && (
+                    <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, pt: 0.5 }}>
+                      {isDean && (
+                        <>
                           <Button
                             size="small"
-                            color="inherit"
-                            disabled={withdrawMut.isPending}
-                            onClick={() =>
-                              withdrawMut.mutate(row.id, { onError: (err) => setError(apiErrorMessage(err)) })
-                            }
+                            variant="contained"
+                            color="success"
+                            onClick={() => {
+                              setDays('2');
+                              setNote('');
+                              setDecide({ row, approve: true });
+                            }}
                           >
-                            Withdraw
+                            Reopen
                           </Button>
-                        )}
-                      </Stack>
-                    </>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            onClick={() => {
+                              setNote('');
+                              setDecide({ row, approve: false });
+                            }}
+                          >
+                            Decline
+                          </Button>
+                        </>
+                      )}
+                      <Box sx={{ flexGrow: 1 }} />
+                      {row.can_withdraw && (
+                        <Button
+                          size="small"
+                          color="inherit"
+                          disabled={withdrawMut.isPending}
+                          onClick={() =>
+                            withdrawMut.mutate(row.id, { onError: (err) => setError(apiErrorMessage(err)) })
+                          }
+                        >
+                          Withdraw
+                        </Button>
+                      )}
+                    </Stack>
                   )}
                 </Stack>
               </CardContent>
@@ -300,3 +318,31 @@ export function AssessmentReopenScreen() {
 }
 
 export default AssessmentReopenScreen;
+
+/** One line, two columns: `left` flush left, `right` flush right; stacks on a phone. */
+function TwoColumnLine({
+  left,
+  right,
+  caption = false,
+}: {
+  left: string;
+  right?: string | null;
+  caption?: boolean;
+}) {
+  const variant = caption ? 'caption' : 'body2';
+  return (
+    <Stack
+      direction={{ xs: 'column', sm: 'row' }}
+      sx={{ justifyContent: 'space-between', columnGap: 2, rowGap: 0.25 }}
+    >
+      <Typography variant={variant} color="text.secondary">
+        {left}
+      </Typography>
+      {right && (
+        <Typography variant={variant} color="text.secondary" sx={{ textAlign: { sm: 'right' } }}>
+          {right}
+        </Typography>
+      )}
+    </Stack>
+  );
+}

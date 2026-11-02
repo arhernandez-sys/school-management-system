@@ -27,6 +27,7 @@ import {
 import type { DemoOffering, DemoStudent } from '@shared/api/mocks/demo/dataset';
 import type { EnrollmentStatus } from '@features/offerings/types';
 import { errorResponse, listParamsFrom } from './_helpers';
+import { formatTime } from '@features/offerings/meetingFormat';
 
 /**
  * MSW handlers for the OFFERINGS module (api-spec §5 Module 5) — DEMO.
@@ -272,10 +273,10 @@ function yearArchived(offering: DemoOffering): boolean {
   return D.academic_years.find((y) => y.id === yearId)?.status === 'archived';
 }
 
-/** "Mon 08:00–09:30" — matches the server-rendered conflict messages. */
+/** "Mon 8:00 AM–9:30 AM" — matches the server-rendered conflict messages. */
 const DAY_SHORT: Record<number, string> = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri' };
 function slotLabel(day: number, start: string, end: string): string {
-  return `${DAY_SHORT[day] ?? `Day ${day}`} ${start.slice(0, 5)}–${end.slice(0, 5)}`;
+  return `${DAY_SHORT[day] ?? `Day ${day}`} ${formatTime(start)}–${formatTime(end)}`;
 }
 /** Half-open overlap: back-to-back meetings (09:30 end, 09:30 start) do NOT clash. */
 function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {

@@ -231,6 +231,10 @@ def _assert_midterm_not_frozen(db: Session, assessment: Assessment, actor: User)
     """
     if actor.role == Role.PRINCIPAL:
         return
+    # A Dean-approved reopen is the Dean's permission for THIS assessment — it overrides
+    # the term-wide freeze while it runs (`marking.is_reopen_active`).
+    if marking.is_reopen_active(assessment):
+        return
     frozen, start, end = midterm_freeze_state(db, assessment.semester_id)
     if frozen:
         raise Conflict(
@@ -309,6 +313,10 @@ def _assert_pre_midterm_marks_not_edited(
     have no way to act on one.
     """
     if actor.role == Role.PRINCIPAL:
+        return
+    # A Dean-approved reopen already IS the Dean's approval to change these marks; a
+    # second one through the revision queue is what made the two workflows clash.
+    if marking.is_reopen_active(assessment):
         return
     frozen, start, end = midterm_freeze_state(db, assessment.semester_id)
     if start is None or end is None or frozen or utcnow() <= end:
