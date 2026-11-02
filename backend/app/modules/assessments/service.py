@@ -435,12 +435,14 @@ def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, pay
     # Locked (see FIXED_ASSESSMENT_WEIGHT): any edit also brings an older non-1 weight back to 1.
     a.weight = FIXED_ASSESSMENT_WEIGHT
     if "assessment_date" in fields and payload.assessment_date != a.assessment_date:
-        # D47 — the date anchors the marking window, so moving it moves the window.
-        # Frozen once closed (the way back in is a reopen request), and a new date may
-        # not land in an already-closed window either.
-        _assert_marking_open(a)
-        _assert_window_not_already_closed(payload.assessment_date)
-        a.assessment_date = payload.assessment_date
+        # The date is READ-ONLY once the assessment exists (client request): it anchors the
+        # marking window, so moving it would move the window. Re-sending the SAME date (the
+        # edit form always does) is not a change and passes.
+        raise ValidationError(
+            "The assessment date cannot be changed once the assessment is created.",
+            code="assessment_date_locked",
+            fields={"assessment_date": ["The date cannot be changed once the assessment is created."]},
+        )
     if payload.absent_as_zero is not None:
         a.absent_as_zero = payload.absent_as_zero
     if payload.allow_makeup is not None:

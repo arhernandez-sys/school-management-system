@@ -143,8 +143,14 @@ export function AssessmentFormDialog({
           onChange={setDate}
           required
           fullWidth
+          // Fixed once created: the date anchors the marking window, so it is read-only on
+          // edit (the server refuses a change too — `assessment_date_locked`).
+          disabled={editing}
           error={Boolean(fieldErrors?.assessment_date)}
-          helperText={fieldErrors?.assessment_date?.join(' ') ?? 'Required'}
+          helperText={
+            fieldErrors?.assessment_date?.join(' ') ??
+            (editing ? 'The date cannot be changed once the assessment is created.' : 'Required')
+          }
         />
 
         <TextField
