@@ -37,7 +37,7 @@ import { RequestRevisionDialog } from './components/RequestRevisionDialog';
 import { RequestReopenDialog } from './components/RequestReopenDialog';
 import { useGradebook, useSaveGrades } from './hooks/useGrades';
 import type { GradeEntry, RevisionBlockedReason } from './types';
-import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime, parseInstant } from '@shared/utils/schoolDate';
 import { closesOn, daysLeftLabel, markingBadge, MARKING_WINDOW_DAYS } from './marking';
 import { isLecturerRole } from '@shared/auth/permissions';
 import { useIsSessionActive } from '@shared/hooks';
@@ -66,7 +66,7 @@ const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
  * D42 §6 — this file's private date+time formatter is gone. It called
  * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
  * stamp on a US-locale machine while every plain date on the same screen was already
- * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy h:mm AM/PM` in America/Belize and is
  * the one place that decision lives.
  */
 
@@ -158,7 +158,7 @@ export function AssessmentGradingScreen() {
   const reopenActive =
     markingOpen &&
     Boolean(assessment?.reopened_until) &&
-    Date.parse(assessment?.reopened_until ?? '') >= Date.now();
+    (parseInstant(assessment?.reopened_until)?.getTime() ?? 0) >= Date.now();
   const frozenHere = midtermFrozen && !reopenActive;
   const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !frozenHere;
 

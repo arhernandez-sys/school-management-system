@@ -3,6 +3,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import dayjs, { type Dayjs } from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
+import { parseInstant } from '@shared/utils/schoolDate';
 
 // `dayjs(value, format, true)` below is a STRICT parse, and strict parsing is only
 // available once this plugin is registered — without it dayjs silently ignores the format
@@ -125,7 +126,7 @@ export interface DateTimeFieldProps
 }
 
 /**
- * A `dd/mm/yyyy hh:mm` picker over a **UTC ISO instant**.
+ * A `dd/mm/yyyy hh:mm AM/PM` picker over a **UTC ISO instant**.
  *
  * The displayed value is the browser's LOCAL wall clock and the stored value is UTC,
  * which is the same contract the `datetime-local` inputs this replaced had — and it is
@@ -146,12 +147,15 @@ export function DateTimeField({
   autoFocus = false,
   sx,
 }: DateTimeFieldProps) {
-  const parsed = value ? dayjs(value) : null;
+  // `parseInstant`, not `dayjs(value)`: the API sends naive UTC (`…T20:15:00`, no `Z`),
+  // which dayjs would read as LOCAL time and show six hours ahead.
+  const instant = parseInstant(value);
+  const parsed = instant ? dayjs(instant) : null;
   return (
     <DateTimePicker
       label={label}
-      format="DD/MM/YYYY HH:mm"
-      ampm={false}
+      format="DD/MM/YYYY hh:mm A"
+      ampm
       value={parsed !== null && parsed.isValid() ? parsed : null}
       onChange={(next) =>
         onChange(next !== null && next.isValid() ? next.toDate().toISOString() : '')
@@ -167,7 +171,7 @@ export function DateTimeField({
           name,
           autoFocus,
           sx,
-          placeholder: 'dd/mm/yyyy hh:mm',
+          placeholder: 'dd/mm/yyyy hh:mm am/pm',
         },
       }}
     />

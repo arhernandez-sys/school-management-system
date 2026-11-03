@@ -75,6 +75,27 @@ export function attendanceRecordableDates(today: string = schoolToday()): string
 }
 
 /**
+ * Parse an API timestamp into a `Date`, treating an offset-less value as **UTC**.
+ *
+ * WHY THIS EXISTS: storage is UTC (`backend/app/core/timeutil.py`), but MariaDB
+ * `DATETIME` columns come back timezone-NAIVE, so the API serialises them as
+ * `2026-11-03T20:15:00` — no `Z`. `new Date()` reads an offset-less date-time as the
+ * BROWSER'S LOCAL time, so in Belize every stamp rendered six hours ahead (the reopen
+ * request "requested on" time was the visible case). A value that already carries `Z`
+ * or `±hh:mm` is left alone, and a date-only `YYYY-MM-DD` is not handled here (see
+ * `formatSchoolDate`).
+ *
+ * Use this — never a bare `new Date(str)` / `Date.parse(str)` — for any instant the API sends.
+ */
+export function parseInstant(value: string | Date | null | undefined): Date | null {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const naive = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value);
+  const d = new Date(naive ? `${value.replace(' ', 'T')}Z` : value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
  * A date as `dd/mm/yyyy` — the format the school asked for (D39, Meeting #2 item 1).
  *
  * WHY THIS EXISTS: fifteen call sites each had their own `fmt` helper calling
@@ -106,8 +127,8 @@ export function formatSchoolDate(value: string | Date | null | undefined): strin
     if (ymd) return `${ymd[3]}/${ymd[2]}/${ymd[1]}`;
   }
 
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
+  const d = parseInstant(value);
+  if (d === null) return String(value);
   return schoolDateOf(d).split('-').reverse().join('/');
 }
 
@@ -165,10 +186,8 @@ export function formatSchoolDateWithWeekday(
   const d =
     typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
       ? new Date(`${value}T12:00:00Z`)
-      : value instanceof Date
-        ? value
-        : new Date(String(value));
-  if (Number.isNaN(d.getTime())) return date;
+      : parseInstant(value);
+  if (d === null) return date;
 
   const day = new Intl.DateTimeFormat('en-GB', {
     timeZone: SCHOOL_TIME_ZONE,
@@ -177,21 +196,31 @@ export function formatSchoolDateWithWeekday(
   return `${day} ${date}`;
 }
 
+const timeOfDay = new Intl.DateTimeFormat('en-US', {
+  timeZone: SCHOOL_TIME_ZONE,
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+});
+
 /**
- * An instant as `dd/mm/yyyy HH:MM`, in the school's timezone.
+ * An instant's time of day as `3:45 PM` — 12-hour clock, school timezone.
+ */
+export function formatSchoolTime(value: string | Date | null | undefined): string {
+  const d = parseInstant(value);
+  if (d === null) return value == null ? '' : String(value);
+  return timeOfDay.format(d);
+}
+
+/**
+ * An instant as `dd/mm/yyyy h:mm AM/PM`, in the school's timezone.
  *
  * For the handful of places that show a TIME as well as a date — a submission deadline,
- * an audit stamp. Same 24-hour clock the rest of the system uses.
+ * an audit stamp. 12-hour clock (client request, 3 Nov 2026).
  */
 export function formatSchoolDateTime(value: string | Date | null | undefined): string {
   if (value == null || value === '') return '';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return String(value);
-  const time = new Intl.DateTimeFormat('en-GB', {
-    timeZone: SCHOOL_TIME_ZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d);
-  return `${formatSchoolDate(d)} ${time}`;
+  const d = parseInstant(value);
+  if (d === null) return String(value);
+  return `${formatSchoolDate(d)} ${timeOfDay.format(d)}`;
 }

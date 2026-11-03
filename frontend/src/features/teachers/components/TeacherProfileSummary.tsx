@@ -1,5 +1,5 @@
 import { Box, Card, CardContent, Divider, Stack, Typography } from '@mui/material';
-import { formatSchoolDate } from '@shared/utils/schoolDate';
+import { formatSchoolDate, parseInstant } from '@shared/utils/schoolDate';
 import { alpha } from '@mui/material/styles';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
@@ -35,8 +35,8 @@ function formatDate(iso: string | null | undefined): string {
   // invalid date — it is the Unix epoch, so this would have printed **01/01/1970** on
   // every lecturer nobody had edited. (`new Date(undefined)` IS NaN; only null coerces.)
   if (iso == null || iso === '') return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : formatSchoolDate(d);
+  const d = parseInstant(iso);
+  return d === null ? '—' : formatSchoolDate(d);
 }
 
 /** A single label/value row in the definition-list sections. */

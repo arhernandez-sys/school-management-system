@@ -97,18 +97,16 @@ export function PeopleListCard({
             {people.map((p, i) => (
               <Box key={p.id}>
                 {i > 0 && <Divider component="li" />}
-                <ListItem
-                  sx={{ px: 0, py: 1.25, gap: 1 }}
-                  secondaryAction={
-                    p.status ? <StatusBadge label={p.status.label} kind={p.status.kind} /> : undefined
-                  }
-                >
+                {/* Status badge in normal flow, not `secondaryAction`: `px: 0` cancels the
+                    padding MUI reserves for that absolutely-positioned slot, so a long
+                    name ran underneath the badge. */}
+                <ListItem sx={{ px: 0, py: 1.25, gap: 1 }}>
                   <ListItemAvatar>
                     <Avatar aria-hidden src={p.avatarUrl} sx={{ width: 40, height: 40 }}>
                       {initials(p.name)}
                     </Avatar>
                   </ListItemAvatar>
-                  <Stack sx={{ minWidth: 0 }}>
+                  <Stack sx={{ minWidth: 0, flex: 1 }}>
                     <Typography variant="subtitle2" component="p" noWrap>
                       {p.to ? (
                         <Link component={RouterLink} to={p.to} underline="hover" color="inherit">
@@ -124,6 +122,11 @@ export function PeopleListCard({
                       </Typography>
                     )}
                   </Stack>
+                  {p.status && (
+                    <Box sx={{ flexShrink: 0 }}>
+                      <StatusBadge label={p.status.label} kind={p.status.kind} />
+                    </Box>
+                  )}
                 </ListItem>
               </Box>
             ))}

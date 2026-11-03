@@ -729,6 +729,21 @@ class TestTheNotificationCount:
             body["unread_announcements"] + body["pending_grade_revisions"]
         )
 
+    def test_the_dashboard_announcement_count_excludes_pending_revisions(
+        self, client, graph, marked
+    ) -> None:
+        """The bell counts revisions; the dashboard's announcements card must not.
+
+        Regression (3 Nov 2026): the Dean's card read "Recent announcements (2 unread)"
+        above "No announcements" — the 2 were items awaiting her decision.
+        """
+        _request(client, graph, marked[0], marked[1])
+        bell = client.get(f"{ANN}/unread-count", headers=graph.P).json()
+        assert bell["pending_grade_revisions"] >= 1
+        stats = client.get("/api/v1/dashboard", headers=graph.P).json()["stats"]
+        assert stats["unread_announcements"] == bell["unread_announcements"]
+        assert stats["unread_announcements"] < bell["unread_count"]
+
     def test_a_lecturers_count_does_not_include_their_own_request(
         self, client, graph, marked
     ) -> None:

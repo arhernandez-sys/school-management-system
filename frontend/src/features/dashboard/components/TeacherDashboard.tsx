@@ -105,23 +105,11 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                 {data.today_classes.map((c, i) => (
                   <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.5, gap: 1, flexWrap: 'wrap' }}
-                      secondaryAction={
-                        <Button
-                          component={RouterLink}
-                          to={ROUTES.attendance}
-                          size="small"
-                          variant={c.attendance_recorded ? 'text' : 'contained'}
-                          startIcon={
-                            c.attendance_recorded ? <CheckCircleIcon /> : <WarningAmberIcon />
-                          }
-                        >
-                          {c.attendance_recorded ? 'View' : 'Record'}
-                        </Button>
-                      }
-                    >
-                      <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                    {/* The action sits IN the row's flow, not in `secondaryAction`: that
+                        slot is absolutely positioned, and `px: 0` cancels the padding MUI
+                        reserves for it, so long text slid underneath the button. */}
+                    <ListItem sx={{ px: 0, py: 1.5, gap: 1.5 }}>
+                      <Stack spacing={0.5} sx={{ minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {c.offering.label} · {c.offering.course.name}
                         </Typography>
@@ -130,6 +118,18 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                           kind={c.attendance_recorded ? 'success' : 'warning'}
                         />
                       </Stack>
+                      <Button
+                        component={RouterLink}
+                        to={ROUTES.attendance}
+                        size="small"
+                        variant={c.attendance_recorded ? 'text' : 'contained'}
+                        startIcon={
+                          c.attendance_recorded ? <CheckCircleIcon /> : <WarningAmberIcon />
+                        }
+                        sx={{ flexShrink: 0 }}
+                      >
+                        {c.attendance_recorded ? 'View' : 'Record'}
+                      </Button>
                     </ListItem>
                   </Box>
                 ))}
@@ -172,20 +172,14 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                 {data.recent_assessments.map((a, i) => (
                   <Box key={a.id}>
                     {i > 0 && <Divider component="li" />}
+                    {/* Title | badge + button, all in normal flow. The button used to be a
+                        `secondaryAction` (absolutely positioned) and landed on top of the
+                        badge; `pr` on the title could not protect a sibling. On a narrow
+                        screen the badge + button wrap below the title instead of overlapping. */}
                     <ListItem
-                      sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}
-                      secondaryAction={
-                        <Button
-                          component={RouterLink}
-                          to={gradingLink(a.id, a.offering_id)}
-                          size="small"
-                          variant={a.days_left != null && a.days_left <= 1 ? 'contained' : 'outlined'}
-                        >
-                          Enter marks
-                        </Button>
-                      }
+                      sx={{ px: 0, py: 1.25, columnGap: 2, rowGap: 1, flexWrap: 'wrap' }}
                     >
-                      <Stack sx={{ minWidth: 0, flexGrow: 1, pr: 14 }}>
+                      <Stack sx={{ minWidth: 0, flex: '1 1 220px' }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {a.title}
                         </Typography>
@@ -194,13 +188,28 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                           · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
-                      <StatusBadge
-                        {...markingBadge({
-                          marking_open: true,
-                          effective_closes_at: a.marking_closes_at,
-                          days_left: a.days_left,
-                        })}
-                      />
+                      <Stack
+                        direction="row"
+                        spacing={1.5}
+                        sx={{ alignItems: 'center', flexShrink: 0, ml: 'auto' }}
+                      >
+                        <StatusBadge
+                          {...markingBadge({
+                            marking_open: true,
+                            effective_closes_at: a.marking_closes_at,
+                            days_left: a.days_left,
+                          })}
+                        />
+                        <Button
+                          component={RouterLink}
+                          to={gradingLink(a.id, a.offering_id)}
+                          size="small"
+                          variant={a.days_left != null && a.days_left <= 1 ? 'contained' : 'outlined'}
+                          sx={{ whiteSpace: 'nowrap' }}
+                        >
+                          Enter marks
+                        </Button>
+                      </Stack>
                     </ListItem>
                   </Box>
                 ))}

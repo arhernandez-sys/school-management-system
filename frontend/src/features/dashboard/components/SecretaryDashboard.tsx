@@ -147,15 +147,8 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
                 {data.recent_enrollments.map((e, i) => (
                   <Box key={e.enrollment_id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.25, gap: 1 }}
-                      secondaryAction={
-                        <Typography variant="caption" color="text.secondary">
-                          {formatDate(e.enrolled_at)}
-                        </Typography>
-                      }
-                    >
-                      <Stack sx={{ minWidth: 0 }}>
+                    <ListItem sx={{ px: 0, py: 1.25, gap: 1 }}>
+                      <Stack sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {e.student_name}
                         </Typography>
@@ -163,6 +156,13 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
                           {e.offering_label}
                         </Typography>
                       </Stack>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                      >
+                        {formatDate(e.enrolled_at)}
+                      </Typography>
                     </ListItem>
                   </Box>
                 ))}

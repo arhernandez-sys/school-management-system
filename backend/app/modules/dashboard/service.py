@@ -163,7 +163,14 @@ def _recent_announcements(
 
 
 def _unread_count(db: Session, actor: User) -> int:
-    return announcements_service.unread_count(db, actor=actor).unread_count
+    """Unread ANNOUNCEMENTS only — the figure beside the announcements card.
+
+    NOT `.unread_count`: that is the bell's total, which for the Dean also adds pending
+    grade revisions and reopen requests (§D8). Using it here labelled the Dean's
+    announcements card "(2 unread)" above an empty list when the two were reopen
+    requests, not announcements (reported 3 Nov 2026).
+    """
+    return announcements_service.unread_count(db, actor=actor).unread_announcements
 
 
 def _bands(db: Session, year: AcademicYear | None) -> tuple[list[calc.BandInput], Decimal | None]:

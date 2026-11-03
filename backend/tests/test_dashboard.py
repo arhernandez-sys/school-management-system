@@ -704,9 +704,11 @@ class TestAnnouncementIntegration:
         # The student variant has no unread stat; cross-check the principal's instead.
         graph.announcement(audience="all")
         p_dash = client.get(DB, headers=graph.P).json()["stats"]["unread_announcements"]
+        # `unread_announcements`, not the bell total `unread_count` — the two are equal
+        # here only because this graph has no pending revisions or reopens for the Dean.
         endpoint = client.get(
             "/api/v1/announcements/unread-count", headers=graph.P
-        ).json()["unread_count"]
+        ).json()["unread_announcements"]
         assert p_dash == endpoint
         assert dash["role"] == "student"
 
