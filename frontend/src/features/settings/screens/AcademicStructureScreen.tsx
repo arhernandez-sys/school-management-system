@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime, parseInstant } from '@shared/utils/schoolDate';
 import {
   Alert,
   Box,
@@ -70,7 +70,7 @@ interface DraftTerm {
  * D42 §6 — this file's private date+time formatter is gone. It called
  * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
  * stamp on a US-locale machine while every plain date on the same screen was already
- * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy h:mm AM/PM` in America/Belize and is
  * the one place that decision lives.
  */
 
@@ -127,8 +127,8 @@ function midtermFreezeCaption(
   now: Date = new Date(),
 ): { text: string; running: boolean } | null {
   if (!start || !end) return null;
-  const from = new Date(start);
-  const to = new Date(end);
+  const from = parseInstant(start) ?? new Date(NaN);
+  const to = parseInstant(end) ?? new Date(NaN);
   // Inclusive both ends, mirroring the server.
   if (now >= from && now <= to) {
     return {

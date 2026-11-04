@@ -30,25 +30,31 @@ export const DAY_LONG: Record<DayOfWeek, string> = {
 export const WEEKDAYS: DayOfWeek[] = [1, 2, 3, 4, 5];
 
 /**
- * "08:00:00" → "08:00". The API serves `HH:MM:SS`; seconds are always zero for a
- * timetable slot and only add noise on screen.
+ * "08:00:00" → "8:00 AM", "13:30:00" → "1:30 PM" — the 12-hour clock the college reads.
+ * The API serves 24-hour `HH:MM:SS`; seconds are always zero for a timetable slot and
+ * are dropped. Only DISPLAY changes: the Schedule form still edits `HH:MM`.
  */
 export function formatTime(value: string): string {
-  return value.slice(0, 5);
+  const [hStr, mStr = '00'] = value.split(':');
+  const h = Number(hStr);
+  if (Number.isNaN(h)) return value.slice(0, 5);
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${mStr.slice(0, 2)} ${suffix}`;
 }
 
-/** "08:00–09:30" (en dash, matching the server-rendered conflict messages). */
+/** "8:00 AM–9:30 AM" (en dash, matching the server-rendered conflict messages). */
 export function formatTimeRange(start: string, end: string): string {
   return `${formatTime(start)}–${formatTime(end)}`;
 }
 
-/** "Mon 08:00–09:30" — one meeting, without its room. */
+/** "Mon 8:00 AM–9:30 AM" — one meeting, without its room. */
 export function formatMeeting(m: OfferingMeeting): string {
   return `${DAY_SHORT[m.day_of_week]} ${formatTimeRange(m.start_time, m.end_time)}`;
 }
 
 /**
- * "Mon 08:00–09:30 · Wed 10:00–11:00" — an offering's whole week on one line, for a table
+ * "Mon 8:00 AM–9:30 AM · Wed 10:00 AM–11:00 AM" — an offering's whole week on one line, for a table
  * cell. Returns `null` for an unscheduled offering so callers can render their own em-dash
  * or "Not scheduled" badge rather than an empty string.
  */

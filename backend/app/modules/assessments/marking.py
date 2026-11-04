@@ -59,6 +59,20 @@ def effective_closes_at(assessment: Assessment) -> datetime | None:
     return max(closes, reopened)
 
 
+def is_reopen_active(assessment: Assessment, now: datetime | None = None) -> bool:
+    """True while a Dean-approved reopen is running (`now <= reopened_until`).
+
+    A reopen is the Dean's explicit permission to enter or change marks on THIS
+    assessment, so while it runs it also lifts the two mid-term guards in
+    `grades.service` (the freeze and the closed-window revision lock). Without that
+    the guards clash: the Dean reopens, the window shows open, and the save is still
+    refused with "file a Revision of Grades" — a revision the gradebook may not even
+    offer. The Dean already decided; asking for a second approval is the clash.
+    """
+    reopened = ensure_aware(assessment.reopened_until)
+    return reopened is not None and (now or utcnow()) <= reopened
+
+
 def is_marking_open(assessment: Assessment, now: datetime | None = None) -> bool:
     closes = effective_closes_at(assessment)
     if closes is None:

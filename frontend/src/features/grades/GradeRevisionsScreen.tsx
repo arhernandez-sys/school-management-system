@@ -70,7 +70,7 @@ const FILTERS: { value: GradeRevisionStatus | 'all'; label: string }[] = [
  * D42 §6 — this file's private date+time formatter is gone. It called
  * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
  * stamp on a US-locale machine while every plain date on the same screen was already
- * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy h:mm AM/PM` in America/Belize and is
  * the one place that decision lives.
  */
 

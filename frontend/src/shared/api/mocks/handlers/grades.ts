@@ -425,8 +425,11 @@ export const gradesHandlers = [
     }
 
     // D33 ask 7 — the mid-session freeze, checked before any validation or mutation.
+    // A Dean-approved reopen that is still running overrides it (`marking.is_reopen_active`).
     const freeze = midtermFreeze();
-    if (freeze.frozen) {
+    const reopenActive =
+      asmt.reopened_until != null && Date.parse(DEMO_TODAY_ISO) <= Date.parse(asmt.reopened_until);
+    if (freeze.frozen && !reopenActive) {
       return errorResponse(
         409,
         'midterm_frozen',

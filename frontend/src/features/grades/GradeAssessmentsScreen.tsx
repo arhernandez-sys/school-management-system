@@ -322,6 +322,8 @@ export function GradeAssessmentsScreen() {
           onClose={() => setPrintOpen(false)}
           params={printParams}
           filterSummary={printSummary}
+          // The Dean reads the report student by student; a lecturer, course by course.
+          groupBy={isDean ? 'student' : 'offering'}
         />
       )}
 

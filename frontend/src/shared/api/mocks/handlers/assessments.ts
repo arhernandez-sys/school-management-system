@@ -413,21 +413,21 @@ export const assessmentsHandlers: RequestHandler[] = [
         );
       }
     }
-    // D47 — the date anchors the window, so moving it moves the window: frozen once
-    // closed, and a new date may not land in an already-closed window either.
-    const movesDate =
-      body.assessment_date !== undefined && body.assessment_date !== a.assessment_date;
-    if (movesDate) {
-      if (!isMarkingOpen(a)) return markingClosedError();
-      const passed = windowPassedError(body.assessment_date);
-      if (passed) return passed;
+    // The date is read-only after creation (`assessment_date_locked`) — it anchors the
+    // marking window. Re-sending the same date is not a change.
+    if (body.assessment_date !== undefined && body.assessment_date !== a.assessment_date) {
+      return errorResponse(
+        422,
+        'assessment_date_locked',
+        'The assessment date cannot be changed once the assessment is created.',
+        { assessment_date: ['The date cannot be changed once the assessment is created.'] },
+      );
     }
 
     if (body.category_id !== undefined) a.category_id = body.category_id;
     if (body.title !== undefined) a.title = body.title.trim();
     if (body.max_score !== undefined) a.max_score = body.max_score;
     a.weight = FIXED_ASSESSMENT_WEIGHT;
-    if (movesDate) a.assessment_date = body.assessment_date ?? null;
 
     return HttpResponse.json(assessmentDetail(a));
   }),

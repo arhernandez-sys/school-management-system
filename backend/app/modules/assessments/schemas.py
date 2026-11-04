@@ -120,8 +120,8 @@ class AssessmentCreateRequest(BaseModel):
 
 
 class AssessmentUpdateRequest(BaseModel):
-    """Partial. Once the marking window has closed `assessment_date` is frozen —
-    moving it would move the window (D47)."""
+    """Partial. `assessment_date` is read-only after creation — moving it would move the
+    marking window (D47). Sending the current date is accepted as a no-op."""
 
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(default=None, min_length=1, max_length=160)

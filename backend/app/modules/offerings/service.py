@@ -469,10 +469,16 @@ _DAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri"}
 
 
 def _slot_label(day_of_week: int, start: time, end: time) -> str:
-    """"Mon 08:00-09:30" — the one place this is formatted, so every conflict message
-    and every audit summary reads the same."""
+    """"Mon 8:00 AM-9:30 AM" — the one place this is formatted, so every conflict message
+    and every audit summary reads the same. 12-hour clock, matching the timetable."""
     day = _DAY_NAMES.get(day_of_week, f"Day {day_of_week}")
-    return f"{day} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    return f"{day} {_clock(start)}-{_clock(end)}"
+
+
+def _clock(value: time) -> str:
+    """08:00 -> "8:00 AM", 13:30 -> "1:30 PM". Built by hand: `%-I` is not portable to Windows."""
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
 
 
 def _overlaps(a_start: time, a_end: time, b_start: time, b_end: time) -> bool:

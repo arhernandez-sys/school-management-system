@@ -8,6 +8,7 @@ import {
   CircularProgress,
   Paper,
   Slide,
+  Snackbar,
   Stack,
   Tooltip,
   Table,
@@ -36,7 +37,7 @@ import { RequestRevisionDialog } from './components/RequestRevisionDialog';
 import { RequestReopenDialog } from './components/RequestReopenDialog';
 import { useGradebook, useSaveGrades } from './hooks/useGrades';
 import type { GradeEntry, RevisionBlockedReason } from './types';
-import { formatSchoolDate, formatSchoolDateTime } from '@shared/utils/schoolDate';
+import { formatSchoolDate, formatSchoolDateTime, parseInstant } from '@shared/utils/schoolDate';
 import { closesOn, daysLeftLabel, markingBadge, MARKING_WINDOW_DAYS } from './marking';
 import { isLecturerRole } from '@shared/auth/permissions';
 import { useIsSessionActive } from '@shared/hooks';
@@ -65,7 +66,7 @@ const REVISION_BLOCKED_COPY: Record<RevisionBlockedReason, string> = {
  * D42 §6 — this file's private date+time formatter is gone. It called
  * `toLocaleString(undefined, …)`, i.e. the BROWSER's locale, so it printed a US month-first
  * stamp on a US-locale machine while every plain date on the same screen was already
- * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy HH:MM` in America/Belize and is
+ * dd/mm/yyyy. `formatSchoolDateTime` renders `dd/mm/yyyy h:mm AM/PM` in America/Belize and is
  * the one place that decision lives.
  */
 
@@ -103,6 +104,8 @@ export function AssessmentGradingScreen() {
 
   const [draft, setDraft] = useState<Map<string, GradeCellValue>>(new Map());
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** The confirmation after a save — without it the only sign was the edits vanishing. */
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
   // D30 §D7 — the student whose grade a revision is being requested for.
   const [revisionFor, setRevisionFor] = useState<{
     id: string;
@@ -147,7 +150,17 @@ export function AssessmentGradingScreen() {
   const midtermEnd = gradebook?.midterm_submission_end ?? null;
   // D47 — the marking window is the per-assessment lock; the server is the source of it.
   const markingOpen = assessment?.marking_open ?? false;
-  const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !midtermFrozen;
+  /**
+   * A Dean-approved reopen that is still running. It is the Dean's permission for THIS
+   * assessment, so the server lets it override the term-wide mid-session freeze and the
+   * "file a Revision of Grades" lock (`marking.is_reopen_active`) — the screen follows.
+   */
+  const reopenActive =
+    markingOpen &&
+    Boolean(assessment?.reopened_until) &&
+    (parseInstant(assessment?.reopened_until)?.getTime() ?? 0) >= Date.now();
+  const frozenHere = midtermFrozen && !reopenActive;
+  const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !frozenHere;
 
   /**
    * D32 — is a Revision of Grades possible for ANY student on this assessment?
@@ -209,6 +222,9 @@ export function AssessmentGradingScreen() {
     try {
       await saveMut.mutateAsync({ assessmentId, entries });
       setDraft(new Map());
+      setSavedMessage(
+        `Marks saved — ${entries.length} ${entries.length === 1 ? 'student' : 'students'} updated.`,
+      );
     } catch (err) {
       setSaveError(apiErrorMessage(err));
     }
@@ -303,7 +319,7 @@ export function AssessmentGradingScreen() {
               variant="outlined"
               label={`${markedCount} of ${cellsHere.length} marked`}
             />
-            {midtermFrozen && <StatusBadge label="Mid-session frozen" kind="warning" />}
+            {frozenHere && <StatusBadge label="Mid-session frozen" kind="warning" />}
             {!gradebook.can_edit && <StatusBadge label="Read-only" kind="neutral" />}
             <Box sx={{ flexGrow: 1 }} />
             {isLecturer && (
@@ -361,7 +377,7 @@ export function AssessmentGradingScreen() {
               types forty marks into a form that will refuse them. "Frozen" on its own is
               unactionable: the next question is always wait-or-file-a-revision, and the
               end date is what answers it. */}
-          {midtermFrozen && (
+          {frozenHere && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               <strong>Mid-session grades are frozen.</strong>{' '}
               {midtermEnd
@@ -374,8 +390,13 @@ export function AssessmentGradingScreen() {
 
           {/* D32 — say ONCE why the Revision column is absent, rather than rendering forty
               disabled buttons. Only when every cell blocks for the same reason; a mixed
-              set has no single explanation and stays quiet. */}
-          {isLecturer && sharedBlockedReason && sharedBlockedReason !== 'not_graded' && (
+              set has no single explanation and stays quiet.
+
+              Also quiet while the marks are directly EDITABLE (marking open, or a Dean
+              reopen running): a revision is the path for a mark you can no longer change,
+              so "revision not available" beside an editable cell reads as "you can't change
+              this" — the opposite of the truth. */}
+          {isLecturer && !canEdit && sharedBlockedReason && sharedBlockedReason !== 'not_graded' && (
             <Alert severity="info" sx={{ mb: 2 }}>
               <strong>Revision of grades is not available for this assessment.</strong>{' '}
               {REVISION_BLOCKED_COPY[sharedBlockedReason]}
@@ -573,7 +594,7 @@ export function AssessmentGradingScreen() {
               // already locked, but a draft entered before the deadline lapsed — or before
               // a refetch flipped the freeze on — could otherwise still be submitted into a
               // guaranteed 409. Same argument for both windows (D33).
-              disabled={saveMut.isPending || midtermFrozen || dirtyCount === 0}
+              disabled={saveMut.isPending || frozenHere || dirtyCount === 0}
               startIcon={saveMut.isPending ? <CircularProgress size={16} color="inherit" /> : undefined}
             >
               {saveMut.isPending ? 'Saving…' : 'Save marks'}
@@ -581,6 +602,16 @@ export function AssessmentGradingScreen() {
           </Stack>
         </Paper>
       </Slide>
+      <Snackbar
+        open={Boolean(savedMessage)}
+        autoHideDuration={4000}
+        onClose={() => setSavedMessage(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity="success" variant="filled" onClose={() => setSavedMessage(null)}>
+          {savedMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

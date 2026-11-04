@@ -165,11 +165,8 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                 {data.recent_grades.map((g, i) => (
                   <Box key={g.assessment_id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.25, gap: 1 }}
-                      secondaryAction={<StatusBadge label={g.letter} kind={letterKind(g.letter)} />}
-                    >
-                      <Stack sx={{ minWidth: 0 }}>
+                    <ListItem sx={{ px: 0, py: 1.25, gap: 1 }}>
+                      <Stack sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {g.title}
                         </Typography>
@@ -177,6 +174,9 @@ export function StudentDashboard({ data }: StudentDashboardProps) {
                           {g.offering?.course.name ?? '—'} · {g.score}/{g.max_score}
                         </Typography>
                       </Stack>
+                      <Box sx={{ flexShrink: 0 }}>
+                        <StatusBadge label={g.letter} kind={letterKind(g.letter)} />
+                      </Box>
                     </ListItem>
                   </Box>
                 ))}
