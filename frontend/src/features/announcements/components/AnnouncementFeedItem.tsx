@@ -91,8 +91,8 @@ export function AnnouncementFeedItem({
               <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0, alignItems: 'center' }}>
                 <StatusBadge
                   label={
-                    a.audience === 'class' && a.class_ref
-                      ? a.class_ref.name
+                    a.audience === 'class' && a.offering
+                      ? a.offering.label
                       : AUDIENCE_LABEL[a.audience]
                   }
                   kind={AUDIENCE_KIND[a.audience]}

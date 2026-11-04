@@ -11,6 +11,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { Divider } from '@mui/material';
 import { PageHeader, LoadingState, ErrorState } from '@shared/components';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { useAssessmentPolicy, useUpdateAssessmentPolicy } from '../hooks/useSettings';
@@ -18,8 +19,14 @@ import { apiErrorMessage } from '@shared/api/errorMessages';
 
 /**
  * Assessment policy (api-spec §11, DB14). The school-level defaults for absent-as-zero,
- * make-up allowance, and drop-lowest count. Principal edits; others view. These three
+ * make-up allowance, and drop-lowest count. Principal edits; others view. Those three
  * fields are the COALESCE base that category/assessment overrides refine (backend).
+ *
+ * **D32 added a fourth control that is not a grading rule** (brief §4): whether students
+ * can see their grades at all. It shares this screen because it shares the singleton row
+ * behind it — a separate settings tab for one switch would need its own endpoint and its
+ * own screen — but it is separated below a divider, because "how a grade is calculated"
+ * and "who may look at it" are different decisions and should not read as one list.
  */
 export function AssessmentPolicyScreen() {
   const { user } = useAuth();
@@ -31,6 +38,7 @@ export function AssessmentPolicyScreen() {
   const [absentAsZero, setAbsentAsZero] = useState(false);
   const [allowMakeup, setAllowMakeup] = useState(false);
   const [dropLowest, setDropLowest] = useState(0);
+  const [studentsCanView, setStudentsCanView] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -39,6 +47,7 @@ export function AssessmentPolicyScreen() {
       setAbsentAsZero(query.data.absent_as_zero);
       setAllowMakeup(query.data.allow_makeup);
       setDropLowest(query.data.drop_lowest_count);
+      setStudentsCanView(query.data.students_can_view_grades ?? false);
     }
   }, [query.data]);
 
@@ -53,6 +62,7 @@ export function AssessmentPolicyScreen() {
           absent_as_zero: absentAsZero,
           allow_makeup: allowMakeup,
           drop_lowest_count: Math.max(0, Math.trunc(dropLowest)),
+          students_can_view_grades: studentsCanView,
         },
       },
       {
@@ -120,6 +130,32 @@ export function AssessmentPolicyScreen() {
             />
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
               Number of lowest grades to drop from each category's average by default.
+            </Typography>
+          </Box>
+
+          <Divider />
+
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>
+              Student visibility
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={studentsCanView}
+                  onChange={(e) => setStudentsCanView(e.target.checked)}
+                  disabled={!canEdit}
+                />
+              }
+              label="Students can see their grades"
+            />
+            <Typography variant="body2" color="text.secondary">
+              When off, students cannot open My Grades or their report card, and the
+              navigation item is hidden. Lecturers and the Dean are unaffected.
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Students never see grade revisions either way — whether a revision was
+              approved or denied, they only see the resulting mark.
             </Typography>
           </Box>
 

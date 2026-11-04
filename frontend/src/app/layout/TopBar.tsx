@@ -5,6 +5,7 @@ import { NotificationsBell } from './NotificationsBell';
 import { StudentYearSwitcher } from './StudentYearSwitcher';
 import { strings } from '@i18n/strings';
 import type { CurrentUser } from '@shared/types/api';
+import type { NotificationItem } from './NotificationsBell';
 
 export interface TopBarProps {
   user: CurrentUser;
@@ -12,6 +13,13 @@ export interface TopBarProps {
   onLogout: () => void;
   schoolName?: string;
   unreadCount: number;
+  /**
+   * What the popover lists (D30 §D8). Previously omitted entirely, which is why the popover
+   * always read "No new notifications" however high the badge went — real dead UI the plan
+   * flagged rather than a missing feature.
+   */
+  notifications?: NotificationItem[];
+  onNotificationSelect?: (id: string) => void;
 }
 
 /** Fixed top app bar (design-system §3.1, §4.1). header landmark. */
@@ -21,6 +29,8 @@ export function TopBar({
   onLogout,
   schoolName,
   unreadCount,
+  notifications = [],
+  onNotificationSelect,
 }: TopBarProps) {
   return (
     <AppBar
@@ -73,7 +83,11 @@ export function TopBar({
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {user.role === 'student' && <StudentYearSwitcher />}
-          <NotificationsBell count={unreadCount} />
+          <NotificationsBell
+            count={unreadCount}
+            items={notifications}
+            onSelect={onNotificationSelect}
+          />
           <UserMenu user={user} onLogout={onLogout} />
         </Box>
       </Toolbar>

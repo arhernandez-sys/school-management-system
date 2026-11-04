@@ -3,9 +3,12 @@ import type { AttendanceStatus } from '@shared/types/enums';
 import { ATTENDANCE_STATUS_META } from '../attendanceStatus';
 
 export interface AttendanceStatusToggleProps {
-  value: AttendanceStatus;
+  /** `null` = not entered yet: no option is selected. */
+  value: AttendanceStatus | null;
   onChange: (next: AttendanceStatus) => void;
   disabled?: boolean;
+  /** Outlines the group in the error colour — used when Save found it unanswered. */
+  error?: boolean;
   /** Accessible group label (e.g. the student name) so SR users know what this sets. */
   ariaLabel: string;
 }
@@ -20,6 +23,7 @@ export function AttendanceStatusToggle({
   value,
   onChange,
   disabled = false,
+  error = false,
   ariaLabel,
 }: AttendanceStatusToggleProps) {
   return (
@@ -27,14 +31,17 @@ export function AttendanceStatusToggle({
       exclusive
       value={value}
       onChange={(_e, next: AttendanceStatus | null) => {
-        // Ignore deselection (null) — a student always has exactly one status.
+        // Ignore deselection (null) — once chosen, a student keeps exactly one status.
         if (next) onChange(next);
       }}
       disabled={disabled}
       aria-label={ariaLabel}
       fullWidth
       size="small"
-      sx={{ flexWrap: { xs: 'wrap', sm: 'nowrap' } }}
+      sx={{
+        flexWrap: { xs: 'wrap', sm: 'nowrap' },
+        ...(error && { outline: 2, outlineColor: 'error.main', borderRadius: 1 }),
+      }}
     >
       {ATTENDANCE_STATUS_META.map((meta) => (
         <ToggleButton

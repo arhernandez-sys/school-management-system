@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { setOnRefreshFailure } from '@shared/api/client';
 import { queryClient } from '@app/providers/queryClient';
 import type { CurrentUser } from '@shared/types/api';
+import { ROUTES } from '@shared/constants/routes';
 import {
   bootstrapSession,
   fetchCurrentUser,
@@ -17,7 +18,8 @@ import { AuthContext, type AuthContextValue, type AuthStatus } from './AuthConte
  * On mount it performs the BOOTSTRAP SILENT REFRESH: it attempts /auth/refresh
  * before any route guard renders, so a hard reload doesn't bounce an authenticated
  * user to /login. Guards read `status === 'bootstrapping'` and show a loading state
- * until this resolves to 'authenticated' or 'anonymous'.
+ * until this resolves to 'authenticated' or 'anonymous'. The login page itself is
+ * exempt: it starts 'anonymous' and makes no refresh call.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('bootstrapping');
@@ -36,6 +38,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // after a real unmount is a harmless no-op in React 18.
     if (bootstrapped.current) return;
     bootstrapped.current = true;
+
+    // The login page never attempts a silent refresh: whoever is on it is signing in.
+    if (window.location.pathname === ROUTES.login) {
+      setStatus('anonymous');
+      return;
+    }
 
     void bootstrapSession().then((currentUser) => {
       if (currentUser) {

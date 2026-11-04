@@ -1,6 +1,7 @@
 import { Chip } from '@mui/material';
 import type { ChipProps } from '@mui/material';
 import type { Role } from '@shared/api/generated/model';
+import { ROLE_LABEL } from '@shared/auth/roleLabels';
 
 /**
  * RoleChip — consistent role display (design-system §5 #11).
@@ -8,19 +9,25 @@ import type { Role } from '@shared/api/generated/model';
  * Promoted from the Phase-6 stub for the Users-admin screen (Settings 7.2). Maps the
  * generated `Role` enum to a human label + a stable color so a user's role reads the
  * same in the directory, detail, and create/edit surfaces.
+ *
+ * D30: the label map moved to `@shared/auth/roleLabels` — it was one of four copies.
  */
-const ROLE_LABEL: Record<Role, string> = {
-  principal: 'Principal',
-  secretary: 'Secretary',
-  teacher: 'Teacher',
-  student: 'Student',
-};
-
 const ROLE_COLOR: Record<Role, ChipProps['color']> = {
   principal: 'primary',
   secretary: 'secondary',
   teacher: 'info',
   student: 'default',
+  // D43 — an HOD reads as a senior lecturer, so 'success' keeps them visually adjacent
+  // to `teacher: info` without implying admin authority. The Auditor is deliberately
+  // 'warning': the chip's job on a user list is to make an account that can see
+  // everything conspicuous.
+  hod: 'success',
+  auditor: 'warning',
+  // D45 §2 — 'error' (red). The strongest chip in the set, for the same reason the
+  // Auditor is 'warning': this account administers logins and permissions, and an
+  // unexpected one in a user list is the single most important thing to notice. It is
+  // not a rank; it is a flag.
+  sysadmin: 'error',
 };
 
 export interface RoleChipProps {

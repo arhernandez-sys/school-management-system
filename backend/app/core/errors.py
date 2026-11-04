@@ -35,6 +35,7 @@ class AppError(Exception):
         code: str | None = None,
         fields: dict[str, list[str]] | None = None,
         extra: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -44,6 +45,13 @@ class AppError(Exception):
         # `extra` merges additional top-level keys into the error body (e.g.
         # retry_after_seconds for account_locked).
         self.extra = extra or {}
+        # `headers` sets response headers the status code has a STANDARD meaning
+        # for — currently only `Retry-After` on a 429 (core/ratelimit.py). The
+        # machine-readable value is still in the body as `retry_after_seconds`;
+        # the header exists for proxies and non-browser clients that act on it.
+        # Cross-origin JS can only read it because `Retry-After` is listed in the
+        # CORS `expose_headers` in app/main.py.
+        self.headers = headers
 
 
 class ValidationError(AppError):
@@ -86,6 +94,20 @@ class AccountInactive(AppError):
     code = "account_inactive"
 
 
+class PasswordChangeRequired(AppError):
+    """The caller holds a valid token but `must_change_password` is still set.
+
+    A 403 rather than a 401: the credentials ARE valid, the account is simply not
+    cleared to do anything else yet. `core/deps.get_current_user` raises this for
+    every request outside the small exempt set (read your own identity, change your
+    password, log out), which is what makes the forced change a SERVER rule instead
+    of a redirect one client happens to perform.
+    """
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "password_change_required"
+
+
 class RateLimited(AppError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "rate_limited"
@@ -124,7 +146,12 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
             fields=exc.fields,
             extra=exc.extra,
         ),
+        headers=exc.headers or None,
     )
+
+
+#: Where FastAPI says a validation error came from. These appear as loc[0] only.
+_LOCATION_PREFIXES = frozenset({"body", "query", "path", "header", "cookie"})
 
 
 async def validation_error_handler(
@@ -134,10 +161,19 @@ async def validation_error_handler(
     messages (api-spec §4.3)."""
     fields: dict[str, list[str]] = {}
     for err in exc.errors():
-        # loc is like ("body", "field", ...) — take the last string segment as the
-        # field name; fall back to a joined path.
-        loc = [str(p) for p in err.get("loc", []) if p not in ("body", "query", "path")]
-        field = loc[-1] if loc else "_root"
+        # `loc` is ("body", "title") or ("body", "entries", 0, "student_id") — a
+        # location prefix, then the path to the offending field.
+        #
+        # Only the FIRST segment is a location. Filtering every occurrence would
+        # erase a field genuinely NAMED "body" (announcements have one): loc
+        # ("body", "body") would collapse to empty and report as "_root", so the
+        # frontend could not attach the message to its textarea.
+        loc = [str(p) for p in err.get("loc", [])]
+        if loc and loc[0] in _LOCATION_PREFIXES:
+            loc = loc[1:]
+        # Skip list indices ("0") so `entries.0.student_id` reports as "student_id".
+        names = [p for p in loc if not p.isdigit()]
+        field = names[-1] if names else "_root"
         fields.setdefault(field, []).append(err.get("msg", "Invalid value."))
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

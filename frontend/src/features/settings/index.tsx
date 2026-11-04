@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Box, Tab, Tabs } from '@mui/material';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { canWrite } from '@shared/auth/permissions';
 import { ROUTES } from '@shared/constants/routes';
-import { SubjectsPage } from './SubjectsPage';
+import { ClassroomsScreen } from '@features/classrooms/ClassroomsScreen';
 import { SchoolProfileScreen } from './screens/SchoolProfileScreen';
 import { AcademicStructureScreen } from './screens/AcademicStructureScreen';
 import { GradingScaleScreen } from './screens/GradingScaleScreen';
@@ -15,9 +15,10 @@ import { AccountScreen } from './screens/AccountScreen';
 /**
  * Settings module (Phase 7.2) — a tabbed, nested-routed container mounted at
  * `/settings/*`. Sub-navigation is role-aware:
- *  - Principal / Secretary: school, academic structure, subjects, grading scale,
- *    assessment policy, users, account. (Within each screen, principal-only writes are
- *    further gated; the server is authoritative.)
+ *  - Dean / Registrar: school, academic structure, courses, programmes, grading scale,
+ *    assessment policy, users, account. (Within each screen, Dean-only writes are
+ *    further gated; the server is authoritative — the Registrar sees Courses and
+ *    Programmes read-only, per D30 §D14.)
  *  - Teacher / Student: account only (their sole Settings capability, permissions map).
  *
  * Nav visibility is UX-only; every route is still role-guarded upstream and the server
@@ -29,6 +30,17 @@ interface SettingsTab {
   path: string;
 }
 
+/**
+ * D44 — `/settings/programs/:programId` → `/programs/:programId`, keeping the id.
+ *
+ * A plain `<Navigate>` cannot: the target depends on a route param, and dropping it would
+ * send someone who bookmarked one programme's curriculum to the list of all of them.
+ */
+function RedirectToProgramCurriculum() {
+  const { programId } = useParams();
+  return <Navigate to={`${ROUTES.programs}/${programId}`} replace />;
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -36,23 +48,60 @@ export function SettingsPage() {
 
   const canManage = user ? canWrite(user.role, 'settings') : false;
 
-  const tabs = useMemo<SettingsTab[]>(
-    () =>
-      canManage
-        ? [
-            { label: 'School', path: 'school' },
-            { label: 'Academic structure', path: 'academic' },
-            { label: 'Subjects', path: 'subjects' },
-            { label: 'Grading scale', path: 'grading' },
-            { label: 'Assessment policy', path: 'policy' },
-            { label: 'Users', path: 'users' },
-            { label: 'My account', path: 'account' },
-          ]
-        : [{ label: 'My account', path: 'account' }],
-    [canManage],
-  );
+  /**
+   * D43 — the tabs are gated INDIVIDUALLY now, not all-or-nothing on write access.
+   *
+   * They used to be: `canWrite(role, 'settings')` gave you all eight, and anything else
+   * gave you "My account" alone. That was fine while the only read-only roles had no
+   * business in Settings at all — but an Auditor is supposed to see the catalog and the
+   * audit trail, and an HOD the catalog, and neither can write a thing.
+   *
+   * D44 moved the catalog out of here entirely, so the `canReadCatalog` gate went with
+   * it — but the REASONING behind it did not, and now lives in `navConfig`: the catalog is
+   * keyed on the **`courses`** module rather than `programs`, because `programs` is
+   * `'view-all'` for EVERY role and keying on it would put Programmes in front of
+   * Lecturers and Students. Same trap, new location.
+   */
+  /**
+   * ⚠️ THE "AUDIT LOG" TAB IS GONE (Sep 2026), merged into Insights → Audit trail.
+   *
+   * There were two screens onto one table: this one showed `audit_log` raw — the dotted
+   * action key, the entity type, the entity UUID, the summary as JSON — and the Audit
+   * trail (D45 Phase 7) shows the same rows as sentences with the module, the IP and the
+   * before/after §46 asks for. The client asked for one screen with the detail on it, so
+   * the two pieces this one had that the other lacked (what KIND of record, and a handle
+   * for the row) moved across as `record` and `reference`.
+   *
+   * `canAccessModule(role, 'audit')` still exists and still gates the surviving screen
+   * from `navConfig`; it is simply no longer consulted here.
+   */
 
-  const defaultPath = canManage ? 'school' : 'account';
+  const tabs = useMemo<SettingsTab[]>(() => {
+    const list: SettingsTab[] = [];
+    if (canManage) {
+      list.push(
+        { label: 'School', path: 'school' },
+        { label: 'Academic structure', path: 'academic' },
+      );
+    }
+    // D44 — Courses and Programmes left this tab strip for the main menu. The ROUTES
+    // below survive as redirects, so old bookmarks and links still land somewhere.
+    if (canManage) {
+      list.push(
+        // D44 — the rooms courses are scheduled into. Estate administration, so it sits
+        // with School and Academic structure rather than in the main menu.
+        { label: 'Classrooms', path: 'classrooms' },
+        { label: 'Grading scale', path: 'grading' },
+        { label: 'Assessment policy', path: 'policy' },
+        { label: 'Users', path: 'users' },
+      );
+    }
+    list.push({ label: 'My account', path: 'account' });
+    return list;
+  }, [canManage]);
+
+  //: Land on the first tab the caller actually has, never on one they cannot open.
+  const defaultPath = tabs[0]?.path ?? 'account';
 
   // Derive the active tab from the URL (…/settings/<segment>).
   const activeSegment = location.pathname.replace(`${ROUTES.settings}/`, '').split('/')[0] || defaultPath;
@@ -78,11 +127,21 @@ export function SettingsPage() {
         <Routes>
           <Route index element={<Navigate to={defaultPath} replace />} />
           <Route path="account" element={<AccountScreen />} />
+          {/* D44 — the catalog moved to `/courses` and `/programs`. These three redirects
+              are kept because a route path is user-visible: bookmarks, shared links and
+              the address bar all carry the old ones, and a 404 is a poor reward for
+              having saved a link. `replace` so Back does not bounce off the redirect. */}
+          <Route path="courses" element={<Navigate to={ROUTES.courses} replace />} />
+          <Route path="programs" element={<Navigate to={ROUTES.programs} replace />} />
+          <Route
+            path="programs/:programId"
+            element={<RedirectToProgramCurriculum />}
+          />
+          {canManage && <Route path="classrooms" element={<ClassroomsScreen />} />}
           {canManage && (
             <>
               <Route path="school" element={<SchoolProfileScreen />} />
               <Route path="academic" element={<AcademicStructureScreen />} />
-              <Route path="subjects" element={<SubjectsPage />} />
               <Route path="grading" element={<GradingScaleScreen />} />
               <Route path="policy" element={<AssessmentPolicyScreen />} />
               <Route path="users" element={<UsersScreen />} />

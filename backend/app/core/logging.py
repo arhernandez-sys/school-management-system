@@ -41,12 +41,40 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         start = time.perf_counter()
         status_code = 500
+
+        # D45 §46 (Phase 7) — publish the client address for the audit trail.
+        #
+        # Done HERE rather than in a middleware of its own because this one is already
+        # the outermost layer and already runs for every request; a second wrapper would
+        # buy nothing but another frame. `resolve_client` is the proxy-aware resolver the
+        # login lockout already trusts (core/net.py) — `request.client.host` alone would
+        # record the reverse proxy on every row.
+        #
+        # Never allowed to fail the request: an unresolvable address is a NULL column,
+        # not a 500. Auditing must not be able to take the system down.
+        ip_token = None
+        try:
+            from app.core.audit_context import set_client_ip
+            from app.core.net import resolve_client
+
+            ip_token = set_client_ip(resolve_client(request).ip)
+        except Exception:  # noqa: BLE001
+            logger.debug("audit ip resolution failed", exc_info=True)
+
         try:
             response = await call_next(request)
             status_code = response.status_code
             response.headers["X-Request-ID"] = request_id
             return response
         finally:
+            # Reset before the next task on this worker inherits the address.
+            if ip_token is not None:
+                try:
+                    from app.core.audit_context import reset_client_ip
+
+                    reset_client_ip(ip_token)
+                except Exception:  # noqa: BLE001
+                    pass
             latency_ms = round((time.perf_counter() - start) * 1000, 1)
             user_id = getattr(request.state, "user_id", None)
             logger.info(

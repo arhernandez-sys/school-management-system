@@ -1,18 +1,20 @@
-import { useState } from 'react';
-import { Box, IconButton, InputAdornment, Menu, MenuItem, TextField, Tooltip } from '@mui/material';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
+import { Box, Checkbox, FormControlLabel, InputAdornment, TextField } from '@mui/material';
 import { StatusBadge } from '@shared/components';
 import type { GradeStatus } from '@shared/types/enums';
 import { statusPresentation } from './gradeDisplay';
 
 /**
- * A single editable gradebook cell (one student × one assessment).
+ * One student's mark for one assessment (D47).
  *
- * Editable states: a numeric score input (validated 0..max_score inline) when the cell
- * is `graded`, or a status badge (absent/excused/exempt/pending) otherwise. The cell
- * menu switches status (FR-GRD-05); non-graded statuses clear the score and are excluded
- * from the weighted term base. Read-only mode (P/S view, or a non-member historical row)
- * renders the value without inputs.
+ * The box is simply OPEN while marking is: type a number and it is a mark, clear it and the
+ * student is blank again. The only other choice is the inline **Excused** tick, which a
+ * blank student needs so the closing window does not turn them into a 0. There is no
+ * status menu any more — absent and exempt are no longer chosen here (an older row that
+ * carries one still renders it read-only).
+ *
+ * Read-only mode (Dean, Registrar, a closed window, a former student) renders the value,
+ * and a blank on a closed window as "0 (auto)" — because that is what the term grade
+ * counts it as.
  */
 export interface GradeCellValue {
   status: GradeStatus;
@@ -26,16 +28,10 @@ export interface GradeCellProps {
   assessmentTitle: string;
   editable: boolean;
   dirty: boolean;
+  /** Blank on a closed window — counts as 0 (server-computed `auto_zero`). */
+  autoZero?: boolean;
   onChange: (next: GradeCellValue) => void;
 }
-
-const STATUS_OPTIONS: { status: GradeStatus; label: string }[] = [
-  { status: 'graded', label: 'Enter a score' },
-  { status: 'absent', label: 'Absent' },
-  { status: 'excused', label: 'Excused' },
-  { status: 'exempt', label: 'Exempt' },
-  { status: 'pending', label: 'Pending (not yet graded)' },
-];
 
 export function GradeCell({
   value,
@@ -44,16 +40,17 @@ export function GradeCell({
   assessmentTitle,
   editable,
   dirty,
+  autoZero = false,
   onChange,
 }: GradeCellProps) {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-
+  const excused = value.status === 'excused';
   const scoreError =
     value.status === 'graded' && value.score != null && (value.score < 0 || value.score > maxScore);
 
   const handleScore = (raw: string) => {
-    if (raw === '') {
-      onChange({ status: 'graded', score: null });
+    if (raw.trim() === '') {
+      // Clearing the box makes the student blank again — not a 0.
+      onChange({ status: 'pending', score: null });
       return;
     }
     const num = Number(raw);
@@ -61,26 +58,24 @@ export function GradeCell({
     onChange({ status: 'graded', score: num });
   };
 
-  const chooseStatus = (status: GradeStatus) => {
-    setAnchor(null);
-    if (status === 'graded') {
-      onChange({ status: 'graded', score: value.status === 'graded' ? value.score : null });
-    } else {
-      onChange({ status, score: null });
-    }
-  };
-
-  // Read-only rendering (P/S view-all, or a historical non-member row).
   if (!editable) {
-    if (value.status === 'graded') {
+    if (value.status === 'graded' && value.score != null) {
+      return <Box sx={{ minWidth: 56, textAlign: 'right' }}>{value.score}</Box>;
+    }
+    if (autoZero) {
       return (
-        <Box sx={{ minWidth: 56, textAlign: 'center' }}>
-          {value.score != null ? `${value.score}` : '—'}
+        <Box
+          sx={{ minWidth: 56, textAlign: 'right', color: 'text.secondary' }}
+          title="No mark was entered before marking closed, so this counts as 0."
+        >
+          0 <Box component="span" sx={{ fontSize: 11 }}>(auto)</Box>
         </Box>
       );
     }
-    const { label, kind } = statusPresentation(value.status);
-    return <StatusBadge label={label} kind={kind} />;
+    if (value.status === 'pending') {
+      return <Box sx={{ minWidth: 56, textAlign: 'right', color: 'text.disabled' }}>—</Box>;
+    }
+    return <StatusBadge {...statusPresentation(value.status)} />;
   }
 
   return (
@@ -88,62 +83,57 @@ export function GradeCell({
       sx={{
         display: 'flex',
         alignItems: 'center',
-        gap: 0.5,
+        justifyContent: 'flex-end',
+        gap: 1,
+        flexWrap: 'wrap',
         // A dirty cell gets a subtle left accent so unsaved edits are visible.
-        borderLeft: dirty ? '3px solid' : '3px solid transparent',
+        borderLeft: '3px solid',
         borderLeftColor: dirty ? 'warning.main' : 'transparent',
         pl: 0.5,
       }}
     >
-      {value.status === 'graded' ? (
-        <TextField
-          value={value.score ?? ''}
-          onChange={(e) => handleScore(e.target.value)}
-          size="small"
-          type="number"
-          error={scoreError}
-          inputProps={{
-            min: 0,
-            max: maxScore,
-            'aria-label': `${assessmentTitle} score for ${studentName}, out of ${maxScore}`,
-            style: { textAlign: 'right', width: 44, padding: '6px 4px' },
-          }}
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end" sx={{ ml: 0 }}>
-                <Box component="span" sx={{ fontSize: 11, color: 'text.disabled' }}>
-                  /{maxScore}
-                </Box>
-              </InputAdornment>
-            ),
-          }}
-          helperText={scoreError ? `0–${maxScore}` : undefined}
-          FormHelperTextProps={{ sx: { m: 0, fontSize: 10, whiteSpace: 'nowrap' } }}
-        />
-      ) : (
-        <StatusBadge {...statusPresentation(value.status)} />
-      )}
-
-      <Tooltip title="Change status">
-        <IconButton
-          size="small"
-          aria-label={`Change ${assessmentTitle} status for ${studentName}`}
-          onClick={(e) => setAnchor(e.currentTarget)}
-        >
-          <MoreVertIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
-        {STATUS_OPTIONS.map((opt) => (
-          <MenuItem
-            key={opt.status}
-            selected={opt.status === value.status}
-            onClick={() => chooseStatus(opt.status)}
-          >
-            {opt.label}
-          </MenuItem>
-        ))}
-      </Menu>
+      <TextField
+        value={value.status === 'graded' ? (value.score ?? '') : ''}
+        onChange={(e) => handleScore(e.target.value)}
+        size="small"
+        type="number"
+        disabled={excused}
+        placeholder={excused ? '' : '—'}
+        error={scoreError}
+        inputProps={{
+          min: 0,
+          max: maxScore,
+          step: 0.5,
+          inputMode: 'decimal',
+          'aria-label': `${assessmentTitle} mark for ${studentName}, out of ${maxScore}`,
+          style: { textAlign: 'right', width: 56, padding: '6px 4px' },
+        }}
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end" sx={{ ml: 0 }}>
+              <Box component="span" sx={{ fontSize: 11, color: 'text.disabled' }}>
+                /{maxScore}
+              </Box>
+            </InputAdornment>
+          ),
+        }}
+        helperText={scoreError ? `0–${maxScore}` : undefined}
+        FormHelperTextProps={{ sx: { m: 0, fontSize: 10, whiteSpace: 'nowrap' } }}
+      />
+      <FormControlLabel
+        sx={{ mr: 0 }}
+        control={
+          <Checkbox
+            size="small"
+            checked={excused}
+            onChange={(e) =>
+              onChange(e.target.checked ? { status: 'excused', score: null } : { status: 'pending', score: null })
+            }
+            inputProps={{ 'aria-label': `Excuse ${studentName} from ${assessmentTitle}` }}
+          />
+        }
+        label={<Box component="span" sx={{ fontSize: 13 }}>Excused</Box>}
+      />
     </Box>
   );
 }

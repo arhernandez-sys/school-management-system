@@ -9,11 +9,13 @@ import {
   CardActionArea,
   CardContent,
   Chip,
+  FormControlLabel,
   Grid,
   Link as MuiLink,
   MenuItem,
   Snackbar,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
@@ -35,20 +37,26 @@ import {
   type DetailTab,
 } from '@shared/components';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { canWrite } from '@shared/auth/permissions';
+import { canWrite, isLecturerRole } from '@shared/auth/permissions';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { ROUTES } from '@shared/constants/routes';
 import {
   useDeleteStudent,
+  useSetGradesWithheld,
   useSetStudentStatus,
   useStudentAssessments,
   useStudentDetail,
   useStudentYears,
   useUpdateStudent,
+  useStudentDocuments,
+  useReplaceStudentDocuments,
 } from './hooks/useStudents';
+import type { DocumentRow } from '@features/admissions/types';
 import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
+import { AcademicHistoryPanel } from './components/AcademicHistoryPanel';
 import {
   STUDENT_STATUS_LABEL as STATUS_LABEL,
   STUDENT_STATUS_OPTIONS as STATUS_OPTIONS,
@@ -98,6 +106,20 @@ export function StudentDetailPage() {
 
   const tabs = useMemo<DetailTab[]>(() => {
     if (!detail || !studentId) return [];
+    // D32 (brief §4) — "grade information from the registration screens" is THIS tab, and
+    // `GET /students/{id}/assessments` now 403s for the Registrar. Rendering it for them
+    // would show an error panel where a tab used to be, which is worse than no tab.
+    // D44 — was `role === 'principal' || role === 'teacher'`, which omitted `hod` and so
+    // hid the Grades & Assessments tab from a Head of Department that
+    // `students/router.py` explicitly grants it to. `isLecturerRole` is the helper D43
+    // introduced to kill exactly this `role === 'teacher'` bug class.
+    const canSeeGrades = user?.role === 'principal' || isLecturerRole(user?.role);
+    // D42 §4 — the Academic history tab is Dean/Registrar only. Its endpoint
+    // (`GET /students/{id}/academic-history`) is already `require_role(PRINCIPAL,
+    // SECRETARY)`, so a Lecturer opening this tab got a 403 error panel where content
+    // should be. The client asked for the tab to go for them, which is also what the
+    // server was already saying.
+    const canSeeAcademicHistory = user?.role === 'principal' || user?.role === 'secretary';
     return [
       {
         value: 'enrollment',
@@ -105,14 +127,42 @@ export function StudentDetailPage() {
         icon: <SchoolOutlinedIcon fontSize="small" />,
         render: () => <StudentEnrollmentPanel student={detail} yearName={yearName} />,
       },
-      {
-        value: 'grades',
-        label: 'Grades & Assessments',
-        icon: <GradingOutlinedIcon fontSize="small" />,
-        render: () => <GradesTab studentId={studentId} yearId={yearId} />,
-      },
+      ...(canSeeGrades
+        ? [
+            {
+              value: 'grades',
+              label: 'Grades & Assessments',
+              icon: <GradingOutlinedIcon fontSize="small" />,
+              render: () => (
+                <>
+                  {user?.role === 'principal' && (
+                    <GradesWithheldControl
+                      studentId={studentId}
+                      withheld={Boolean(detail.grades_withheld)}
+                    />
+                  )}
+                  <GradesTab studentId={studentId} yearId={yearId} />
+                </>
+              ),
+            } as DetailTab,
+          ]
+        : []),
+      ...(canSeeAcademicHistory
+        ? [
+            {
+              // D30 §D12 — the tertiary view: programme, credits earned and remaining, the
+              // cumulative GPA, and which courses count toward the current award. Derived on
+              // every read, and NOT year-scoped: an award spans years by definition, so the
+              // global year switcher deliberately does not narrow it.
+              value: 'academic',
+              label: 'Academic history',
+              icon: <SchoolOutlinedIcon fontSize="small" />,
+              render: () => <AcademicHistoryPanel studentId={studentId} />,
+            } as DetailTab,
+          ]
+        : []),
     ];
-  }, [detail, studentId, yearId, yearName]);
+  }, [detail, studentId, yearId, yearName, user?.role]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading student" />;
@@ -165,6 +215,39 @@ export function StudentDetailPage() {
   );
 }
 
+/**
+ * The Dean's per-student grade hold. With grades published school-wide, this keeps THIS
+ * student on "grades not published" anyway. Rendered for the Dean only; the server's
+ * `PUT /students/{id}/grades-withheld` is the boundary.
+ */
+function GradesWithheldControl({ studentId, withheld }: { studentId: string; withheld: boolean }) {
+  const mutation = useSetGradesWithheld(studentId);
+  return (
+    <Box sx={{ mb: 2 }}>
+      <FormControlLabel
+        control={
+          <Switch
+            checked={withheld}
+            disabled={mutation.isPending}
+            onChange={(e) => mutation.mutate(e.target.checked)}
+          />
+        }
+        label="Hide grades from this student"
+      />
+      <Typography variant="body2" color="text.secondary">
+        {withheld
+          ? 'This student cannot see their grades, even while grades are published to students.'
+          : 'This student sees their grades whenever grades are published to students.'}
+      </Typography>
+      {mutation.isError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {apiErrorMessage(mutation.error, 'Could not update grade visibility.')}
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 /** "12 (A)" / "Not yet graded" — a subject group's per-term grade as display text. */
 function termGradeText(group: StudentAssessmentGroup): string {
   const { numeric, letter } = group.term_grade;
@@ -187,27 +270,31 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   if (query.isError) {
     return <ErrorState onRetry={() => void query.refetch()} />;
   }
-  const groups = query.data ?? [];
+  const groups = query.data?.items ?? [];
   if (groups.length === 0) {
     return (
       <EmptyState
         variant="card"
         title="No assessments yet"
-        description="Published assessments for this student's section will appear here."
+        description="Assessments for this student's courses will appear here."
       />
     );
   }
 
-  const selected = groups.find((g) => g.class_subject_id === selectedId) ?? null;
+  const selected = groups.find((g) => g.offering_id === selectedId) ?? null;
   if (selected) {
-    return <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />;
+    return (
+      <Box>
+        <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />
+      </Box>
+    );
   }
 
   return (
     <Grid container spacing={2}>
       {groups.map((group) => (
-        <Grid item xs={12} sm={6} key={group.class_subject_id}>
-          <SubjectCard group={group} onOpen={() => setSelectedId(group.class_subject_id)} />
+        <Grid item xs={12} sm={6} key={group.offering_id}>
+          <SubjectCard group={group} onOpen={() => setSelectedId(group.offering_id)} />
         </Grid>
       ))}
     </Grid>
@@ -243,7 +330,7 @@ function SubjectCard({ group, onOpen }: { group: StudentAssessmentGroup; onOpen:
   );
 }
 
-const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
+const BASE_ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
   {
     field: 'title',
     headerName: 'Assessment',
@@ -251,26 +338,21 @@ const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
     render: (a) => <Typography variant="body2">{a.title}</Typography>,
   },
   {
-    field: 'type',
-    headerName: 'Type',
-    render: (a) => (
-      <Typography variant="body2" sx={{ textTransform: 'capitalize' }}>
-        {a.type}
-      </Typography>
-    ),
-  },
-  {
     field: 'assessment_date',
     headerName: 'Date',
-    render: (a) => <Typography variant="body2">{a.assessment_date ?? '—'}</Typography>,
+    render: (a) => (
+      <Typography variant="body2">
+        {a.assessment_date ? formatSchoolDate(a.assessment_date) : '—'}
+      </Typography>
+    ),
   },
   {
     field: 'score',
     headerName: 'Score',
     align: 'right',
     render: (a) => (
-      <Typography variant="body2">
-        {a.score != null ? `${a.score} / ${a.max_score}` : '—'}
+      <Typography variant="body2" color={a.auto_zero ? 'text.secondary' : undefined}>
+        {a.score != null ? `${a.score} / ${a.max_score}` : a.auto_zero ? `0 / ${a.max_score}` : '—'}
       </Typography>
     ),
   },
@@ -278,8 +360,9 @@ const ASSESSMENT_COLUMNS: DataTableColumn<StudentAssessmentLine>[] = [
     field: 'status',
     headerName: 'Status',
     render: (a) => {
-      const released = a.is_released;
-      if (a.status === 'graded' && released) return <StatusBadge label="Graded" kind="success" />;
+      if (a.status === 'graded') return <StatusBadge label="Graded" kind="success" />;
+      // D47 — no mark by the time marking closed: it counts as 0.
+      if (a.auto_zero) return <StatusBadge label="Not submitted (0)" kind="error" />;
       if (a.status === 'absent') return <StatusBadge label="Absent" kind="warning" />;
       if (a.status === 'excused' || a.status === 'exempt')
         return <StatusBadge label="Excused" kind="info" />;
@@ -324,7 +407,7 @@ function SubjectAssessments({
       </Stack>
       <DataTable<StudentAssessmentLine>
         caption={`Assessments for ${name}`}
-        columns={ASSESSMENT_COLUMNS}
+        columns={BASE_ASSESSMENT_COLUMNS}
         rows={rows}
         getRowId={(a) => a.id}
         page={page}
@@ -349,25 +432,50 @@ function StudentActions({ student }: { student: StudentDetail }) {
     undefined,
   );
   const [statusOpen, setStatusOpen] = useState(false);
-  const [nextStatus, setNextStatus] = useState<StudentStatus>('active');
+  const [nextStatus, setNextStatus] = useState<StudentStatus>('Active');
   const [statusError, setStatusError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const updateMut = useUpdateStudent(student.id);
+  const docsQuery = useStudentDocuments(student.id, editOpen);
+  const docsMut = useReplaceStudentDocuments(student.id);
   const statusMut = useSetStudentStatus(student.id);
   const deleteMut = useDeleteStudent();
 
-  const handleEdit = (values: StudentWritePayload) => {
+  const handleEdit = (values: StudentWritePayload, documents?: DocumentRow[]) => {
     setEditError(null);
     setEditFieldErrors(undefined);
-    // Section + student_number are immutable on edit; send only benign profile fields.
-    const { student_number: _sn, section_id: _sid, ...patch } = values;
+    // Enrollment + student_number are immutable on edit; send only benign profile
+    // fields. `offering_ids` is create-only server-side (PATCH rejects it), so stripping it
+    // here keeps the request valid rather than relying on the 422.
+    //
+    // D33 adds `program_id` to that list. The form already leaves it `undefined` on edit
+    // and `JSON.stringify` drops undefined keys, so this is belt-and-braces — but the
+    // server's `extra="forbid"` turns a leak into a 422 on an otherwise valid save, and a
+    // programme CHANGE has to move `student_program_history` with it (§D12).
+    const {
+      student_number: _sn,
+      offering_ids: _oids,
+      program_id: _pid,
+      ...patch
+    } = values;
     void _sn;
-    void _sid;
+    void _oids;
+    void _pid;
     updateMut.mutate(patch, {
-      onSuccess: () => {
+      onSuccess: async () => {
+        // Section F saves second, and only when it was touched: the profile is the bigger
+        // edit, and a checklist failure must not read as the profile having failed.
+        if (documents) {
+          try {
+            await docsMut.mutateAsync(documents);
+          } catch (err) {
+            setEditError(`The profile was saved, but the document checklist was not: ${apiErrorMessage(err)}`);
+            return;
+          }
+        }
         setEditOpen(false);
         setToast('Student updated.');
       },
@@ -410,7 +518,8 @@ function StudentActions({ student }: { student: StudentDetail }) {
           variant="outlined"
           onClick={() => {
             setStatusError(null);
-            setNextStatus(student.status === 'active' ? 'inactive' : 'active');
+            // D34 vocabulary: the toggle flips between the two LIVE states.
+            setNextStatus(student.status === 'Active' ? 'Inactive' : 'Active');
             setStatusOpen(true);
           }}
         >
@@ -431,7 +540,8 @@ function StudentActions({ student }: { student: StudentDetail }) {
       <StudentFormDialog
         open={editOpen}
         student={student}
-        submitting={updateMut.isPending}
+        submitting={updateMut.isPending || docsMut.isPending}
+        documents={docsQuery.data}
         error={editError}
         fieldErrors={editFieldErrors}
         onSubmit={handleEdit}
@@ -451,7 +561,11 @@ function StudentActions({ student }: { student: StudentDetail }) {
               fullWidth
               size="small"
             >
-              {STATUS_OPTIONS.filter((st) => st !== student.status).map((st) => (
+              {/* The selected value always stays an option. After applying, the student
+                  refetches with the NEW status while the dialog is still fading out — so
+                  filtering on `student.status` alone removed the chosen option mid-fade
+                  and MUI warned "out-of-range value". */}
+              {STATUS_OPTIONS.filter((st) => st !== student.status || st === nextStatus).map((st) => (
                 <MenuItem key={st} value={st}>
                   {STATUS_LABEL[st]}
                 </MenuItem>
