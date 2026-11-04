@@ -108,11 +108,10 @@ export function StudentListPrintDialog({
                     <TableCell sx={{ fontWeight: 600 }}>Year</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Programme</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Gender</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>Religion</TableCell>
+                    <TableCell sx={{ fontWeight: 600 }}>Age</TableCell>
                     {/* D40 — added with its filter. A sheet headed "Married students"
                         that does not print a civil status cannot be checked by the
-                        person holding it, which is the whole reason Gender and Religion
-                        are here. Printed AS STORED, not capitalised like Gender: these
+                        person holding it, which is the whole reason Gender is here. Printed AS STORED, not capitalised like Gender: these
                         values are TitleCase in the column already. */}
                     <TableCell sx={{ fontWeight: 600 }}>Civil status</TableCell>
                     <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
@@ -130,7 +129,7 @@ export function StudentListPrintDialog({
                       <TableCell sx={{ textTransform: 'capitalize' }}>
                         {s.gender ?? '—'}
                       </TableCell>
-                      <TableCell>{s.religion ?? '—'}</TableCell>
+                      <TableCell>{s.age ?? '—'}</TableCell>
                       <TableCell>{s.civil_status ?? '—'}</TableCell>
                       <TableCell sx={{ textTransform: 'capitalize' }}>{s.status}</TableCell>
                     </TableRow>

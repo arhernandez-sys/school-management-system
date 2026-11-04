@@ -211,6 +211,20 @@ class TestTheRowCarriesWhatItWasFilteredBy:
         assert row["program_code"] is None
         assert row["religion"] is None
 
+    def test_the_list_row_carries_age_not_the_date_of_birth(
+        self, client, staff_headers, cohort
+    ) -> None:
+        """The printed list shows AGE. The full date of birth stays off the directory
+        wire — age is derived server-side from the school's local today."""
+        from app.core.timeutil import school_today
+
+        resp = client.get(f"{STUDENTS}?page_size=100&search=Ana Alpha", headers=staff_headers)
+        row = next(i for i in resp.json()["items"] if i["id"] == str(cohort["ana"].id))
+        today = school_today()
+        expected = today.year - 2010 - ((today.month, today.day) < (1, 1))
+        assert row["age"] == expected
+        assert "date_of_birth" not in row
+
 
 # ════════════════════════════════════════════════════════════════════════════
 class TestFilterOptions:

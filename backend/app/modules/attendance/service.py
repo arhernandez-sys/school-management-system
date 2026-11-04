@@ -50,6 +50,7 @@ from app.modules.attendance.schemas import (
     AttendanceUpsertResponse,
     LastRecorded,
     MyAttendanceHistoryItem,
+    MyAttendanceOffering,
     MyAttendanceResponse,
 )
 from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
@@ -602,14 +603,59 @@ def get_my_attendance(
         # semester's records under the requested year's heading is precisely the
         # mislabelling defect that `/grades/me` was fixed for (see its fallback guard).
         stmt = stmt.where(AttendanceRecord.semester_id == semester_id)
-    records = list(db.scalars(stmt.order_by(AttendanceRecord.attendance_date.desc())).all())
+    records = list(
+        db.scalars(
+            stmt.order_by(
+                AttendanceRecord.attendance_date.desc(), AttendanceRecord.offering_id.asc()
+            )
+        ).all()
+    )
+
+    # Offerings in the period: every active enrolment (so a course with nothing marked
+    # yet still shows, at zero) plus any offering that holds this student's records.
+    enr_stmt = select(ClassEnrollment.offering_id).where(
+        ClassEnrollment.student_id == student.id, ClassEnrollment.unenrolled_at.is_(None)
+    )
+    if year_id is not None:
+        enr_stmt = enr_stmt.where(
+            ClassEnrollment.semester_id.in_(
+                select(Semester.id).where(Semester.academic_year_id == year_id)
+            )
+        )
+    if semester_id is not None:
+        enr_stmt = enr_stmt.where(ClassEnrollment.semester_id == semester_id)
+    offering_ids = set(db.scalars(enr_stmt).all()) | {r.offering_id for r in records}
+
+    by_offering: dict[uuid.UUID, list[AttendanceStatus]] = defaultdict(list)
+    for r in records:
+        by_offering[r.offering_id].append(r.status)
+
+    offerings: list[MyAttendanceOffering] = []
+    if offering_ids:
+        rows = db.execute(
+            select(CourseOffering, Course)
+            .join(Course, Course.id == CourseOffering.course_id)
+            .where(CourseOffering.id.in_(offering_ids))
+            .order_by(*OFFERING_ORDER)
+        ).all()
+        teachers = _teachers_for_offerings(db, [o.id for o, _ in rows])
+        offerings = [
+            MyAttendanceOffering(
+                offering=_offering_ref(db, o, teachers.get(o.id, []), course=c),
+                summary=_summarize(by_offering.get(o.id, [])),
+            )
+            for o, c in rows
+        ]
 
     return MyAttendanceResponse(
         summary=_summarize([r.status for r in records]),
         history=[
-            MyAttendanceHistoryItem(date=r.attendance_date, status=r.status)
+            MyAttendanceHistoryItem(
+                date=r.attendance_date, status=r.status, offering_id=r.offering_id
+            )
             for r in records
         ],
+        offerings=offerings,
     )
 
 

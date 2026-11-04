@@ -181,6 +181,14 @@ function allocateStudentNumber(enrollmentDate: string): string {
   return `${ym}${String(next).padStart(3, '0')}`;
 }
 
+/** Whole years between two YYYY-MM-DD dates — mirrors `StudentListItem.age` server-side. */
+function ageOn(dob: string | null | undefined, today: string): number | null {
+  if (!dob) return null;
+  const years = Number(today.slice(0, 4)) - Number(dob.slice(0, 4));
+  // MM-DD compares correctly as a string.
+  return today.slice(5) < dob.slice(5) ? years - 1 : years;
+}
+
 /** StudentListItem (GET /students). `viewerRole` scopes the course COUNT — see below. */
 function studentListItem(s: DemoStudent, viewerRole?: string) {
   return {
@@ -208,6 +216,7 @@ function studentListItem(s: DemoStudent, viewerRole?: string) {
     // narrowed to "Married" that never prints one cannot be checked.
     civil_status: s.civil_status ?? null,
     program_code: D.programs.find((p) => p.id === s.program_id)?.code ?? null,
+    age: ageOn(s.date_of_birth, DEMO_TODAY),
   };
 }
 

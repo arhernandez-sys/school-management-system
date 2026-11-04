@@ -140,8 +140,22 @@ export interface AttendanceAlertsResponse {
   students: AttendanceAlertStudent[];
 }
 
-/** GET /attendance/me — a student's own attendance. */
+/** One offering the student sits in the period, with its own tally. */
+export interface MyAttendanceOffering {
+  offering: AttendanceOfferingRef;
+  summary: AttendanceCounts;
+}
+
+/**
+ * GET /attendance/me — a student's own attendance.
+ *
+ * Each lecturer marks the register for their OWN offering, so a student has one mark per
+ * offering per day. `history[].offering_id` says which offering a mark belongs to;
+ * `offerings[]` lists every offering in the period (including ones not yet marked) with
+ * its own tally. `summary` is across all of them.
+ */
 export interface MyAttendanceResponse {
   summary: AttendanceCounts;
-  history: Array<{ date: string; status: AttendanceStatus }>;
+  history: Array<{ date: string; status: AttendanceStatus; offering_id: string }>;
+  offerings: MyAttendanceOffering[];
 }

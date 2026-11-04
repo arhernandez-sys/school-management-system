@@ -145,11 +145,29 @@ class AttendanceSummaryResponse(BaseModel):
 class MyAttendanceHistoryItem(BaseModel):
     date: _date
     status: AttendanceStatus
+    #: The offering the mark was recorded in. A student sits several offerings a day, so
+    #: a bare (date, status) row cannot say WHICH lecturer marked them absent.
+    offering_id: UUID
+
+
+class MyAttendanceOffering(BaseModel):
+    """One offering the student sits in the period, with its own tally.
+
+    Listed for every active enrolment in the period even when nothing has been marked
+    yet (all-zero summary), plus any offering that holds records from an enrolment
+    since dropped — a mark that exists is never hidden from its student.
+    """
+
+    offering: AttendanceOfferingRef
+    summary: AttendanceCounts
 
 
 class MyAttendanceResponse(BaseModel):
+    #: Across every offering in the period.
     summary: AttendanceCounts
     history: list[MyAttendanceHistoryItem] = Field(default_factory=list)
+    #: Per-offering breakdown, ordered by course code then section.
+    offerings: list[MyAttendanceOffering] = Field(default_factory=list)
 
 
 # ── GET /attendance/alerts (D44) ───────────────────────────────────────────────

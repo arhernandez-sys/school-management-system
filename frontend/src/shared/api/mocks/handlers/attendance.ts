@@ -412,9 +412,36 @@ export const attendanceHandlers: RequestHandler[] = [
       )
       .sort((a, b) => b.attendance_date.localeCompare(a.attendance_date));
 
+    // Per-offering breakdown, mirroring the backend: active enrolments in the period
+    // (so an unmarked course shows at zero) ∪ any offering holding this student's marks.
+    const offeringIds = new Set(rows.map((r) => r.offering_id));
+    for (const e of D.enrollments) {
+      if (
+        e.student_id === studentId &&
+        !e.unenrolled_at &&
+        yearSemIds.has(e.semester_id) &&
+        (!semesterId || e.semester_id === semesterId)
+      ) {
+        offeringIds.add(e.offering_id);
+      }
+    }
+    const offerings = [...offeringIds]
+      .map((id) => getOffering(id))
+      .filter((o): o is DemoOffering => Boolean(o))
+      .sort((a, b) => offeringLabel(a).localeCompare(offeringLabel(b)))
+      .map((o) => ({
+        offering: offeringRef(o),
+        summary: summarize(rows.filter((r) => r.offering_id === o.id)),
+      }));
+
     return HttpResponse.json({
       summary: summarize(rows),
-      history: rows.map((r) => ({ date: r.attendance_date, status: r.status })),
+      history: rows.map((r) => ({
+        date: r.attendance_date,
+        status: r.status,
+        offering_id: r.offering_id,
+      })),
+      offerings,
     });
   }),
 ];

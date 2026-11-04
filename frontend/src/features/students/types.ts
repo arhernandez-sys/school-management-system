@@ -67,6 +67,8 @@ export interface StudentListItem extends StudentNameParts {
   civil_status: string | null;
   /** The programme CODE, e.g. "BMAD". Null until a student is assigned one. */
   program_code: string | null;
+  /** Whole years, derived server-side from the date of birth (which is not on the row). */
+  age: number | null;
 }
 
 /**

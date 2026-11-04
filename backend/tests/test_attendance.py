@@ -727,6 +727,52 @@ class TestMyAttendance:
         assert r.status_code == 200, r.text
         assert r.json()["history"] == []
 
+    def test_breakdown_is_per_offering(self, client, graph, db_session) -> None:
+        """Two offerings marked on the same day stay separate, each with its own tally,
+        and every history row names the offering that recorded it."""
+        me, enr = graph.student(with_login=True)
+        enr2 = ClassEnrollment(
+            offering_id=graph.other_section.id, student_id=me.id, semester_id=graph.sem.id
+        )
+        db_session.add(enr2)
+        db_session.flush()
+        day = date(2025, 10, 15)
+        graph.record(me, enr, status="present", on=day)
+        graph.record(me, enr2, status="absent", on=day, section=graph.other_section)
+
+        body = client.get(f"{AT}/me", headers=graph.student_headers(me)).json()
+        by_id = {o["offering"]["offering"]["id"]: o for o in body["offerings"]}
+        assert set(by_id) == {str(graph.section.id), str(graph.other_section.id)}
+        mine = by_id[str(graph.section.id)]
+        assert mine["summary"]["present"] == 1 and mine["summary"]["absent"] == 0
+        assert mine["offering"]["offering"]["label"] == graph.label(graph.section)
+        assert [t["name"] for t in mine["offering"]["teachers"]] == ["Maria Reyes"]
+        other = by_id[str(graph.other_section.id)]
+        assert other["summary"]["absent"] == 1 and other["summary"]["present"] == 0
+        assert {(h["offering_id"], h["status"]) for h in body["history"]} == {
+            (str(graph.section.id), "present"),
+            (str(graph.other_section.id), "absent"),
+        }
+        assert body["summary"]["present"] == 1 and body["summary"]["absent"] == 1
+
+    def test_enrolled_offering_with_no_marks_listed_at_zero(self, client, graph) -> None:
+        me, _ = graph.student(with_login=True)
+        body = client.get(f"{AT}/me", headers=graph.student_headers(me)).json()
+        assert [o["offering"]["offering"]["id"] for o in body["offerings"]] == [
+            str(graph.section.id)
+        ]
+        assert body["offerings"][0]["summary"]["pct_present"] == 0.0
+
+    def test_breakdown_never_includes_another_students_offering(self, client, graph) -> None:
+        me, enr = graph.student(with_login=True)
+        other, other_enr = graph.student(section=graph.other_section)
+        graph.record(other, other_enr, status="absent", section=graph.other_section)
+        graph.record(me, enr, status="present")
+        body = client.get(f"{AT}/me", headers=graph.student_headers(me)).json()
+        assert [o["offering"]["offering"]["id"] for o in body["offerings"]] == [
+            str(graph.section.id)
+        ]
+
     def test_summary_counts_late_as_present(self, client, graph) -> None:
         me, enr = graph.student(with_login=True)
         graph.record(me, enr, status="late", on=date(2025, 10, 15))

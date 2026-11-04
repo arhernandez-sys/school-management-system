@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.common.enums import (
     AcademicYearStatus,
@@ -22,6 +22,7 @@ from app.common.enums import (
     YearOfStudy,
 )
 from app.common.schemas import AuditStamp, OfferingRef, CourseRef
+from app.core.timeutil import school_today
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +144,20 @@ class StudentListItem(BaseModel):
     #: Resolved from `program_id` — the CODE, e.g. "BMAD", which is what the register
     #: and the report card both print. `None` until a student is assigned a programme.
     program_code: str | None = None
+    #: Read from the ORM row only to derive `age`; `exclude=True` keeps the full date of
+    #: birth off the directory wire (the detail page already carries it for those who
+    #: need it). The printed list shows age, not religion.
+    date_of_birth: date | None = Field(default=None, exclude=True)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def age(self) -> int | None:
+        """Whole years as of the school's local today (America/Belize)."""
+        if self.date_of_birth is None:
+            return None
+        today = school_today()
+        dob = self.date_of_birth
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
 class StudentFilterOptions(BaseModel):
