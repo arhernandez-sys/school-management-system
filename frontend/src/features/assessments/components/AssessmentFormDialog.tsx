@@ -5,7 +5,7 @@ import type { AssessmentCategory, AssessmentListItem } from '../hooks/useAssessm
 
 export interface AssessmentFormValues {
   title: string;
-  category_id: string | null;
+  category_id: string;
   assessment_date: string | null;
   max_score: number;
   weight: number;
@@ -24,15 +24,15 @@ export interface AssessmentFormDialogProps {
   onClose: () => void;
 }
 
-const NONE_CATEGORY = '__none__';
-
 /** Every assessment counts equally within its category (client request, 17 Oct 2026). */
 const FIXED_WEIGHT = 1;
 
 /**
  * Create / edit an assessment DEFINITION (assessment-first, API-9). Grade entry is a
- * separate module — this only captures title, optional category, date (required) and max
- * score.
+ * separate module — this only captures title, category (required), date (required) and max
+ * score. The "No category" option is gone (client request, 4 Nov 2026): every new or
+ * edited assessment must belong to a weighting group. A legacy uncategorized one opens
+ * with the field empty and cannot be saved until a category is picked.
  *
  * **There is no Type field** (client request, 16 Oct 2026): the category is the only way
  * to group an assessment. The server stores an omitted type as `assignment`, and nothing
@@ -61,14 +61,14 @@ export function AssessmentFormDialog({
   const editing = Boolean(assessment);
 
   const [title, setTitle] = useState('');
-  const [categoryId, setCategoryId] = useState<string>(NONE_CATEGORY);
+  const [categoryId, setCategoryId] = useState<string>('');
   const [date, setDate] = useState('');
   const [maxScore, setMaxScore] = useState('100');
 
   useEffect(() => {
     if (!open) return;
     setTitle(assessment?.title ?? '');
-    setCategoryId(assessment?.category_id ?? NONE_CATEGORY);
+    setCategoryId(assessment?.category_id ?? '');
     setDate(assessment?.assessment_date ?? '');
     setMaxScore(assessment ? String(assessment.max_score) : '100');
   }, [open, assessment]);
@@ -77,12 +77,13 @@ export function AssessmentFormDialog({
   const maxScoreValid = maxScore.trim() !== '' && Number.isFinite(maxScoreNum) && maxScoreNum > 0;
   const titleValid = title.trim().length > 0;
   const dateValid = date.trim() !== '';
-  const canSubmit = titleValid && dateValid && maxScoreValid;
+  const categoryValid = categoryId !== '';
+  const canSubmit = titleValid && categoryValid && dateValid && maxScoreValid;
 
   const handleSubmit = () => {
     onSubmit({
       title: title.trim(),
-      category_id: categoryId === NONE_CATEGORY ? null : categoryId,
+      category_id: categoryId,
       assessment_date: date,
       max_score: maxScoreNum,
       weight: FIXED_WEIGHT,
@@ -118,18 +119,23 @@ export function AssessmentFormDialog({
 
         <TextField
           select
-          label="Category (optional)"
+          label="Category"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
+          required
           fullWidth
           disabled={categoriesLoading}
+          inputProps={{ 'aria-required': true }}
+          error={Boolean(fieldErrors?.category_id)}
           helperText={
-            categoriesLoading ? 'Loading categories…' : 'Weighting group this assessment belongs to.'
+            fieldErrors?.category_id?.join(' ') ??
+            (categoriesLoading
+              ? 'Loading categories…'
+              : categories.length === 0
+                ? 'No categories yet — create one for this course before adding assessments.'
+                : 'Required. Weighting group this assessment belongs to.')
           }
         >
-          <MenuItem value={NONE_CATEGORY}>
-            <em>No category</em>
-          </MenuItem>
           {categories.map((c) => (
             <MenuItem key={c.id} value={c.id}>
               {c.name}

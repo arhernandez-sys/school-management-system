@@ -867,6 +867,8 @@ class TestMarkingWindowEntry:
         s, _ = graph.student()
         assert self._save(client, graph, a, s).status_code == 200
 
+    @pytest.mark.skip(reason="BACKFILL-TEMP: marking_closed guard on grade entry commented out "
+                      "for now until the school finishes adding all the old data for testing.")
     def test_entry_after_the_window_closes_409(self, client, graph) -> None:
         a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
         s, _ = graph.student()
@@ -875,6 +877,8 @@ class TestMarkingWindowEntry:
         err = _assert_envelope(r.json(), code="marking_closed")
         assert err["closed_at"] is not None
 
+    @pytest.mark.skip(reason="BACKFILL-TEMP: marking_closed guard on grade entry commented out "
+                      "for now until the school finishes adding all the old data for testing.")
     def test_a_refused_batch_writes_nothing(self, client, graph, db_session) -> None:
         a = graph.assessment(max_score="20", assessment_date=_days_ago(6))
         s, _ = graph.student()
@@ -891,6 +895,8 @@ class TestMarkingWindowEntry:
         db_session.flush()
         assert self._save(client, graph, a, s).status_code == 200
 
+    @pytest.mark.skip(reason="BACKFILL-TEMP: marking_closed guard on grade entry commented out "
+                      "for now until the school finishes adding all the old data for testing.")
     def test_an_expired_reopen_locks_it_again(self, client, graph, db_session) -> None:
         a = graph.assessment(max_score="20", assessment_date=_days_ago(10))
         s, _ = graph.student()

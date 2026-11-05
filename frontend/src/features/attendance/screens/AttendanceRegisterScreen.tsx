@@ -17,7 +17,8 @@ import {
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { attendanceRecordableDates, schoolToday } from '@shared/utils/schoolDate';
+// BACKFILL-TEMP: `attendanceRecordableDates` unused while the past-date limit is off.
+import { schoolToday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import {
   useAttendanceRegister,
@@ -60,7 +61,13 @@ export function AttendanceRegisterScreen() {
   const requestedDate = searchParams.get('date') ?? schoolToday();
   // A URL or a typed value can still name a closed date — fall back to today rather
   // than load (and offer to save) a register outside the window.
-  const date = attendanceRecordableDates().includes(requestedDate) ? requestedDate : schoolToday();
+  // BACKFILL-TEMP: commented out for now until the school finishes adding all the old data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+  // Only a FUTURE date still falls back to today (ISO dates compare as strings).
+  // const date = attendanceRecordableDates().includes(requestedDate) ? requestedDate : schoolToday();
+  const date =
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) && requestedDate <= schoolToday()
+      ? requestedDate
+      : schoolToday();
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
   const offeringsQuery = useAttendanceOfferings(yearId);

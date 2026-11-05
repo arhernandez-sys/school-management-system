@@ -955,7 +955,9 @@ def upsert_grades(
     # D42 §5 — the end-of-session deadline check that used to sit here is gone. The
     # mid-session freeze is the only window that stops grade entry now.
     _assert_midterm_not_frozen(db, assessment, actor)
-    _assert_marking_open(assessment)
+    # BACKFILL-TEMP: commented out for now until the school finishes adding all the old
+    # data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+    # _assert_marking_open(assessment)
 
     entries = payload.entries
     max_score = _dec(assessment.max_score) or Decimal(0)

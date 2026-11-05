@@ -40,6 +40,7 @@ import type {
   Role,
 } from '@shared/api/generated/model';
 import { listLinkableProfiles } from '../api/linkableProfiles';
+import { ACTIVE_TERM_RECOVERY } from '@shared/api/activeTermQuery';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
 
@@ -82,6 +83,8 @@ function useInvalidateAcademicStructure() {
   return () => {
     void qc.invalidateQueries({ queryKey: getListAcademicYearsApiV1SettingsAcademicYearsGetQueryKey() });
     void qc.invalidateQueries({ queryKey: getGetActiveTermApiV1SettingsActiveTermGetQueryKey() });
+    // The Reports term picker reads the same endpoint under its own key.
+    void qc.invalidateQueries({ queryKey: ['reports', 'active-term'] });
   };
 }
 
@@ -248,8 +251,9 @@ export function useAccount() {
 // ── Active term (global semester switcher) ──────────────────────────────────────
 /**
  * GET /settings/active-term. 409 no_active_semester when the school has no active
- * year/semester — the caller degrades to a setup prompt. Retries are disabled so a
- * 409 (a valid "not set up" state, not a transient error) surfaces immediately.
+ * year/semester — the caller degrades to a setup prompt. The 409 still surfaces at once
+ * (the default retry policy never retries a 4xx); see `ACTIVE_TERM_RECOVERY` for how a
+ * failed read now recovers without a reload.
  *
  * `enabled` exists so callers mounted ABOVE the route guards (YearProvider) can hold
  * the request until the session is established. Without it the query fires during
@@ -261,7 +265,11 @@ export function useAccount() {
  */
 export function useActiveTerm(options?: { enabled?: boolean }) {
   return useGetActiveTermApiV1SettingsActiveTermGet({
-    query: { staleTime: CONFIG_STALE_MS, retry: false, enabled: options?.enabled ?? true },
+    query: {
+      staleTime: CONFIG_STALE_MS,
+      enabled: options?.enabled ?? true,
+      ...ACTIVE_TERM_RECOVERY,
+    },
   });
 }
 

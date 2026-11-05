@@ -17,6 +17,7 @@ import {
   type StudentPickerParams,
 } from '../api/reportsApi';
 import type { ReportCardKind } from '../types';
+import { ACTIVE_TERM_RECOVERY } from '@shared/api/activeTermQuery';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000;
 
@@ -35,7 +36,7 @@ export function useActiveTerm() {
     queryKey: ['reports', 'active-term'],
     queryFn: fetchActiveTerm,
     staleTime: CONFIG_STALE_MS,
-    retry: false,
+    ...ACTIVE_TERM_RECOVERY,
   });
 }
 

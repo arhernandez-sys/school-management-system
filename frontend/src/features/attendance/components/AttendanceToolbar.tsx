@@ -1,5 +1,6 @@
 import { Box, MenuItem, Stack, TextField } from '@mui/material';
-import { attendanceRecordableDates, schoolToday } from '@shared/utils/schoolDate';
+// BACKFILL-TEMP: `attendanceRecordableDates` unused while the past-date limit is off.
+import { schoolToday } from '@shared/utils/schoolDate';
 import { YearSelect, DateField } from '@shared/components';
 import type { YearOption } from '@shared/hooks';
 import type { AttendanceOfferingsResponse } from '../types';
@@ -64,8 +65,11 @@ export function AttendanceToolbar({
   const today = schoolToday();
   // Client request (14 Oct 2026): past dates are closed too — only today and the
   // previous school day (the Friday, when today is Monday) can be picked.
-  const recordable = attendanceRecordableDates(today);
-  const earliest = recordable[0];
+  // BACKFILL-TEMP: commented out for now until the school finishes adding all the old data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+  // While it is off, any past date can be picked; the future stays closed (FR-ATT-05,
+  // and the server still refuses it with `future_date_not_allowed`).
+  // const recordable = attendanceRecordableDates(today);
+  // const earliest = recordable[0];
 
   return (
     <Stack
@@ -112,10 +116,12 @@ export function AttendanceToolbar({
             value={date ?? today}
             onChange={onDateChange}
             disabled={disabled}
-            minDate={earliest}
+            // BACKFILL-TEMP: past-date limit commented out for now (see note above).
+            // minDate={earliest}
             maxDate={today}
-            shouldDisableDate={(d) => !recordable.includes(d)}
-            helperText="Today or the previous school day only"
+            // shouldDisableDate={(d) => !recordable.includes(d)}
+            // helperText="Today or the previous school day only"
+            helperText="Today or an earlier date"
             fullWidth
           />
         </Box>

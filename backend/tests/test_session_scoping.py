@@ -65,8 +65,10 @@ class TestCreateUsesOfferingSession:
     ) -> None:
         # Offering in a session other than the school's active one, then made active again
         # is not needed: the point is the stamp follows the offering, not the global flag.
+        cat = graph.category()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "Quiz", "max_score": 10})
+            "offering_id": str(graph.cs.id), "category_id": str(cat.id),
+            "title": "Quiz", "max_score": 10})
         assert r.status_code == 201, r.text
         assert r.json()["semester_id"] == str(graph.cs.semester_id)
 

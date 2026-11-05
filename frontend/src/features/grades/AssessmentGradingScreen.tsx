@@ -160,7 +160,11 @@ export function AssessmentGradingScreen() {
     Boolean(assessment?.reopened_until) &&
     (parseInstant(assessment?.reopened_until)?.getTime() ?? 0) >= Date.now();
   const frozenHere = midtermFrozen && !reopenActive;
-  const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !frozenHere;
+  // BACKFILL-TEMP: commented out for now until the school finishes adding all the old data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+  // The marking window no longer locks the grid (the server's `marking_closed` refusal
+  // is commented out too). Session, ownership and the mid-term freeze still apply.
+  // const canEdit = (gradebook?.can_edit ?? false) && markingOpen && !frozenHere;
+  const canEdit = (gradebook?.can_edit ?? false) && !frozenHere;
 
   /**
    * D32 — is a Revision of Grades possible for ANY student on this assessment?
@@ -341,7 +345,9 @@ export function AssessmentGradingScreen() {
               saved. Students still without a mark when it closes count as 0.
             </Alert>
           )}
-          {!markingOpen && (
+          {/* BACKFILL-TEMP: `&& !canEdit` added so the "Marking closed" banner (and its
+              reopen button) doesn't show over a grid that is editable. Revert with the above. */}
+          {!markingOpen && !canEdit && (
             <Alert
               severity="warning"
               icon={<LockClockIcon />}

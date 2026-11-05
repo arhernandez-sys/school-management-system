@@ -153,8 +153,10 @@ class TestAuthGate:
 class TestCreate:
     def test_create_ok_is_live_with_an_open_window(self, client, graph) -> None:
         """D47 — no draft, no release: an assessment is gradable from creation."""
+        cat = graph.category()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "Quiz 1", "max_score": 25, "weight": 1})
+            "offering_id": str(graph.cs.id), "category_id": str(cat.id),
+            "title": "Quiz 1", "max_score": 25, "weight": 1})
         assert r.status_code == 201, r.text
         b = r.json()
         assert "status" not in b and "is_released" not in b
@@ -202,13 +204,25 @@ class TestCreate:
     def test_type_is_retired(self, client, graph) -> None:
         # Assessment types were removed on 16 Oct 2026 (column dropped): the API neither
         # returns one nor accepts one — `extra="forbid"` makes a stale client's `type` a 422.
+        cat = graph.category()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "No type", "max_score": 10})
+            "offering_id": str(graph.cs.id), "category_id": str(cat.id),
+            "title": "No type", "max_score": 10})
         assert r.status_code == 201, r.text
         assert "type" not in r.json()
         r = client.post(A, headers=graph.H, json={
             "offering_id": str(graph.cs.id), "title": "X", "type": "quiz", "max_score": 10})
         assert r.status_code == 422
+
+    def test_create_without_a_category_422(self, client, graph) -> None:
+        """Category is required (4 Nov 2026) — omitted or explicit null, both refused."""
+        for body in (
+            {"offering_id": str(graph.cs.id), "title": "X", "max_score": 10},
+            {"offering_id": str(graph.cs.id), "title": "X", "max_score": 10, "category_id": None},
+        ):
+            r = client.post(A, headers=graph.H, json=body)
+            assert r.status_code == 422, r.text
+            _assert_envelope(r.json(), code="category_required")
 
     def test_create_in_archived_year_409(self, client, graph, db_session) -> None:
         graph.section.is_archived = True
@@ -284,8 +298,10 @@ class TestUpdateDelete:
     def test_weight_is_locked_at_1(self, client, graph, db_session) -> None:
         # 17 Oct 2026: a submitted weight is accepted but ignored, on create AND on edit,
         # and any edit brings an older non-1 weight back to 1.
+        cat = graph.category()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "W", "max_score": 10, "weight": 5})
+            "offering_id": str(graph.cs.id), "category_id": str(cat.id),
+            "title": "W", "max_score": 10, "weight": 5})
         assert r.status_code == 201, r.text
         assert r.json()["weight"] == 1
 
@@ -299,6 +315,13 @@ class TestUpdateDelete:
         db_session.flush()
         r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"title": "Renamed"})
         assert r.status_code == 200 and r.json()["weight"] == 1
+
+    def test_patch_cannot_clear_the_category_422(self, client, graph) -> None:
+        c = graph.category()
+        a = graph.assessment(category_id=c.id)
+        r = client.patch(f"{A}/{a.id}", headers=graph.H, json={"category_id": None})
+        assert r.status_code == 422, r.text
+        _assert_envelope(r.json(), code="category_required")
 
     def test_patch_scores_exceed_new_max_409(self, client, graph) -> None:
         a = graph.assessment(max_score="100")
@@ -429,6 +452,8 @@ class TestMarkingWindow:
         assert items[str(open_.id)]["marking_open"] is True
         assert items[str(open_.id)]["days_left"] == 0
 
+    @pytest.mark.skip(reason="BACKFILL-TEMP: marking_window_passed guard commented out for "
+                      "now until the school finishes adding all the old data for testing.")
     def test_create_with_a_date_whose_window_has_passed_422(self, client, graph) -> None:
         r = client.post(A, headers=graph.H, json={
             "offering_id": str(graph.cs.id), "title": "Late", "max_score": 10,
@@ -437,8 +462,10 @@ class TestMarkingWindow:
         _assert_envelope(r.json(), code="marking_window_passed")
 
     def test_create_on_the_last_open_day_is_allowed(self, client, graph) -> None:
+        cat = graph.category()
         r = client.post(A, headers=graph.H, json={
-            "offering_id": str(graph.cs.id), "title": "Edge", "max_score": 10,
+            "offering_id": str(graph.cs.id), "category_id": str(cat.id),
+            "title": "Edge", "max_score": 10,
             "assessment_date": _days_ago(5).isoformat()})
         assert r.status_code == 201, r.text
         assert r.json()["marking_open"] is True

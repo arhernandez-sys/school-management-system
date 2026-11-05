@@ -81,7 +81,8 @@ interface YearContextValue {
   /** Active-semester name (e.g. "Semester 1"), for the switcher label. */
   activeSemesterName: string | undefined;
   /**
-   * Active-semester **id** — required by every assessment write (`semester_id`).
+   * Active-semester **id** — the school's current term. Assessment creation no longer
+   * sends it (the server stamps the offering's own session), so no write depends on it.
    *
    * Exposed here because this provider already reads `GET /settings/active-term` for
    * all authenticated roles, so consumers get the real id with no extra request.

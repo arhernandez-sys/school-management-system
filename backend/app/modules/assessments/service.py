@@ -369,10 +369,15 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
             code="semester_mismatch",
             fields={"semester_id": ["Must be the course offering's session."]},
         )
-    _assert_window_not_already_closed(payload.assessment_date)
+    # BACKFILL-TEMP: commented out for now until the school finishes adding all the old
+    # data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+    # _assert_window_not_already_closed(payload.assessment_date)
 
-    if payload.category_id is not None:
-        _assert_category_matches_cs(db, payload.category_id, cs.id)
+    # Category is REQUIRED (client request, 4 Nov 2026) — every assessment must sit in a
+    # weighting group. Existing uncategorized rows stay readable; they just can't be
+    # created, or edited back to uncategorized.
+    _assert_category_present(payload.category_id)
+    _assert_category_matches_cs(db, payload.category_id, cs.id)
 
     a = Assessment(
         offering_id=cs.id,
@@ -400,6 +405,15 @@ def create_assessment(db: Session, *, actor: User, payload) -> AssessmentDetail:
     return _detail(db, a, with_stats=True)
 
 
+def _assert_category_present(category_id: uuid.UUID | None) -> None:
+    if category_id is None:
+        raise ValidationError(
+            "A category is required.",
+            code="category_required",
+            fields={"category_id": ["Choose a category."]},
+        )
+
+
 def _assert_category_matches_cs(db: Session, category_id: uuid.UUID, cs_id: uuid.UUID) -> None:
     cat = db.get(AssessmentCategory, category_id)
     if cat is None or cat.offering_id != cs_id:
@@ -421,8 +435,8 @@ def update_assessment(db: Session, *, actor: User, assessment_id: uuid.UUID, pay
     fields = payload.model_fields_set
 
     if "category_id" in fields:
-        if payload.category_id is not None:
-            _assert_category_matches_cs(db, payload.category_id, a.offering_id)
+        _assert_category_present(payload.category_id)
+        _assert_category_matches_cs(db, payload.category_id, a.offering_id)
         a.category_id = payload.category_id
 
     if payload.max_score is not None and payload.max_score < float(a.max_score):

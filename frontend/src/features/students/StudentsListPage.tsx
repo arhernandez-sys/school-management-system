@@ -332,6 +332,9 @@ export function StudentsListPage() {
     setPage(0);
   };
 
+  const showAgeNotReligion =
+    user?.role === 'principal' || user?.role === 'secretary' || isLecturerRole(user?.role);
+
   const columns: DataTableColumn<StudentListItem>[] = [
     {
       // Sorting this column asks for `last_name`, which the API expands to
@@ -387,12 +390,24 @@ export function StudentsListPage() {
       hideOnMobile: true,
       render: (s) => <Typography variant="body2">{genderLabel(s.gender) || '—'}</Typography>,
     },
-    {
-      field: 'religion',
-      headerName: 'Religion',
-      hideOnMobile: true,
-      render: (s) => <Typography variant="body2">{s.religion || '—'}</Typography>,
-    },
+    // Client request (4 Nov 2026): the Dean, Registrar and lecturers see AGE here, not religion —
+    // the same swap the printed list already made. `age` is derived server-side from the
+    // school-local today (the date of birth never leaves the server on this endpoint).
+    // Other roles keep Religion, which backs their Religion filter (D38's rule above).
+    showAgeNotReligion
+      ? {
+          field: 'age',
+          headerName: 'Age',
+          align: 'right',
+          hideOnMobile: true,
+          render: (s) => <Typography variant="body2">{s.age ?? '—'}</Typography>,
+        }
+      : {
+          field: 'religion',
+          headerName: 'Religion',
+          hideOnMobile: true,
+          render: (s) => <Typography variant="body2">{s.religion || '—'}</Typography>,
+        },
     {
       // D40 — added with the filter, under D38's rule above: a directory narrowed to
       // "Married" that never prints a civil status is a result the Registrar cannot
