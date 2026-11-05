@@ -4,6 +4,8 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import { Link as RouterLink } from 'react-router-dom';
 import { PageHeader, LoadingState, EmptyState } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
+import { isNoAcademicYearError } from '@shared/api/setupState';
+import { NoAcademicYearState } from '@shared/components/NoAcademicYearState';
 import { useAuth } from '@features/auth/hooks/useAuth';
 import { ROUTES } from '@shared/constants/routes';
 import { StudentPicker } from '../components/StudentPicker';
@@ -106,12 +108,17 @@ export function ReportCardScreen() {
            open, the term has no mid-term period, or the student was not enrolled in it.
            The server names each one, so the message is shown rather than swallowed by a
            generic "something went wrong" the user cannot act on. */
-        <EmptyState
-          title="This report is not available yet"
-          description={apiErrorMessage(query.error)}
-          variant="page"
-          action={{ label: 'Try again', onClick: () => void query.refetch() }}
-        />
+        isNoAcademicYearError(query.error) ? (
+          // No academic year / active session: nothing to retry, so no "Try again".
+          <NoAcademicYearState />
+        ) : (
+          <EmptyState
+            title="This report is not available yet"
+            description={apiErrorMessage(query.error)}
+            variant="page"
+            action={{ label: 'Try again', onClick: () => void query.refetch() }}
+          />
+        )
       ) : query.data ? (
         <ReportCardDocument data={query.data} />
       ) : null}

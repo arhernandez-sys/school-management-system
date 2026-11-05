@@ -1017,6 +1017,32 @@ class TestGradingScale:
             "C+": 2.50, "C": 2.00, "D": 1.00, "F": 0.00,
         }
 
+    def test_get_grading_scale_with_no_active_year_is_a_specific_code(
+        self, client, make_user, auth_headers, archive_seeded_active_year
+    ) -> None:
+        """No active year → 404 `no_active_year`, NOT the generic `not_found`: the UI
+        keys on the code to show "no academic year yet" instead of a red error."""
+        archive_seeded_active_year()
+        dean = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            GRADING_SCALE, headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL)
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["error"]["code"] == "no_active_year"
+
+    def test_get_grading_scale_unknown_year_is_still_not_found(
+        self, client, make_user, auth_headers
+    ) -> None:
+        """A bad explicit id is a real error and keeps `not_found`."""
+        dean = make_user(role=Role.PRINCIPAL)
+        resp = client.get(
+            GRADING_SCALE,
+            params={"academic_year_id": str(uuid.uuid4())},
+            headers=auth_headers(user_id=dean.id, role=Role.PRINCIPAL),
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["error"]["code"] == "not_found"
+
     def test_put_grading_scale_round_trips_grade_points(
         self, client, make_user, auth_headers
     ) -> None:

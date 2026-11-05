@@ -89,7 +89,9 @@ export function GradingScaleScreen() {
   }, [query.data]);
 
   if (query.isLoading) return <LoadingState variant="table" rows={6} />;
-  if (query.isError || !query.data) return <ErrorState onRetry={() => void query.refetch()} />;
+  // 404 `no_active_year` → the "no academic year yet" empty state, not a red error.
+  if (query.isError || !query.data)
+    return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
 
   const updateBand = (key: string, patch: Partial<GradingBand>) =>
     setBands((prev) => prev.map((b) => (b._key === key ? { ...b, ...patch } : b)));

@@ -879,7 +879,10 @@ def _resolve_scale_year_id(
         )
     )
     if active is None:
-        raise NotFound("No active academic year.", code="not_found")
+        # A SPECIFIC code (was the generic `not_found`): "the school has no active year
+        # yet" is a setup state the UI shows as an empty state, not a failure to retry.
+        # Same code `reports.institutional` already uses for the same condition.
+        raise NotFound("No active academic year.", code="no_active_year")
     return active
 
 
@@ -888,7 +891,7 @@ def _scale_for_year(db: Session, year_id: uuid.UUID) -> GradingScale:
         select(GradingScale).where(GradingScale.academic_year_id == year_id)
     )
     if scale is None:
-        raise NotFound("No grading scale for this year.", code="not_found")
+        raise NotFound("No grading scale for this year.", code="no_grading_scale")
     return scale
 
 

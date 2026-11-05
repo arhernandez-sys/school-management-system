@@ -39,6 +39,8 @@ const ERROR_COPY: Record<string, string> = {
   active_year_exists: 'An active academic year already exists. Archive it before creating a new one.',
   year_already_archived: 'This academic year is already archived.',
   no_active_semester: 'No active semester is set. Create and activate an academic year to continue.',
+  no_active_year: 'No academic year has been created. Please contact administration.',
+  no_grading_scale: 'This academic year has no grading scale yet. Please contact administration.',
   invalid_semester_count: 'An academic year must have exactly two semesters.',
   // Grading scale
   grading_bands_invalid: 'The grading bands must cover 0–100 with no gaps or overlaps.',

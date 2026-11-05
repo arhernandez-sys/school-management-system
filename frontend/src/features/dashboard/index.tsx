@@ -56,7 +56,10 @@ export function DashboardPage() {
       {query.isLoading ? (
         <LoadingState variant="cards" rows={4} label="Loading your dashboard" />
       ) : query.isError ? (
+        // 409 `no_active_semester` (no academic year yet) renders as an empty state with
+        // the setup message; only a real failure gets the red box and Retry.
         <ErrorState
+          error={query.error}
           message="We couldn't load your dashboard. Please try again."
           onRetry={() => void query.refetch()}
         />

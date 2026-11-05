@@ -714,7 +714,8 @@ export function CollegeReportsScreen() {
       {query.isLoading ? (
         <LoadingState variant="cards" rows={4} label="Building the report" />
       ) : query.isError ? (
-        <ErrorState onRetry={() => void query.refetch()} />
+        // `no_active_year` / `no_active_semester` → the setup empty state, not a red error.
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : !query.data ? (
         <EmptyState title="Nothing to report yet" variant="page" />
       ) : tab === 'intake' ? (

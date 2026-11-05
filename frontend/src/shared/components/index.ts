@@ -2,6 +2,7 @@
 export { LoadingState } from './LoadingState';
 export { EmptyState } from './EmptyState';
 export { ErrorState } from './ErrorState';
+export { NoAcademicYearState } from './NoAcademicYearState';
 export { PageHeader } from './PageHeader';
 export type { PageHeaderProps } from './PageHeader';
 export { PageContainer } from './PageContainer';
