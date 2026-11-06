@@ -34,12 +34,14 @@ import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import { useAcademicYears } from '@features/settings/hooks/useSettings';
 import { useReligions, religionOptions } from '@features/settings/hooks/useReligions';
 import {
+  CIVIL_STATUSES,
   GENDERS,
   GENDER_LABEL,
   canonicalCivilStatus,
   civilStatusOptions,
 } from '@shared/types/enums';
 import { schoolYearOptions } from '@shared/utils/schoolYears';
+import { SSNO_LENGTH, padSsno, ssnoDigits } from '@shared/utils/ssno';
 import {
   useApplication,
   useCreatePendingApplication,
@@ -237,19 +239,6 @@ function fromDetail(detail: ApplicationDetail | PendingApplicationDetail): Draft
 /** Empty string → null, so clearing a field CLEARS it rather than storing `""`. */
 const orNull = (value: string) => (value.trim() === '' ? null : value.trim());
 
-/** Social Security numbers are 9 digits; the field accepts digits only. */
-const SSNO_LENGTH = 9;
-const ssnoDigits = (value: string) => value.replace(/\D/g, '').slice(0, SSNO_LENGTH);
-
-/**
- * Left-pads a Social Security no. with zeros to 9 digits (client request, 14 Oct 2026):
- * typing `123` stores `000000123`. Blank stays blank — padding nothing would invent a
- * number the applicant never gave.
- */
-const padSsno = (value: string) => {
-  const digits = ssnoDigits(value);
-  return digits === '' ? '' : digits.padStart(SSNO_LENGTH, '0');
-};
 
 /**
  * The WHOLE form, every section at once.
@@ -424,6 +413,32 @@ export function ApplicationWizardScreen() {
     setHydrated(true);
   }, [detail, pending, hydrated]);
 
+  /**
+   * NO DROPDOWN IS EVER BLANK (client, Nov 2026): every select starts on its first option
+   * instead of an empty row, so nothing reaches the server blank. Runs on a new form, after
+   * hydration (a saved record with a NULL gets the first option too), and again when an
+   * async list — school years, religions, programmes — finishes loading. Only EMPTY fields
+   * are filled; a value already chosen or on file is never replaced.
+   */
+  const firstSchoolYear = schoolYears[0] ?? '';
+  const firstReligion = religionChoices[0]?.value ?? '';
+  const firstProgramme = programmeOptions[0]?.id ?? '';
+  useEffect(() => {
+    setDraft((prev) => {
+      const patch: Partial<Draft> = {};
+      if (!prev.gender.trim()) patch.gender = GENDERS[0] ?? 'female';
+      if (!prev.civil_status.trim()) patch.civil_status = CIVIL_STATUSES[0] ?? 'Single';
+      if (!prev.district) patch.district = DISTRICTS[0] ?? prev.district;
+      if (!prev.year_of_study) patch.year_of_study = 'First';
+      if (!prev.enrollment_load) patch.enrollment_load = 'Part Time';
+      if (!prev.school_year.trim() && firstSchoolYear) patch.school_year = firstSchoolYear;
+      if (!prev.religion.trim() && firstReligion) patch.religion = firstReligion;
+      if (!prev.program_id && firstProgramme) patch.program_id = firstProgramme;
+      // Same reference when nothing changed, so React bails out instead of re-rendering.
+      return Object.keys(patch).length > 0 ? { ...prev, ...patch } : prev;
+    });
+  }, [draft, firstSchoolYear, firstReligion, firstProgramme]);
+
   const set = useCallback(
     <K extends keyof Draft>(key: K, value: Draft[K]) =>
       setDraft((prev) => ({ ...prev, [key]: value })),
@@ -586,7 +601,7 @@ export function ApplicationWizardScreen() {
   const personalInfoComplete =
     hasNames &&
     draft.date_of_birth.trim().length > 0 &&
-    draft.ssno.trim().length > 0 &&
+    // Social Security no. is OPTIONAL (client, Nov 2026) — not every applicant has one yet.
     draft.gender.trim().length > 0 &&
     draft.civil_status.trim().length > 0 &&
     draft.religion.trim().length > 0;
@@ -754,7 +769,6 @@ export function ApplicationWizardScreen() {
                   fieldErrors.school_year?.join(' ') ?? 'The intake this application is for.'
                 }
               >
-                <MenuItem value="">—</MenuItem>
                 {schoolYears.map((year) => (
                   <MenuItem key={year} value={year}>
                     {year}
@@ -777,12 +791,12 @@ export function ApplicationWizardScreen() {
                 // Pad when the field is left, so the applicant SEES 000000123 before
                 // saving; the payload pads again in case Save is reached without a blur.
                 onBlur={() => set('ssno', padSsno(draft.ssno))}
-                required
                 fullWidth
                 inputProps={{ maxLength: SSNO_LENGTH, inputMode: 'numeric' }}
                 error={Boolean(fieldErrors.ssno)}
                 helperText={
-                  fieldErrors.ssno?.join(' ') ?? '9 digits — shorter numbers are padded with zeros.'
+                  fieldErrors.ssno?.join(' ') ??
+                  'Optional. 9 digits — shorter numbers are padded with zeros.'
                 }
               />
             </Stack>
@@ -884,7 +898,6 @@ export function ApplicationWizardScreen() {
                 onChange={(e) => set('district', e.target.value as District)}
                 fullWidth
               >
-                <MenuItem value="">—</MenuItem>
                 {DISTRICTS.map((district) => (
                   <MenuItem key={district} value={district}>
                     {district}
@@ -1204,7 +1217,6 @@ export function ApplicationWizardScreen() {
                       : undefined)
               }
             >
-              <MenuItem value="">—</MenuItem>
               {programmeOptions.map((program) => (
                 <MenuItem key={program.id} value={program.id}>
                   {program.code} — {program.name}
@@ -1220,7 +1232,6 @@ export function ApplicationWizardScreen() {
                 fullWidth
                 required
               >
-                <MenuItem value="">—</MenuItem>
                 <MenuItem value="First">First</MenuItem>
                 <MenuItem value="Second">Second</MenuItem>
               </TextField>
@@ -1235,7 +1246,6 @@ export function ApplicationWizardScreen() {
                 // column conflating them, which could answer neither.
                 helperText="Part Time is under 15 credits a session; Full Time is over 15."
               >
-                <MenuItem value="">—</MenuItem>
                 <MenuItem value="Part Time">Part Time (&lt;15 credits)</MenuItem>
                 <MenuItem value="Full Time">Full Time (&gt;15 credits)</MenuItem>
                 <MenuItem value="Transient">Transient</MenuItem>

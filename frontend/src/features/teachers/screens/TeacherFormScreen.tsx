@@ -33,6 +33,7 @@ import {
   useUpdateTeacher,
 } from '../hooks/useTeachers';
 import type { TeacherDetail } from '../types';
+import { SSNO_LENGTH, padSsno, ssnoDigits } from '@shared/utils/ssno';
 
 /**
  * Add / edit a lecturer as a FULL-PAGE FORM (D40, client ask) — the shape the admissions
@@ -114,7 +115,8 @@ const EMPTY: Draft = {
   full_name: '',
   first_name: '',
   last_name: '',
-  gender: '',
+  // No blank dropdowns (client, Nov 2026): the select starts on its first option.
+  gender: 'male',
   email: '',
   phone: '',
   address: '',
@@ -139,7 +141,8 @@ function fromDetail(t: TeacherDetail): Draft {
     full_name: t.full_name ?? '',
     first_name: t.first_name ?? '',
     last_name: t.last_name ?? '',
-    gender: t.gender ?? '',
+    // A lecturer with nothing on file gets the first option rather than a blank select.
+    gender: t.gender ?? 'male',
     email: t.email ?? '',
     phone: t.phone ?? '',
     address: t.address ?? '',
@@ -314,7 +317,7 @@ export function TeacherFormScreen() {
           academic_qualification: orUndef(draft.academic_qualification),
           designation: orUndef(draft.designation),
           address: orUndef(draft.address),
-          ssno: orUndef(draft.ssno),
+          ssno: orUndef(padSsno(draft.ssno)),
           licensenum: orUndef(draft.licensenum),
           hire_date: draft.hire_date || undefined,
           end_date: draft.end_date || undefined,
@@ -348,7 +351,7 @@ export function TeacherFormScreen() {
         academic_qualification: orUndef(draft.academic_qualification),
         designation: orUndef(draft.designation),
         address: orUndef(draft.address),
-        ssno: orUndef(draft.ssno),
+        ssno: orUndef(padSsno(draft.ssno)),
         licensenum: orUndef(draft.licensenum),
         hire_date: draft.hire_date || undefined,
         end_date: draft.end_date || undefined,
@@ -492,9 +495,8 @@ export function TeacherFormScreen() {
                   is no longer offered. A lecturer already saved as 'other' still shows
                   it "(as recorded)", so the select never renders blank for them.
 
-                  No blank row: on edit the field is required, and an option that submits
-                  an empty value would defeat that from inside the control. A lecturer
-                  with nothing on file simply opens blank. */}
+                  No blank row, and never blank: a new lecturer — or one with nothing on
+                  file — starts on Male, the first option (client, Nov 2026). */}
               <MenuItem value="male">Male</MenuItem>
               <MenuItem value="female">Female</MenuItem>
               {draft.gender === 'other' && (
@@ -545,11 +547,14 @@ export function TeacherFormScreen() {
             <TextField
               label="Social security no. (optional)"
               value={draft.ssno}
-              onChange={(e) => set('ssno', e.target.value)}
+              onChange={(e) => set('ssno', ssnoDigits(e.target.value))}
+              // Padded exactly like the student forms: on blur so the user SEES
+              // 000000123, and again in the payload in case Save skips the blur.
+              onBlur={() => set('ssno', padSsno(draft.ssno))}
               fullWidth
-              slotProps={{ htmlInput: { maxLength: 9 } }}
+              slotProps={{ htmlInput: { maxLength: SSNO_LENGTH, inputMode: 'numeric' } }}
               error={Boolean(fieldErrors.ssno)}
-              helperText={err('ssno') ?? 'Up to 9 characters.'}
+              helperText={err('ssno') ?? '9 digits — shorter numbers are padded with zeros.'}
             />
             <TextField
               label="Lecturer licence no. (optional)"

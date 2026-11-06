@@ -12,8 +12,10 @@ import {
 } from '@mui/material';
 import { FormDialog, DateField } from '@shared/components';
 import { schoolToday } from '@shared/utils/schoolDate';
+import { SSNO_LENGTH, padSsno, ssnoDigits } from '@shared/utils/ssno';
 import { strings } from '@i18n/strings';
 import {
+  CIVIL_STATUSES,
   DISTRICTS,
   ENROLLMENT_LOADS,
   GENDERS,
@@ -271,6 +273,40 @@ export function StudentFormDialog({
     setOrigin(student?.origin ?? '');
   }, [open, student]);
 
+  /**
+   * NO DROPDOWN IS EVER BLANK (client, Nov 2026): every select starts on its first option
+   * instead of an empty row, so nothing reaches the server blank. Runs when the dialog
+   * opens (an existing student with a NULL gets the first option too) and again when the
+   * religion / programme lists finish loading. Only EMPTY fields are filled — a value
+   * already chosen or on file is never replaced. After the reset effect blanks a field it
+   * re-runs on the next render (its deps changed) and fills it then.
+   */
+  const firstReligion = religionChoices[0]?.value ?? '';
+  const firstProgram = programOptions[0]?.id ?? '';
+  useEffect(() => {
+    if (!open) return;
+    if (!gender.trim()) setGender(GENDERS[0] ?? 'female');
+    if (!civilStatus.trim()) setCivilStatus(CIVIL_STATUSES[0] ?? 'Single');
+    if (!district && DISTRICTS[0]) setDistrict(DISTRICTS[0]);
+    if (!yearOfStudy && YEAR_OF_STUDY_OPTIONS[0]) setYearOfStudy(YEAR_OF_STUDY_OPTIONS[0]);
+    if (!enrollmentLoad && ENROLLMENT_LOADS[0]) setEnrollmentLoad(ENROLLMENT_LOADS[0]);
+    if (!religion.trim() && firstReligion) setReligion(firstReligion);
+    // Create only: on edit the programme is read-only and never sent.
+    if (!editing && !programId && firstProgram) setProgramId(firstProgram);
+  }, [
+    open,
+    editing,
+    gender,
+    civilStatus,
+    district,
+    yearOfStudy,
+    enrollmentLoad,
+    religion,
+    programId,
+    firstReligion,
+    firstProgram,
+  ]);
+
   // D30: the student number is NOT required to create — omitting it is how the server is
   // asked to issue the next YYYYMM### (§D9).
   const namesMissing = firstName.trim().length === 0 || lastName.trim().length === 0;
@@ -291,7 +327,7 @@ export function StudentFormDialog({
   const personalInfoMissing =
     namesMissing ||
     dateOfBirth.trim().length === 0 ||
-    ssno.trim().length === 0 ||
+    // Social Security no. is OPTIONAL (client, Nov 2026) — not every student has one.
     gender.trim().length === 0 ||
     civilStatus.trim().length === 0 ||
     religion.trim().length === 0;
@@ -317,7 +353,7 @@ export function StudentFormDialog({
       enrollment_date: enrollmentDate.trim(),
       year_of_study: (yearOfStudy || null) as YearOfStudy | null,
       // ── the rest of the application form (D33) ──
-      ssno: orNull(ssno),
+      ssno: orNull(padSsno(ssno)),
       civil_status: orNull(civilStatus),
       religion: orNull(religion),
       street: orNull(street),
@@ -381,7 +417,7 @@ export function StudentFormDialog({
         <Typography variant="body2" color="text.secondary">
           The same information the BAJC application collects. Every field under{' '}
           <strong>Personal information</strong> is required, along with the enrollment
-          date; middle name is the one exception. Leave anything else the form does not
+          date; middle name and Social Security no. are the exceptions. Leave anything else the form does not
           mark required blank.
         </Typography>
 
@@ -431,7 +467,7 @@ export function StudentFormDialog({
             onChange={(e) => setMiddleName(e.target.value)}
             fullWidth
             error={Boolean(fieldErrors?.middle_name)}
-            helperText={err('middle_name') ?? 'Optional — the only one in this section.'}
+            helperText={err('middle_name') ?? 'Optional.'}
           />
         </Row>
 
@@ -448,12 +484,16 @@ export function StudentFormDialog({
           <TextField
             label="Social Security no."
             value={ssno}
-            onChange={(e) => setSsno(e.target.value)}
-            required
+            onChange={(e) => setSsno(ssnoDigits(e.target.value))}
+            // Pad on blur so the user SEES 000000123; the payload pads again in case
+            // Save is pressed without leaving the field.
+            onBlur={() => setSsno(padSsno(ssno))}
             fullWidth
-            inputProps={{ maxLength: 9 }}
+            inputProps={{ maxLength: SSNO_LENGTH, inputMode: 'numeric' }}
             error={Boolean(fieldErrors?.ssno)}
-            helperText={err('ssno')}
+            helperText={
+              err('ssno') ?? 'Optional. 9 digits — shorter numbers are padded with zeros.'
+            }
           />
           <TextField
             select
@@ -574,7 +614,6 @@ export function StudentFormDialog({
             onChange={(e) => setDistrict(e.target.value as District | '')}
             fullWidth
           >
-            <MenuItem value="">—</MenuItem>
             {DISTRICTS.map((d) => (
               <MenuItem key={d} value={d}>
                 {d}
@@ -787,7 +826,6 @@ export function StudentFormDialog({
                     : 'Recorded in the programme history from the enrollment date.')
             }
           >
-            <MenuItem value="">—</MenuItem>
             {programOptions.map((p) => (
               <MenuItem key={p.id} value={p.id}>
                 {p.code} — {p.name}
@@ -806,7 +844,6 @@ export function StudentFormDialog({
             error={Boolean(fieldErrors?.year_of_study)}
             helperText={err('year_of_study') ?? "The student's own level."}
           >
-            <MenuItem value="">Not set</MenuItem>
             {YEAR_OF_STUDY_OPTIONS.map((y) => (
               <MenuItem key={y} value={y}>
                 {y}
@@ -823,7 +860,6 @@ export function StudentFormDialog({
             // column conflating them, which could answer neither.
             helperText="Part Time is under 15 credits a session; Full Time is over 15."
           >
-            <MenuItem value="">Not set</MenuItem>
             {ENROLLMENT_LOADS.map((l) => (
               <MenuItem key={l} value={l}>
                 {l}
