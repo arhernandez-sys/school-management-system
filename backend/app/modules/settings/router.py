@@ -17,6 +17,7 @@ Endpoints (all mount under `/api/v1` via app/main.py):
     PATCH  /settings/semesters/{id}                 Dean (P)       -> SemesterDetail         [D30]
     PATCH  /settings/semesters/{id}/activate        principal      -> SemesterDetail
     POST   /settings/academic-years/{id}/archive    principal      -> ArchiveYearResponse (202)
+    POST   /settings/academic-years/{id}/reactivate principal      -> AcademicYearDetail
   Grading scale:
     GET    /settings/grading-scale                 authenticated  -> GradingScaleRead
     PUT    /settings/grading-scale                 principal      -> GradingScaleUpdateResponse
@@ -373,6 +374,24 @@ def archive_academic_year(
     return ArchiveYearResponse(
         snapshots_written=written, no_active_year_remaining=no_active
     )
+
+
+@router.post(
+    "/academic-years/{year_id}/reactivate",
+    response_model=AcademicYearDetail,
+    summary="Reactivate an archived academic year (principal)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR},
+)
+def reactivate_academic_year(
+    year_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> AcademicYearDetail:
+    """Principal. Undoes an archive made by mistake: the year becomes active again,
+    its end-term snapshots are discarded (the next archive rewrites them), its grading
+    scale and offerings reopen, and one of its terms is made current.
+    409 `year_not_archived`; 409 `active_year_exists` while another year is active."""
+    return service.reactivate_academic_year(db, actor=actor, year_id=year_id)
 
 
 # ── Grading scale ─────────────────────────────────────────────────────────────

@@ -4,7 +4,9 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { customInstance } from '@shared/api/mutator';
+import type { AcademicYearDetail } from '@shared/api/generated/model';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
@@ -104,6 +106,29 @@ export function useArchiveAcademicYear() {
   const invalidate = useInvalidateAcademicStructure();
   return useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost({
     mutation: { onSuccess: invalidate },
+  });
+}
+
+/**
+ * Undo an archive made by mistake (`POST /settings/academic-years/{id}/reactivate`).
+ *
+ * Hand-written rather than orval-generated: `frontend/openapi.json` is a stale snapshot
+ * (RUNBOOK) and regenerating the whole client for one endpoint would churn every module.
+ * Transport still goes through the shared `customInstance` mutator. Invalidates EVERY
+ * query: reactivation changes the active year/term, unfreezes the scale and reopens
+ * offerings, which touches nearly every cached year-scoped read.
+ */
+export function useReactivateAcademicYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ yearId }: { yearId: string }) =>
+      customInstance<AcademicYearDetail>({
+        url: `/settings/academic-years/${yearId}/reactivate`,
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
   });
 }
 

@@ -508,3 +508,122 @@ class TestFrozenReadsAfterArchival:
         assert item["is_frozen"] is True
         assert item["numeric"] == 82.0
         assert item["effective_policy"] is not None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+def _reactivate_path(year_id) -> str:  # noqa: ANN001
+    return f"/api/v1/settings/academic-years/{year_id}/reactivate"
+
+
+class TestReactivate:
+    """Undoing an archive made by mistake (`POST .../reactivate`)."""
+
+    def test_reactivate_restores_a_live_year(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        from app.modules.settings.models import GradingScale
+
+        g = tiny(score="90")
+        assert client.post(_archive_path(g.year.id), headers=principal_headers).status_code == 202
+
+        resp = client.post(_reactivate_path(g.year.id), headers=principal_headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "active"
+        assert body["archived_at"] is None
+        assert [s["is_active"] for s in body["semesters"]] == [True]
+
+        db_session.expire_all()
+        scale = db_session.scalar(
+            select(GradingScale).where(GradingScale.academic_year_id == g.year.id)
+        )
+        assert scale.is_frozen is False
+        assert db_session.get(CourseOffering, g.cs.id).is_archived is False
+        # End-term snapshots are discarded so stale frozen figures cannot override
+        # corrections (prerequisites read them unconditionally).
+        assert db_session.scalar(
+            select(func.count()).select_from(TermGradeSnapshot).where(
+                TermGradeSnapshot.semester_id == g.semester.id
+            )
+        ) == 0
+        assert db_session.scalar(
+            select(func.count()).select_from(ReportCardSnapshot).where(
+                ReportCardSnapshot.semester_id == g.semester.id
+            )
+        ) == 0
+
+    def test_grades_are_live_again_and_re_archive_refreezes(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        g = tiny(score="75")
+        client.post(_archive_path(g.year.id), headers=principal_headers)
+        client.post(_reactivate_path(g.year.id), headers=principal_headers)
+
+        grade = db_session.scalar(
+            select(AssessmentGrade).where(AssessmentGrade.assessment_id == g.assessment.id)
+        )
+        grade.score = Decimal("90")
+        db_session.flush()
+
+        card = client.get(_card_path(g.student.id, g.semester.id), headers=principal_headers).json()
+        assert card["is_frozen"] is False
+        assert card["subjects"][0]["numeric"] == 90.0
+
+        again = client.post(_archive_path(g.year.id), headers=principal_headers)
+        assert again.status_code == 202
+        assert again.json()["snapshots_written"] == 1
+        db_session.expire_all()
+        snap = db_session.scalar(
+            select(TermGradeSnapshot).where(TermGradeSnapshot.semester_id == g.semester.id)
+        )
+        assert float(snap.numeric_grade) == 90.0
+
+    def test_individually_archived_offering_stays_archived(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        g = tiny()
+        other = CourseOffering(
+            course_id=g.subject.id, semester_id=g.semester.id,
+            section_code=uuid.uuid4().hex[:6], is_archived=True,
+        )
+        db_session.add(other)
+        db_session.flush()
+
+        client.post(_archive_path(g.year.id), headers=principal_headers)
+        client.post(_reactivate_path(g.year.id), headers=principal_headers)
+        db_session.expire_all()
+        assert db_session.get(CourseOffering, g.cs.id).is_archived is False
+        assert db_session.get(CourseOffering, other.id).is_archived is True
+
+    def test_409_when_another_year_is_active(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        g = tiny()
+        client.post(_archive_path(g.year.id), headers=principal_headers)
+        db_session.add(AcademicYear(
+            name=f"Other {g.tag}", start_date=date(2026, 9, 1),
+            end_date=date(2027, 8, 31), status=AcademicYearStatus.ACTIVE,
+        ))
+        db_session.flush()
+
+        resp = client.post(_reactivate_path(g.year.id), headers=principal_headers)
+        assert resp.status_code == 409
+        assert resp.json()["error"]["code"] == "active_year_exists"
+
+    def test_409_when_not_archived(self, client, tiny, principal_headers) -> None:
+        g = tiny()
+        resp = client.post(_reactivate_path(g.year.id), headers=principal_headers)
+        assert resp.status_code == 409
+        assert resp.json()["error"]["code"] == "year_not_archived"
+
+    @pytest.mark.parametrize("role", [Role.SECRETARY, Role.TEACHER, Role.STUDENT])
+    def test_non_principal_is_refused(
+        self, client, tiny, principal_headers, make_user, auth_headers, role
+    ) -> None:
+        g = tiny()
+        client.post(_archive_path(g.year.id), headers=principal_headers)
+        user = make_user(role=role, full_name="Not The Dean")
+        resp = client.post(
+            _reactivate_path(g.year.id), headers=auth_headers(user_id=user.id, role=role)
+        )
+        assert resp.status_code == 403

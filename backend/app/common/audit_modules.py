@@ -232,6 +232,7 @@ ACTION_LABELS: dict[str, str] = {
     # ── Calendar ──────────────────────────────────────────────────────────────
     "academic_year.create": "Academic year created",
     "academic_year.archive": "Academic year archived",
+    "academic_year.reactivate": "Academic year reactivated",
     "semester.create": "Session created",
     "semester.update": "Session changed",
     "semester.activate": "Session made current",

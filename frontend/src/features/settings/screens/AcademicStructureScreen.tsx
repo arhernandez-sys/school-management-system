@@ -26,6 +26,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import AcUnitIcon from '@mui/icons-material/AcUnit';
+import RestoreIcon from '@mui/icons-material/Restore';
 import {
   PageHeader,
   LoadingState,
@@ -42,6 +43,7 @@ import {
   useCreateAcademicYear,
   useActivateSemester,
   useArchiveAcademicYear,
+  useReactivateAcademicYear,
   useFreezeMidtermGrades,
   useCreateSemester,
   useUpdateSemester,
@@ -162,6 +164,7 @@ export function AcademicStructureScreen() {
   const createMut = useCreateAcademicYear();
   const activateMut = useActivateSemester();
   const archiveMut = useArchiveAcademicYear();
+  const reactivateMut = useReactivateAcademicYear();
   const freezeMut = useFreezeMidtermGrades();
   const createTermMut = useCreateSemester();
   const updateTermMut = useUpdateSemester();
@@ -194,6 +197,8 @@ export function AcademicStructureScreen() {
   // ── archive confirm / activate error ─────────────────────────────────────────
   const [archiveTarget, setArchiveTarget] = useState<AcademicYearDetail | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [reactivateTarget, setReactivateTarget] = useState<AcademicYearDetail | null>(null);
+  const [reactivateError, setReactivateError] = useState<string | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
   // D32 — the mid-session freeze reports back inline rather than through a dialog: it is
   // idempotent and non-destructive, so a confirm step would be ceremony. What it DOES
@@ -355,6 +360,18 @@ export function AcademicStructureScreen() {
     );
   };
 
+  const handleReactivate = () => {
+    if (!reactivateTarget) return;
+    setReactivateError(null);
+    reactivateMut.mutate(
+      { yearId: reactivateTarget.id },
+      {
+        onSuccess: () => setReactivateTarget(null),
+        onError: (err) => setReactivateError(apiErrorMessage(err)),
+      },
+    );
+  };
+
   const handleArchive = () => {
     if (!archiveTarget) return;
     setArchiveError(null);
@@ -443,6 +460,19 @@ export function AcademicStructureScreen() {
                           Archive year
                         </Button>
                       </Stack>
+                    )}
+                    {canManage && isArchived && (
+                      <Button
+                        color="primary"
+                        size="small"
+                        startIcon={<RestoreIcon />}
+                        onClick={() => {
+                          setReactivateError(null);
+                          setReactivateTarget(year);
+                        }}
+                      >
+                        Reactivate year
+                      </Button>
                     )}
                   </Stack>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
@@ -805,12 +835,29 @@ export function AcademicStructureScreen() {
         description={
           archiveTarget ? `Archive "${archiveTarget.name}"? This ends the active session.` : undefined
         }
-        warning="Archiving freezes the year: grades and report cards are snapshotted and the year becomes read-only. This cannot be undone."
+        warning="Archiving freezes the year: grades and report cards are snapshotted and the year becomes read-only. If this was a mistake, the year can be reactivated afterwards."
         confirmLabel="Archive year"
         pending={archiveMut.isPending}
         error={archiveError}
         onConfirm={handleArchive}
         onCancel={() => setArchiveTarget(null)}
+      />
+
+      {/* Reactivate confirm */}
+      <ConfirmDialog
+        open={Boolean(reactivateTarget)}
+        title="Reactivate academic year?"
+        description={
+          reactivateTarget
+            ? `Reactivate "${reactivateTarget.name}"? It becomes the active year again.`
+            : undefined
+        }
+        warning="The year becomes editable again: its frozen end-of-session grades and report cards are discarded and will be re-captured when you archive it next. One of its sessions is made current — you can switch it afterwards. Only one year can be active, so archive any other active year first."
+        confirmLabel="Reactivate year"
+        pending={reactivateMut.isPending}
+        error={reactivateError}
+        onConfirm={handleReactivate}
+        onCancel={() => setReactivateTarget(null)}
       />
     </>
   );

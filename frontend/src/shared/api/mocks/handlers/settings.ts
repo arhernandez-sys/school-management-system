@@ -518,6 +518,36 @@ export const settingsHandlers = [
     );
   }),
 
+  http.post(`${API_BASE_URL}/settings/academic-years/:yearId/reactivate`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const year = D.academic_years.find((y) => y.id === params.yearId);
+    if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
+    if (year.status !== 'archived') {
+      return errorResponse(409, 'year_not_archived', 'This academic year is not archived.');
+    }
+    const other = D.academic_years.find((y) => y.status === 'active' && y.id !== year.id);
+    if (other) {
+      return errorResponse(
+        409,
+        'active_year_exists',
+        `'${other.name}' is the active academic year. Archive it first, then reactivate this one.`,
+      );
+    }
+    year.status = 'active';
+    year.archived_at = null;
+    const terms = D.semesters
+      .filter((s) => s.academic_year_id === year.id)
+      .sort((a, b) => a.sequence - b.sequence);
+    if (terms.length) {
+      D.semesters.forEach((s) => {
+        s.is_active = false;
+      });
+      terms[0]!.is_active = true;
+    }
+    return HttpResponse.json(academicYearDetail(year.id));
+  }),
+
   // ── Grading scale ───────────────────────────────────────────────────────────────
   http.get(`${API_BASE_URL}/settings/grading-scale`, ({ request }) => {
     const url = new URL(request.url);

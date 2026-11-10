@@ -36,8 +36,10 @@ const ERROR_COPY: Record<string, string> = {
   duplicate_category_name: 'This offering already has a category with that name.',
   semester_mismatch: 'That offering runs in a different session from the enrolment you are making.',
   // Academic structure
-  active_year_exists: 'An active academic year already exists. Archive it before creating a new one.',
+  // Shared by create-year AND reactivate-year, so the copy names neither action.
+  active_year_exists: 'Another academic year is already active. Archive it first — only one year can be active at a time.',
   year_already_archived: 'This academic year is already archived.',
+  year_not_archived: 'This academic year is not archived, so there is nothing to reactivate.',
   no_active_semester: 'No active semester is set. Create and activate an academic year to continue.',
   no_active_year: 'No academic year has been created. Please contact administration.',
   no_grading_scale: 'This academic year has no grading scale yet. Please contact administration.',

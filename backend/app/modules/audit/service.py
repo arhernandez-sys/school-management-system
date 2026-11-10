@@ -76,6 +76,7 @@ REPORTS: dict[str, tuple[str, tuple[str, ...]]] = {
             "assessment_policy.update",
             "academic_year.create",
             "academic_year.archive",
+            "academic_year.reactivate",
             "semester.create",
             "semester.update",
             "semester.activate",

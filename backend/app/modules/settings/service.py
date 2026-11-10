@@ -823,13 +823,22 @@ def archive_academic_year(
     )
     # D31: an offering is scoped to a SEMESTER, not to a year, so "archive this year's
     # offerings" is now a subquery through `semesters` rather than a direct column match.
+    year_semesters = select(Semester.id).where(Semester.academic_year_id == year.id)
+    # Remember which offerings were ALREADY archived on their own (the offering edit
+    # dialog can archive one section). `reactivate_academic_year` reads this back from
+    # the audit row so undoing the year archive does not also undo those decisions.
+    already_archived_offering_ids = [
+        str(i)
+        for i in db.scalars(
+            select(CourseOffering.id).where(
+                CourseOffering.semester_id.in_(year_semesters),
+                CourseOffering.is_archived.is_(True),
+            )
+        ).all()
+    ]
     db.execute(
         update(CourseOffering)
-        .where(
-            CourseOffering.semester_id.in_(
-                select(Semester.id).where(Semester.academic_year_id == year.id)
-            )
-        )
+        .where(CourseOffering.semester_id.in_(year_semesters))
         .values(is_archived=True)
     )
     # Deactivate this year's semesters so the school has no active term until a new
@@ -855,10 +864,146 @@ def archive_academic_year(
         action="academic_year.archive",
         entity_type="academic_year",
         entity_id=year.id,
-        summary={"snapshots_written": snapshots_written},
+        summary={
+            "snapshots_written": snapshots_written,
+            "already_archived_offering_ids": already_archived_offering_ids,
+        },
     )
     db.commit()
     return snapshots_written, no_active_year_remaining
+
+
+def _pick_semester_to_activate(semesters: list[Semester]) -> Semester | None:
+    """The term to make current when a year comes back from the archive.
+
+    The archive cleared `is_active` and did not record which term it was, so this picks
+    by date: the term running today, else the latest one that has started, else the
+    first by sequence. The Dean can switch it with `/activate` straight afterwards.
+    """
+    if not semesters:
+        return None
+    today = date.today()
+    ordered = sorted(semesters, key=lambda s: s.sequence)
+    for s in ordered:
+        if s.start_date <= today <= s.end_date:
+            return s
+    started = [s for s in ordered if s.start_date <= today]
+    if started:
+        return max(started, key=lambda s: s.start_date)
+    return ordered[0]
+
+
+def reactivate_academic_year(
+    db: Session, *, actor: User, year_id: uuid.UUID
+) -> AcademicYearDetail:
+    """POST /settings/academic-years/{id}/reactivate (principal).
+
+    Undoes `archive_academic_year`, for the year archived by mistake:
+      1. 409 `year_not_archived` if it is not archived; 409 `active_year_exists` if
+         another year is active (one-active invariant — archive that one first).
+      2. Delete the year's END-TERM `report_card_snapshots` and its
+         `term_grade_snapshots`. They are derived data the freeze will rewrite on the
+         next archive. Leaving them would be wrong, not just wasteful: prerequisite
+         checks and academic history read `term_grade_snapshots` UNCONDITIONALLY
+         (`grades.service` — "frozen wins"), so a grade corrected after reactivation
+         would be silently overridden by the stale frozen figure. MID-TERM snapshots
+         are kept — they are frozen per term on their own schedule, not by the archive.
+      3. status = active, archived_at = NULL (reads go live again), grading scale
+         unfrozen, offerings unarchived EXCEPT those already archived individually
+         before the year archive (read from that archive's audit row).
+      4. Activate one of the year's terms so the school is not left without a current
+         term (see `_pick_semester_to_activate`).
+    """
+    from app.common.enums import ReportCardKind
+    from app.modules.grades.models import TermGradeSnapshot
+    from app.modules.reports.models import ReportCardSnapshot
+
+    year = db.get(AcademicYear, year_id)
+    if year is None:
+        raise NotFound("Academic year not found.", code="not_found")
+    if year.status != AcademicYearStatus.ARCHIVED:
+        raise Conflict(
+            "This academic year is not archived.", code="year_not_archived"
+        )
+    other_active = db.scalar(
+        select(AcademicYear.name).where(
+            AcademicYear.status == AcademicYearStatus.ACTIVE,
+            AcademicYear.id != year.id,
+        )
+    )
+    if other_active is not None:
+        raise Conflict(
+            f"'{other_active}' is the active academic year. Archive it first, then "
+            "reactivate this one.",
+            code="active_year_exists",
+        )
+
+    semesters = list(
+        db.scalars(select(Semester).where(Semester.academic_year_id == year.id)).all()
+    )
+    semester_ids = [s.id for s in semesters]
+
+    if semester_ids:
+        db.query(TermGradeSnapshot).filter(
+            TermGradeSnapshot.semester_id.in_(semester_ids)
+        ).delete(synchronize_session=False)
+        db.query(ReportCardSnapshot).filter(
+            ReportCardSnapshot.semester_id.in_(semester_ids),
+            ReportCardSnapshot.kind == ReportCardKind.ENDTERM,
+        ).delete(synchronize_session=False)
+
+    year.status = AcademicYearStatus.ACTIVE
+    year.archived_at = None
+    year.updated_by = actor.id
+
+    db.execute(
+        update(GradingScale)
+        .where(GradingScale.academic_year_id == year.id)
+        .values(is_frozen=False)
+    )
+
+    last_archive_summary = db.scalar(
+        select(AuditLog.summary)
+        .where(
+            AuditLog.action == "academic_year.archive",
+            AuditLog.entity_id == year.id,
+        )
+        .order_by(AuditLog.id.desc())
+        .limit(1)
+    ) or {}
+    keep_archived: list[uuid.UUID] = []
+    for raw in last_archive_summary.get("already_archived_offering_ids") or []:
+        try:
+            keep_archived.append(uuid.UUID(str(raw)))
+        except ValueError:
+            continue
+    if semester_ids:
+        stmt = update(CourseOffering).where(CourseOffering.semester_id.in_(semester_ids))
+        if keep_archived:
+            stmt = stmt.where(CourseOffering.id.not_in(keep_archived))
+        db.execute(stmt.values(is_archived=False))
+
+    activated = _pick_semester_to_activate(semesters)
+    if activated is not None:
+        db.execute(
+            update(Semester).where(Semester.is_active.is_(True)).values(is_active=False)
+        )
+        activated.is_active = True
+
+    _audit(
+        db,
+        actor=actor,
+        action="academic_year.reactivate",
+        entity_type="academic_year",
+        entity_id=year.id,
+        summary={
+            "name": year.name,
+            "activated_semester_id": str(activated.id) if activated else None,
+        },
+    )
+    db.commit()
+    db.refresh(year)
+    return _year_detail(db, year)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
