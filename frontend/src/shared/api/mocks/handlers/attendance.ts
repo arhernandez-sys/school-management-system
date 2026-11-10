@@ -244,6 +244,9 @@ export const attendanceHandlers: RequestHandler[] = [
     if (date > DEMO_TODAY) {
       return errorResponse(422, 'future_date_not_allowed', "You can't record attendance for a future date.");
     }
+    if (offering.is_archived) {
+      return errorResponse(409, 'offering_archived', 'This course offering is archived.');
+    }
 
     const rosterIds = new Set(rosterFor(offeringId).map((s) => s.id));
     const recordedBy = getTeacher(actingTeacherId())?.user_id ?? DEMO_IDS.principalUserId;

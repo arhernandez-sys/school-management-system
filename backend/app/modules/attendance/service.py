@@ -414,8 +414,11 @@ def upsert_register(
             fields={"date": ["You can't record attendance for a future date."]},
         )
 
+    # Two different refusals: the offering itself is archived (per-offering flag), or
+    # its whole academic year is. They used to share `year_archived`, so a lecturer on
+    # an archived offering in a LIVE year was told the year was archived.
     if offering.is_archived:
-        raise Conflict("The academic year is archived.", code="year_archived")
+        raise Conflict("This course offering is archived.", code="offering_archived")
     year = year_of_offering(db, offering)
     if year is not None and year.archived_at is not None:
         raise Conflict("The academic year is archived.", code="year_archived")

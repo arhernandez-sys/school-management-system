@@ -545,6 +545,12 @@ export const settingsHandlers = [
       });
       terms[0]!.is_active = true;
     }
+    // Mirrors the backend: EVERY offering of the year comes back, including one the
+    // Dean archived on its own (client rule, 10 Nov 2026).
+    const termIds = new Set(terms.map((s) => s.id));
+    D.offerings.forEach((o) => {
+      if (termIds.has(o.semester_id)) o.is_archived = false;
+    });
     return HttpResponse.json(academicYearDetail(year.id));
   }),
 

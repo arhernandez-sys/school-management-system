@@ -524,6 +524,8 @@ class TestRegisterUpsert:
             AT, json=self._body(graph, [{"student_id": str(s.id), "status": "present"}]), headers=graph.H
         )
         assert r.status_code == 409
+        # An archived OFFERING in a live year is not an archived year.
+        _assert_envelope(r.json(), code="offering_archived")
 
     def test_duplicate_student_422(self, client, graph) -> None:
         s, _ = graph.student()

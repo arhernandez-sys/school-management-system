@@ -824,18 +824,6 @@ def archive_academic_year(
     # D31: an offering is scoped to a SEMESTER, not to a year, so "archive this year's
     # offerings" is now a subquery through `semesters` rather than a direct column match.
     year_semesters = select(Semester.id).where(Semester.academic_year_id == year.id)
-    # Remember which offerings were ALREADY archived on their own (the offering edit
-    # dialog can archive one section). `reactivate_academic_year` reads this back from
-    # the audit row so undoing the year archive does not also undo those decisions.
-    already_archived_offering_ids = [
-        str(i)
-        for i in db.scalars(
-            select(CourseOffering.id).where(
-                CourseOffering.semester_id.in_(year_semesters),
-                CourseOffering.is_archived.is_(True),
-            )
-        ).all()
-    ]
     db.execute(
         update(CourseOffering)
         .where(CourseOffering.semester_id.in_(year_semesters))
@@ -864,10 +852,7 @@ def archive_academic_year(
         action="academic_year.archive",
         entity_type="academic_year",
         entity_id=year.id,
-        summary={
-            "snapshots_written": snapshots_written,
-            "already_archived_offering_ids": already_archived_offering_ids,
-        },
+        summary={"snapshots_written": snapshots_written},
     )
     db.commit()
     return snapshots_written, no_active_year_remaining
@@ -909,8 +894,13 @@ def reactivate_academic_year(
          would be silently overridden by the stale frozen figure. MID-TERM snapshots
          are kept — they are frozen per term on their own schedule, not by the archive.
       3. status = active, archived_at = NULL (reads go live again), grading scale
-         unfrozen, offerings unarchived EXCEPT those already archived individually
-         before the year archive (read from that archive's audit row).
+         unfrozen, and EVERY offering of the year unarchived — including one the Dean
+         archived individually before the year archive (client rule, 10 Nov 2026: the
+         year brings all of its offerings back). An earlier version kept "already
+         archived" offerings archived, but that list was inferred from the flag alone
+         and could not tell a deliberate archive from a flag left over by a previous
+         archive that was never undone — so one bad cycle left every offering of the
+         year archived on every later reactivation.
       4. Activate one of the year's terms so the school is not left without a current
          term (see `_pick_semester_to_activate`).
     """
@@ -962,26 +952,16 @@ def reactivate_academic_year(
         .values(is_frozen=False)
     )
 
-    last_archive_summary = db.scalar(
-        select(AuditLog.summary)
-        .where(
-            AuditLog.action == "academic_year.archive",
-            AuditLog.entity_id == year.id,
-        )
-        .order_by(AuditLog.id.desc())
-        .limit(1)
-    ) or {}
-    keep_archived: list[uuid.UUID] = []
-    for raw in last_archive_summary.get("already_archived_offering_ids") or []:
-        try:
-            keep_archived.append(uuid.UUID(str(raw)))
-        except ValueError:
-            continue
+    unarchived_offerings = 0
     if semester_ids:
-        stmt = update(CourseOffering).where(CourseOffering.semester_id.in_(semester_ids))
-        if keep_archived:
-            stmt = stmt.where(CourseOffering.id.not_in(keep_archived))
-        db.execute(stmt.values(is_archived=False))
+        unarchived_offerings = db.execute(
+            update(CourseOffering)
+            .where(
+                CourseOffering.semester_id.in_(semester_ids),
+                CourseOffering.is_archived.is_(True),
+            )
+            .values(is_archived=False)
+        ).rowcount or 0
 
     activated = _pick_semester_to_activate(semesters)
     if activated is not None:
@@ -999,6 +979,7 @@ def reactivate_academic_year(
         summary={
             "name": year.name,
             "activated_semester_id": str(activated.id) if activated else None,
+            "unarchived_offerings": unarchived_offerings,
         },
     )
     db.commit()
