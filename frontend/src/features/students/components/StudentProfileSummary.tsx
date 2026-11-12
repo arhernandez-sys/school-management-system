@@ -25,6 +25,7 @@ import type { StatCardColor } from '@shared/components';
 import { genderLabel } from '@shared/types/enums';
 import { STUDENT_STATUS_KIND, STUDENT_STATUS_LABEL } from '../constants';
 import type { StudentDetail } from '../types';
+import { yearStandingText } from '../yearStanding';
 
 /** Whole years between `dob` and today; `null` for a missing/invalid/implausible date. */
 function ageFrom(dob: string): number | null {
@@ -139,7 +140,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
       ? [
           {
             label: 'Year of study',
-            value: student.year_of_study,
+            value: yearStandingText(student),
             color: 'secondary' as StatCardColor,
             icon: <SchoolOutlinedIcon fontSize="small" />,
           },
@@ -176,7 +177,7 @@ export function StudentProfileSummary({ student }: StudentProfileSummaryProps) {
       label: 'Programme',
       value: student.program ? `${student.program.code} — ${student.program.name}` : '—',
     },
-    { label: 'Year of study', value: student.year_of_study || '—' },
+    { label: 'Year of study', value: yearStandingText(student) },
     { label: 'Study load', value: student.enrollment_load || '—' },
     { label: 'Enrolled', value: formatSchoolDate(student.enrollment_date) || '—' },
     { label: 'Status', value: STUDENT_STATUS_LABEL[student.status] },

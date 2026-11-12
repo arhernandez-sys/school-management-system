@@ -1620,11 +1620,11 @@ class TestAccount:
         resp = client.patch(
             ACCOUNT,
             headers=auth_headers(user_id=user.id, role=Role.STUDENT),
-            json={"preferences": {"locale": "es", "theme": "dark", "default_page_size": 50}},
+            json={"preferences": {"locale": "en", "theme": "dark", "default_page_size": 50}},
         )
         assert resp.status_code == 200, resp.text
         prefs = resp.json()["preferences"]
-        assert prefs["locale"] == "es"
+        assert prefs["locale"] == "en"
         assert prefs["theme"] == "dark"
         assert prefs["default_page_size"] == 50
         # Row now exists and persisted (within rollback).

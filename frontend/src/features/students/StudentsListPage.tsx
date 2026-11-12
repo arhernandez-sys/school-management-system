@@ -40,6 +40,7 @@ import { useStudentFilterOptions, useStudentsList } from './hooks/useStudents';
 import { useOfferingOptions } from './hooks/useOfferingOptions';
 import { useProgramsList } from '@features/programs/hooks/usePrograms';
 import { StudentListPrintDialog } from './components/StudentListPrintDialog';
+import { YEAR_RESULT_LABEL } from './yearStanding';
 import { StudentFiltersDialog } from './components/StudentFiltersDialog';
 import {
   EMPTY_STUDENT_FILTERS,
@@ -369,7 +370,24 @@ export function StudentsListPage() {
       field: 'year_of_study',
       headerName: 'Year',
       sortable: true,
-      render: (s) => <Typography variant="body2">{s.year_of_study || '—'}</Typography>,
+      // Scoped to the selected year by the server (`student_year_records`): a past year
+      // shows the level held THEN and how that year ended; a repeater is flagged.
+      render: (s) => (
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <Typography variant="body2">{s.year_of_study || '—'}</Typography>
+          {s.repeating && (
+            <Chip size="small" color="warning" variant="outlined" label="Repeating" />
+          )}
+          {s.year_result && (
+            <Chip
+              size="small"
+              variant="outlined"
+              color={s.year_result === 'Repeating' ? 'error' : 'success'}
+              label={YEAR_RESULT_LABEL[s.year_result]}
+            />
+          )}
+        </Stack>
+      ),
     },
     {
       field: 'program_code',

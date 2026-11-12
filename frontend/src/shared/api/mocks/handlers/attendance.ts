@@ -152,6 +152,38 @@ function summarize(records: Array<{ status: AttendanceStatus }>) {
   return { ...counts, pct_present };
 }
 
+/** "08:00" | "08:00:00" -> "08:00:00". */
+function normTime(t: string): string {
+  return t.length === 5 ? `${t}:00` : t;
+}
+
+/** The offering's meetings on `date`'s ISO weekday, earliest first, one per start time. */
+function sessionsOn(offeringId: string, date: string) {
+  const js = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const iso = js === 0 ? 7 : js;
+  const seen = new Set<string>();
+  return D.offering_meetings
+    .filter((m) => m.offering_id === offeringId && m.day_of_week === iso)
+    .sort((a, b) => a.start_time.localeCompare(b.start_time))
+    .filter((m) => (seen.has(m.start_time) ? false : (seen.add(m.start_time), true)));
+}
+
+/**
+ * One session's records. Legacy records (no `session_start`) belong to the day's first
+ * session — the backend's rule — and a session-specific record wins over them.
+ */
+function sessionRecords(offeringId: string, date: string, start: string | null, first: string | null) {
+  const byStudent = new Map<string, DemoAttendanceRecord>();
+  const day = attendanceFor(offeringId, date);
+  for (const r of day.filter((r) => !r.session_start)) {
+    if (start === null || start === first) byStudent.set(r.student_id, r);
+  }
+  for (const r of day.filter((r) => r.session_start && r.session_start === start)) {
+    byStudent.set(r.student_id, r);
+  }
+  return [...byStudent.values()];
+}
+
 export const attendanceHandlers: RequestHandler[] = [
   // ── Offering picker ─────────────────────────────────────────────────────────────
   // GET /attendance/offerings — what the caller may pick (lecturer: own; Dean/Registrar: all).
@@ -183,8 +215,22 @@ export const attendanceHandlers: RequestHandler[] = [
       return errorResponse(404, 'offering_not_found', 'Offering not found.');
     }
 
-    const recorded = attendanceFor(offeringId, date);
+    const meetings = sessionsOn(offeringId, date);
+    const first = meetings[0]?.start_time ?? null;
+    const requested = url.searchParams.get('start_time');
+    const wanted = requested ? normTime(requested) : null;
+    const start = meetings.some((m) => m.start_time === wanted) ? wanted : first;
+    const recorded = sessionRecords(offeringId, date, start, first);
     const byStudent = new Map(recorded.map((r) => [r.student_id, r]));
+    const dayRecords = attendanceFor(offeringId, date);
+    const sessions = meetings.map((m) => ({
+      start_time: m.start_time,
+      end_time: m.end_time,
+      room: m.room,
+      recorded: dayRecords.some(
+        (r) => r.session_start === m.start_time || (!r.session_start && m.start_time === first),
+      ),
+    }));
     const roster = rosterFor(offeringId);
 
     const entries = roster.map((stu) => {
@@ -209,6 +255,8 @@ export const attendanceHandlers: RequestHandler[] = [
     return HttpResponse.json({
       offering: offeringRef(offering),
       date,
+      sessions,
+      start_time: start,
       can_record: role === 'teacher',
       entries,
       last_recorded: lastRec
@@ -228,14 +276,16 @@ export const attendanceHandlers: RequestHandler[] = [
     const body = (await request.json()) as {
       offering_id?: string;
       date?: string;
+      start_time?: string;
       entries?: Array<{ student_id?: string; status?: string }>;
     };
     const offeringId = body.offering_id;
     const date = body.date;
 
-    if (!offeringId || !date) {
-      return errorResponse(422, 'validation_error', 'offering_id and date are required.');
+    if (!offeringId || !date || !body.start_time) {
+      return errorResponse(422, 'validation_error', 'offering_id, date and start_time are required.');
     }
+    const startTime = normTime(body.start_time);
     const offering = getOffering(offeringId);
     if (!offering || !canAccessOffering(role, offeringId)) {
       return errorResponse(404, 'offering_not_found', 'Offering not found.');
@@ -244,6 +294,21 @@ export const attendanceHandlers: RequestHandler[] = [
     if (date > DEMO_TODAY) {
       return errorResponse(422, 'future_date_not_allowed', "You can't record attendance for a future date.");
     }
+
+    const meetings = sessionsOn(offeringId, date);
+    const first = meetings[0]?.start_time ?? null;
+    if (!meetings.some((m) => m.start_time === startTime)) {
+      return errorResponse(
+        422,
+        'no_scheduled_session',
+        meetings.length === 0
+          ? 'This course offering has no class scheduled on that day.'
+          : 'There is no class scheduled at that time on that day.',
+      );
+    }
+    const sessionByStudent = new Map(
+      sessionRecords(offeringId, date, startTime, first).map((r) => [r.student_id, r]),
+    );
 
     const rosterIds = new Set(rosterFor(offeringId).map((s) => s.id));
     const recordedBy = getTeacher(actingTeacherId())?.user_id ?? DEMO_IDS.principalUserId;
@@ -257,14 +322,10 @@ export const attendanceHandlers: RequestHandler[] = [
       const enr = activeEnrollmentFor(entry.student_id, offeringId);
       if (!enr) continue;
 
-      const existing = D.attendance_records.find(
-        (r) =>
-          r.offering_id === offeringId &&
-          r.student_id === entry.student_id &&
-          r.attendance_date === date,
-      );
+      const existing = sessionByStudent.get(entry.student_id);
       if (existing) {
         existing.status = entry.status;
+        existing.session_start = startTime;
         existing.recorded_by_user_id = recordedBy;
         existing.recorded_at = recordedAt;
       } else {
@@ -277,6 +338,7 @@ export const attendanceHandlers: RequestHandler[] = [
           // offering belongs to Semester 2 even while Semester 1 is the live term.
           semester_id: offering.semester_id,
           attendance_date: date,
+          session_start: startTime,
           status: entry.status,
           recorded_by_user_id: recordedBy,
           recorded_at: recordedAt,
@@ -286,8 +348,8 @@ export const attendanceHandlers: RequestHandler[] = [
       upserted += 1;
     }
 
-    const dayRecords = attendanceFor(offeringId, date);
-    return HttpResponse.json({ upserted, summary: summarize(dayRecords) });
+    const sessionRows = sessionRecords(offeringId, date, startTime, first);
+    return HttpResponse.json({ upserted, summary: summarize(sessionRows) });
   }),
 
   // ── Per-offering summary (history/trend over the seeded window) ─────────────────
@@ -440,6 +502,7 @@ export const attendanceHandlers: RequestHandler[] = [
         date: r.attendance_date,
         status: r.status,
         offering_id: r.offering_id,
+        start_time: r.session_start ?? null,
       })),
       offerings,
     });

@@ -23,6 +23,7 @@ import {
 } from '@shared/components';
 import type { StatusKind } from '@shared/components';
 import { formatSchoolDateWithWeekday } from '@shared/utils/schoolDate';
+import { formatTime } from '@features/offerings/meetingFormat';
 import type { AttendanceStatus } from '@shared/types/enums';
 import { useSelectedYear } from '@app/providers/YearContext';
 import { useMyAttendance } from '../hooks/useAttendance';
@@ -217,9 +218,13 @@ export function MyAttendanceScreen() {
             </TableHead>
             <TableBody>
               {history.map((row) => (
-                // (date, offering) is unique: one mark per offering per day.
-                <TableRow key={`${row.date}:${row.offering_id}`}>
-                  <TableCell>{longDate(row.date)}</TableCell>
+                // (date, offering, session) is unique: an offering that meets twice in a
+                // day has one mark per session.
+                <TableRow key={`${row.date}:${row.offering_id}:${row.start_time ?? ''}`}>
+                  <TableCell>
+                    {longDate(row.date)}
+                    {row.start_time ? ` · ${formatTime(row.start_time)}` : ''}
+                  </TableCell>
                   {!selected && <TableCell>{courseName(row.offering_id)}</TableCell>}
                   <TableCell>
                     <StatusBadge

@@ -513,9 +513,34 @@ export const settingsHandlers = [
       return errorResponse(409, 'year_already_archived', 'This year is already archived.');
     }
     return HttpResponse.json(
-      { snapshots_written: 0, no_active_year_remaining: false },
+      {
+        snapshots_written: 0,
+        no_active_year_remaining: false,
+        promoted: 0,
+        completed: 0,
+        repeating: 0,
+        skipped: 0,
+      },
       { status: 202 },
     );
+  }),
+
+  // Year-end progression preview. The demo data has no graded year to evaluate, so it
+  // answers with the year's Summer/Semester terms and nobody to move.
+  http.get(`${API_BASE_URL}/settings/academic-years/:yearId/progression`, ({ params, cookies }) => {
+    const denied = assertPrincipal(cookies);
+    if (denied) return denied;
+    const year = D.academic_years.find((y) => y.id === params.yearId);
+    if (!year) return errorResponse(404, 'not_found', 'Academic year not found.');
+    return HttpResponse.json({
+      year_id: year.id,
+      terms: [],
+      promoted: 0,
+      completed: 0,
+      repeating: 0,
+      skipped: 0,
+      students: [],
+    });
   }),
 
   http.post(`${API_BASE_URL}/settings/academic-years/:yearId/reactivate`, ({ params, cookies }) => {

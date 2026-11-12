@@ -50,6 +50,8 @@ REPORTS: dict[str, tuple[str, tuple[str, ...]]] = {
             "student.delete",
             "student.status_change",
             "student.program_change",
+            "student.progression",
+            "student.progression_excuse",
             "application.enrolled",
         ),
     ),

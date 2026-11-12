@@ -54,10 +54,27 @@ export interface AttendanceEntry {
   recorded_at: string | null;
 }
 
-/** GET /attendance — the daily register for one (offering, date). */
+/**
+ * One scheduled meeting of the offering on the register's date. Attendance is taken PER
+ * SESSION: an offering that meets twice on a Monday has two registers that Monday.
+ */
+export interface AttendanceSession {
+  /** "HH:MM:SS" as served. */
+  start_time: string;
+  end_time: string;
+  room: string | null;
+  /** At least one mark exists for this session. */
+  recorded: boolean;
+}
+
+/** GET /attendance — the register for one (offering, date, session). */
 export interface AttendanceRegister {
   offering: AttendanceOfferingRef;
   date: string;
+  /** The offering's meetings on `date`'s weekday. Empty = no class that day. */
+  sessions: AttendanceSession[];
+  /** The session this register is for (one of `sessions[].start_time`), or null. */
+  start_time: string | null;
   can_record: boolean;
   entries: AttendanceEntry[];
   last_recorded: { by: string; at: string } | null;
@@ -67,6 +84,8 @@ export interface AttendanceRegister {
 export interface AttendanceUpsertRequest {
   offering_id: string;
   date: string;
+  /** Which scheduled session on `date` is being marked ("HH:MM" or "HH:MM:SS"). */
+  start_time: string;
   entries: Array<{ student_id: string; status: AttendanceStatus }>;
 }
 
@@ -156,6 +175,12 @@ export interface MyAttendanceOffering {
  */
 export interface MyAttendanceResponse {
   summary: AttendanceCounts;
-  history: Array<{ date: string; status: AttendanceStatus; offering_id: string }>;
+  history: Array<{
+    date: string;
+    status: AttendanceStatus;
+    offering_id: string;
+    /** The session within the day; null on marks recorded before per-session attendance. */
+    start_time: string | null;
+  }>;
   offerings: MyAttendanceOffering[];
 }

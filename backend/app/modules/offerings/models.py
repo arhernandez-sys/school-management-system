@@ -52,6 +52,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     SmallInteger,
+    String,
     Text,
     Time,
     text,
@@ -302,6 +303,13 @@ class ClassEnrollment(Base, TimestampMixin, AuditMixin):
         nullable=False,
         server_default=text("'enrolled'"),
     )
+    #: Dean exception (11 Nov 2026): this course does not block year-end progression even
+    #: if failed / withdrawn / ungraded. Changes NOTHING about the grade, GPA or transcript
+    #: — it only answers "may this student still move up a year?".
+    progression_excused: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, default=False, server_default=text("0")
+    )
+    progression_excuse_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enrolled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

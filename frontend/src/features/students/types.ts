@@ -42,6 +42,9 @@ export interface StudentNameParts {
   last_name: string;
 }
 
+/** How an academic year ended for a student (`student_year_records.result`). */
+export type YearResult = 'Promoted' | 'Repeating' | 'Completed';
+
 /** Row in GET /students. */
 export interface StudentListItem extends StudentNameParts {
   id: string;
@@ -52,6 +55,13 @@ export interface StudentListItem extends StudentNameParts {
    * `year_group` and narrowed it to the two BAJC years, so free text is not accepted.
    */
   year_of_study: YearOfStudy | null;
+  /**
+   * For the year being viewed: how it ended (null while it is still running). The
+   * `year_of_study` beside it is the level held IN that year, not today's.
+   */
+  year_result?: YearResult | null;
+  /** Sitting this level again in the viewed year (the year before ended in Repeating). */
+  repeating?: boolean;
   /** How many course offerings they actively sit this term (D31: was `class_count`). */
   offering_count: number;
   guardian_name: string | null;
@@ -189,6 +199,13 @@ export interface StudentDetail extends StudentNameParts, StudentAdmissionFields 
    */
   gender: string | null;
   year_of_study: YearOfStudy | null;
+  /**
+   * For the year being viewed: how it ended (null while it is still running). The
+   * `year_of_study` beside it is the level held IN that year, not today's.
+   */
+  year_result?: YearResult | null;
+  /** Sitting this level again in the viewed year (the year before ended in Repeating). */
+  repeating?: boolean;
   enrollment_date: string;
   status: StudentStatus;
   guardian_name: string;

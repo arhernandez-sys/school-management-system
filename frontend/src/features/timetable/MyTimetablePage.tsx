@@ -1,7 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
-import { Alert, AlertTitle, Box, Button, Stack, Typography } from '@mui/material';
-import MenuBookIcon from '@mui/icons-material/MenuBook';
-import ScheduleIcon from '@mui/icons-material/Schedule';
+import { Alert, AlertTitle, Button, Stack, Typography } from '@mui/material';
 import ClassOutlinedIcon from '@mui/icons-material/ClassOutlined';
 import {
   EmptyState,
@@ -9,7 +7,6 @@ import {
   LoadingState,
   PageContainer,
   PageHeader,
-  StatCard,
 } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
 import { useAuth } from '@features/auth/hooks/useAuth';
@@ -43,10 +40,6 @@ export function MyTimetablePage() {
 
   const view = query.data;
   const totalEntries = view?.days.reduce((n, d) => n + d.entries.length, 0) ?? 0;
-  const busiestDay = view?.days.reduce<{ name: string; n: number }>(
-    (best, d) => (d.entries.length > best.n ? { name: d.day_name, n: d.entries.length } : best),
-    { name: '—', n: 0 },
-  );
   const isPast = Boolean(selectedPeriod && !selectedPeriod.isActiveYear);
 
   return (
@@ -91,33 +84,6 @@ export function MyTimetablePage() {
             />
           ) : (
             <>
-              <Box
-                sx={{
-                  display: 'grid',
-                  gap: 2,
-                  mb: 3,
-                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' },
-                }}
-              >
-                <StatCard
-                  label="Courses this week"
-                  value={totalEntries}
-                  icon={<MenuBookIcon />}
-                  color="primary"
-                />
-                <StatCard
-                  label="Busiest day"
-                  value={busiestDay && busiestDay.n > 0 ? busiestDay.name : '—'}
-                  icon={<ScheduleIcon />}
-                  color="info"
-                  helperText={
-                    busiestDay && busiestDay.n > 0
-                      ? `${busiestDay.n} ${busiestDay.n === 1 ? 'meeting' : 'meetings'}`
-                      : undefined
-                  }
-                />
-              </Box>
-
               {view.unscheduled.length > 0 && (
                 <Alert severity="info" sx={{ mb: 3 }}>
                   <AlertTitle>
@@ -148,7 +114,11 @@ export function MyTimetablePage() {
                 days={view.days}
                 // A teacher's own week would repeat their name on every card.
                 showTeacher={!isTeacher}
-                emptyDayLabel={isTeacher ? 'Nothing scheduled' : 'Free'}
+                emptyDayLabel={isTeacher ? 'No class' : 'Free'}
+                // A past year's week is not this week: no "today" / "next class".
+                live={!isPast}
+                // Every entry on a lecturer's own week is an offering they teach.
+                canTakeAttendance={isTeacher}
               />
             </>
           )}

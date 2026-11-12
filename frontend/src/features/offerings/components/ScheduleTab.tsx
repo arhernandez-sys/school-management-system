@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, AlertTitle, Box, Button, Paper, Stack, Typography } from '@mui/material';
+import { Alert, AlertTitle, Box, Button, Stack, Typography } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import { EmptyState, ErrorState, LoadingState } from '@shared/components';
 import { apiErrorMessage } from '@shared/api/errorMessages';
 import { useOfferingMeetings, useReplaceMeetings } from '../hooks/useOfferings';
-import { DAY_LONG, formatTimeRange, meetingRowInvalid } from '../meetingFormat';
+import { meetingRowInvalid } from '../meetingFormat';
 import { MeetingRowsEditor } from './MeetingRowsEditor';
+import { WeeklyScheduleView } from './WeeklyScheduleView';
 import type { OfferingMeetingInput, ScheduleConflict } from '../types';
 
 /**
@@ -33,6 +34,10 @@ export interface ScheduleTabProps {
   /** The server-computed offering label, for captions and empty-state copy. */
   offeringLabel: string;
   canManage: boolean;
+  /** The offering's classroom label — pre-filled as the room of a newly added meeting. */
+  defaultRoom?: string | null;
+  /** The offering's own lecturer: today's classes get a "Take attendance" button. */
+  canTakeAttendance?: boolean;
 }
 
 /** Server meetings → editable draft rows (drop ids; the PUT is a replace). */
@@ -52,7 +57,13 @@ function sameDraft(a: OfferingMeetingInput[], b: OfferingMeetingInput[]): boolea
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function ScheduleTab({ offeringId, offeringLabel, canManage }: ScheduleTabProps) {
+export function ScheduleTab({
+  offeringId,
+  offeringLabel,
+  canManage,
+  defaultRoom = null,
+  canTakeAttendance = false,
+}: ScheduleTabProps) {
   const query = useOfferingMeetings(offeringId);
   const saveMut = useReplaceMeetings(offeringId);
 
@@ -105,29 +116,11 @@ export function ScheduleTab({ offeringId, offeringLabel, canManage }: ScheduleTa
       );
     }
     return (
-      <Stack spacing={1.5}>
-        {draft.map((m, i) => (
-          <Paper key={i} variant="outlined" sx={{ p: 2 }}>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={{ xs: 0.5, sm: 2 }}
-              alignItems={{ sm: 'baseline' }}
-            >
-              <Typography variant="subtitle2" sx={{ minWidth: 100 }}>
-                {DAY_LONG[m.day_of_week]}
-              </Typography>
-              <Typography variant="body2">
-                {formatTimeRange(m.start_time, m.end_time)}
-              </Typography>
-              {m.room && (
-                <Typography variant="body2" color="text.secondary">
-                  {m.room}
-                </Typography>
-              )}
-            </Stack>
-          </Paper>
-        ))}
-      </Stack>
+      <WeeklyScheduleView
+        offeringId={offeringId}
+        meetings={draft}
+        canTakeAttendance={canTakeAttendance}
+      />
     );
   }
 
@@ -170,7 +163,12 @@ export function ScheduleTab({ offeringId, offeringLabel, canManage }: ScheduleTa
         </Typography>
       )}
 
-      <MeetingRowsEditor value={draft} onChange={setDraft} disabled={saveMut.isPending} />
+      <MeetingRowsEditor
+        value={draft}
+        onChange={setDraft}
+        disabled={saveMut.isPending}
+        defaultRoom={defaultRoom}
+      />
 
       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
         {dirty && (

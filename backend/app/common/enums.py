@@ -651,6 +651,23 @@ class YearOfStudy(str, enum.Enum):
     SECOND = "Second"
 
 
+class ProgressionStanding(str, enum.Enum):
+    """How an academic year ended for a student (`student_year_records.result`,
+    11 Nov 2026).
+
+    Written only by `students.progression` at year archive, and cleared by reactivating
+    the year. NULL = not decided yet.
+
+      PROMOTED   Passed the year and moved First -> Second.
+      REPEATING  Did not pass the year (and had no Dean exception): same year again.
+      COMPLETED  Passed Second year; status moved to Completed.
+    """
+
+    PROMOTED = "Promoted"
+    REPEATING = "Repeating"
+    COMPLETED = "Completed"
+
+
 class EnrollmentLoad(str, enum.Enum):
     """Study load (`applications.enrollment_load`) — the other half of the split above.
 

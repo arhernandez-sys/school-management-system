@@ -14,7 +14,7 @@ Hermetic + rolled back via `db_session`.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 import pytest
@@ -25,6 +25,7 @@ from app.modules.attendance.models import AttendanceRecord
 from app.modules.offerings.models import (
     CourseOffering,
     ClassEnrollment,
+    ClassMeeting,
     ClassTeacher,
     Course,
 )
@@ -97,6 +98,17 @@ class _Graph:
             )
         db_session.add_all([self.cs, self.other_cs])
         db_session.flush()
+        # Attendance is per SCHEDULED SESSION: without a meeting on the weekday there is
+        # no register to mark. One 08:00-09:00 session every weekday on both offerings.
+        for off in (self.cs, self.other_cs):
+            for dow in range(1, 6):
+                db_session.add(
+                    ClassMeeting(
+                        offering_id=off.id, day_of_week=dow,
+                        start_time=time(8, 0), end_time=time(9, 0), room="Room A",
+                    )
+                )
+        db_session.flush()
         self.other_section = self.other_cs
         self.section = self.cs
 
@@ -152,13 +164,17 @@ class _Graph:
             self._db.flush()
         return s, enr
 
-    def record(self, student, enrollment, *, status="present", on=None, section=None):
+    def record(
+        self, student, enrollment, *, status="present", on=None, section=None,
+        session_start=time(8, 0),
+    ):
         r = AttendanceRecord(
             offering_id=(section or self.section).id,
             student_id=student.id,
             enrollment_id=enrollment.id,
             semester_id=self.sem.id,
             attendance_date=on or date(2025, 10, 15),
+            session_start=session_start,
             status=status,
         )
         self._db.add(r)
@@ -194,7 +210,7 @@ class TestAuthGate:
         assert client.get(f"{AT}?offering_id={uuid.uuid4()}").status_code == 401
 
     def test_upsert_requires_auth(self, client) -> None:
-        body = {"offering_id": str(uuid.uuid4()), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(uuid.uuid4()), "date": "2025-10-15", "start_time": "08:00", "entries": []}
         assert client.put(AT, json=body).status_code == 401
 
     def test_summary_requires_auth(self, client) -> None:
@@ -221,13 +237,13 @@ class TestAuthGate:
 
     def test_principal_forbidden_on_upsert(self, client, graph) -> None:
         """Unusual for this codebase: P/S read the register but cannot mark it."""
-        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "start_time": "08:00", "entries": []}
         r = client.put(AT, json=body, headers=graph.P)
         assert r.status_code == 403
         _assert_envelope(r.json(), code="forbidden")
 
     def test_secretary_forbidden_on_upsert(self, client, graph) -> None:
-        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "entries": []}
+        body = {"offering_id": str(graph.section.id), "date": "2025-10-15", "start_time": "08:00", "entries": []}
         assert client.put(AT, json=body, headers=graph.S).status_code == 403
 
     def test_teacher_forbidden_on_me(self, client, graph) -> None:
@@ -404,6 +420,7 @@ class TestRegisterRead:
             json={
                 "offering_id": str(graph.section.id),
                 "date": "2025-10-15",
+                "start_time": "08:00",
                 "entries": [{"student_id": str(s.id), "status": "present"}],
             },
             headers=graph.H,
@@ -432,7 +449,10 @@ class TestRegisterRead:
 # ════════════════════════════════════════════════════════════════════════════
 class TestRegisterUpsert:
     def _body(self, graph, entries, on="2025-10-15"):
-        return {"offering_id": str(graph.section.id), "date": on, "entries": entries}
+        return {
+            "offering_id": str(graph.section.id), "date": on, "start_time": "08:00",
+            "entries": entries,
+        }
 
     def test_happy_path_returns_count_and_summary(self, client, graph) -> None:
         s1, _ = graph.student()
@@ -478,6 +498,7 @@ class TestRegisterUpsert:
         body = {
             "offering_id": str(graph.other_section.id),
             "date": "2025-10-15",
+            "start_time": "08:00",
             "entries": [{"student_id": str(s.id), "status": "present"}],
         }
         assert client.put(AT, json=body, headers=graph.H).status_code == 404
@@ -494,6 +515,8 @@ class TestRegisterUpsert:
         _assert_envelope(r.json(), code="future_date_not_allowed")
 
     def test_today_is_allowed_boundary(self, client, graph) -> None:
+        if _school_today().isoweekday() > 5:
+            pytest.skip("The fixture schedule is Mon-Fri; today has no session to mark.")
         s, _ = graph.student()
         r = client.put(
             AT,
@@ -780,3 +803,124 @@ class TestMyAttendance:
         body = client.get(f"{AT}/me", headers=graph.student_headers(me)).json()
         assert body["summary"]["late"] == 1
         assert body["summary"]["pct_present"] == 50.0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+class TestPerSessionAttendance:
+    """Attendance follows the offering's SCHEDULE: one register per scheduled meeting."""
+
+    WED = "2025-10-15"  # a Wednesday (isoweekday 3)
+
+    def _add_afternoon_session(self, db_session, graph) -> None:
+        db_session.add(
+            ClassMeeting(
+                offering_id=graph.section.id, day_of_week=3,
+                start_time=time(13, 0), end_time=time(14, 30), room="Lab 2",
+            )
+        )
+        db_session.flush()
+
+    def _put(self, client, graph, start, entries, on=None):
+        return client.put(
+            AT,
+            json={
+                "offering_id": str(graph.section.id), "date": on or self.WED,
+                "start_time": start, "entries": entries,
+            },
+            headers=graph.H,
+        )
+
+    def test_register_lists_the_days_sessions(self, client, graph, db_session) -> None:
+        self._add_afternoon_session(db_session, graph)
+        body = client.get(
+            f"{AT}?offering_id={graph.section.id}&date={self.WED}", headers=graph.H
+        ).json()
+        assert [x["start_time"] for x in body["sessions"]] == ["08:00:00", "13:00:00"]
+        assert body["sessions"][1]["room"] == "Lab 2"
+        assert body["start_time"] == "08:00:00"  # defaults to the first session
+
+    def test_two_sessions_same_day_are_recorded_independently(
+        self, client, graph, db_session
+    ) -> None:
+        self._add_afternoon_session(db_session, graph)
+        s, _ = graph.student()
+        assert self._put(client, graph, "08:00", [{"student_id": str(s.id), "status": "present"}]).status_code == 200
+        assert self._put(client, graph, "13:00", [{"student_id": str(s.id), "status": "absent"}]).status_code == 200
+
+        rows = db_session.scalars(
+            select(AttendanceRecord).where(
+                AttendanceRecord.offering_id == graph.section.id,
+                AttendanceRecord.student_id == s.id,
+            )
+        ).all()
+        assert sorted((r.session_start, r.status.value) for r in rows) == [
+            (time(8, 0), "present"), (time(13, 0), "absent"),
+        ]
+
+        morning = client.get(
+            f"{AT}?offering_id={graph.section.id}&date={self.WED}&start_time=08:00",
+            headers=graph.H,
+        ).json()
+        afternoon = client.get(
+            f"{AT}?offering_id={graph.section.id}&date={self.WED}&start_time=13:00",
+            headers=graph.H,
+        ).json()
+        assert morning["entries"][0]["status"] == "present"
+        assert afternoon["entries"][0]["status"] == "absent"
+        assert all(x["recorded"] for x in afternoon["sessions"])
+
+    def test_unscheduled_time_is_rejected(self, client, graph) -> None:
+        s, _ = graph.student()
+        r = self._put(client, graph, "10:00", [{"student_id": str(s.id), "status": "present"}])
+        assert r.status_code == 422
+        _assert_envelope(r.json(), code="no_scheduled_session")
+
+    def test_day_without_a_meeting_is_rejected(self, client, graph) -> None:
+        s, _ = graph.student()
+        # 2025-10-18 is a Saturday; the fixture schedule is Mon-Fri.
+        r = self._put(
+            client, graph, "08:00", [{"student_id": str(s.id), "status": "present"}],
+            on="2025-10-18",
+        )
+        assert r.status_code == 422
+        _assert_envelope(r.json(), code="no_scheduled_session")
+
+    def test_day_without_a_meeting_reads_as_no_sessions(self, client, graph) -> None:
+        body = client.get(
+            f"{AT}?offering_id={graph.section.id}&date=2025-10-18", headers=graph.H
+        ).json()
+        assert body["sessions"] == []
+        assert body["start_time"] is None
+
+    def test_start_time_is_required_on_upsert(self, client, graph) -> None:
+        body = {"offering_id": str(graph.section.id), "date": self.WED, "entries": []}
+        assert client.put(AT, json=body, headers=graph.H).status_code == 422
+
+    def test_legacy_mark_belongs_to_first_session_and_is_stamped_on_save(
+        self, client, graph, db_session
+    ) -> None:
+        self._add_afternoon_session(db_session, graph)
+        s, e = graph.student()
+        legacy = graph.record(s, e, status="late", session_start=None)
+
+        first = client.get(
+            f"{AT}?offering_id={graph.section.id}&date={self.WED}&start_time=08:00",
+            headers=graph.H,
+        ).json()
+        second = client.get(
+            f"{AT}?offering_id={graph.section.id}&date={self.WED}&start_time=13:00",
+            headers=graph.H,
+        ).json()
+        assert first["entries"][0]["status"] == "late"
+        assert second["entries"][0]["status"] is None
+
+        assert self._put(client, graph, "08:00", [{"student_id": str(s.id), "status": "present"}]).status_code == 200
+        count = db_session.scalar(
+            select(func.count()).select_from(AttendanceRecord).where(
+                AttendanceRecord.student_id == s.id
+            )
+        )
+        db_session.refresh(legacy)
+        assert count == 1  # updated in place, not duplicated
+        assert legacy.session_start == time(8, 0)
+        assert legacy.status.value == "present"

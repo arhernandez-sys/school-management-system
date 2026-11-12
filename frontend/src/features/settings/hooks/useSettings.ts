@@ -132,6 +132,104 @@ export function useReactivateAcademicYear() {
   });
 }
 
+/** One thing standing between a student and the next year. */
+export interface ProgressionIssue {
+  kind: 'missing_term' | 'failed' | 'withdrawn' | 'no_grade' | 'not_passed';
+  message: string;
+  term_name: string;
+  /** Set for course issues (what the Dean excuses); null for a missing session. */
+  enrollment_id: string | null;
+  excused: boolean;
+  excuse_reason: string | null;
+}
+
+/** One student's year-end outcome (`GET /settings/academic-years/{id}/progression`). */
+export interface ProgressionStudent {
+  student_id: string;
+  student_number: string;
+  full_name: string;
+  year_of_study: string | null;
+  /** promote = First → Second, complete = Second → Completed. */
+  outcome: 'promote' | 'complete' | 'repeat' | 'skip';
+  /** Unexcused issues (repeat) or why the student was not checked (skip). */
+  reasons: string[];
+  /** Every issue, excused ones included. */
+  issues: ProgressionIssue[];
+  terms_excused: boolean;
+  terms_excuse_reason: string | null;
+}
+
+export interface ProgressionExcuseBody {
+  excused: boolean;
+  /** Required (3+ chars) when excusing. */
+  reason: string | null;
+}
+
+export interface ProgressionPreviewData {
+  year_id: string;
+  terms: string[];
+  promoted: number;
+  completed: number;
+  repeating: number;
+  skipped: number;
+  students: ProgressionStudent[];
+}
+
+/** The archive response, plus the progression counts the generated model predates. */
+export interface ArchiveYearResult {
+  snapshots_written: number;
+  no_active_year_remaining: boolean;
+  promoted?: number;
+  completed?: number;
+  repeating?: number;
+  skipped?: number;
+}
+
+/**
+ * Preview of the year-end progression archiving would apply. Hand-written (see
+ * `useReactivateAcademicYear` for why). `staleTime: 0`: grades can still be changing.
+ */
+export function useProgressionPreview(yearId: string | undefined) {
+  return useQuery({
+    queryKey: ['settings', 'progression', yearId],
+    queryFn: () =>
+      customInstance<ProgressionPreviewData>({
+        url: `/settings/academic-years/${yearId}/progression`,
+        method: 'GET',
+      }),
+    enabled: Boolean(yearId),
+    staleTime: 0,
+  });
+}
+
+/** Dean exception: the sessions a student did not take this year stop blocking them. */
+export function useExcuseStudentSessions(yearId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ studentId, body }: { studentId: string; body: ProgressionExcuseBody }) =>
+      customInstance<void>({
+        url: `/settings/academic-years/${yearId}/progression/students/${studentId}/excuse`,
+        method: 'PUT',
+        data: body,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['settings', 'progression', yearId] }),
+  });
+}
+
+/** Dean exception: one course stops blocking progression (grade/transcript unchanged). */
+export function useExcuseEnrollment(yearId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ enrollmentId, body }: { enrollmentId: string; body: ProgressionExcuseBody }) =>
+      customInstance<void>({
+        url: `/settings/academic-years/${yearId}/progression/enrollments/${enrollmentId}/excuse`,
+        method: 'PUT',
+        data: body,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['settings', 'progression', yearId] }),
+  });
+}
+
 /**
  * D32 (brief §6) — capture the term's mid-term report cards.
  *

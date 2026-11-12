@@ -223,8 +223,24 @@ export function OfferingsListPage() {
       headerName: 'When / where',
       render: (o) => {
         const when = summarizeMeetings(o.meetings);
-        const rooms = roomsOf(o.meetings);
-        if (!when) return <StatusBadge label="Not scheduled" kind="neutral" />;
+        // The offering's classroom first, then any other room a meeting uses.
+        const classroomLabel = o.classroom?.label ?? null;
+        const rooms = [
+          ...(classroomLabel ? [classroomLabel] : []),
+          ...roomsOf(o.meetings).filter((r) => r !== classroomLabel),
+        ];
+        if (!when) {
+          return (
+            <Stack spacing={0.25} sx={{ alignItems: 'flex-start' }}>
+              <StatusBadge label="Not scheduled" kind="neutral" />
+              {classroomLabel && (
+                <Typography variant="caption" color="text.secondary">
+                  {classroomLabel}
+                </Typography>
+              )}
+            </Stack>
+          );
+        }
         return (
           <Stack spacing={0.25}>
             <Typography variant="body2">{when}</Typography>

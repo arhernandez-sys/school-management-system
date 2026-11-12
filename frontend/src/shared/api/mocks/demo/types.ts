@@ -476,6 +476,8 @@ export interface DemoAttendanceRecord {
   enrollment_id: string;
   semester_id: string;
   attendance_date: string; // YYYY-MM-DD
+  /** "HH:MM:SS" of the scheduled meeting; absent/null = recorded before per-session attendance. */
+  session_start?: string | null;
   status: AttendanceStatus;
   recorded_by_user_id: string;
   recorded_at: string; // RFC3339

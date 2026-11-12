@@ -19,10 +19,8 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { useAccount, useUpdateAccount } from '../hooks/useSettings';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 
-const LOCALE_OPTIONS = [
-  { value: 'en', label: 'English' },
-  { value: 'es', label: 'Español' },
-];
+// English only: the UI is not translated, so a second language would change nothing.
+const LOCALE_OPTIONS = [{ value: 'en', label: 'English' }];
 const THEME_OPTIONS = [
   { value: 'light', label: 'Light' },
   { value: 'system', label: 'System' },
@@ -52,7 +50,8 @@ export function AccountScreen() {
   useEffect(() => {
     if (query.data) {
       setFullName(query.data.full_name ?? '');
-      setLocale(query.data.preferences.locale ?? 'en');
+      const saved = query.data.preferences.locale;
+      setLocale(LOCALE_OPTIONS.some((o) => o.value === saved) ? (saved as string) : 'en');
       setTheme(query.data.preferences.theme ?? 'light');
       setDateFormat(query.data.preferences.date_format ?? 'YYYY-MM-DD');
       setPageSize(query.data.preferences.default_page_size ?? 25);

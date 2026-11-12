@@ -129,6 +129,12 @@ class StudentListItem(BaseModel):
     status: StudentStatus
     #: The student's own level, e.g. "Lower 6" (D29). Was read off their homeroom.
     year_of_study: str | None = None
+    #: For the year being viewed (`student_year_records`): how that year ENDED —
+    #: Promoted / Repeating / Completed. NULL while the year is still running.
+    year_result: str | None = None
+    #: True when the student is sitting this level AGAIN in the year being viewed (the
+    #: year before ended in Repeating).
+    repeating: bool = False
     #: Active subject classes for the resolved semester.
     offering_count: int = 0
     guardian_name: str | None = None
@@ -240,6 +246,12 @@ class StudentDetail(_AdmissionProfileFields):
     program: ProgramRef | None = None
     year_of_study: YearOfStudy | None = None
     enrollment_load: EnrollmentLoad | None = None
+    #: For the year being viewed (`student_year_records`): how that year ENDED —
+    #: Promoted / Repeating / Completed. NULL while the year is still running.
+    year_result: str | None = None
+    #: True when the student is sitting this level AGAIN in the year being viewed (the
+    #: year before ended in Repeating).
+    repeating: bool = False
     #: The application this student was admitted from, when there is one. Students who
     #: predate the admissions module — or who were created directly through
     #: `POST /students` — have none, and that stays supported.

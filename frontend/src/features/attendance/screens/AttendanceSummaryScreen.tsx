@@ -155,7 +155,9 @@ export function AttendanceSummaryScreen() {
       render: (r) => r.present + r.absent + r.late + r.excused,
     },
     {
-      field: 'student',
+      // Not 'student': DataTable keys header/body cells on `field`, and the name column
+      // above already uses it — two equal keys made React warn and could drop a cell.
+      field: 'view',
       headerName: '',
       align: 'right',
       render: (r) => (

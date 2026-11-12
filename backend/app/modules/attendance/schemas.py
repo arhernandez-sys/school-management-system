@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import date as _date
 from datetime import datetime
+from datetime import time as _time
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,6 +94,20 @@ class AttendanceEntry(BaseModel):
     recorded_at: datetime | None = None
 
 
+class AttendanceSession(BaseModel):
+    """One scheduled meeting of the offering on the register's date.
+
+    Derived from `class_meetings` for the date's weekday. Attendance is taken PER SESSION,
+    so an offering that meets twice on a Monday has two registers that Monday.
+    """
+
+    start_time: _time
+    end_time: _time
+    room: str | None = None
+    #: True when at least one mark exists for this (date, session).
+    recorded: bool = False
+
+
 class LastRecorded(BaseModel):
     by: str
     at: datetime
@@ -101,6 +116,12 @@ class LastRecorded(BaseModel):
 class AttendanceRegister(BaseModel):
     offering: AttendanceOfferingRef
     date: _date
+    #: The offering's scheduled meetings on `date`'s weekday, earliest first. Empty means
+    #: the offering does not meet that day, and nothing can be recorded for it.
+    sessions: list[AttendanceSession] = Field(default_factory=list)
+    #: The session this register is for — one of `sessions[].start_time`, or null when
+    #: `sessions` is empty.
+    start_time: _time | None = None
     can_record: bool = False
     entries: list[AttendanceEntry] = Field(default_factory=list)
     last_recorded: LastRecorded | None = None
@@ -117,6 +138,9 @@ class AttendanceUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     offering_id: UUID
     date: _date
+    #: Which scheduled meeting on `date` is being marked. Must match the `start_time` of
+    #: one of the offering's meetings on that weekday (422 `no_scheduled_session`).
+    start_time: _time
     entries: list[AttendanceUpsertEntry] = Field(default_factory=list)
 
 
@@ -148,6 +172,9 @@ class MyAttendanceHistoryItem(BaseModel):
     #: The offering the mark was recorded in. A student sits several offerings a day, so
     #: a bare (date, status) row cannot say WHICH lecturer marked them absent.
     offering_id: UUID
+    #: The session within the day. Null on marks recorded before attendance was taken
+    #: per session.
+    start_time: _time | None = None
 
 
 class MyAttendanceOffering(BaseModel):

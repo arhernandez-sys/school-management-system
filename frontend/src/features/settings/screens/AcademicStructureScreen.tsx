@@ -51,6 +51,9 @@ import {
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 import { TERM_TYPE_OPTIONS, termTypeLabel } from '../termTypes';
 import { TermFormDialog, type TermFormValues } from '../components/TermFormDialog';
+import { ProgressionPreview } from '../components/ProgressionPreview';
+import { ProgressionDialog } from '../components/ProgressionDialog';
+import type { ArchiveYearResult } from '../hooks/useSettings';
 import type {
   AcademicYearDetail,
   SemesterDetail,
@@ -155,6 +158,7 @@ function midtermFreezeCaption(
 export function AcademicStructureScreen() {
   const { user } = useAuth();
   const canManage = user ? canWrite(user.role, 'settings') : false;
+  const isDean = user?.role === 'principal';
 
   const theme = useTheme();
   // Below sm the per-year semester table would horizontal-scroll; stack cards instead.
@@ -206,6 +210,8 @@ export function AcademicStructureScreen() {
   // still open" look identical if nothing is shown.
   const [freezeError, setFreezeError] = useState<string | null>(null);
   const [freezeNotice, setFreezeNotice] = useState<string | null>(null);
+  const [archiveNotice, setArchiveNotice] = useState<string | null>(null);
+  const [progressionYear, setProgressionYear] = useState<AcademicYearDetail | null>(null);
 
   if (query.isLoading) return <LoadingState variant="cards" rows={2} />;
   if (query.isError || !query.data) return <ErrorState onRetry={() => void query.refetch()} />;
@@ -375,10 +381,19 @@ export function AcademicStructureScreen() {
   const handleArchive = () => {
     if (!archiveTarget) return;
     setArchiveError(null);
+    const yearName = archiveTarget.name;
+    setArchiveNotice(null);
     archiveMut.mutate(
       { yearId: archiveTarget.id },
       {
-        onSuccess: () => setArchiveTarget(null),
+        onSuccess: (res) => {
+          setArchiveTarget(null);
+          const r = res as ArchiveYearResult;
+          setArchiveNotice(
+            `${yearName} archived. ${r.promoted ?? 0} moved to Second year, ` +
+              `${r.completed ?? 0} completed, ${r.repeating ?? 0} repeating.`,
+          );
+        },
         onError: (err) => setArchiveError(apiErrorMessage(err)),
       },
     );
@@ -412,6 +427,11 @@ export function AcademicStructureScreen() {
       {freezeNotice && (
         <Alert severity="success" sx={{ mb: 2 }} onClose={() => setFreezeNotice(null)}>
           {freezeNotice}
+        </Alert>
+      )}
+      {archiveNotice && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setArchiveNotice(null)}>
+          {archiveNotice}
         </Alert>
       )}
 
@@ -449,6 +469,13 @@ export function AcademicStructureScreen() {
                         >
                           Add term
                         </Button>
+                        {/* Year-end progression + Dean exceptions: the Dean only
+                            (principal-only server-side, like the archive itself). */}
+                        {isDean && (
+                          <Button size="small" onClick={() => setProgressionYear(year)}>
+                            Year-end progression
+                          </Button>
+                        )}
                         <Button
                           color="warning"
                           size="small"
@@ -827,15 +854,29 @@ export function AcademicStructureScreen() {
         onClose={closeTermDialog}
       />
 
+      {progressionYear && (
+        <ProgressionDialog
+          open
+          yearId={progressionYear.id}
+          yearName={progressionYear.name}
+          onClose={() => setProgressionYear(null)}
+        />
+      )}
+
       {/* Archive confirm */}
       <ConfirmDialog
         open={Boolean(archiveTarget)}
         title="Archive academic year?"
         destructive
         description={
-          archiveTarget ? `Archive "${archiveTarget.name}"? This ends the active session.` : undefined
+          archiveTarget ? (
+            <>
+              Archive &quot;{archiveTarget.name}&quot;? This ends the active session.
+              <ProgressionPreview yearId={archiveTarget.id} />
+            </>
+          ) : undefined
         }
-        warning="Archiving freezes the year: grades and report cards are snapshotted and the year becomes read-only. If this was a mistake, the year can be reactivated afterwards."
+        warning="Archiving freezes the year: grades and report cards are snapshotted, students move up a year as shown above, and the year becomes read-only. If this was a mistake, reactivating the year undoes both."
         confirmLabel="Archive year"
         pending={archiveMut.isPending}
         error={archiveError}

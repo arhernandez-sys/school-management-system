@@ -204,6 +204,8 @@ ACTION_LABELS: dict[str, str] = {
     "student.delete": "Student record removed",
     "student.status_change": "Student status changed",
     "student.program_change": "Student programme changed",
+    "student.progression": "Year-end progression (promoted / completed / repeating)",
+    "student.progression_excuse": "Dean exception for year-end progression",
     "student.grades_withheld": "Student's grades hidden from them",
     "student.grades_unwithheld": "Student's grades shown to them again",
     # ── Registration ──────────────────────────────────────────────────────────

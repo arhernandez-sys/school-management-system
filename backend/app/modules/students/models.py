@@ -29,7 +29,13 @@ from sqlalchemy import (
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.common.enums import District, EnrollmentLoad, StudentStatus, YearOfStudy
+from app.common.enums import (
+    District,
+    EnrollmentLoad,
+    ProgressionStanding,
+    StudentStatus,
+    YearOfStudy,
+)
 from app.db.base import AuditMixin, Base, SoftDeleteMixin, TimestampMixin, uuid_pk
 from app.db.types import GUID, enum_col
 
@@ -336,4 +342,60 @@ class StudentProgramHistory(Base, TimestampMixin, AuditMixin):
             name="ck_student_program_dates",
         ),
         Index("ix_student_program_student", "student_id"),
+    )
+
+
+class StudentYearRecord(Base, TimestampMixin, AuditMixin):
+    """A student's level and year-end result for ONE academic year (11 Nov 2026).
+
+    `student_profiles.year_of_study` is the CURRENT level; this is the history, so the
+    year switcher shows what was true THEN ("First" in 2026-27) rather than today's value.
+
+    One row per (student, academic year), enforced by `uq_student_year_records`. Written by:
+
+      * the year archive (`students.progression.apply_progression`) — `year_of_study` is
+        the level the student held DURING the year, `result` how it ended;
+      * the Dean's missing-sessions exception, which may create the row early with
+        `result` still NULL.
+
+    `result` NULL = not decided yet (the year is still running). Reactivating the year
+    clears it again (`revert_progression`).
+    """
+
+    __tablename__ = "student_year_records"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "student_profiles.id", ondelete="CASCADE", name="fk_student_year_records_student"
+        ),
+        nullable=False,
+    )
+    academic_year_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "academic_years.id", ondelete="CASCADE", name="fk_student_year_records_year"
+        ),
+        nullable=False,
+    )
+    #: The level held DURING this year (First / Second).
+    year_of_study: Mapped[YearOfStudy | None] = mapped_column(
+        enum_col(YearOfStudy), nullable=True
+    )
+    #: How the year ended: Promoted / Repeating / Completed. NULL = not decided yet.
+    result: Mapped[ProgressionStanding | None] = mapped_column(
+        enum_col(ProgressionStanding), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Dean exception: sessions the student did not take this year do not block them
+    #: (entered from another school, missed Summer).
+    missing_terms_excused: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, default=False, server_default=text("0")
+    )
+    excuse_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    __table_args__ = (
+        Index("uq_student_year_records", "student_id", "academic_year_id", unique=True),
+        Index("ix_student_year_records_year", "academic_year_id"),
     )

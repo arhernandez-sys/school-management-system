@@ -28,16 +28,16 @@ export async function getAttendanceOfferings(
   return res.data;
 }
 
-/** GET /attendance?offering_id=&date= — the daily register. */
+/** GET /attendance?offering_id=&date=&start_time= — the register for one session. */
 export async function getAttendanceRegister(
-  params: { offering_id: string; date: string },
+  params: { offering_id: string; date: string; start_time?: string },
   signal?: AbortSignal,
 ): Promise<AttendanceRegister> {
   const res = await api.get<AttendanceRegister>('/attendance', { params, signal });
   return res.data;
 }
 
-/** PUT /attendance — bulk upsert the register for one (offering, date). */
+/** PUT /attendance — bulk upsert the register for one (offering, date, session). */
 export async function putAttendanceRegister(
   body: AttendanceUpsertRequest,
 ): Promise<AttendanceUpsertResponse> {

@@ -12,8 +12,11 @@ import {
   Paper,
   Snackbar,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
+import { formatTimeRange } from '@features/offerings/meetingFormat';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
@@ -50,11 +53,20 @@ function formatRecordedAt(iso: string): string {
  * day can be chosen — future dates (FR-ATT-05) and older ones are closed. P/S land here read-only and
  * are steered to the Summary tab (they view-all, they do not record).
  *
- * Selection persists to the URL (?offering_id=&date=) so the sheet is shareable/reloadable.
+ * Attendance is per SCHEDULED SESSION (Nov 2026): the register for a date lists the
+ * offering's meetings on that weekday and the lecturer marks each one separately — an
+ * offering that meets at 08:00 and 13:00 on a Monday has two registers that Monday. A date
+ * with no meeting has no register.
+ *
+ * Selection persists to the URL (?offering_id=&date=&start_time=) so the sheet is
+ * shareable/reloadable.
  */
 export function AttendanceRegisterScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const offeringId = searchParams.get('offering_id');
+  // Null lets the server pick the day's first session; a stale value (not a meeting on
+  // the chosen date) is also resolved server-side to the first session.
+  const requestedStart = searchParams.get('start_time');
   // Defaults to the school-local today (America/Belize), matching the backend's
   // `school_today()`. Previously the demo dataset's fixed 2025-10-15, so against the
   // real API the register opened on a date months in the past.
@@ -71,8 +83,12 @@ export function AttendanceRegisterScreen() {
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
   const offeringsQuery = useAttendanceOfferings(yearId);
-  const registerQuery = useAttendanceRegister(offeringId, date);
+  const registerQuery = useAttendanceRegister(offeringId, date, requestedStart);
   const saveMut = useSaveAttendance();
+  const sessions = registerQuery.data?.sessions ?? [];
+  /** The session the loaded register is for — what Save writes against. */
+  const sessionStart = registerQuery.data?.start_time ?? null;
+  const currentSession = sessions.find((s) => s.start_time === sessionStart) ?? null;
 
   // Switching year clears the (year-specific) offering so the effect re-picks one.
   const handleChangeYear = (value: string) =>
@@ -81,6 +97,7 @@ export function AttendanceRegisterScreen() {
         const next = new URLSearchParams(prev);
         next.set('year', value);
         next.delete('offering_id');
+        next.delete('start_time');
         return next;
       },
       { replace: true },
@@ -155,10 +172,12 @@ export function AttendanceRegisterScreen() {
   const markAllPresent = () =>
     setDraft(Object.fromEntries(entries.map((e) => [e.student.id, DEFAULT_STATUS] as const)));
 
+  // A new offering or date has a different schedule, so the session choice resets.
   const handleChangeOffering = (value: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('offering_id', value);
+      next.delete('start_time');
       return next;
     });
 
@@ -166,11 +185,21 @@ export function AttendanceRegisterScreen() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('date', value);
+      next.delete('start_time');
       return next;
     });
 
+  const handleChangeSession = (value: string | null) => {
+    if (!value) return; // exclusive group: clicking the selected session again is a no-op
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('start_time', value);
+      return next;
+    });
+  };
+
   const handleSave = () => {
-    if (!offeringId) return;
+    if (!offeringId || !sessionStart) return;
     setError(null);
     if (counts.missing > 0) {
       setShowMissing(true);
@@ -180,6 +209,7 @@ export function AttendanceRegisterScreen() {
       {
         offering_id: offeringId,
         date,
+        start_time: sessionStart,
         entries: entries.map((e) => ({
           student_id: e.student.id,
           // Non-null: the guard above refuses the save while any row is blank.
@@ -189,7 +219,10 @@ export function AttendanceRegisterScreen() {
       {
         onSuccess: (res) => {
           const section = registerQuery.data?.offering.offering.label ?? 'this offering';
-          setSaved(`Attendance saved for ${section} · ${res.upserted} students`);
+          const slot = currentSession
+            ? ` (${formatTimeRange(currentSession.start_time, currentSession.end_time)})`
+            : '';
+          setSaved(`Attendance saved for ${section}${slot} · ${res.upserted} students`);
         },
         onError: (err) => setError(apiErrorMessage(err)),
       },
@@ -275,8 +308,40 @@ export function AttendanceRegisterScreen() {
         />
       )}
 
-      {registerQuery.data && (
+      {registerQuery.data && sessions.length === 0 && (
+        <EmptyState
+          title="No class scheduled on this day"
+          description="Attendance follows the course offering's schedule. Pick a date on which this offering meets, or add a meeting for this weekday on the offering's Schedule tab."
+        />
+      )}
+
+      {registerQuery.data && sessions.length > 0 && (
         <>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
+              {sessions.length > 1
+                ? `This offering meets ${sessions.length} times on this day — take attendance for each class.`
+                : 'Class session'}
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              color="primary"
+              value={sessionStart}
+              onChange={(_e, value: string | null) => handleChangeSession(value)}
+              aria-label="Class session"
+              sx={{ flexWrap: 'wrap' }}
+            >
+              {sessions.map((s) => (
+                <ToggleButton key={s.start_time} value={s.start_time} sx={{ textTransform: 'none' }}>
+                  {formatTimeRange(s.start_time, s.end_time)}
+                  {s.room ? ` · ${s.room}` : ''}
+                  {s.recorded ? ' ✓' : ''}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Box>
+
           {registerQuery.data.last_recorded && (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Last recorded by {registerQuery.data.last_recorded.by} on{' '}

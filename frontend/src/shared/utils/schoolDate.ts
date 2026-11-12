@@ -42,6 +42,31 @@ export function schoolToday(): string {
   return schoolDateOf(new Date());
 }
 
+const clockParts = new Intl.DateTimeFormat('en-GB', {
+  timeZone: SCHOOL_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * The school-local wall clock right now: `{ date: 'YYYY-MM-DD', isoWeekday: 1..7,
+ * time: 'HH:MM' }`. For "what is the next class" logic, which must agree with the
+ * school's day rather than the device's.
+ */
+export function schoolNow(instant: Date = new Date()): {
+  date: string;
+  isoWeekday: number;
+  time: string;
+} {
+  const date = schoolDateOf(instant);
+  const js = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const parts = clockParts.formatToParts(instant);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? '00';
+  return { date, isoWeekday: js === 0 ? 7 : js, time: `${get('hour')}:${get('minute')}` };
+}
+
 /** The school-local `YYYY-MM-DD` for any instant. */
 export function schoolDateOf(instant: Date): string {
   const parts = dateParts.formatToParts(instant);

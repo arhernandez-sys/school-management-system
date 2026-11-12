@@ -22,7 +22,7 @@ Recording is teacher-only: P/S read the register and the summary but do not mark
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -145,24 +145,28 @@ def get_my_attendance(
 @router.get(
     "",
     response_model=AttendanceRegister,
-    summary="The daily register for one (offering, date)",
+    summary="The register for one scheduled session (offering, date, start_time)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 422: _ERR},
 )
 def get_register(
     offering_id: Annotated[uuid.UUID, Query()],
     on_date: Annotated[date | None, Query(alias="date")] = None,
+    start_time: Annotated[time | None, Query()] = None,
     db: Session = Depends(get_db),
     actor: User = Depends(_staff),
 ) -> AttendanceRegister:
     """`offering_id` is required — omitting it is a 422. `date` defaults to today.
+    `start_time` picks one of the day's scheduled sessions (default: the first).
     An unmarked student has `status: null`, which is not an attendance value."""
-    return service.get_register(db, actor=actor, offering_id=offering_id, on_date=on_date)
+    return service.get_register(
+        db, actor=actor, offering_id=offering_id, on_date=on_date, start_time=start_time
+    )
 
 
 @router.put(
     "",
     response_model=AttendanceUpsertResponse,
-    summary="Mark the register for one (offering, date) (teacher)",
+    summary="Mark the register for one scheduled session (teacher)",
     responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
 )
 def upsert_register(
@@ -172,5 +176,6 @@ def upsert_register(
 ) -> AttendanceUpsertResponse:
     """Teacher-only (403 for P/S) + offering ownership (404). Rejects future dates
     (422 future_date_not_allowed), archived years (409) and non-roster students
-    (422 student_not_enrolled). Upsert key is (offering, student, date)."""
+    (422 student_not_enrolled) and sessions not on the offering's schedule
+    (422 no_scheduled_session). Upsert key is (offering, student, date, start_time)."""
     return service.upsert_register(db, actor=actor, payload=payload)

@@ -1,8 +1,14 @@
 """Attendance service (api-spec §5 Module 8, FR-ATT-*, D-Q4).
 
 Owns DB access + transactions for the 5 attendance endpoints; the router is thin.
-Attendance is **per-offering, per-day**: for an (offering, date) every actively
-enrolled student carries a present/absent/late/excused status.
+Attendance is **per-offering, per-SESSION**: a session is one of the offering's scheduled
+weekly meetings (`class_meetings`) on a given date, identified by its start time. For an
+(offering, date, session) every actively enrolled student carries a
+present/absent/late/excused status. An offering that meets twice on a Monday has two
+registers that Monday; a date on which the offering does not meet has none.
+
+Legacy marks (written before Nov 2026, `session_start IS NULL`) are read as belonging to
+the FIRST session of their day, and get that session's time stamped on the next save.
 
 Recording is **teacher-only** — principals and secretaries read the register and
 the summary but cannot mark it (matching the finished frontend). A teacher may mark an
@@ -22,8 +28,9 @@ import uuid
 from collections import defaultdict
 from datetime import date as date_type
 from datetime import datetime
+from datetime import time as time_type
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.common.enums import AcademicYearStatus, AttendanceStatus, Role
@@ -39,6 +46,7 @@ from app.modules.attendance.schemas import (
     AttendanceDatePoint,
     AttendanceEntry,
     AttendanceRegister,
+    AttendanceSession,
     AttendanceOfferingPickerItem,
     AttendanceOfferingRef,
     AttendanceOfferingsResponse,
@@ -55,7 +63,13 @@ from app.modules.attendance.schemas import (
 )
 from app.modules.offerings.queries import offerings_in_year, year_id_of_offering, year_of_offering
 from app.modules.offerings.labels import OFFERING_ORDER, offering_ref
-from app.modules.offerings.models import ClassEnrollment, ClassTeacher, Course, CourseOffering
+from app.modules.offerings.models import (
+    ClassEnrollment,
+    ClassMeeting,
+    ClassTeacher,
+    Course,
+    CourseOffering,
+)
 from app.modules.settings.models import AcademicYear, AuditLog, SchoolProfile, Semester
 from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
 from app.modules.teachers.models import TeacherProfile
@@ -282,6 +296,91 @@ def _active_roster(
     return [(student, enrollment) for student, enrollment in rows]
 
 
+def _sessions_on(
+    db: Session, offering: CourseOffering, on_date: date_type
+) -> list[ClassMeeting]:
+    """The offering's scheduled meetings on `on_date`'s weekday, earliest first.
+
+    Deduplicated by start time: two meetings starting at the same minute (a schedule the
+    timetable already warns about as a self-overlap) are ONE session here, because the
+    start time is the session's identity on the record.
+    """
+    meetings = db.scalars(
+        select(ClassMeeting)
+        .where(
+            ClassMeeting.offering_id == offering.id,
+            ClassMeeting.day_of_week == on_date.isoweekday(),
+            ClassMeeting.deleted_at.is_(None),
+        )
+        .order_by(ClassMeeting.start_time.asc(), ClassMeeting.end_time.asc())
+    ).all()
+    seen: set[time_type] = set()
+    unique: list[ClassMeeting] = []
+    for m in meetings:
+        if m.start_time not in seen:
+            seen.add(m.start_time)
+            unique.append(m)
+    return unique
+
+
+def _session_records(
+    db: Session,
+    offering: CourseOffering,
+    on_date: date_type,
+    start: time_type | None,
+    first_start: time_type | None,
+) -> dict[uuid.UUID, AttendanceRecord]:
+    """This session's marks, keyed by student.
+
+    A legacy mark (`session_start IS NULL`) is folded into the day's FIRST session, and a
+    session-specific mark for the same student wins over it. With no session (`start is
+    None` — the offering does not meet that day) only legacy marks can exist, and they are
+    returned so a historical register is still readable.
+    """
+    if start is None:
+        cond = AttendanceRecord.session_start.is_(None)
+    elif start == first_start:
+        cond = or_(
+            AttendanceRecord.session_start == start,
+            AttendanceRecord.session_start.is_(None),
+        )
+    else:
+        cond = AttendanceRecord.session_start == start
+    rows = db.scalars(
+        select(AttendanceRecord).where(
+            AttendanceRecord.offering_id == offering.id,
+            AttendanceRecord.attendance_date == on_date,
+            cond,
+        )
+    ).all()
+    out: dict[uuid.UUID, AttendanceRecord] = {}
+    # Legacy first, so a session-specific row for the same student overwrites it.
+    for r in sorted(rows, key=lambda r: r.session_start is not None):
+        out[r.student_id] = r
+    return out
+
+
+def _recorded_starts(
+    db: Session, offering: CourseOffering, on_date: date_type, first_start: time_type | None
+) -> set[time_type]:
+    """Start times on `on_date` that hold at least one mark (legacy -> the first session)."""
+    starts = set(
+        db.scalars(
+            select(AttendanceRecord.session_start)
+            .where(
+                AttendanceRecord.offering_id == offering.id,
+                AttendanceRecord.attendance_date == on_date,
+            )
+            .distinct()
+        ).all()
+    )
+    if None in starts:
+        starts.discard(None)
+        if first_start is not None:
+            starts.add(first_start)
+    return starts
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # GET /attendance/offerings
 # ──────────────────────────────────────────────────────────────────────────────
@@ -343,27 +442,43 @@ def list_offerings(
 # GET /attendance
 # ──────────────────────────────────────────────────────────────────────────────
 def get_register(
-    db: Session, *, actor: User, offering_id: uuid.UUID, on_date: date_type | None
+    db: Session,
+    *,
+    actor: User,
+    offering_id: uuid.UUID,
+    on_date: date_type | None,
+    start_time: time_type | None = None,
 ) -> AttendanceRegister:
-    """The daily register: the whole active roster, left-joined to the day's records.
+    """The register for one SESSION: the whole active roster, left-joined to its marks.
+
+    `start_time` picks the session among the day's scheduled meetings; omitted, or not a
+    meeting that day (e.g. a stale value after the date changed), it falls back to the
+    day's first session. A day with no meetings returns `sessions=[]`, `start_time=None`.
 
     An unrecorded student has `status=None` — that is "not yet marked", not an
-    attendance value, and the UI defaults the row to present.
+    attendance value.
     """
     offering = _offering_or_404(db, actor, offering_id)
     target = on_date or _today()
     semester = _semester_for_offering(db, offering)
     roster = _active_roster(db, offering, semester)
 
-    records = {
-        r.student_id: r
-        for r in db.scalars(
-            select(AttendanceRecord).where(
-                AttendanceRecord.offering_id == offering.id,
-                AttendanceRecord.attendance_date == target,
-            )
-        ).all()
-    }
+    meetings = _sessions_on(db, offering, target)
+    first_start = meetings[0].start_time if meetings else None
+    starts = [m.start_time for m in meetings]
+    selected = start_time if start_time in starts else first_start
+
+    records = _session_records(db, offering, target, selected, first_start)
+    recorded = _recorded_starts(db, offering, target, first_start)
+    sessions = [
+        AttendanceSession(
+            start_time=m.start_time,
+            end_time=m.end_time,
+            room=m.room,
+            recorded=m.start_time in recorded,
+        )
+        for m in meetings
+    ]
 
     entries = [
         AttendanceEntry(
@@ -392,6 +507,8 @@ def get_register(
     return AttendanceRegister(
         offering=_offering_ref(db, offering, teachers.get(offering.id, [])),
         date=target,
+        sessions=sessions,
+        start_time=selected,
         can_record=actor.role == Role.TEACHER,
         entries=entries,
         last_recorded=last_recorded,
@@ -404,7 +521,11 @@ def get_register(
 def upsert_register(
     db: Session, *, actor: User, payload: AttendanceUpsertRequest
 ) -> AttendanceUpsertResponse:
-    """Bulk upsert one (offering, date). Teacher-only, all-or-nothing validation."""
+    """Bulk upsert one (offering, date, session). Teacher-only, all-or-nothing validation.
+
+    The session must be one of the offering's scheduled meetings on that weekday — the
+    schedule, not the offering, is what makes a register exist.
+    """
     offering = _offering_or_404(db, actor, payload.offering_id)
 
     if payload.date > _today():
@@ -419,6 +540,20 @@ def upsert_register(
     year = year_of_offering(db, offering)
     if year is not None and year.archived_at is not None:
         raise Conflict("The academic year is archived.", code="year_archived")
+
+    meetings = _sessions_on(db, offering, payload.date)
+    first_start = meetings[0].start_time if meetings else None
+    if payload.start_time not in {m.start_time for m in meetings}:
+        message = (
+            "This course offering has no class scheduled on that day."
+            if not meetings
+            else "There is no class scheduled at that time on that day."
+        )
+        raise ValidationError(
+            message,
+            code="no_scheduled_session",
+            fields={"start_time": [message]},
+        )
 
     seen: set[uuid.UUID] = set()
     duplicates: list[uuid.UUID] = []
@@ -448,15 +583,7 @@ def upsert_register(
             fields={"student_id": [str(s) for s in not_enrolled]},
         )
 
-    existing = {
-        r.student_id: r
-        for r in db.scalars(
-            select(AttendanceRecord).where(
-                AttendanceRecord.offering_id == offering.id,
-                AttendanceRecord.attendance_date == payload.date,
-            )
-        ).all()
-    }
+    existing = _session_records(db, offering, payload.date, payload.start_time, first_start)
 
     for entry in payload.entries:
         enrollment = enrollments[entry.student_id]
@@ -469,6 +596,7 @@ def upsert_register(
                 enrollment_id=enrollment.id,
                 semester_id=enrollment.semester_id,
                 attendance_date=payload.date,
+                session_start=payload.start_time,
                 status=entry.status,
                 # Only settable HERE — see the same note in grades.upsert_grades. The
                 # tail below sets `updated_by` on insert and update alike, which is why
@@ -478,6 +606,8 @@ def upsert_register(
             )
             db.add(row)
         row.status = entry.status
+        # Stamps the session on a legacy (NULL) row the first time it is re-saved.
+        row.session_start = payload.start_time
         row.enrollment_id = enrollment.id
         row.semester_id = enrollment.semester_id
         row.updated_by = actor.id
@@ -487,20 +617,22 @@ def upsert_register(
         actor=actor,
         action="attendance.upsert",
         entity_id=offering.id,
-        summary={"date": payload.date.isoformat(), "entries": len(payload.entries)},
+        summary={
+            "date": payload.date.isoformat(),
+            "start_time": payload.start_time.isoformat(timespec="minutes"),
+            "entries": len(payload.entries),
+        },
     )
     db.flush()
 
-    # Summary spans EVERY record for the day, not only the submitted rows — a
-    # partial save must still report the day's true state.
-    statuses = list(
-        db.scalars(
-            select(AttendanceRecord.status).where(
-                AttendanceRecord.offering_id == offering.id,
-                AttendanceRecord.attendance_date == payload.date,
-            )
-        ).all()
-    )
+    # Summary spans EVERY record for the session, not only the submitted rows — a
+    # partial save must still report the session's true state.
+    statuses = [
+        r.status
+        for r in _session_records(
+            db, offering, payload.date, payload.start_time, first_start
+        ).values()
+    ]
     db.commit()
     return AttendanceUpsertResponse(
         upserted=len(payload.entries), summary=_summarize(statuses)
@@ -606,7 +738,9 @@ def get_my_attendance(
     records = list(
         db.scalars(
             stmt.order_by(
-                AttendanceRecord.attendance_date.desc(), AttendanceRecord.offering_id.asc()
+                AttendanceRecord.attendance_date.desc(),
+                AttendanceRecord.session_start.desc(),
+                AttendanceRecord.offering_id.asc(),
             )
         ).all()
     )
@@ -651,7 +785,10 @@ def get_my_attendance(
         summary=_summarize([r.status for r in records]),
         history=[
             MyAttendanceHistoryItem(
-                date=r.attendance_date, status=r.status, offering_id=r.offering_id
+                date=r.attendance_date,
+                status=r.status,
+                offering_id=r.offering_id,
+                start_time=r.session_start,
             )
             for r in records
         ],

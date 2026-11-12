@@ -76,7 +76,15 @@ export function OfferingDetailPage() {
         value: 'schedule',
         label: 'Schedule',
         render: () => (
-          <ScheduleTab offeringId={offeringId} offeringLabel={detail.label} canManage={canManage} />
+          <ScheduleTab
+            offeringId={offeringId}
+            offeringLabel={detail.label}
+            canManage={canManage}
+            defaultRoom={detail.classroom?.label ?? null}
+            // Only a TEACHER can mark the register (`can_record` is teacher-only
+            // server-side), and only on an offering they own.
+            canTakeAttendance={user?.role === 'teacher' && Boolean(detail.actionable_by_caller)}
+          />
         ),
       },
       {
@@ -96,7 +104,7 @@ export function OfferingDetailPage() {
         render: () => <OverviewTab offeringId={offeringId} />,
       },
     ];
-  }, [offeringId, detail, canManage, canEditGrading]);
+  }, [offeringId, detail, canManage, canEditGrading, user?.role]);
 
   if (detailQuery.isLoading) {
     return <LoadingState variant="page" label="Loading offering" />;
@@ -127,7 +135,13 @@ export function OfferingDetailPage() {
       ? detail.teachers.map((t) => t.full_name).join(', ')
       : 'No lecturer assigned';
   const when = summarizeMeetings(detail.meetings);
-  const rooms = roomsOf(detail.meetings);
+  // The offering's own classroom first, then any OTHER room a meeting uses (e.g. a lab),
+  // so the classroom chosen at creation is always visible even before a schedule exists.
+  const classroomLabel = detail.classroom?.label ?? null;
+  const rooms = [
+    ...(classroomLabel ? [classroomLabel] : []),
+    ...roomsOf(detail.meetings).filter((r) => r !== classroomLabel),
+  ];
   // The subtitle answers "which course, which term, which year" — the three facts that
   // distinguish this row from another offering of the same course. Each part is dropped
   // when unresolved rather than printed as an empty segment.

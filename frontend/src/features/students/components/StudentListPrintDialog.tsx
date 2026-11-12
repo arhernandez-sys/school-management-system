@@ -6,6 +6,7 @@ import { surnameFirst } from '@shared/utils/names';
 import { useSchoolProfile } from '@features/settings/hooks/useSettings';
 import { useStudentsForPrint } from '../hooks/useStudents';
 import type { StudentsListParams } from '../types';
+import { yearStandingText } from '../yearStanding';
 
 export interface StudentListPrintDialogProps {
   open: boolean;
@@ -123,7 +124,7 @@ export function StudentListPrintDialog({
                       <TableCell>{s.student_number}</TableCell>
                       {/* D33 ask 5 — the printed register reads the same way as the screen. */}
                       <TableCell>{surnameFirst(s)}</TableCell>
-                      <TableCell>{s.year_of_study ?? '—'}</TableCell>
+                      <TableCell>{yearStandingText(s)}</TableCell>
                       <TableCell>{s.program_code ?? '—'}</TableCell>
                       {/* Capitalised for print only; the stored value is lowercase. */}
                       <TableCell sx={{ textTransform: 'capitalize' }}>

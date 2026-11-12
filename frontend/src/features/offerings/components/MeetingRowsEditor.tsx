@@ -1,6 +1,7 @@
 import { Box, Button, IconButton, MenuItem, Stack, TextField, Tooltip } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import { useClassroomOptions } from '@features/classrooms/hooks/useClassrooms';
 import { DAY_LONG, meetingRowInvalid, WEEKDAYS } from '../meetingFormat';
 import type { DayOfWeek, OfferingMeetingInput } from '../types';
 
@@ -18,8 +19,9 @@ import type { DayOfWeek, OfferingMeetingInput } from '../types';
  * server's, because only the server can see the other offerings; it reports those as
  * warnings rather than rejections, so this component never blocks a save on them.
  *
- * Room is per ROW because room is per MEETING: `course_offerings` has no `room` column,
- * since one course legitimately meets in a lecture room on Monday and a lab on Wednesday.
+ * Room is per ROW because one course legitimately meets in a lecture room on Monday and a
+ * lab on Wednesday. It is a DROPDOWN of the college's active classrooms (Nov 2026), not
+ * free text, and a new row starts in the offering's own classroom (`defaultRoom`).
  */
 export interface MeetingRowsEditorProps {
   value: OfferingMeetingInput[];
@@ -27,6 +29,8 @@ export interface MeetingRowsEditorProps {
   disabled?: boolean;
   /** Compact spacing for use inside the create dialog. */
   dense?: boolean;
+  /** Room label pre-filled on a newly added meeting — the offering's own classroom. */
+  defaultRoom?: string | null;
 }
 
 /** A sensible new row: Monday morning, which is what most first meetings are. */
@@ -42,7 +46,15 @@ export function MeetingRowsEditor({
   onChange,
   disabled = false,
   dense = false,
+  defaultRoom = null,
 }: MeetingRowsEditorProps) {
+  // The same ACTIVE-room list the offering's Classroom dropdown uses (shared query key,
+  // so it is fetched once). The meeting stores the room's server-built `label` as text:
+  // `class_meetings.room` is still a free-text column.
+  const classroomsQuery = useClassroomOptions();
+  const roomOptions = classroomsQuery.data?.items ?? [];
+  const roomLabels = new Set(roomOptions.map((r) => r.label));
+
   const update = (index: number, patch: Partial<OfferingMeetingInput>) => {
     onChange(value.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
@@ -104,14 +116,32 @@ export function MeetingRowsEditor({
               sx={{ minWidth: 120 }}
             />
             <TextField
+              select
               size="small"
               label="Room"
               value={row.room ?? ''}
               onChange={(e) => update(index, { room: e.target.value })}
               disabled={disabled}
-              placeholder="Room A"
+              helperText={classroomsQuery.isLoading ? 'Loading rooms…' : undefined}
+              SelectProps={{ displayEmpty: true }}
+              InputLabelProps={{ shrink: true }}
               fullWidth
-            />
+            >
+              <MenuItem value="">
+                <em>No room</em>
+              </MenuItem>
+              {/* A value typed before this was a dropdown (or a room since retired) stays
+                  selectable, so opening and re-saving a schedule never silently drops it. */}
+              {row.room && !roomLabels.has(row.room) && (
+                <MenuItem value={row.room}>{row.room} (not in classroom list)</MenuItem>
+              )}
+              {roomOptions.map((room) => (
+                <MenuItem key={room.id} value={room.label}>
+                  {room.label}
+                  {room.capacity > 0 ? ` · ${room.capacity} seats` : ''}
+                </MenuItem>
+              ))}
+            </TextField>
             <Box sx={{ display: 'flex', alignItems: 'center', pt: { xs: 0, sm: 0.25 } }}>
               <Tooltip title="Remove this meeting">
                 <IconButton
@@ -132,7 +162,7 @@ export function MeetingRowsEditor({
         <Button
           size="small"
           startIcon={<AddIcon />}
-          onClick={() => onChange([...value, { ...NEW_ROW }])}
+          onClick={() => onChange([...value, { ...NEW_ROW, room: defaultRoom ?? '' }])}
           disabled={disabled}
         >
           Add meeting

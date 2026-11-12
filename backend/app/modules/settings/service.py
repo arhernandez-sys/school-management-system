@@ -773,9 +773,14 @@ def freeze_midterm_grades(
 
 def archive_academic_year(
     db: Session, *, actor: User, year_id: uuid.UUID
-) -> tuple[int, bool]:
+) -> tuple[int, bool, dict[str, int]]:
     """POST /settings/academic-years/{id}/archive (principal). Returns
-    (snapshots_written, no_active_year_remaining).
+    (snapshots_written, no_active_year_remaining, progression_counts).
+
+    **Year-end progression** (11 Nov 2026) runs right after the freeze, in this same
+    transaction: students who passed the year's Summer + Semester terms move First ->
+    Second or Second -> Completed; the rest repeat (`students.progression`). Its undo
+    data rides on this archive's audit row, which `reactivate_academic_year` reads.
 
     THE FREEZE (schema §10.4, FR-SET-07) runs first, then the state transitions:
       1. compute + upsert `term_grade_snapshots` and `report_card_snapshots`
@@ -797,6 +802,7 @@ def archive_academic_year(
     this module for the logo URL resolver).
     """
     from app.modules.reports.freeze import freeze_academic_year
+    from app.modules.students.progression import apply_progression
 
     year = db.get(AcademicYear, year_id)
     if year is None:
@@ -810,6 +816,17 @@ def archive_academic_year(
 
     # ── 1. Freeze, while the year is still live ────────────────────────────────
     snapshots_written = freeze_academic_year(db, actor=actor, year=year)
+    # Flush so the progression reads the snapshots the freeze just wrote.
+    db.flush()
+
+    # ── 1b. Year-end progression (First -> Second -> Completed) ────────────────
+    progression, progression_undo = apply_progression(db, actor=actor, year=year)
+    progression_counts = {
+        "promoted": progression.count("promote"),
+        "completed": progression.count("complete"),
+        "repeating": progression.count("repeat"),
+        "skipped": progression.count("skip"),
+    }
 
     # ── 2-5. State transitions ─────────────────────────────────────────────────
     year.status = AcademicYearStatus.ARCHIVED
@@ -867,10 +884,55 @@ def archive_academic_year(
         summary={
             "snapshots_written": snapshots_written,
             "already_archived_offering_ids": already_archived_offering_ids,
+            "progression": progression_counts,
+            "progression_undo": progression_undo,
         },
     )
     db.commit()
-    return snapshots_written, no_active_year_remaining
+    return snapshots_written, no_active_year_remaining, progression_counts
+
+
+def preview_progression(db: Session, *, year_id: uuid.UUID) -> dict:
+    """GET /settings/academic-years/{id}/progression (principal). Read-only: what the
+    archive's progression step would do right now. See `students.progression`."""
+    from app.modules.students.progression import evaluate_year
+
+    year = db.get(AcademicYear, year_id)
+    if year is None:
+        raise NotFound("Academic year not found.", code="not_found")
+    result = evaluate_year(db, year)
+    return {
+        "year_id": year.id,
+        "terms": result.term_names,
+        "promoted": result.count("promote"),
+        "completed": result.count("complete"),
+        "repeating": result.count("repeat"),
+        "skipped": result.count("skip"),
+        "students": [
+            {
+                "student_id": d.student_id,
+                "student_number": d.student_number,
+                "full_name": d.full_name,
+                "year_of_study": d.year_of_study.value if d.year_of_study else None,
+                "outcome": d.outcome,
+                "reasons": d.reasons,
+                "issues": [
+                    {
+                        "kind": i.kind,
+                        "message": i.message,
+                        "term_name": i.term_name,
+                        "enrollment_id": i.enrollment_id,
+                        "excused": i.excused,
+                        "excuse_reason": i.excuse_reason,
+                    }
+                    for i in d.issues
+                ],
+                "terms_excused": d.terms_excused,
+                "terms_excuse_reason": d.terms_excuse_reason,
+            }
+            for d in result.decisions
+        ],
+    }
 
 
 def _pick_semester_to_activate(semesters: list[Semester]) -> Semester | None:
@@ -977,6 +1039,14 @@ def reactivate_academic_year(
             keep_archived.append(uuid.UUID(str(raw)))
         except ValueError:
             continue
+    # Undo the year-end progression this archive applied (students moved back to the
+    # year / status they had). Students changed by hand since are left alone.
+    from app.modules.students.progression import revert_progression
+
+    progression_reverted = revert_progression(
+        db, year=year, undo=last_archive_summary.get("progression_undo") or []
+    )
+
     if semester_ids:
         stmt = update(CourseOffering).where(CourseOffering.semester_id.in_(semester_ids))
         if keep_archived:
@@ -999,6 +1069,7 @@ def reactivate_academic_year(
         summary={
             "name": year.name,
             "activated_semester_id": str(activated.id) if activated else None,
+            "progression_reverted": progression_reverted,
         },
     )
     db.commit()

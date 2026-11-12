@@ -380,7 +380,13 @@ export function OfferingFormDialog({
             with other offerings are checked when you save and shown as warnings.
           </Typography>
         </Stack>
-        <MeetingRowsEditor value={meetings} onChange={setMeetings} disabled={submitting} dense />
+        <MeetingRowsEditor
+          value={meetings}
+          onChange={setMeetings}
+          disabled={submitting}
+          dense
+          defaultRoom={classroomOptions.find((r) => r.id === classroomId)?.label ?? null}
+        />
           </>
         )}
       </Stack>

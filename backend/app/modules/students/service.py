@@ -53,7 +53,11 @@ from app.modules.offerings.queries import year_of_offering
 from app.modules.offerings.models import ClassEnrollment, Course, CourseOffering
 from app.modules.grades import service as grades_service
 from app.modules.settings.models import AcademicYear, AuditLog, Semester
-from app.modules.students.models import StudentProfile, StudentProgramHistory
+from app.modules.students.models import (
+    StudentProfile,
+    StudentProgramHistory,
+    StudentYearRecord,
+)
 from app.common.numbering import allocate_student_number
 from app.modules.programs.models import Program
 from app.modules.students.schemas import (
@@ -503,6 +507,14 @@ def _detail(
     the list is now complete and each row carries `can_open`. See `StudentOfferingRef`,
     including the note that `can_open` is an affordance and never the boundary."""
     detail = StudentDetail.model_validate(student)
+    from app.modules.students.progression import levels_in_year
+
+    _apply_year_level(
+        detail,
+        levels_in_year(db, [student.id], academic_year_id or _active_year_id(db)).get(
+            student.id
+        ),
+    )
     if academic_year_id is not None:
         base_offerings = [
             offering_ref(offering, course, db.get(Semester, offering.semester_id))
@@ -665,7 +677,24 @@ def list_students(
         )
 
     if year_of_study is not None:
-        stmt = stmt.where(StudentProfile.year_of_study == year_of_study)
+        if academic_year_id is not None:
+            # The level the student held in THAT year when it has been decided
+            # (`student_year_records`), else their current one — so filtering 2026-27 by
+            # "First" finds who was First then, not who is First today.
+            decided_level = (
+                select(StudentYearRecord.year_of_study)
+                .where(
+                    StudentYearRecord.student_id == StudentProfile.id,
+                    StudentYearRecord.academic_year_id == academic_year_id,
+                    StudentYearRecord.result.is_not(None),
+                )
+                .scalar_subquery()
+            )
+            stmt = stmt.where(
+                func.coalesce(decided_level, StudentProfile.year_of_study) == year_of_study
+            )
+        else:
+            stmt = stmt.where(StudentProfile.year_of_study == year_of_study)
 
     # D32 (brief §3) — three more attribute filters. Plain WHERE clauses on
     # `student_profiles`, so they compose with each other AND with everything above
@@ -800,7 +829,37 @@ def list_students(
     # per row: the print view raises `page_size` to cover the entire filtered result, so
     # a per-row lookup here would be an N+1 over the full directory rather than over 25.
     _attach_program_codes(db, page.items)
+    _attach_year_levels(db, page.items, academic_year_id or _active_year_id(db))
     return page
+
+
+def _apply_year_level(item, level) -> None:  # noqa: ANN001
+    """Overwrite the CURRENT level with the one held in the viewed year, when known."""
+    if level is None:
+        return
+    if level.year_of_study is not None:
+        # StudentDetail types it as the enum, the list row as a plain string.
+        item.year_of_study = (
+            level.year_of_study
+            if isinstance(item, StudentDetail)
+            else level.year_of_study.value
+        )
+    item.year_result = level.result.value if level.result else None
+    item.repeating = level.repeating
+
+
+def _attach_year_levels(db: Session, items: list, year_id: uuid.UUID | None) -> None:
+    """Year of study / result / repeating AS OF `year_id`, for a page in one query.
+
+    `student_profiles.year_of_study` is today's level; `student_year_records` is what it
+    was in each year. Switching the year therefore shows the level the student actually
+    had then.
+    """
+    from app.modules.students.progression import levels_in_year
+
+    levels = levels_in_year(db, [i.id for i in items], year_id)
+    for item in items:
+        _apply_year_level(item, levels.get(item.id))
 
 
 def _attach_program_codes(db: Session, items: list[StudentListItem]) -> None:

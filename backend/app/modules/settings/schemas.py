@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.common.enums import AcademicYearStatus, Role, TermType
 from app.common.schemas import (
@@ -209,6 +209,73 @@ class ArchiveYearResponse(BaseModel):
 
     snapshots_written: int
     no_active_year_remaining: bool
+    #: Year-end progression, run in the same transaction (`students.progression`).
+    promoted: int = 0
+    completed: int = 0
+    repeating: int = 0
+    skipped: int = 0
+
+
+class ProgressionIssue(BaseModel):
+    """One thing standing between a student and the next year."""
+
+    kind: Literal["missing_term", "failed", "withdrawn", "no_grade", "not_passed"]
+    message: str
+    term_name: str
+    #: Set for course issues — the id the Dean excuses. NULL for `missing_term`.
+    enrollment_id: UUID | None = None
+    excused: bool = False
+    excuse_reason: str | None = None
+
+
+class ProgressionStudent(BaseModel):
+    """One student's year-end outcome."""
+
+    student_id: UUID
+    student_number: str
+    full_name: str
+    year_of_study: str | None = None
+    #: promote (First -> Second), complete (Second -> Completed), repeat, skip.
+    outcome: Literal["promote", "complete", "repeat", "skip"]
+    #: Unexcused issues (repeat) or why the student was not checked (skip).
+    reasons: list[str] = []
+    #: Every issue, excused ones included.
+    issues: list[ProgressionIssue] = []
+    #: The Dean excused the sessions this student did not take, this year.
+    terms_excused: bool = False
+    terms_excuse_reason: str | None = None
+
+
+class ProgressionExcuseRequest(BaseModel):
+    """PUT body for a Dean exception. A reason is REQUIRED to excuse — it is the record
+    of why a student moved up without meeting the rule."""
+
+    model_config = ConfigDict(extra="forbid")
+    excused: bool
+    reason: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _reason_when_excusing(self) -> "ProgressionExcuseRequest":
+        if self.excused and len((self.reason or "").strip()) < 3:
+            raise ValueError("A reason is required to excuse.")
+        return self
+
+
+class ProgressionPreview(BaseModel):
+    """GET /settings/academic-years/{id}/progression — what archiving would do.
+
+    Read-only. Results are live until the year is archived, so this can change as
+    lecturers finish entering grades.
+    """
+
+    year_id: UUID
+    #: The Summer / Semester terms every student must pass, in order.
+    terms: list[str]
+    promoted: int
+    completed: int
+    repeating: int
+    skipped: int
+    students: list[ProgressionStudent]
 
 
 class MidtermFreezeResponse(BaseModel):
@@ -368,7 +435,9 @@ class UserUpdateRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 class PreferencesUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    locale: str | None = Field(default=None, max_length=16)
+    #: English only (11 Nov 2026): the UI is not translated, so offering another
+    #: language would store a choice that changes nothing.
+    locale: Literal["en"] | None = None
     theme: str | None = Field(default=None, max_length=16)
     date_format: str | None = Field(default=None, max_length=32)
     default_page_size: int | None = Field(default=None, ge=5, le=200)

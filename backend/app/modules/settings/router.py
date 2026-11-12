@@ -40,7 +40,7 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.common.enums import Role
@@ -57,6 +57,8 @@ from app.modules.settings.schemas import (
     AcademicYearList,
     ArchiveYearResponse,
     MidtermFreezeResponse,
+    ProgressionExcuseRequest,
+    ProgressionPreview,
     AssessmentPolicyRead,
     AssessmentPolicyUpdateRequest,
     GradingScaleRead,
@@ -368,12 +370,81 @@ def archive_academic_year(
     `report_card_snapshots` (schema §10.4), then applies the state transitions;
     `snapshots_written` reports the term-grade rows frozen. 409 year_already_archived
     if already archived."""
-    written, no_active = service.archive_academic_year(
+    written, no_active, progression = service.archive_academic_year(
         db, actor=actor, year_id=year_id
     )
     return ArchiveYearResponse(
-        snapshots_written=written, no_active_year_remaining=no_active
+        snapshots_written=written, no_active_year_remaining=no_active, **progression
     )
+
+
+@router.get(
+    "/academic-years/{year_id}/progression",
+    response_model=ProgressionPreview,
+    summary="Preview year-end progression (principal)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR},
+)
+def preview_progression(
+    year_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(_principal),
+) -> ProgressionPreview:
+    """Principal. Read-only: which students archiving this year would promote
+    (First -> Second), complete (Second -> Completed) or keep repeating, with the
+    reason for each one that does not move. A student must pass every course they sat
+    in the year's Summer and Semester terms, judged by the grading scale against their
+    programme's pass mark."""
+    return ProgressionPreview(**service.preview_progression(db, year_id=year_id))
+
+
+@router.put(
+    "/academic-years/{year_id}/progression/students/{student_id}/excuse",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Dean exception: excuse a student's missing sessions this year (principal)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def excuse_student_sessions(
+    year_id: uuid.UUID,
+    student_id: uuid.UUID,
+    payload: ProgressionExcuseRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> Response:
+    """Dean only. For THIS academic year, the sessions the student did not take (e.g.
+    entered from another school, missed Summer) no longer block progression. A reason is
+    required to excuse; `excused: false` removes the exception. 409 `year_archived`."""
+    from app.modules.students.progression import set_student_excuse
+
+    set_student_excuse(
+        db, actor=actor, year_id=year_id, student_id=student_id,
+        excused=payload.excused, reason=payload.reason,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put(
+    "/academic-years/{year_id}/progression/enrollments/{enrollment_id}/excuse",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Dean exception: a course no longer blocks progression (principal)",
+    responses={401: _ERR, 403: _ERR, 404: _ERR, 409: _ERR, 422: _ERR},
+)
+def excuse_enrollment(
+    year_id: uuid.UUID,
+    enrollment_id: uuid.UUID,
+    payload: ProgressionExcuseRequest,
+    db: Session = Depends(get_db),
+    actor: User = Depends(_principal),
+) -> Response:
+    """Dean only. A failed / withdrawn / ungraded course stops blocking the student's
+    year-end progression. The grade, GPA and transcript are NOT changed. 404 if the
+    enrolment is not in this year; 409 `year_archived`."""
+    from app.modules.students.progression import set_enrollment_excuse
+
+    set_enrollment_excuse(
+        db, actor=actor, year_id=year_id, enrollment_id=enrollment_id,
+        excused=payload.excused, reason=payload.reason,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

@@ -20,7 +20,10 @@ export const attendanceKeys = {
   all: ['attendance'] as const,
   offerings: (academicYearId?: string | null) =>
     [...attendanceKeys.all, 'offerings', academicYearId ?? null] as const,
-  register: (offeringId: string, date: string) =>
+  register: (offeringId: string, date: string, startTime?: string | null) =>
+    [...attendanceKeys.all, 'register', offeringId, date, startTime ?? null] as const,
+  /** Prefix covering every session of one (offering, date). */
+  registerDay: (offeringId: string, date: string) =>
     [...attendanceKeys.all, 'register', offeringId, date] as const,
   summary: (offeringId: string) => [...attendanceKeys.all, 'summary', offeringId] as const,
   // D44 — keyed on the YEAR, so switching the year filter refetches and switching
@@ -42,11 +45,22 @@ export function useAttendanceOfferings(academicYearId?: string) {
   });
 }
 
-/** The daily register for an (offering, date). Disabled until an offering is chosen. */
-export function useAttendanceRegister(offeringId: string | null, date: string) {
+/**
+ * The register for one (offering, date, session). `startTime` null lets the server pick
+ * the day's first session. Disabled until an offering is chosen.
+ */
+export function useAttendanceRegister(
+  offeringId: string | null,
+  date: string,
+  startTime: string | null = null,
+) {
   return useQuery({
-    queryKey: attendanceKeys.register(offeringId ?? '', date),
-    queryFn: ({ signal }) => getAttendanceRegister({ offering_id: offeringId!, date }, signal),
+    queryKey: attendanceKeys.register(offeringId ?? '', date, startTime),
+    queryFn: ({ signal }) =>
+      getAttendanceRegister(
+        { offering_id: offeringId!, date, ...(startTime ? { start_time: startTime } : {}) },
+        signal,
+      ),
     enabled: Boolean(offeringId) && Boolean(date),
     placeholderData: (prev) => prev, // avoid a flash when switching date/offering
   });
@@ -89,8 +103,9 @@ export function useSaveAttendance() {
   return useMutation({
     mutationFn: putAttendanceRegister,
     onSuccess: (_data, variables) => {
+      // Every session of the day: each register's `sessions[].recorded` flags change too.
       void qc.invalidateQueries({
-        queryKey: attendanceKeys.register(variables.offering_id, variables.date),
+        queryKey: attendanceKeys.registerDay(variables.offering_id, variables.date),
       });
       void qc.invalidateQueries({ queryKey: attendanceKeys.summary(variables.offering_id) });
     },
