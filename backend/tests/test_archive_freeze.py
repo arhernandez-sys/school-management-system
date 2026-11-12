@@ -578,9 +578,11 @@ class TestReactivate:
         )
         assert float(snap.numeric_grade) == 90.0
 
-    def test_individually_archived_offering_stays_archived(
+    def test_individually_archived_offering_is_reactivated_too(
         self, client, tiny, principal_headers, db_session
     ) -> None:
+        """Client rule (10 Nov 2026): reactivating the year brings back EVERY offering
+        of it, including one the Dean archived on its own beforehand."""
         g = tiny()
         other = CourseOffering(
             course_id=g.subject.id, semester_id=g.semester.id,
@@ -593,7 +595,28 @@ class TestReactivate:
         client.post(_reactivate_path(g.year.id), headers=principal_headers)
         db_session.expire_all()
         assert db_session.get(CourseOffering, g.cs.id).is_archived is False
-        assert db_session.get(CourseOffering, other.id).is_archived is True
+        assert db_session.get(CourseOffering, other.id).is_archived is False
+
+    def test_leftover_flag_from_an_earlier_cycle_does_not_stick(
+        self, client, tiny, principal_headers, db_session
+    ) -> None:
+        """The defect seen on the live server: the year came back once WITHOUT the
+        endpoint (offerings left flagged), was archived again, and the archive then
+        recorded every offering as 'already archived', so reactivate kept them all
+        archived — and the lecturer's attendance save was refused."""
+        g = tiny()
+        assert client.post(_archive_path(g.year.id), headers=principal_headers).status_code == 202
+        db_session.expire_all()
+        year = db_session.get(AcademicYear, g.year.id)
+        year.status = AcademicYearStatus.ACTIVE
+        year.archived_at = None
+        db_session.flush()
+        assert client.post(_archive_path(g.year.id), headers=principal_headers).status_code == 202
+
+        r = client.post(_reactivate_path(g.year.id), headers=principal_headers)
+        assert r.status_code == 200, r.text
+        db_session.expire_all()
+        assert db_session.get(CourseOffering, g.cs.id).is_archived is False
 
     def test_409_when_another_year_is_active(
         self, client, tiny, principal_headers, db_session

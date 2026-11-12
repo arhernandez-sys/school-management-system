@@ -294,6 +294,9 @@ export const attendanceHandlers: RequestHandler[] = [
     if (date > DEMO_TODAY) {
       return errorResponse(422, 'future_date_not_allowed', "You can't record attendance for a future date.");
     }
+    if (offering.is_archived) {
+      return errorResponse(409, 'offering_archived', 'This course offering is archived.');
+    }
 
     const meetings = sessionsOn(offeringId, date);
     const first = meetings[0]?.start_time ?? null;
