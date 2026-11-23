@@ -48,13 +48,25 @@ export function PageHeader({
         {(breadcrumbs || hasActions) && (
           <Stack
             spacing={1}
-            sx={{ flexShrink: 0, alignItems: { xs: 'flex-start', sm: 'flex-end' } }}
+            sx={{
+              flexShrink: 0,
+              minWidth: 0,
+              alignItems: { xs: 'flex-start', sm: 'flex-end' },
+            }}
           >
             {breadcrumbs && (
               <Box sx={{ color: 'text.secondary', fontSize: '0.8125rem' }}>{breadcrumbs}</Box>
             )}
             {hasActions && (
-              <Stack direction="row" spacing={1}>
+              // D33 — WRAPS. Two buttons of ordinary length ("Print list" + "Add student")
+              // are already ~300px, so on a 390px phone a non-wrapping row pushed the page
+              // into a horizontal scroll. `useFlexGap` so the gap survives the wrap.
+              <Stack
+                direction="row"
+                spacing={1}
+                useFlexGap
+                sx={{ flexWrap: 'wrap', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}
+              >
                 {secondaryActions}
                 {primaryAction}
               </Stack>

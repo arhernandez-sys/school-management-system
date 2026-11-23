@@ -1,0 +1,19 @@
+# SIS backend — DEVELOPMENT dependencies (everything in requirements.txt, plus tests).
+#
+# This is the one to install on a development machine:
+#
+#     .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+#
+# Mirrors `[project.optional-dependencies].dev` in pyproject.toml, and the mirror is
+# enforced by `tests/test_requirements_sync.py` — see the header of requirements.txt.
+
+-r requirements.txt
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+pytest==8.3.4
+# What Starlette's TestClient transports over. The whole suite is SYNCHRONOUS
+# (`TestClient` + sync SQLAlchemy) — there are zero `async def` tests, which is why
+# `pytest-asyncio` was dropped in Phase 8: it was declared, never actually installed,
+# and its stale `asyncio_mode` setting warned on every run. Re-add both together if
+# async tests ever arrive.
+httpx==0.28.1

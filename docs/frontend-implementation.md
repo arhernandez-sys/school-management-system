@@ -1,8 +1,31 @@
 # Frontend Implementation — School Management System (SIS)
 
-> **Phase 6 — Frontend Foundation.** Owner: `frontend-engineer`. This is the first code-writing phase. It delivers the **application shell everything else plugs into** — scaffold, theme, routing + guards, auth structure, TanStack Query + API client infra, and the feature-based folder tree. It deliberately builds **no feature-module functionality** (that is Phase 7). It honors `architecture.md` (§3 auth, §5 folder structure, §7 state strategy), `ui-design-system.md` (D18 nav, D19 theme tokens, D20–D22), `api-specification.md` (§1 conventions, §2 auth, §4 envelopes), and `progress-tracker.md` (D14/D15/D27/D28).
+> **Phase 6 — Frontend Foundation.** Owner: `frontend-engineer`. This is the first code-writing phase. It delivers the **application shell everything else plugs into** — scaffold, theme, routing + guards, auth structure, TanStack Query + API client infra, and the feature-based folder tree. It deliberately builds **no feature-module functionality** (that is Phase 7). It honors `architecture.md` (§3 auth, §5 folder structure, §7 state strategy), `ui-design-system.md` (D18 nav, D19 theme tokens, D20–D22), `api-specification.md` (§1 conventions, §2 auth, §4 envelopes), and `complete-work.md` (D14/D15/D27/D28).
 
-_Last updated: 2026-06-26 — Phase 6._
+_Last updated: 2026-07-28._
+
+> **⚙️ THE BACKEND NOW EXISTS FOR EVERY SCREEN (2026-07-28).** Phase 7 is complete: all twelve
+> modules are served (70 path templates / 99 operations — see `backend/openapi.json`). The routes
+> that were previously dead against the real API — `/dashboard`, `/grades`, `/attendance`,
+> `/announcements`, `/reports`, `/calendar` — are all live now. **Run with
+> `VITE_ENABLE_MOCKS=false` to hit the real backend**; `npm run demo` remains the MSW fake-data
+> track for client previews.
+>
+> **Two things to know when comparing the real API to `npm run demo`:**
+> 1. **Term grades will differ where the demo data uses weighted categories.** The backend
+>    implements the documented two-level rollup (`database-schema.md` §10.2c: grades → category %,
+>    categories → by `category.weight`, with drop-lowest); `mocks/demo/selectors.ts::computeTermGrade`
+>    does a flat mean and ignores category weights entirely. The backend is correct — the mock is a
+>    simplification. Screens are unaffected (they render `term_numeric` from the server), only the
+>    numbers move.
+> 2. **`selectors.ts::letterFor` still has the OQ-DB2 bug** — a strict `min <= v <= max` lookup
+>    against `.99`-ceiling bands, so e.g. `179.99/200 = 89.995` matches no band and renders blank
+>    where a "B" belongs. The backend resolves this half-open on `min_score`. Demo-only and
+>    cosmetic, but worth aligning if the demo is shown again.
+>
+> **Orval was deliberately NOT regenerated** for the new modules: they use hand-written transports
+> (`features/*/api/*.ts`), so generating clients nothing imports would add noise without proving
+> anything. `npm run typecheck` passes clean. See the progress tracker's note for the full reasoning.
 
 ---
 
@@ -15,13 +38,20 @@ _Last updated: 2026-06-26 — Phase 6._
 ```bash
 cd frontend
 cp .env.example .env      # configure VITE_API_BASE_URL etc. (mocks ON by default)
-npm install               # installs deps + copies the MSW worker into public/
+npm install               # installs deps ONLY — see the note below
+npx msw init public/ --save  # REQUIRED on a fresh clone: creates public/mockServiceWorker.js
 npm run dev               # http://localhost:5173  (login → shell works via the mock layer)
 npm run build             # tsc -b && vite build  → dist/
 npm run typecheck         # tsc -b --noEmit
 npm run lint              # eslint
 npm run format            # prettier --write
 ```
+
+> ⚠️ **`npm install` does NOT create the MSW worker.** This block used to claim it did.
+> There is no `postinstall` script in `package.json`, and `public/mockServiceWorker.js` is
+> gitignored (`frontend/.gitignore:29`) — so on a fresh clone nothing generates it. Demo mode
+> then loads and 404s every request, which reads like a broken app rather than a missing
+> file. `RUNBOOK.md` §1.3 has the same warning.
 
 **Build/run status (verified in Phase 6):**
 - `npm install` — ✅ 362 packages, no blocking errors (transitive deprecation warnings only).
@@ -69,9 +99,10 @@ frontend/
     ├── vite-env.d.ts                 # typed import.meta.env
     │
     ├── app/
-    │   ├── providers/                # AppProviders, queryClient, ErrorBoundary
+    │   ├── providers/                # AppProviders, queryClient, ErrorBoundary,
+    │   │                             #   YearContext (student year·semester selection)
     │   ├── router/                   # routes.tsx, ProtectedRoute, RoleRoute, ErrorPages (403/404)
-    │   └── layout/                   # AppShell, TopBar, Sidebar, UserMenu, SemesterSwitcher,
+    │   └── layout/                   # AppShell, TopBar, Sidebar, UserMenu, StudentYearSwitcher,
     │                                 #   NotificationsBell, navConfig (role-aware nav map)
     │
     ├── features/                     # one folder per module — components/ api/ hooks/ types.ts
@@ -160,7 +191,7 @@ Lives in `src/shared/api/mocks/` (`browser.ts`, `handlers.ts`, `fixtures.ts`), u
 - Scaffold + tooling (Vite/TS strict/ESLint/Prettier), `.env.example`, path aliases, vendor chunk-splitting.
 - MUI theme (D19) via `colorSchemes`.
 - Feature-based folder tree (11 modules + shared + theme + i18n).
-- AppShell + TopBar + Sidebar (role-aware nav from permission map, responsive permanent/temporary/mini drawer) + UserMenu + SemesterSwitcher + NotificationsBell (shell-functional; data sources wired in Phase 7).
+- AppShell + TopBar + Sidebar (role-aware nav from permission map, responsive permanent/temporary/mini drawer) + UserMenu + NotificationsBell (shell-functional; data sources wired in Phase 7). The app-bar period control shipped as the **student-only `StudentYearSwitcher`** (`YearContext`), not the all-roles `SemesterSwitcher` originally specified — staff scope per module via `?year=`. See ui-design-system §3.1.
 - Routing + `ProtectedRoute` + `RoleRoute` + 403/404 pages + per-role placeholder pages.
 - Auth structure: in-memory token, bootstrap silent refresh, single-flight refresh, logout, `/auth/me`, error normalization.
 - QueryClient + query-key factory.
@@ -172,7 +203,7 @@ Lives in `src/shared/api/mocks/` (`browser.ts`, `handlers.ts`, `fixtures.ts`), u
 - The 13 data/feature-composition shared components (`stubs.tsx`): `DataTable`, `ConfirmDialog`, `ChartWithTable`, `StatCard`, `FormDialog`, `FormPage`, `FilterBar`, `RoleChip`, `StatusBadge`, `DetailTabs`, `PrintLayout`, `PasswordField`, `CollapsibleSection` — typed placeholders rendering a "Phase 7" marker.
 - All 11 feature modules' real functionality (lists/detail/forms/dashboards/reports).
 - Forced password-change form body (route + placeholder exist; `PATCH /auth/me/password` wiring is Phase 7).
-- SemesterSwitcher term list + NotificationsBell unread count (need Settings + Announcements modules).
+- Period-switcher term list + NotificationsBell unread count (need Settings + Announcements modules). ✅ Both landed: `StudentYearSwitcher` reads `GET /students/me/years` + `GET /settings/academic-years`; the bell reads `GET /announcements/unread-count`.
 - OpenAPI-generated TS client (needs the running backend / Phase 5 artifact).
 - i18n is a string-table stub (English); no i18n library wired yet.
 

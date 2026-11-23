@@ -1,0 +1,363 @@
+"""Course-offering schemas (api-spec §5 Module 5; D31).
+
+WHAT D31 CHANGED IN THIS CONTRACT
+
+    `classes` + `class_subjects` merged into `course_offerings`, so three things went:
+
+      * `ClassListItem.name` / `.grade_level` / `.section` — a stored homeroom name and
+        Form level. An offering's identity is its COURSE plus its TERM plus an optional
+        section, and its display string is `label` (see `offerings/labels.py`). The label
+        is computed server-side and sent, so the API and the demo handlers cannot disagree
+        about how an offering is named — the same reasoning that keeps the GPA in one
+        function.
+      * `ClassSubjectItem` and `ClassSubjectCreateRequest` — an offering IS the subject
+        now, so there is nothing to attach or list. `POST /offerings` takes `course_id`
+        directly.
+      * `academic_year_id` on the create request — an offering is scheduled into a
+        SEMESTER. The year is reached through it, never stored alongside it.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, time
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.common.enums import EnrollmentStatus
+from app.modules.classrooms.schemas import ClassroomRef
+from app.common.schemas import (
+    AcademicYearRef,
+    AuditStamp,
+    CourseRef,
+    SemesterRef,
+    StudentRef,
+    TeacherRef,
+)
+
+
+class OfferingMeetingItem(BaseModel):
+    """One recurring weekly slot of an offering."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    day_of_week: int
+    start_time: time
+    end_time: time
+    room: str | None = None
+
+
+class ScheduleConflict(BaseModel):
+    """An advisory clash. Never blocks a write — see `MeetingsResult`."""
+
+    kind: Literal["teacher", "room", "student"]
+    #: The thing that clashes: a lecturer's name, a room name, or a student's name.
+    label: str
+    with_offering_id: UUID
+    #: `offering_label` of the other offering, e.g. "MATH1110-01".
+    with_offering_label: str
+    day_of_week: int
+    start_time: time
+    end_time: time
+    message: str
+
+
+class OfferingListItem(BaseModel):
+    """A row in GET /offerings.
+
+    `course` carries the credits, because credits live ONLY on the catalog (D31) and
+    every listing that names a course also shows what it is worth.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    #: "MATH1110-01" — built by `offering_label`, never assembled client-side.
+    label: str = ""
+    course: CourseRef | None = None
+    semester: SemesterRef | None = None
+    section_code: str | None = None
+    capacity: int | None = None
+    #: D44 — where this offering meets. NULL = no room assigned.
+    #:
+    #: ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+    #: places describe the same fact until the timetable is moved onto this one; see
+    #: `docs/d44-sims10-and-meeting3.md`.
+    classroom: ClassroomRef | None = None
+    enrolled_count: int = 0
+    is_archived: bool
+    teachers: list[TeacherRef] = Field(default_factory=list)
+    lead_teacher_id: UUID | None = None
+    meetings: list[OfferingMeetingItem] = Field(default_factory=list)
+    #: True when the CALLER may act on this offering (a lecturer who teaches it, or any
+    #: Dean/Registrar). Drives whether the row's actions render.
+    actionable_by_caller: bool = False
+
+
+class OfferingDetail(BaseModel):
+    """GET /offerings/{id}."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    label: str = ""
+    course: CourseRef | None = None
+    semester: SemesterRef | None = None
+    #: Derived through the semester — an offering does not store its year (D31).
+    academic_year: AcademicYearRef | None = None
+    section_code: str | None = None
+    capacity: int | None = None
+    #: D44 — where this offering meets. NULL = no room assigned.
+    #:
+    #: ⚠️ `meetings[].room` is FREE TEXT and is still what the timetable renders. Two
+    #: places describe the same fact until the timetable is moved onto this one; see
+    #: `docs/d44-sims10-and-meeting3.md`.
+    classroom: ClassroomRef | None = None
+    enrolled_count: int = 0
+    over_capacity: bool = False
+    is_archived: bool
+    teachers: list[TeacherRef] = Field(default_factory=list)
+    lead_teacher_id: UUID | None = None
+    meetings: list[OfferingMeetingItem] = Field(default_factory=list)
+    assessment_count: int = 0
+    actionable_by_caller: bool = False
+    audit: AuditStamp | None = None
+
+
+class RosterEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    enrollment_id: UUID
+    student: StudentRef
+    enrolled_at: datetime
+    unenrolled_at: datetime | None = None
+    #: D35 — HOW the student is sitting this offering: the client's `coursestatus`.
+    #:
+    #: The column has existed since `005_tertiary.sql` §8 and was **mapped and nothing
+    #: else** until D35 — no endpoint set it, no calculation read it, and all 393 live rows
+    #: said `enrolled`. Putting it on the roster is what makes it visible at all.
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.REGISTERED
+
+
+class EnrollmentResult(BaseModel):
+    """POST /offerings/{id}/enrollments.
+
+    `over_capacity_warning` and `schedule_conflicts` are advisory: the enrolment
+    succeeded. A missing PREREQUISITE, by contrast, is a hard 409 — unlike a timetable
+    clash it is not fixed by the next edit (D30 §D4, D-Q6).
+    """
+
+    enrolled: list[RosterEntry] = Field(default_factory=list)
+    over_capacity_warning: bool = False
+    schedule_conflicts: list[ScheduleConflict] = Field(default_factory=list)
+
+
+class EnrollableStudent(StudentRef):
+    """A student the picker may offer, plus whether the gate will actually take them.
+
+    D45 §3b P2. The picker used to return a bare `StudentRef`, so it offered students
+    the prerequisite gate then refused — and because `enroll_students` validates the
+    whole batch before writing anything, ONE ineligible pick refused the entire
+    selection. The Dean's experience was "it isn't allowing to add students", with a
+    message naming a single student and no way to see which others were affected.
+
+    `eligible=False` is advisory for the UI only. The gate in `enroll_students` is
+    still the authority and is unchanged — this field must never be the thing that
+    decides an enrolment, or the rule would live in two places.
+    """
+
+    eligible: bool = True
+    #: Why not — the same prose the 409 uses. `None` when `eligible`.
+    ineligible_reason: str | None = None
+    #: D45 §12/§20 — WHICH rule bars them: `"prerequisites"` or `"student_status"`.
+    #: The client sends back the matching override flag, so a waiver names the rule it
+    #: actually waived instead of blanket-waiving everything the Dean can reach.
+    ineligible_rule: str | None = None
+
+
+class EnrollableStudents(BaseModel):
+    items: list[EnrollableStudent] = Field(default_factory=list)
+
+
+class OfferingMeetingInput(BaseModel):
+    """One submitted slot. `day_of_week` is Mon-Fri; `end_time` must follow `start_time`.
+
+    The time order is validated HERE rather than left to the database. `class_meetings`
+    carries `ck_class_meetings_time_order`, so an inverted slot was always refused — but
+    as an `OperationalError` raised mid-write, which surfaces as a 500 instead of the 422
+    the caller can act on. A constraint the API can check before it writes should be
+    checked before it writes; the CHECK stays as the backstop for anything that reaches
+    the table another way.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    day_of_week: int = Field(ge=1, le=5)
+    start_time: time
+    end_time: time
+    room: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def _end_after_start(self) -> "OfferingMeetingInput":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be later than start_time")
+        return self
+
+
+class MeetingsReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    meetings: list[OfferingMeetingInput] = Field(default_factory=list)
+
+
+class MeetingsResult(BaseModel):
+    """GET/PUT /offerings/{id}/meetings.
+
+    `conflicts` is advisory. Overlapping a lecturer or a room is a real scheduling
+    mistake but not always an error (a room can be shared, a clash may be fixed minutes
+    later), and hard-blocking would make an otherwise-valid week unsaveable. So the write
+    succeeds and the UI warns — the same warn-only call already made for over-capacity
+    enrolment (D-Q6).
+    """
+
+    meetings: list[OfferingMeetingItem] = Field(default_factory=list)
+    conflicts: list[ScheduleConflict] = Field(default_factory=list)
+
+
+class OfferingCreateRequest(BaseModel):
+    """POST /offerings (Dean or Registrar) — schedule a course in a term.
+
+    `course_id` and `semester_id` together with `section_code` ARE the offering's
+    identity. Lecturers and meetings are optional but accepted so the whole
+    "MATH1110-01, Prof. Cano, Room A, Mon 08:00-09:30" can be created in one request
+    instead of three. `semester_id` defaults to the active term.
+
+    There is no `name`: the label is derived (D31). There is no `academic_year_id`: the
+    year follows from the semester.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    course_id: UUID
+    semester_id: UUID | None = None
+    #: "01", "02" for parallel sections of the same course in the same term.
+    section_code: str | None = Field(default=None, max_length=10)
+    capacity: int | None = Field(default=None, gt=0)
+    #: D44 — FK to `classroom`. Omit or send null for "no room yet", which is what all
+    #: 19 pre-D44 offerings are.
+    classroom_id: UUID | None = None
+    teacher_ids: list[UUID] = Field(default_factory=list)
+    lead_teacher_id: UUID | None = None
+    meetings: list[OfferingMeetingInput] = Field(default_factory=list)
+
+
+class OfferingUpdateRequest(BaseModel):
+    """PATCH /offerings/{id} (Dean or Registrar). Partial.
+
+    Neither `course_id` nor `semester_id` is editable: changing either would silently
+    reinterpret every assessment, grade and attendance record already recorded against
+    the offering. Create another offering instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    section_code: str | None = Field(default=None, max_length=10)
+    capacity: int | None = Field(default=None, gt=0)
+    #: D44. Send `null` EXPLICITLY to unassign the room; omit to leave it alone. The
+    #: service reads `exclude_unset`, so the two are distinguishable here — unlike
+    #: `capacity` above, which cannot be cleared and predates the distinction mattering.
+    classroom_id: UUID | None = None
+    is_archived: bool | None = None
+
+
+class TeacherAssignRequest(BaseModel):
+    """PUT /offerings/{id}/teachers (Dean or Registrar).
+
+    Replaces the lecturer set. Empty list is allowed (removes all). `lead_teacher_id`
+    must be a member of `teacher_ids`; defaults to `teacher_ids[0]` when omitted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    teacher_ids: list[UUID] = Field(default_factory=list)
+    lead_teacher_id: UUID | None = None
+
+
+class EnrollmentOverride(BaseModel):
+    """D45 §12/§20 — an authorized waiver of a registration restriction. **Dean only.**
+
+    §12 asks that a prerequisite be enforced *"or require an authorized override"*, and
+    §20's "???" asked which restrictions those are. Answered by BAJC on 2026-09-09:
+    **the prerequisite rule and the student-status rule; NOT capacity.**
+
+    Capacity was considered and deliberately excluded. It is warn-only today — the enrol
+    succeeds and returns `over_capacity_warning` — so there is nothing to override; making
+    it overridable would first mean making it a refusal, which is a stricter system than
+    BAJC asked for.
+
+    ⚠️ `year_archived` and `semester_mismatch` are NOT overridable and must never become
+    so. They are integrity invariants, not academic policy: an enrolment in an archived
+    year or in a term the offering does not run in produces a row no screen can explain
+    and no report can attribute. A waiver is for a rule the institution may choose to
+    set aside, not for a contradiction.
+
+    `reason` is REQUIRED. §12 and §20 both say every override is logged, and a waiver
+    with no stated cause is not an audit record — it is only a hole with a name on it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Waive `prerequisite_not_met` for every student in this batch that it blocks.
+    prerequisites: bool = False
+    #: Waive `student_not_enrollable` — the student is not in an enrollable status.
+    student_status: bool = False
+    reason: str = Field(
+        min_length=5,
+        max_length=500,
+        description="Why the rule is being set aside. Recorded against the Dean.",
+    )
+
+
+class EnrollRequest(BaseModel):
+    """POST /offerings/{id}/enrollments. `semester_id` defaults to the offering's own."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    student_ids: list[UUID] = Field(min_length=1)
+    #: D45 §12/§20. Absent for an ordinary enrolment — which is every existing caller, so
+    #: nothing changes for them. Present only when a Dean is deliberately setting a rule
+    #: aside; any other role sending it gets 403 `override_not_permitted`.
+    override: EnrollmentOverride | None = None
+    semester_id: UUID | None = None
+    #: D35 — how these students are sitting the offering. Applies to EVERY id in the
+    #: batch, which is what an audit cohort actually looks like; a single student's status
+    #: is changed afterwards through `PATCH .../enrollments/{id}`.
+    #:
+    #: Defaults to `enrolled`, so every existing caller is unchanged. The two `withdraw_*`
+    #: values are accepted here as well as on the PATCH — a Registrar transcribing a paper
+    #: record backwards needs to be able to register a withdrawal that already happened.
+    enrollment_status: EnrollmentStatus = EnrollmentStatus.REGISTERED
+
+
+class EnrollmentStatusRequest(BaseModel):
+    """PATCH /offerings/{id}/enrollments/{enrollment_id} (D35).
+
+    A SEPARATE endpoint from `DELETE`, and the distinction is the point:
+
+      * `DELETE` un-enrols — the row is closed with `unenrolled_at` and the student is off
+        the roster, as though the registration were a mistake.
+      * a WITHDRAWAL is a fact about a course the student did sit and then left. The row
+        stays open and on the roster, because the transcript has to print `W`
+        against it. Deleting it would erase the very thing being recorded.
+
+    `reason` is not stored on the enrolment — there is no column for it — but it is written
+    to the audit log, which is where "why did this change" is answerable for every other
+    guarded transition in this system.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enrollment_status: EnrollmentStatus
+    reason: str | None = Field(default=None, max_length=500)

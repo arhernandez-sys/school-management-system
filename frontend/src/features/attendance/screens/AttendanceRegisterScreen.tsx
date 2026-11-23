@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -11,58 +12,92 @@ import {
   Paper,
   Snackbar,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
+import { formatTimeRange } from '@features/offerings/meetingFormat';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@shared/components';
 import { useYearFilter } from '@shared/hooks';
 import { apiErrorMessage } from '@shared/api/errorMessages';
-import { DEMO_TODAY } from '@shared/api/mocks/demo/dataset';
+// BACKFILL-TEMP: `attendanceRecordableDates` unused while the past-date limit is off.
+import { schoolToday } from '@shared/utils/schoolDate';
 import type { AttendanceStatus } from '@shared/types/enums';
 import {
   useAttendanceRegister,
-  useAttendanceSections,
+  useAttendanceOfferings,
   useSaveAttendance,
 } from '../hooks/useAttendance';
 import { AttendanceToolbar } from '../components/AttendanceToolbar';
 import { AttendanceStatusToggle } from '../components/AttendanceStatusToggle';
 import { ATTENDANCE_STATUS_META, DEFAULT_STATUS } from '../attendanceStatus';
 
-/** Local, editable copy of each row's status keyed by student id. */
-type Draft = Record<string, AttendanceStatus>;
+/**
+ * Local, editable copy of each row's status keyed by student id. `null` = not entered
+ * yet — the client asked that nothing be pre-selected, so an unrecorded student starts
+ * blank and Save refuses until every row has a status.
+ */
+type Draft = Record<string, AttendanceStatus | null>;
 
 function formatRecordedAt(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? iso
-    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  // D39 (Meeting #2 item 1) — dd/mm/yyyy.
+  return formatSchoolDate(iso);
 }
 
 /**
  * Attendance entry sheet (design-system §7.6) — tablet-first daily register for one
- * (section, date). All rows default to Present (FR-ATT-02); the teacher taps to change
- * a status, can "Mark all present", sees running counts, and Saves via PUT /attendance
- * (upsert, FR-ATT-03). Future dates are blocked (FR-ATT-05). P/S land here read-only and
+ * (offering, date). Unrecorded rows start with NO status selected (client request,
+ * 14 Oct 2026 — replaces FR-ATT-02's "default Present"); the lecturer taps each one or
+ * uses "Mark all present", sees running counts, and Saves via PUT /attendance (upsert,
+ * FR-ATT-03). Save is refused while any row is blank. Only today and the previous school
+ * day can be chosen — future dates (FR-ATT-05) and older ones are closed. P/S land here read-only and
  * are steered to the Summary tab (they view-all, they do not record).
  *
- * Selection persists to the URL (?section_id=&date=) so the sheet is shareable/reloadable.
+ * Attendance is per SCHEDULED SESSION (Nov 2026): the register for a date lists the
+ * offering's meetings on that weekday and the lecturer marks each one separately — an
+ * offering that meets at 08:00 and 13:00 on a Monday has two registers that Monday. A date
+ * with no meeting has no register.
+ *
+ * Selection persists to the URL (?offering_id=&date=&start_time=) so the sheet is
+ * shareable/reloadable.
  */
 export function AttendanceRegisterScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const sectionId = searchParams.get('section_id');
-  const date = searchParams.get('date') ?? DEMO_TODAY;
+  const offeringId = searchParams.get('offering_id');
+  // Null lets the server pick the day's first session; a stale value (not a meeting on
+  // the chosen date) is also resolved server-side to the first session.
+  const requestedStart = searchParams.get('start_time');
+  // Defaults to the school-local today (America/Belize), matching the backend's
+  // `school_today()`. Previously the demo dataset's fixed 2025-10-15, so against the
+  // real API the register opened on a date months in the past.
+  const requestedDate = searchParams.get('date') ?? schoolToday();
+  // A URL or a typed value can still name a closed date — fall back to today rather
+  // than load (and offer to save) a register outside the window.
+  // BACKFILL-TEMP: commented out for now until the school finishes adding all the old data for testing. Restore once the backfill is done (grep BACKFILL-TEMP).
+  // Only a FUTURE date still falls back to today (ISO dates compare as strings).
+  // const date = attendanceRecordableDates().includes(requestedDate) ? requestedDate : schoolToday();
+  const date =
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) && requestedDate <= schoolToday()
+      ? requestedDate
+      : schoolToday();
 
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
-  const sectionsQuery = useAttendanceSections(yearId);
-  const registerQuery = useAttendanceRegister(sectionId, date);
+  const offeringsQuery = useAttendanceOfferings(yearId);
+  const registerQuery = useAttendanceRegister(offeringId, date, requestedStart);
   const saveMut = useSaveAttendance();
+  const sessions = registerQuery.data?.sessions ?? [];
+  /** The session the loaded register is for — what Save writes against. */
+  const sessionStart = registerQuery.data?.start_time ?? null;
+  const currentSession = sessions.find((s) => s.start_time === sessionStart) ?? null;
 
-  // Switching year clears the (year-specific) section so the effect re-picks one.
+  // Switching year clears the (year-specific) offering so the effect re-picks one.
   const handleChangeYear = (value: string) =>
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', value);
-        next.delete('section_id');
+        next.delete('offering_id');
+        next.delete('start_time');
         return next;
       },
       { replace: true },
@@ -71,50 +106,63 @@ export function AttendanceRegisterScreen() {
   const [draft, setDraft] = useState<Draft>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Set when Save was pressed with blank rows; drives the alert and row outlines. */
+  const [showMissing, setShowMissing] = useState(false);
 
-  const canRecord = registerQuery.data?.can_record ?? sectionsQuery.data?.can_record ?? false;
+  const canRecord = registerQuery.data?.can_record ?? offeringsQuery.data?.can_record ?? false;
 
-  // Default the section to the caller's first available one (keeps the URL the source of truth).
+  // Preselect the caller's first available class (keeps the URL the source of truth).
+  //
+  // This `items[0]` is NOT the retired "a student has one homeroom" assumption that D29
+  // removed elsewhere — it just picks a starting class for the picker, which the user then
+  // changes. Every class in the list is equally valid; there is no primary one.
   useEffect(() => {
-    if (!sectionId && sectionsQuery.data && sectionsQuery.data.items.length > 0) {
+    if (!offeringId && offeringsQuery.data && offeringsQuery.data.items.length > 0) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set('section_id', sectionsQuery.data!.items[0]!.id);
-          if (!next.get('date')) next.set('date', DEMO_TODAY);
+          next.set('offering_id', offeringsQuery.data!.items[0]!.offering.id);
+          if (!next.get('date')) next.set('date', schoolToday());
           return next;
         },
         { replace: true },
       );
     }
-  }, [sectionId, sectionsQuery.data, setSearchParams]);
+  }, [offeringId, offeringsQuery.data, setSearchParams]);
 
-  // Seed the editable draft from the loaded register (unrecorded → default Present).
+  // Seed the editable draft from the loaded register (unrecorded → blank, not Present).
   useEffect(() => {
     if (registerQuery.data) {
       const seeded: Draft = {};
       for (const entry of registerQuery.data.entries) {
-        seeded[entry.student.id] = entry.status ?? DEFAULT_STATUS;
+        seeded[entry.student.id] = entry.status ?? null;
       }
       setDraft(seeded);
+      setShowMissing(false);
     }
   }, [registerQuery.data]);
 
   const entries = registerQuery.data?.entries ?? [];
 
   const counts = useMemo(() => {
-    const c = { present: 0, absent: 0, late: 0, excused: 0 };
+    const c = { present: 0, absent: 0, late: 0, excused: 0, missing: 0 };
     for (const entry of entries) {
-      const status = draft[entry.student.id] ?? DEFAULT_STATUS;
-      c[status] += 1;
+      const status = draft[entry.student.id] ?? null;
+      if (status === null) c.missing += 1;
+      else c[status] += 1;
     }
     return c;
   }, [entries, draft]);
 
+  // The warning clears itself once the last blank row is filled in.
+  useEffect(() => {
+    if (counts.missing === 0) setShowMissing(false);
+  }, [counts.missing]);
+
   const isDirty = useMemo(() => {
     if (!registerQuery.data) return false;
     return registerQuery.data.entries.some(
-      (entry) => (entry.status ?? DEFAULT_STATUS) !== (draft[entry.student.id] ?? DEFAULT_STATUS),
+      (entry) => (entry.status ?? null) !== (draft[entry.student.id] ?? null),
     );
   }, [registerQuery.data, draft]);
 
@@ -124,10 +172,12 @@ export function AttendanceRegisterScreen() {
   const markAllPresent = () =>
     setDraft(Object.fromEntries(entries.map((e) => [e.student.id, DEFAULT_STATUS] as const)));
 
-  const handleChangeSection = (value: string) =>
+  // A new offering or date has a different schedule, so the session choice resets.
+  const handleChangeOffering = (value: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set('section_id', value);
+      next.set('offering_id', value);
+      next.delete('start_time');
       return next;
     });
 
@@ -135,25 +185,44 @@ export function AttendanceRegisterScreen() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('date', value);
+      next.delete('start_time');
       return next;
     });
 
+  const handleChangeSession = (value: string | null) => {
+    if (!value) return; // exclusive group: clicking the selected session again is a no-op
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('start_time', value);
+      return next;
+    });
+  };
+
   const handleSave = () => {
-    if (!sectionId) return;
+    if (!offeringId || !sessionStart) return;
     setError(null);
+    if (counts.missing > 0) {
+      setShowMissing(true);
+      return;
+    }
     saveMut.mutate(
       {
-        section_id: sectionId,
+        offering_id: offeringId,
         date,
+        start_time: sessionStart,
         entries: entries.map((e) => ({
           student_id: e.student.id,
-          status: draft[e.student.id] ?? DEFAULT_STATUS,
+          // Non-null: the guard above refuses the save while any row is blank.
+          status: draft[e.student.id] as AttendanceStatus,
         })),
       },
       {
         onSuccess: (res) => {
-          const section = registerQuery.data?.section.name ?? 'class';
-          setSaved(`Attendance saved for ${section} · ${res.upserted} students`);
+          const section = registerQuery.data?.offering.offering.label ?? 'this offering';
+          const slot = currentSession
+            ? ` (${formatTimeRange(currentSession.start_time, currentSession.end_time)})`
+            : '';
+          setSaved(`Attendance saved for ${section}${slot} · ${res.upserted} students`);
         },
         onError: (err) => setError(apiErrorMessage(err)),
       },
@@ -164,17 +233,18 @@ export function AttendanceRegisterScreen() {
     if (!registerQuery.data) return;
     setDraft(
       Object.fromEntries(
-        registerQuery.data.entries.map((e) => [e.student.id, e.status ?? DEFAULT_STATUS] as const),
+        registerQuery.data.entries.map((e) => [e.student.id, e.status ?? null] as const),
       ),
     );
+    setShowMissing(false);
   };
 
   // ── UI states ────────────────────────────────────────────────────────────────
-  if (sectionsQuery.isLoading) return <LoadingState variant="page" label="Loading classes" />;
-  if (sectionsQuery.isError) {
-    return <ErrorState onRetry={() => void sectionsQuery.refetch()} />;
+  if (offeringsQuery.isLoading) return <LoadingState variant="page" label="Loading course offerings" />;
+  if (offeringsQuery.isError) {
+    return <ErrorState onRetry={() => void offeringsQuery.refetch()} />;
   }
-  if (sectionsQuery.data && sectionsQuery.data.items.length === 0) {
+  if (offeringsQuery.data && offeringsQuery.data.items.length === 0) {
     return (
       <>
         <PageHeader title="Record attendance" />
@@ -193,15 +263,15 @@ export function AttendanceRegisterScreen() {
         title={canRecord ? 'Record attendance' : 'Attendance'}
         subtitle={
           registerQuery.data
-            ? `${registerQuery.data.section.name} · ${entries.length} students`
-            : 'Per-day homeroom register'
+            ? `${registerQuery.data.offering.offering.label} · ${entries.length} students`
+            : 'Per-day register for one subject class'
         }
       />
 
       <AttendanceToolbar
-        sections={sectionsQuery.data?.items ?? []}
-        sectionId={sectionId}
-        onSectionChange={handleChangeSection}
+        offerings={offeringsQuery.data?.items ?? []}
+        offeringId={offeringId}
+        onOfferingChange={handleChangeOffering}
         date={date}
         onDateChange={handleChangeDate}
         years={years}
@@ -223,6 +293,13 @@ export function AttendanceRegisterScreen() {
         </Alert>
       )}
 
+      {showMissing && counts.missing > 0 && (
+        <Alert severity="warning" role="alert" sx={{ mb: 2 }}>
+          Some students' attendance has not been entered ({counts.missing} of {entries.length}).
+          Choose a status for every highlighted student before saving.
+        </Alert>
+      )}
+
       {registerQuery.isLoading && <LoadingState variant="table" rows={6} />}
       {registerQuery.isError && (
         <ErrorState
@@ -231,8 +308,40 @@ export function AttendanceRegisterScreen() {
         />
       )}
 
-      {registerQuery.data && (
+      {registerQuery.data && sessions.length === 0 && (
+        <EmptyState
+          title="No class scheduled on this day"
+          description="Attendance follows the course offering's schedule. Pick a date on which this offering meets, or add a meeting for this weekday on the offering's Schedule tab."
+        />
+      )}
+
+      {registerQuery.data && sessions.length > 0 && (
         <>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
+              {sessions.length > 1
+                ? `This offering meets ${sessions.length} times on this day — take attendance for each class.`
+                : 'Class session'}
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              color="primary"
+              value={sessionStart}
+              onChange={(_e, value: string | null) => handleChangeSession(value)}
+              aria-label="Class session"
+              sx={{ flexWrap: 'wrap' }}
+            >
+              {sessions.map((s) => (
+                <ToggleButton key={s.start_time} value={s.start_time} sx={{ textTransform: 'none' }}>
+                  {formatTimeRange(s.start_time, s.end_time)}
+                  {s.room ? ` · ${s.room}` : ''}
+                  {s.recorded ? ' ✓' : ''}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Box>
+
           {registerQuery.data.last_recorded && (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Last recorded by {registerQuery.data.last_recorded.by} on{' '}
@@ -243,7 +352,7 @@ export function AttendanceRegisterScreen() {
           {canRecord && (
             <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'center' }}>
               <Typography variant="body2" color="text.secondary">
-                All present by default.
+                Choose a status for every student.
               </Typography>
               <Button size="small" onClick={markAllPresent} disabled={entries.length === 0}>
                 Mark all present
@@ -281,9 +390,10 @@ export function AttendanceRegisterScreen() {
                       </Box>
                       <Box sx={{ width: { xs: '100%', md: 'auto' }, flexShrink: 0 }}>
                         <AttendanceStatusToggle
-                          value={draft[entry.student.id] ?? DEFAULT_STATUS}
+                          value={draft[entry.student.id] ?? null}
                           onChange={(status) => setStatus(entry.student.id, status)}
                           disabled={!canRecord || saveMut.isPending}
+                          error={showMissing && (draft[entry.student.id] ?? null) === null}
                           ariaLabel={`Attendance status for ${entry.student.full_name}`}
                         />
                       </Box>
@@ -322,6 +432,9 @@ export function AttendanceRegisterScreen() {
                     label={`${counts[meta.value]} ${meta.label}`}
                   />
                 ))}
+                {counts.missing > 0 && (
+                  <Chip color="warning" size="small" label={`${counts.missing} Not entered`} />
+                )}
               </Stack>
               <Stack direction="row" spacing={1}>
                 <Button onClick={handleCancel} disabled={!isDirty || saveMut.isPending}>

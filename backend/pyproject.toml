@@ -12,15 +12,28 @@ dependencies = [
     "pydantic-settings==2.7.1",
     "argon2-cffi==23.1.0",
     "pyjwt==2.10.1",
-    "psycopg[binary]==3.2.3",
+    # The backend targets self-hosted MariaDB; the former psycopg/Postgres driver
+    # was dropped with the pivot. Nothing imports psycopg — the only remaining
+    # Postgres artefact is the knowingly Postgres-only Alembic revision.
+    "pymysql==1.1.1",
     "python-multipart==0.0.20",
     "email-validator==2.2.0",
+    # IANA timezone database. Required for ZoneInfo("America/Belize") — Windows does
+    # not ship the tz database, so without this the school-local date resolution in
+    # app/core/timeutil.py raises ZoneInfoNotFoundError. It was already present as a
+    # transitive dependency; declared explicitly now that we depend on it directly.
+    "tzdata==2026.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
-    "pytest-asyncio==0.25.0",
+    # `httpx` is what Starlette's TestClient transports over — the entire suite is
+    # synchronous (`TestClient`, sync SQLAlchemy), so there are ZERO `async def`
+    # tests and `pytest-asyncio` was dropped in Phase 8: it was declared here,
+    # never actually installed in the working venv, and its `asyncio_mode` setting
+    # therefore raised `PytestConfigWarning: Unknown config option` on every run.
+    # Re-add both together if async tests ever arrive.
     "httpx==0.28.1",
 ]
 
@@ -34,7 +47,13 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
+# --strict-markers: a typo'd marker (`@pytest.mark.requires_bd`) becomes an ERROR
+#   instead of silently doing nothing — which for a SELECTION marker means the test
+#   quietly drops out of the lane it was supposed to be in.
+# --strict-config: an unrecognised key in this block becomes an error. Added
+#   because the reverse happened: a stale `asyncio_mode = "auto"` sat here warning
+#   on every run for weeks (see the [dev] note above). Dead config now fails loudly.
+addopts = ["--strict-markers", "--strict-config"]
 # Markers (registered to avoid PytestUnknownMarkWarning). `requires_db` is an
 # explicit opt-in marker future module tests can use on DB-backed cases; the
 # db_session fixture already skips cleanly without a configured DATABASE_URL, so

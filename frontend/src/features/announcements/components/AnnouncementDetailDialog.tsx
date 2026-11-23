@@ -43,8 +43,8 @@ export function AnnouncementDetailDialog({ id, onClose }: AnnouncementDetailDial
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                 <StatusBadge
                   label={
-                    a.audience === 'class' && a.class_ref
-                      ? `Class · ${a.class_ref.name}`
+                    a.audience === 'class' && a.offering
+                      ? `Course · ${a.offering.label}`
                       : AUDIENCE_LABEL[a.audience]
                   }
                   kind={AUDIENCE_KIND[a.audience]}

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Box,
+  Button,
   Card,
   CardActionArea,
   CardContent,
@@ -17,81 +19,140 @@ import {
   ErrorState,
   LoadingState,
   PageHeader,
+  SearchableSelect,
+  SessionSelect,
   YearSelect,
 } from '@shared/components';
-import { useYearFilter } from '@shared/hooks';
+import PrintIcon from '@mui/icons-material/Print';
+import { StudentPicker } from '@features/reports/components/StudentPicker';
+import type { StudentRef as ReportStudentRef } from '@features/reports/types';
+import { AssessmentReportPrintDialog } from './components/AssessmentReportPrintDialog';
+import { useSessionFilter, useYearFilter } from '@shared/hooks';
 import { useAuth } from '@features/auth/hooks/useAuth';
-import { useClassSubjectOptions } from './hooks/useGrades';
-import { SubjectGradesScreen } from './SubjectGradesScreen';
-import type { ClassSubjectOption } from './types';
+import { strings } from '@i18n/strings';
+import { useOfferingOptions } from './hooks/useGrades';
+import { OfferingGradesScreen } from './OfferingGradesScreen';
+import type { OfferingOption } from './types';
+import { isLecturerRole } from '@shared/auth/permissions';
 
-const CLASS_SUBJECT_PARAM = 'class_subject_id';
+const OFFERING_PARAM = 'offering_id';
 
 /**
- * Grades entry point — a GRID OF SUBJECT CARDS (mirrors the student "My Grades" pattern).
- * Click a subject to drill into its assessments + grading (SubjectGradesScreen). Teacher
- * sees the subjects they teach; P/S see all (read-only downstream). Students use My Grades.
- * Selection + year persist to the URL (`?class_subject_id=`, `?year=`).
+ * Grades entry point — a GRID OF OFFERING CARDS (mirrors the student "My Grades" pattern).
+ * Click one to drill into its assessments + grading (OfferingGradesScreen). A lecturer sees
+ * the offerings they teach; the Dean and Registrar see all (read-only downstream). Students
+ * use My Grades. Selection + year persist to the URL (`?offering_id=`, `?year=`).
+ *
+ * **D31 replaced the Form / Section filters with a Term filter.** Those two read
+ * `option.section.grade_level` and `option.section.section` — the homeroom's Form and its
+ * division letter, both dropped with the `classes` table. The term took their place because
+ * it is what now separates two otherwise identical cards: the same course legitimately has a
+ * gradebook in Semester 1 and another in Semester 2, and those are different books. A
+ * year-scoped picker could not express that at all.
+ *
+ * **D47 — Print lives here**, on the main page rather than inside each offering. The Dean
+ * filters by session, course offering, student and lecturer; a lecturer by session and
+ * their own course offerings (the server holds them to their own whatever is sent). The
+ * Registrar and Auditor browse but do not print.
  */
 export function GradeAssessmentsScreen() {
   const { user } = useAuth();
-  const isTeacher = user?.role === 'teacher';
-  // P/S browse every offering school-wide; give them Teacher/Form/Section narrowing filters.
-  // Teachers see only their own subjects, so these would be noise for them.
-  const showClassFilters = user?.role === 'principal' || user?.role === 'secretary';
+  const isTeacher = isLecturerRole(user?.role); // D43 — an HOD is a lecturer
+  // The Dean and Registrar browse every offering school-wide, so they get Lecturer/Term
+  // narrowing. A lecturer sees only their own, where these would be noise.
+  const showBrowseFilters = user?.role === 'principal' || user?.role === 'secretary';
+  const isDean = user?.role === 'principal';
+  // D47 — the assessment report is the Dean's and the lecturers' (their own courses).
+  const canPrint = isDean || isTeacher;
   const { yearId, years, activeYearId, isLoading: yearsLoading } = useYearFilter();
+  // Session beside the year, for every role, defaulting to the active one. Any other
+  // session is browsed read-only — the server reports `can_edit: false` for it too.
+  const session = useSessionFilter(yearId);
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get(CLASS_SUBJECT_PARAM);
+  const selectedId = searchParams.get(OFFERING_PARAM);
 
-  const optionsQuery = useClassSubjectOptions(yearId);
+  const optionsQuery = useOfferingOptions(yearId);
   const options = useMemo(() => optionsQuery.data?.items ?? [], [optionsQuery.data]);
   const selected = useMemo(
-    () => options.find((o) => o.id === selectedId) ?? null,
+    () => options.find((o) => o.offering.id === selectedId) ?? null,
     [options, selectedId],
   );
 
-  // ── Teacher / Form / Section filters (P/S only) ──────────────────────────────────
+  // ── Lecturer filter (Dean + Registrar only) ──────────────────────────────────────
   const [teacherId, setTeacherId] = useState('');
-  const [form, setForm] = useState('');
-  const [sectionLetter, setSectionLetter] = useState('');
+  // ── D47 — course offering (everyone) and student (Dean) filters, + print ────────
+  const [offeringFilter, setOfferingFilter] = useState('');
+  const [student, setStudent] = useState<ReportStudentRef | null>(null);
+  const [printOpen, setPrintOpen] = useState(false);
 
-  // Distinct filter options derived from the offerings the caller can see.
-  const { teachers, forms, sectionLetters } = useMemo(() => {
+  // Distinct lecturers derived from the offerings the caller can see.
+  const teachers = useMemo(() => {
     const teacherMap = new Map<string, string>();
-    const formSet = new Set<string>();
-    const letterSet = new Set<string>();
-    for (const o of options) {
-      for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
-      if (o.section?.grade_level) formSet.add(o.section.grade_level);
-      if (o.section?.section) letterSet.add(o.section.section);
-    }
-    return {
-      teachers: [...teacherMap.entries()]
-        .map(([id, name]) => ({ id, name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      forms: [...formSet].sort((a, b) => a.localeCompare(b)),
-      sectionLetters: [...letterSet].sort((a, b) => a.localeCompare(b)),
-    };
+    for (const o of options) for (const t of o.teachers) teacherMap.set(t.id, t.full_name);
+    return [...teacherMap.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [options]);
 
-  const filteredOptions = useMemo(() => {
-    if (!showClassFilters) return options;
-    return options.filter(
-      (o) =>
-        (!teacherId || o.teachers.some((t) => t.id === teacherId)) &&
-        (!form || o.section?.grade_level === form) &&
-        (!sectionLetter || o.section?.section === sectionLetter),
-    );
-  }, [options, showClassFilters, teacherId, form, sectionLetter]);
+  const filteredOptions = useMemo(
+    () =>
+      options.filter(
+        (o) =>
+          (!session.sessionId || o.offering.semester?.id === session.sessionId) &&
+          (!showBrowseFilters || !teacherId || o.teachers.some((t) => t.id === teacherId)) &&
+          (!offeringFilter || o.offering.id === offeringFilter),
+      ),
+    [options, session.sessionId, showBrowseFilters, teacherId, offeringFilter],
+  );
 
-  // Drop a stale ?class_subject_id= that isn't in the current year's options.
+  // The offering dropdown lists what the OTHER filters leave, so it never offers a course
+  // that the session or lecturer filter has already ruled out.
+  const offeringChoices = useMemo(
+    () =>
+      options
+        .filter(
+          (o) =>
+            (!session.sessionId || o.offering.semester?.id === session.sessionId) &&
+            (!showBrowseFilters || !teacherId || o.teachers.some((t) => t.id === teacherId)),
+        )
+        .map((o) => ({ value: o.offering.id, label: o.offering.label, hint: o.offering.course.name })),
+    [options, session.sessionId, showBrowseFilters, teacherId],
+  );
+
+  const printParams = useMemo(
+    () => ({
+      academic_year_id: yearId || undefined,
+      semester_id: session.sessionId || undefined,
+      offering_id: offeringFilter || undefined,
+      student_id: isDean ? student?.id : undefined,
+      teacher_id: isDean ? teacherId || undefined : undefined,
+    }),
+    [yearId, session.sessionId, offeringFilter, isDean, student, teacherId],
+  );
+  const printSummary = useMemo(() => {
+    const parts: string[] = [];
+    const year = years.find((y) => y.id === yearId);
+    if (year) parts.push(year.name);
+    const sess = session.sessions.find((x) => x.id === session.sessionId);
+    if (sess) parts.push(sess.name);
+    const off = options.find((o) => o.offering.id === offeringFilter);
+    if (off) parts.push(off.offering.label);
+    if (isDean && teacherId) {
+      const t = teachers.find((x) => x.id === teacherId);
+      if (t) parts.push(`Lecturer: ${t.name}`);
+    }
+    if (isDean && student) parts.push(`Student: ${student.full_name}`);
+    return parts;
+  }, [years, yearId, session.sessions, session.sessionId, options, offeringFilter, isDean, teacherId, teachers, student]);
+
+  // Drop a stale ?offering_id= that isn't in the current year's options.
   useEffect(() => {
-    if (selectedId && options.length > 0 && !options.some((o) => o.id === selectedId)) {
+    if (selectedId && options.length > 0 && !options.some((o) => o.offering.id === selectedId)) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.delete(CLASS_SUBJECT_PARAM);
+          next.delete(OFFERING_PARAM);
           return next;
         },
         { replace: true },
@@ -99,16 +160,16 @@ export function GradeAssessmentsScreen() {
     }
   }, [selectedId, options, setSearchParams]);
 
-  const openSubject = (id: string) =>
+  const openOffering = (id: string) =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set(CLASS_SUBJECT_PARAM, id);
+      next.set(OFFERING_PARAM, id);
       return next;
     });
   const backToGrid = () =>
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.delete(CLASS_SUBJECT_PARAM);
+      next.delete(OFFERING_PARAM);
       return next;
     });
   const changeYear = (id: string) =>
@@ -116,36 +177,53 @@ export function GradeAssessmentsScreen() {
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set('year', id);
-        next.delete(CLASS_SUBJECT_PARAM);
+        // A session belongs to one year; the new year resolves its own default.
+        next.delete('session');
+        next.delete(OFFERING_PARAM);
         return next;
       },
       { replace: true },
     );
+  // A filter pinned to a course in another year would silently match nothing.
+  useEffect(() => {
+    setOfferingFilter('');
+  }, [yearId, session.sessionId]);
 
   // ── Drill-down ────────────────────────────────────────────────────────────────
   if (selectedId) {
     return (
-      <SubjectGradesScreen
+      <OfferingGradesScreen
         option={selected}
-        classSubjectId={selectedId}
+        offeringId={selectedId}
         canAuthor={Boolean(selected?.can_edit)}
         onBack={backToGrid}
       />
     );
   }
 
-  // ── Subject card grid ───────────────────────────────────────────────────────────
+  // ── Offering card grid ──────────────────────────────────────────────────────────
   const subtitle = isTeacher
-    ? 'Pick a subject to view its assessments and grade the class.'
-    : 'Browse subjects. Grade entry is done by the subject teacher.';
+    ? 'Pick a course to view its assessments and grade the class.'
+    : 'Browse course offerings. Grade entry is done by the offering’s lecturer.';
 
   return (
     <Box sx={{ pt: 3 }}>
-      <PageHeader title="Grades" subtitle={subtitle} />
+      <PageHeader
+        title="Grades"
+        subtitle={subtitle}
+        primaryAction={
+          canPrint ? (
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => setPrintOpen(true)}>
+              Print assessments
+            </Button>
+          ) : undefined
+        }
+      />
 
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
+        useFlexGap
         sx={{ mb: 2, alignItems: { sm: 'flex-start' }, flexWrap: 'wrap' }}
       >
         <YearSelect
@@ -156,67 +234,64 @@ export function GradeAssessmentsScreen() {
           isLoading={yearsLoading}
         />
 
-        {showClassFilters && (
+        <SessionSelect
+          value={session.sessionId}
+          onChange={session.setSessionId}
+          sessions={session.sessions}
+          isLoading={session.isLoading}
+        />
+
+        {showBrowseFilters && (
           <>
             <TextField
               select
               size="small"
-              label="Teacher"
+              label={strings.terms.lecturer}
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
               disabled={teachers.length === 0}
+              // Show "All lecturers" rather than an empty box when nothing is picked.
+              SelectProps={{ displayEmpty: true }}
+              InputLabelProps={{ shrink: true }}
               sx={{ minWidth: 180 }}
             >
-              <MenuItem value="">All teachers</MenuItem>
+              <MenuItem value="">All lecturers</MenuItem>
               {teachers.map((t) => (
                 <MenuItem key={t.id} value={t.id}>
                   {t.name}
                 </MenuItem>
               ))}
             </TextField>
-
-            <TextField
-              select
-              size="small"
-              label="Form"
-              value={form}
-              onChange={(e) => setForm(e.target.value)}
-              disabled={forms.length === 0}
-              sx={{ minWidth: 140 }}
-            >
-              <MenuItem value="">All forms</MenuItem>
-              {forms.map((f) => (
-                <MenuItem key={f} value={f}>
-                  {f}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              select
-              size="small"
-              label="Section"
-              value={sectionLetter}
-              onChange={(e) => setSectionLetter(e.target.value)}
-              disabled={sectionLetters.length === 0}
-              sx={{ minWidth: 120 }}
-            >
-              <MenuItem value="">All sections</MenuItem>
-              {sectionLetters.map((l) => (
-                <MenuItem key={l} value={l}>
-                  {l}
-                </MenuItem>
-              ))}
-            </TextField>
           </>
         )}
+
+        <SearchableSelect
+          label="Course offering"
+          value={offeringFilter}
+          onChange={setOfferingFilter}
+          allOption="All course offerings"
+          options={offeringChoices}
+          loading={optionsQuery.isLoading}
+          sx={{ minWidth: 240 }}
+        />
+
+        {/* The student filter narrows the PRINTED report to one student's marks. */}
+        {isDean && <StudentPicker value={student} onChange={setStudent} />}
       </Stack>
 
-      {optionsQuery.isLoading && <LoadingState variant="cards" rows={6} label="Loading subjects" />}
+      {!session.isLoading && session.sessionId && !session.isActive && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          This session is not active. Its assessments and grades are read-only.
+        </Alert>
+      )}
+
+      {optionsQuery.isLoading && (
+        <LoadingState variant="cards" rows={6} label="Loading course offerings" />
+      )}
 
       {optionsQuery.isError && (
         <ErrorState
-          message="We couldn't load your subjects."
+          message="We couldn't load your course offerings."
           onRetry={() => void optionsQuery.refetch()}
         />
       )}
@@ -224,11 +299,11 @@ export function GradeAssessmentsScreen() {
       {!optionsQuery.isLoading && !optionsQuery.isError && options.length === 0 && (
         <EmptyState
           variant="page"
-          title="No subjects"
+          title="No course offerings"
           description={
             isTeacher
-              ? 'You are not assigned to any subjects in this year.'
-              : 'No subjects were found for this year.'
+              ? 'You are not assigned to any offerings in this year.'
+              : 'No course offerings were found for this year.'
           }
         />
       )}
@@ -236,16 +311,27 @@ export function GradeAssessmentsScreen() {
       {options.length > 0 && filteredOptions.length === 0 && (
         <EmptyState
           variant="page"
-          title="No subjects match these filters"
-          description="Try clearing the teacher, form, or section filter."
+          title="No offerings match these filters"
+          description="Try another session, or clear the lecturer or course offering filter."
+        />
+      )}
+
+      {canPrint && (
+        <AssessmentReportPrintDialog
+          open={printOpen}
+          onClose={() => setPrintOpen(false)}
+          params={printParams}
+          filterSummary={printSummary}
+          // The Dean reads the report student by student; a lecturer, course by course.
+          groupBy={isDean ? 'student' : 'offering'}
         />
       )}
 
       {filteredOptions.length > 0 && (
         <Grid container spacing={2}>
-          {filteredOptions.map((cs) => (
-            <Grid item xs={12} sm={6} md={4} key={cs.id}>
-              <SubjectCard option={cs} onOpen={() => openSubject(cs.id)} />
+          {filteredOptions.map((o) => (
+            <Grid item xs={12} sm={6} md={4} key={o.offering.id}>
+              <OfferingCard option={o} onOpen={() => openOffering(o.offering.id)} />
             </Grid>
           ))}
         </Grid>
@@ -254,19 +340,25 @@ export function GradeAssessmentsScreen() {
   );
 }
 
-function SubjectCard({ option, onOpen }: { option: ClassSubjectOption; onOpen: () => void }) {
+function OfferingCard({ option, onOpen }: { option: OfferingOption; onOpen: () => void }) {
   const teacherName = option.teachers[0]?.full_name;
+  const { offering } = option;
   return (
     <Card sx={{ height: '100%' }}>
-      <CardActionArea onClick={onOpen} aria-label={`Open ${option.display_name}`} sx={{ height: '100%' }}>
+      <CardActionArea
+        onClick={onOpen}
+        aria-label={`Open ${offering.label}`}
+        sx={{ height: '100%' }}
+      >
         <CardContent>
           <Stack spacing={0.5}>
             <Typography variant="subtitle1" noWrap>
-              {option.subject?.name ?? 'Subject'}
+              {offering.course.name}
             </Typography>
             <Typography variant="body2" color="text.secondary" noWrap>
-              {option.section?.name ?? 'Class'}
-              {teacherName ? ` · ${teacherName}` : ''}
+              {/* Label + term + lecturer: the three facts that tell two cards for the same
+                  course apart. */}
+              {[offering.label, offering.semester?.name, teacherName].filter(Boolean).join(' · ')}
             </Typography>
             <Box sx={{ mt: 1 }}>
               <Chip

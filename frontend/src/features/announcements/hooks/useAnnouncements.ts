@@ -17,15 +17,17 @@ import type {
   AnnouncementListParams,
   AnnouncementWritePayload,
   AnnouncementsPageResult,
-  TargetClass,
+  TargetOffering,
 } from '../types';
+// D30 §D8 — the bell payload now spans two modules, so its type lives with the newer one.
+import type { UnreadCount } from '@features/grades/revisionTypes';
 
 export const announcementKeys = {
   all: ['announcements'] as const,
   list: (params: AnnouncementListParams) => [...announcementKeys.all, 'list', params] as const,
   detail: (id: string) => [...announcementKeys.all, 'detail', id] as const,
   unreadCount: () => [...announcementKeys.all, 'unread-count'] as const,
-  targetClasses: () => [...announcementKeys.all, 'target-classes'] as const,
+  targetOfferings: () => [...announcementKeys.all, 'target-offerings'] as const,
 };
 
 /** Build the query string, omitting empty values so keys stay stable. */
@@ -65,28 +67,51 @@ export function useAnnouncementDetail(id: string | null) {
   });
 }
 
-/** GET /announcements/unread-count — bell badge source. */
+/**
+ * GET /announcements/unread-count — bell badge source.
+ *
+ * Returns just the total, which is what the badge shows. D30 §D8 extended the endpoint with
+ * pending grade revisions and a breakdown; `unread_count` is the SUM, so this hook needed no
+ * change and every existing caller kept working. Use `useNotificationCounts` when the
+ * breakdown matters.
+ */
 export function useUnreadCount() {
   return useQuery({
     queryKey: announcementKeys.unreadCount(),
     queryFn: async ({ signal }) => {
-      const { data } = await api.get<{ unread_count: number }>('/announcements/unread-count', {
-        signal,
-      });
+      const { data } = await api.get<UnreadCount>('/announcements/unread-count', { signal });
       return data.unread_count;
     },
     staleTime: 30 * 1000,
   });
 }
 
-/** GET /announcements/target-classes — sections the caller may target (compose picker). */
-export function useTargetClasses(enabled: boolean) {
+/**
+ * The same call, unreduced — announcements vs grade revisions (D30 §D8).
+ *
+ * The popover groups by source, so it needs to know which of the two a number came from.
+ * Same query KEY as `useUnreadCount`, so the two share one cache entry and one request
+ * rather than the bell fetching twice.
+ */
+export function useNotificationCounts() {
   return useQuery({
-    queryKey: announcementKeys.targetClasses(),
+    queryKey: announcementKeys.unreadCount(),
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get<UnreadCount>('/announcements/unread-count', { signal });
+      return data;
+    },
+    staleTime: 30 * 1000,
+  });
+}
+
+/** GET /announcements/target-offerings — what the caller may target (compose picker). */
+export function useTargetOfferings(enabled: boolean) {
+  return useQuery({
+    queryKey: announcementKeys.targetOfferings(),
     enabled,
     staleTime: 5 * 60 * 1000, // reference-ish; changes rarely mid-session
     queryFn: async ({ signal }) => {
-      const { data } = await api.get<{ items: TargetClass[] }>('/announcements/target-classes', {
+      const { data } = await api.get<{ items: TargetOffering[] }>('/announcements/target-offerings', {
         signal,
       });
       return data.items;

@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import {
   Box,
   Button,
@@ -18,18 +19,30 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { StatCard, StatusBadge, EmptyState } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
-import type { TeacherDashboard as TeacherDashboardData } from '../types';
+import type {
+  TeacherDashboard as TeacherDashboardData,
+  HodDashboard as HodDashboardData,
+} from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
+import { markingBadge, MARKING_WINDOW_DAYS } from '@features/grades/marking';
 
 export interface TeacherDashboardProps {
-  data: TeacherDashboardData;
+  /** D43 — also accepts the HOD variant, which is the same payload with an honest
+   *  discriminator. A head's landing page IS their own teaching. */
+  data: TeacherDashboardData | HodDashboardData;
 }
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'TBD';
-  const d = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  // `iso` here is a date-only `YYYY-MM-DD`, which the formatter reads as a calendar date
+  // rather than as UTC midnight — the reason the old `T00:00:00Z` suffix is gone.
+  return formatSchoolDayMonth(iso);
+}
+
+/** Straight into one assessment's grading screen (D47 — the marks go in there). */
+function gradingLink(assessmentId: string, offeringId: string): string {
+  return `${ROUTES.gradeAssessment}/${assessmentId}?offering_id=${encodeURIComponent(offeringId)}`;
 }
 
 /**
@@ -44,16 +57,16 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
   return (
     <Grid container spacing={3}>
       {/* Stat row */}
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
-          label="My classes"
-          value={stats.my_sections}
+          label="My courses"
+          value={stats.my_offerings}
           icon={<ClassIcon />}
           color="primary"
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
           label="Attendance due today"
           value={stats.attendance_due_today}
@@ -63,16 +76,16 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
           to={ROUTES.attendance}
         />
       </Grid>
-      <Grid item xs={12} sm={4}>
+      <Grid item xs={12} sm={6} lg={4}>
         <StatCard
-          label="Ungraded items"
+          label="Open for marking"
           value={stats.ungraded_items}
           icon={<RuleIcon />}
           color="info"
+          helperText={`${MARKING_WINDOW_DAYS}-day window per assessment`}
           to={ROUTES.grades}
         />
       </Grid>
-
       {/* Today's classes — hero */}
       <Grid item xs={12} lg={7}>
         <Card variant="outlined" sx={{ height: '100%' }}>
@@ -84,40 +97,39 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               <EmptyState
                 icon={<ClassIcon fontSize="inherit" />}
                 title="No classes assigned"
-                description="You have no sections in the active term yet."
+                description="You have no course offerings in the active session yet."
                 variant="card"
               />
             ) : (
               <List disablePadding>
                 {data.today_classes.map((c, i) => (
-                  <Box key={c.section_id}>
+                  <Box key={c.offering.id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.5, gap: 1, flexWrap: 'wrap' }}
-                      secondaryAction={
-                        <Button
-                          component={RouterLink}
-                          to={ROUTES.attendance}
-                          size="small"
-                          variant={c.attendance_recorded ? 'text' : 'contained'}
-                          startIcon={
-                            c.attendance_recorded ? <CheckCircleIcon /> : <WarningAmberIcon />
-                          }
-                        >
-                          {c.attendance_recorded ? 'View' : 'Record'}
-                        </Button>
-                      }
-                    >
-                      <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                    {/* The action sits IN the row's flow, not in `secondaryAction`: that
+                        slot is absolutely positioned, and `px: 0` cancels the padding MUI
+                        reserves for it, so long text slid underneath the button. */}
+                    <ListItem sx={{ px: 0, py: 1.5, gap: 1.5 }}>
+                      <Stack spacing={0.5} sx={{ minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
                         <Typography variant="subtitle2" component="p" noWrap>
-                          {c.section_name}
-                          {c.subject_name ? ` · ${c.subject_name}` : ''}
+                          {c.offering.label} · {c.offering.course.name}
                         </Typography>
                         <StatusBadge
                           label={c.attendance_recorded ? 'Recorded' : 'Not recorded'}
                           kind={c.attendance_recorded ? 'success' : 'warning'}
                         />
                       </Stack>
+                      <Button
+                        component={RouterLink}
+                        to={ROUTES.attendance}
+                        size="small"
+                        variant={c.attendance_recorded ? 'text' : 'contained'}
+                        startIcon={
+                          c.attendance_recorded ? <CheckCircleIcon /> : <WarningAmberIcon />
+                        }
+                        sx={{ flexShrink: 0 }}
+                      >
+                        {c.attendance_recorded ? 'View' : 'Record'}
+                      </Button>
                     </ListItem>
                   </Box>
                 ))}
@@ -142,7 +154,7 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
               sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}
             >
               <Typography variant="h4" component="h3">
-                Assessments needing attention
+                Marking closing soonest
               </Typography>
               <Button component={RouterLink} to={ROUTES.grades} size="small">
                 Enter grades
@@ -151,8 +163,8 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
             {data.recent_assessments.length === 0 ? (
               <EmptyState
                 icon={<RuleIcon fontSize="inherit" />}
-                title="Nothing to grade"
-                description="No published or in-progress assessments right now."
+                title="Nothing to mark"
+                description="No assessment has its marking window open right now."
                 variant="card"
               />
             ) : (
@@ -160,20 +172,44 @@ export function TeacherDashboard({ data }: TeacherDashboardProps) {
                 {data.recent_assessments.map((a, i) => (
                   <Box key={a.id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem sx={{ px: 0, py: 1.25, gap: 1, flexWrap: 'wrap' }}>
-                      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
+                    {/* Title | badge + button, all in normal flow. The button used to be a
+                        `secondaryAction` (absolutely positioned) and landed on top of the
+                        badge; `pr` on the title could not protect a sibling. On a narrow
+                        screen the badge + button wrap below the title instead of overlapping. */}
+                    <ListItem
+                      sx={{ px: 0, py: 1.25, columnGap: 2, rowGap: 1, flexWrap: 'wrap' }}
+                    >
+                      <Stack sx={{ minWidth: 0, flex: '1 1 220px' }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {a.title}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {a.section_name}
-                          {a.subject_name ? ` · ${a.subject_name}` : ''} · {formatDate(a.assessment_date)}
+                          {[a.offering?.label, a.offering?.course.name].filter(Boolean).join(' · ')}{' '}
+                          · {formatDate(a.assessment_date)}
                         </Typography>
                       </Stack>
-                      <StatusBadge
-                        label={a.status === 'grading' ? 'In progress' : 'Published'}
-                        kind={a.status === 'grading' ? 'warning' : 'info'}
-                      />
+                      <Stack
+                        direction="row"
+                        spacing={1.5}
+                        sx={{ alignItems: 'center', flexShrink: 0, ml: 'auto' }}
+                      >
+                        <StatusBadge
+                          {...markingBadge({
+                            marking_open: true,
+                            effective_closes_at: a.marking_closes_at,
+                            days_left: a.days_left,
+                          })}
+                        />
+                        <Button
+                          component={RouterLink}
+                          to={gradingLink(a.id, a.offering_id)}
+                          size="small"
+                          variant={a.days_left != null && a.days_left <= 1 ? 'contained' : 'outlined'}
+                          sx={{ whiteSpace: 'nowrap' }}
+                        >
+                          Enter marks
+                        </Button>
+                      </Stack>
                     </ListItem>
                   </Box>
                 ))}

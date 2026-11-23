@@ -119,8 +119,51 @@ export const theme = createTheme({
     MuiTextField: {
       defaultProps: { size: 'small', variant: 'outlined' },
     },
+    /**
+     * Every dropdown scrolls instead of growing (D43-b).
+     *
+     * MUI's default menu has NO height cap, so a `<Select>` over a long list renders
+     * every option at once: the course picker (114 courses) and the programme,
+     * lecturer and student pickers all opened a menu taller than the viewport, which
+     * pushes the page around and leaves no obvious way back to the field. Capping the
+     * paper turns the same list into a normal scroll.
+     *
+     * `MenuProps` is set as a DEFAULT PROP rather than a style override so any screen
+     * that needs different behaviour can still pass its own `MenuProps` and win.
+     *
+     * 40vh, not a fixed pixel height: on a 390px phone — the width D33 fixed the
+     * PageHeader for — a fixed 320px menu still covers most of the screen, while a
+     * viewport fraction stays proportionate on both. The floor keeps it usable on very
+     * short windows, where 40vh alone would show barely two options.
+     *
+     * `autoFocus: false` stops the menu stealing focus from a field the user is still
+     * typing in, which matters most on the pickers that sit next to a search box.
+     */
     MuiSelect: {
+      defaultProps: {
+        size: 'small',
+        MenuProps: {
+          autoFocus: false,
+          PaperProps: { sx: { maxHeight: 'max(40vh, 240px)' } },
+        },
+      },
+    },
+    /**
+     * The same cap for a bare `<Menu>` and for Autocomplete's popup, so a long list
+     * behaves identically whichever control is showing it. Without these two, fixing
+     * `MuiSelect` alone would leave the type-to-filter pickers (which are Autocompletes)
+     * as the only dropdowns that still run off the screen.
+     */
+    MuiMenu: {
+      defaultProps: {
+        PaperProps: { sx: { maxHeight: 'max(40vh, 240px)' } },
+      },
+    },
+    MuiAutocomplete: {
       defaultProps: { size: 'small' },
+      styleOverrides: {
+        listbox: { maxHeight: 'max(40vh, 240px)' },
+      },
     },
     MuiTableCell: {
       styleOverrides: {

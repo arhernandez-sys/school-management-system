@@ -1,4 +1,5 @@
 import { Link as RouterLink } from 'react-router-dom';
+import { formatSchoolDayMonth } from '@shared/utils/schoolDate';
 import {
   Box,
   Button,
@@ -29,15 +30,16 @@ export interface SecretaryDashboardProps {
 }
 
 function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // D39 (Meeting #2 item 1) — day-first. Compact (no year): this is a dashboard chip.
+  return formatSchoolDayMonth(iso);
 }
 
 const QUICK_ACTIONS = [
-  { label: 'Add student', to: ROUTES.students, icon: <PersonAddAlt1Icon /> },
-  { label: 'Add teacher', to: ROUTES.teachers, icon: <SchoolIcon /> },
-  { label: 'Create class', to: ROUTES.classes, icon: <AddBusinessIcon /> },
+  // D38 — a student is created by ACCEPTING an application, so this tile leads to
+  // Admissions rather than to the directory, which no longer has a create action.
+  { label: 'Add student', to: ROUTES.applications, icon: <PersonAddAlt1Icon /> },
+  { label: 'Add lecturer', to: ROUTES.teachers, icon: <SchoolIcon /> },
+  { label: 'Create class', to: ROUTES.offerings, icon: <AddBusinessIcon /> },
   { label: 'Post announcement', to: ROUTES.announcements, icon: <CampaignIcon /> },
 ];
 
@@ -93,17 +95,17 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
           value={stats.total_sections}
           icon={<ClassIcon />}
           color="secondary"
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
         <StatCard
-          label="Subjects needing a teacher"
+          label="Courses needing a lecturer"
           value={stats.unstaffed_subjects}
           icon={<WarningAmberIcon />}
           color={stats.unstaffed_subjects > 0 ? 'warning' : 'success'}
-          helperText={stats.unstaffed_subjects > 0 ? 'Assign a teacher' : 'All staffed'}
-          to={ROUTES.classes}
+          helperText={stats.unstaffed_subjects > 0 ? 'Assign a lecturer' : 'All staffed'}
+          to={ROUTES.offerings}
         />
       </Grid>
       <Grid item xs={12} sm={6} lg={3}>
@@ -113,7 +115,7 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
           icon={<WarningAmberIcon />}
           color={stats.over_capacity_sections > 0 ? 'warning' : 'success'}
           helperText={stats.over_capacity_sections > 0 ? 'Review enrolment' : 'Within capacity'}
-          to={ROUTES.classes}
+          to={ROUTES.offerings}
         />
       </Grid>
 
@@ -145,22 +147,22 @@ export function SecretaryDashboard({ data }: SecretaryDashboardProps) {
                 {data.recent_enrollments.map((e, i) => (
                   <Box key={e.enrollment_id}>
                     {i > 0 && <Divider component="li" />}
-                    <ListItem
-                      sx={{ px: 0, py: 1.25, gap: 1 }}
-                      secondaryAction={
-                        <Typography variant="caption" color="text.secondary">
-                          {formatDate(e.enrolled_at)}
-                        </Typography>
-                      }
-                    >
-                      <Stack sx={{ minWidth: 0 }}>
+                    <ListItem sx={{ px: 0, py: 1.25, gap: 1 }}>
+                      <Stack sx={{ minWidth: 0, flex: 1 }}>
                         <Typography variant="subtitle2" component="p" noWrap>
                           {e.student_name}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" noWrap>
-                          {e.section_name}
+                          {e.offering_label}
                         </Typography>
                       </Stack>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                      >
+                        {formatDate(e.enrolled_at)}
+                      </Typography>
                     </ListItem>
                   </Box>
                 ))}

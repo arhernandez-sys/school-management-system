@@ -19,18 +19,11 @@ import { useAuth } from '@features/auth/hooks/useAuth';
 import { useAccount, useUpdateAccount } from '../hooks/useSettings';
 import { apiErrorMessage, fieldErrorsFrom } from '@shared/api/errorMessages';
 
-const LOCALE_OPTIONS = [
-  { value: 'en', label: 'English' },
-  { value: 'es', label: 'Español' },
-];
+// English only: the UI is not translated, so a second language would change nothing.
+const LOCALE_OPTIONS = [{ value: 'en', label: 'English' }];
 const THEME_OPTIONS = [
   { value: 'light', label: 'Light' },
   { value: 'system', label: 'System' },
-];
-const DATE_FORMAT_OPTIONS = [
-  { value: 'YYYY-MM-DD', label: '2026-06-30 (ISO)' },
-  { value: 'MM/DD/YYYY', label: '06/30/2026' },
-  { value: 'DD/MM/YYYY', label: '30/06/2026' },
 ];
 
 /**
@@ -57,7 +50,8 @@ export function AccountScreen() {
   useEffect(() => {
     if (query.data) {
       setFullName(query.data.full_name ?? '');
-      setLocale(query.data.preferences.locale ?? 'en');
+      const saved = query.data.preferences.locale;
+      setLocale(LOCALE_OPTIONS.some((o) => o.value === saved) ? (saved as string) : 'en');
       setTheme(query.data.preferences.theme ?? 'light');
       setDateFormat(query.data.preferences.date_format ?? 'YYYY-MM-DD');
       setPageSize(query.data.preferences.default_page_size ?? 25);
@@ -156,19 +150,6 @@ export function AccountScreen() {
               helperText="Dark mode is planned for a future release."
             >
               {THEME_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value}>
-                  {o.label}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
-              label="Date format"
-              value={dateFormat}
-              onChange={(e) => setDateFormat(e.target.value)}
-              fullWidth
-            >
-              {DATE_FORMAT_OPTIONS.map((o) => (
                 <MenuItem key={o.value} value={o.value}>
                   {o.label}
                 </MenuItem>

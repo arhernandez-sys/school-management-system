@@ -4,14 +4,19 @@
  * shared mutator. Reference/config data (school, grading scale, policy, years) is
  * given a long staleTime — it changes rarely and is read on many screens.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { customInstance } from '@shared/api/mutator';
+import type { AcademicYearDetail } from '@shared/api/generated/model';
 import {
   useGetSchoolApiV1SettingsSchoolGet,
   useUpdateSchoolApiV1SettingsSchoolPut,
   useListAcademicYearsApiV1SettingsAcademicYearsGet,
   useCreateAcademicYearApiV1SettingsAcademicYearsPost,
   useActivateSemesterApiV1SettingsSemestersSemesterIdActivatePatch,
+  useCreateSemesterApiV1SettingsSemestersPost,
+  useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch,
   useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost,
+  useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost,
   useGetGradingScaleApiV1SettingsGradingScaleGet,
   useUpdateGradingScaleApiV1SettingsGradingScalePut,
   useGetAssessmentPolicyApiV1SettingsAssessmentPolicyGet,
@@ -34,7 +39,10 @@ import { useResetUserPasswordApiV1AuthUsersUserIdResetPasswordPost } from '@shar
 import type {
   ListUsersApiV1SettingsUsersGetParams,
   GetGradingScaleApiV1SettingsGradingScaleGetParams,
+  Role,
 } from '@shared/api/generated/model';
+import { listLinkableProfiles } from '../api/linkableProfiles';
+import { ACTIVE_TERM_RECOVERY } from '@shared/api/activeTermQuery';
 
 const CONFIG_STALE_MS = 5 * 60 * 1000; // 5 min — reference data changes rarely.
 
@@ -54,9 +62,21 @@ export function useUpdateSchoolProfile() {
 }
 
 // ── Academic structure (years + semesters) ─────────────────────────────────────
-export function useAcademicYears() {
+/**
+ * GET /settings/academic-years — every year with its semesters.
+ *
+ * Readable by ALL authenticated roles (widened 2026-07-29): this is the calendar every
+ * period picker is built from — the staff `?year=` filter (`useYearFilter`) and the
+ * student's global year·semester switcher, which joins it against
+ * `GET /students/me/years` for the semesters. It was P/S-only, so a teacher's picker
+ * got a 403 and silently emptied.
+ *
+ * `enabled` mirrors {@link useActiveTerm}: YearProvider mounts ABOVE the route guards,
+ * so it must hold the request until the session exists or eat a 401 on every reload.
+ */
+export function useAcademicYears(options?: { enabled?: boolean }) {
   return useListAcademicYearsApiV1SettingsAcademicYearsGet({
-    query: { staleTime: CONFIG_STALE_MS },
+    query: { staleTime: CONFIG_STALE_MS, enabled: options?.enabled ?? true },
   });
 }
 
@@ -65,6 +85,8 @@ function useInvalidateAcademicStructure() {
   return () => {
     void qc.invalidateQueries({ queryKey: getListAcademicYearsApiV1SettingsAcademicYearsGetQueryKey() });
     void qc.invalidateQueries({ queryKey: getGetActiveTermApiV1SettingsActiveTermGetQueryKey() });
+    // The Reports term picker reads the same endpoint under its own key.
+    void qc.invalidateQueries({ queryKey: ['reports', 'active-term'] });
   };
 }
 
@@ -83,6 +105,173 @@ export function useActivateSemester() {
 export function useArchiveAcademicYear() {
   const invalidate = useInvalidateAcademicStructure();
   return useArchiveAcademicYearApiV1SettingsAcademicYearsYearIdArchivePost({
+    mutation: { onSuccess: invalidate },
+  });
+}
+
+/**
+ * Undo an archive made by mistake (`POST /settings/academic-years/{id}/reactivate`).
+ *
+ * Hand-written rather than orval-generated: `frontend/openapi.json` is a stale snapshot
+ * (RUNBOOK) and regenerating the whole client for one endpoint would churn every module.
+ * Transport still goes through the shared `customInstance` mutator. Invalidates EVERY
+ * query: reactivation changes the active year/term, unfreezes the scale and reopens
+ * offerings, which touches nearly every cached year-scoped read.
+ */
+export function useReactivateAcademicYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ yearId }: { yearId: string }) =>
+      customInstance<AcademicYearDetail>({
+        url: `/settings/academic-years/${yearId}/reactivate`,
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
+}
+
+/** One thing standing between a student and the next year. */
+export interface ProgressionIssue {
+  kind: 'missing_term' | 'failed' | 'withdrawn' | 'no_grade' | 'not_passed';
+  message: string;
+  term_name: string;
+  /** Set for course issues (what the Dean excuses); null for a missing session. */
+  enrollment_id: string | null;
+  excused: boolean;
+  excuse_reason: string | null;
+}
+
+/** One student's year-end outcome (`GET /settings/academic-years/{id}/progression`). */
+export interface ProgressionStudent {
+  student_id: string;
+  student_number: string;
+  full_name: string;
+  year_of_study: string | null;
+  /** promote = First → Second, complete = Second → Completed. */
+  outcome: 'promote' | 'complete' | 'repeat' | 'skip';
+  /** Unexcused issues (repeat) or why the student was not checked (skip). */
+  reasons: string[];
+  /** Every issue, excused ones included. */
+  issues: ProgressionIssue[];
+  terms_excused: boolean;
+  terms_excuse_reason: string | null;
+}
+
+export interface ProgressionExcuseBody {
+  excused: boolean;
+  /** Required (3+ chars) when excusing. */
+  reason: string | null;
+}
+
+export interface ProgressionPreviewData {
+  year_id: string;
+  terms: string[];
+  promoted: number;
+  completed: number;
+  repeating: number;
+  skipped: number;
+  students: ProgressionStudent[];
+}
+
+/** The archive response, plus the progression counts the generated model predates. */
+export interface ArchiveYearResult {
+  snapshots_written: number;
+  no_active_year_remaining: boolean;
+  promoted?: number;
+  completed?: number;
+  repeating?: number;
+  skipped?: number;
+}
+
+/**
+ * Preview of the year-end progression archiving would apply. Hand-written (see
+ * `useReactivateAcademicYear` for why). `staleTime: 0`: grades can still be changing.
+ */
+export function useProgressionPreview(yearId: string | undefined) {
+  return useQuery({
+    queryKey: ['settings', 'progression', yearId],
+    queryFn: () =>
+      customInstance<ProgressionPreviewData>({
+        url: `/settings/academic-years/${yearId}/progression`,
+        method: 'GET',
+      }),
+    enabled: Boolean(yearId),
+    staleTime: 0,
+  });
+}
+
+/** Dean exception: the sessions a student did not take this year stop blocking them. */
+export function useExcuseStudentSessions(yearId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ studentId, body }: { studentId: string; body: ProgressionExcuseBody }) =>
+      customInstance<void>({
+        url: `/settings/academic-years/${yearId}/progression/students/${studentId}/excuse`,
+        method: 'PUT',
+        data: body,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['settings', 'progression', yearId] }),
+  });
+}
+
+/** Dean exception: one course stops blocking progression (grade/transcript unchanged). */
+export function useExcuseEnrollment(yearId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ enrollmentId, body }: { enrollmentId: string; body: ProgressionExcuseBody }) =>
+      customInstance<void>({
+        url: `/settings/academic-years/${yearId}/progression/enrollments/${enrollmentId}/excuse`,
+        method: 'PUT',
+        data: body,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['settings', 'progression', yearId] }),
+  });
+}
+
+/**
+ * D32 (brief §6) — capture the term's mid-term report cards.
+ *
+ * Invalidates the report-card cache as well as the academic structure: a freeze changes
+ * what `GET /reports/report-card?kind=midterm` returns, and a Dean who freezes and then
+ * opens the report should not be shown the pre-freeze error from cache.
+ */
+export function useFreezeMidtermGrades() {
+  const queryClient = useQueryClient();
+  const invalidate = useInvalidateAcademicStructure();
+  return useFreezeMidtermGradesApiV1SettingsSemestersSemesterIdMidtermFreezePost({
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        void queryClient.invalidateQueries({ queryKey: ['reports', 'report-card'] });
+      },
+    },
+  });
+}
+
+/**
+ * D30 §D3 — add / correct ONE calendar term.
+ *
+ * These two were hand-written because `POST /settings/semesters` and
+ * `PATCH /settings/semesters/{id}` were new in D30 and absent from the committed
+ * `openapi.json`, which was a stale 21-path snapshot at the time.
+ *
+ * **D31 switched them to the generated operations.** Refreshing the spec to the real
+ * 101-path surface brought both into `generated/settings/settings.ts`, and the config's own
+ * rule is that a generated copy must never sit beside a hand-authored one to drift — the
+ * hand-written versions were now a second declaration of the same two calls. Regenerating
+ * is also no longer the all-or-nothing hazard that note described: `orval.transformer.cjs`
+ * prunes the spec to the four generated tags, so codegen touches nothing else.
+ */
+export function useCreateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useCreateSemesterApiV1SettingsSemestersPost({ mutation: { onSuccess: invalidate } });
+}
+
+export function useUpdateSemester() {
+  const invalidate = useInvalidateAcademicStructure();
+  return useUpdateSemesterApiV1SettingsSemestersSemesterIdPatch({
     mutation: { onSuccess: invalidate },
   });
 }
@@ -132,7 +321,35 @@ export function useUsersList(params: ListUsersApiV1SettingsUsersGetParams) {
 
 function useInvalidateUsers() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+  return () => {
+    qc.invalidateQueries({ queryKey: getListUsersApiV1SettingsUsersGetQueryKey() });
+    // A created login takes its profile out of the picker.
+    qc.invalidateQueries({ queryKey: ['settings', 'linkable-profiles'] });
+  };
+}
+
+/**
+ * The roles whose login must be linked to a profile, and which profile. Mirrors
+ * `_PROFILE_KIND` in `backend/app/modules/settings/service.py`: every scoped read for
+ * these roles starts from the caller's profile, so a login without one 404s.
+ */
+export const PROFILE_KIND_BY_ROLE: Partial<Record<Role, 'teacher' | 'student'>> = {
+  teacher: 'teacher',
+  hod: 'teacher',
+  student: 'student',
+};
+
+/** Unlinked profiles for the user form's picker; idle for a role that takes none. */
+export function useLinkableProfiles(role: Role, search: string, enabled: boolean) {
+  const takesProfile = Boolean(PROFILE_KIND_BY_ROLE[role]);
+  return useQuery({
+    // Keyed by the profile KIND, not the role: teacher and hod read the same rows.
+    queryKey: ['settings', 'linkable-profiles', PROFILE_KIND_BY_ROLE[role], search],
+    queryFn: ({ signal }) =>
+      listLinkableProfiles({ role, search: search || undefined }, signal),
+    enabled: enabled && takesProfile,
+    placeholderData: (prev) => prev,
+  });
 }
 
 export function useCreateUser() {
@@ -157,12 +374,25 @@ export function useAccount() {
 // ── Active term (global semester switcher) ──────────────────────────────────────
 /**
  * GET /settings/active-term. 409 no_active_semester when the school has no active
- * year/semester — the caller degrades to a setup prompt. Retries are disabled so a
- * 409 (a valid "not set up" state, not a transient error) surfaces immediately.
+ * year/semester — the caller degrades to a setup prompt. The 409 still surfaces at once
+ * (the default retry policy never retries a 4xx); see `ACTIVE_TERM_RECOVERY` for how a
+ * failed read now recovers without a reload.
+ *
+ * `enabled` exists so callers mounted ABOVE the route guards (YearProvider) can hold
+ * the request until the session is established. Without it the query fires during
+ * AuthProvider's bootstrap, when no access token is in memory yet, and eats a
+ * guaranteed 401 on every hard reload. The client's interceptor does recover it —
+ * the 401 coalesces onto the same single-flight `performRefresh()` the bootstrap is
+ * already running and is replayed — but it costs a round-trip and puts a red herring
+ * in the console. Defaults to true so existing callers are unaffected.
  */
-export function useActiveTerm() {
+export function useActiveTerm(options?: { enabled?: boolean }) {
   return useGetActiveTermApiV1SettingsActiveTermGet({
-    query: { staleTime: CONFIG_STALE_MS, retry: false },
+    query: {
+      staleTime: CONFIG_STALE_MS,
+      enabled: options?.enabled ?? true,
+      ...ACTIVE_TERM_RECOVERY,
+    },
   });
 }
 
@@ -174,3 +404,11 @@ export function useUpdateAccount() {
     },
   });
 }
+
+// ── Audit log ──────────────────────────────────────────────────────────────────
+// ⚠️ `AuditLogParams` / `AuditLogItem` / `AuditLogPage` / `auditLogKeys` / `useAuditLog`
+// LIVED HERE AND ARE GONE (Sep 2026), with `GET /settings/audit-log`. The one audit
+// reader is `features/audit`, over `GET /audit`. See `settings/index.tsx` for why there
+// is no longer a second one — it is about the AUDIENCE, not tidiness: this endpoint's
+// gate had grown to include the System Administrator, whom D45 Phase 7 deliberately
+// refused on the rendered trail because it is mostly academic records.
