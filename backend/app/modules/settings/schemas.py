@@ -37,6 +37,9 @@ class SchoolProfileRead(SchoolIdentity):
     post_graduation_access_days: int | None = None
     #: The attendance warning floor, as a percentage (D45 §23).
     attendance_alert_threshold: float = 80.0
+    #: Lecturer retirement age, and the years-before window for the Dean dashboard.
+    lecturer_retirement_age: int = 60
+    retirement_warning_years: int = 3
 
 
 class SchoolUpdateRequest(BaseModel):
@@ -55,6 +58,10 @@ class SchoolUpdateRequest(BaseModel):
     #: is inclusive. Defaulted rather than optional so a PUT that omits it does not
     #: silently reset the college's number to zero and flag nobody.
     attendance_alert_threshold: float = Field(default=80.0, ge=0, le=100)
+    #: Defaulted (not optional) for the same reason as the threshold above: a PUT that
+    #: omits them must not reset the college's policy.
+    lecturer_retirement_age: int = Field(default=60, ge=40, le=100)
+    retirement_warning_years: int = Field(default=3, ge=0, le=20)
 
 
 class LogoUploadResponse(BaseModel):

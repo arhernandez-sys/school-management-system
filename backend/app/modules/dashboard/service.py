@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -65,6 +66,7 @@ from app.modules.dashboard.schemas import (
     GradeDistributionItem,
     HodDashboard,
     PersonStatus,
+    RetiringLecturer,
     SecretaryDashboard,
     SecretaryEnrollmentItem,
     SecretaryStats,
@@ -86,6 +88,7 @@ from app.modules.settings.models import (
     AssessmentPolicy,
     GradingScale,
     GradingScaleBand,
+    SchoolProfile,
     Semester,
 )
 from app.modules.students.models import STUDENT_NAME_ORDER, StudentProfile
@@ -655,6 +658,65 @@ def _school_attendance_rate(db: Session, year: AcademicYear) -> float:
     return _summarize(statuses).pct_present
 
 
+def _add_years(d: date, years: int) -> date:
+    """`d` plus whole years; 29 Feb rolls to 28 Feb in a non-leap year."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
+def _age_on(dob: date, today: date) -> int:
+    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+def _retirement_policy(db: Session) -> tuple[int, int]:
+    row = db.execute(
+        select(
+            SchoolProfile.lecturer_retirement_age,
+            SchoolProfile.retirement_warning_years,
+        )
+    ).first()
+    if row is None:
+        return 60, 3
+    return int(row[0]), int(row[1])
+
+
+def _retiring_lecturers(
+    db: Session, *, retirement_age: int, warning_years: int
+) -> list[RetiringLecturer]:
+    """Active, not-retired lecturers whose retirement date falls within
+    `warning_years` from today — including any already past it. Soonest first."""
+    today = school_today()
+    # Born on or before this date => retirement date is within the window.
+    cutoff_dob = _add_years(today, -(retirement_age - warning_years))
+    rows = db.scalars(
+        select(TeacherProfile).where(
+            TeacherProfile.deleted_at.is_(None),
+            TeacherProfile.status == TeacherStatus.ACTIVE,
+            TeacherProfile.is_retired.is_not(True),
+            TeacherProfile.date_of_birth.is_not(None),
+            TeacherProfile.date_of_birth <= cutoff_dob,
+        )
+    ).all()
+    out = []
+    for t in rows:
+        retire_on = _add_years(t.date_of_birth, retirement_age)
+        out.append(
+            RetiringLecturer(
+                id=t.id,
+                name=t.full_name,
+                staff_number=t.staff_number,
+                date_of_birth=t.date_of_birth,
+                age=_age_on(t.date_of_birth, today),
+                retirement_date=retire_on,
+                days_remaining=(retire_on - today).days,
+            )
+        )
+    out.sort(key=lambda r: r.retirement_date)
+    return out
+
+
 def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semester) -> AdminDashboard:
     active_students = db.scalar(
         select(func.count())
@@ -757,6 +819,8 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         passing_by_letter=_passing,
     )
 
+    _retirement_age, _warning_years = _retirement_policy(db)
+
     return AdminDashboard(
         user_full_name=actor.full_name,
         academic_year_name=year.name,
@@ -792,6 +856,11 @@ def _admin_payload(db: Session, actor: User, year: AcademicYear, semester: Semes
         recent_teachers=recent_teachers,
         recent_students=recent_students,
         recent_announcements=_recent_announcements(db, actor, _ANNOUNCEMENT_LIMIT),
+        retiring_lecturers=_retiring_lecturers(
+            db, retirement_age=_retirement_age, warning_years=_warning_years
+        ),
+        retirement_age=_retirement_age,
+        retirement_warning_years=_warning_years,
     )
 
 
@@ -1309,8 +1378,11 @@ def get_dashboard(db: Session, *, actor: User) -> DashboardResponse:
             **_teacher_payload(db, actor, year, semester).model_dump(exclude={"role"})
         )
     if actor.role == Role.AUDITOR:
+        # The retirement list is for the Dean only.
         return AuditorDashboard(
-            **_admin_payload(db, actor, year, semester).model_dump(exclude={"role"})
+            **_admin_payload(db, actor, year, semester).model_dump(
+                exclude={"role", "retiring_lecturers"}
+            )
         )
     if actor.role == Role.PRINCIPAL:
         return _admin_payload(db, actor, year, semester)

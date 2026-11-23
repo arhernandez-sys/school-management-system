@@ -80,6 +80,10 @@ FIELD_LABELS = {
     "is_active": "Current",
     "min_passing_grade_point": "Pass mark",
     "attendance_alert_threshold": "Attendance alert threshold",
+    "lecturer_retirement_age": "Lecturer retirement age",
+    "retirement_warning_years": "Retirement warning (years)",
+    "is_retired": "Retired",
+    "retired_date": "Retired date",
 }
 
 #: Summary keys that ARE worth showing as a recorded fact, and what to call them.

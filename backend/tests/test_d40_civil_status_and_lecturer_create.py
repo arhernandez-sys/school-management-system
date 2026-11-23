@@ -222,6 +222,7 @@ class TestLecturerCreateTakesTheWholeProfile:
             headers=staff_headers,
             json={
                 "staff_number": f"STF{tag}",
+                "date_of_birth": "1980-01-15",
                 "full_name": "Dr. Adaeze Full",
                 "email": f"adaeze.{tag.lower()}@example.bz",
                 "phone": "501-555-0142",
@@ -273,6 +274,7 @@ class TestLecturerCreateTakesTheWholeProfile:
             headers=staff_headers,
             json={
                 "staff_number": f"STF{tag}",
+                "date_of_birth": "1980-01-15",
                 "full_name": "Roundtrip Rae",
                 "gender": "other",
                 "bio": "  padded  ",
@@ -299,6 +301,7 @@ class TestLecturerCreateTakesTheWholeProfile:
             headers=staff_headers,
             json={
                 "staff_number": f"STF{tag}",
+                "date_of_birth": "1980-01-15",
                 "full_name": "Empty Row Eddie",
                 "expertise": [{"area": "Biology", "level": 50}, {"area": "   ", "level": 70}],
             },
@@ -314,7 +317,7 @@ class TestLecturerCreateTakesTheWholeProfile:
         resp = client.post(
             TEACHERS,
             headers=staff_headers,
-            json={"staff_number": f"STF{tag}", "full_name": "Minimal Mo"},
+            json={"date_of_birth": "1980-01-15", "staff_number": f"STF{tag}", "full_name": "Minimal Mo"},
         )
         assert resp.status_code == 201, resp.text
         teacher = resp.json()["teacher"]
@@ -329,6 +332,7 @@ class TestLecturerCreateTakesTheWholeProfile:
             headers=staff_headers,
             json={
                 "staff_number": f"STF{tag}",
+                "date_of_birth": "1980-01-15",
                 "full_name": "Bad Licence Bo",
                 "licensenum": "OWD/2019/00035",
             },

@@ -237,6 +237,7 @@ class TestCreateTeacher:
     def _payload(self, **over) -> dict:
         base = {
             "staff_number": f"NEW{uuid.uuid4().hex[:8]}",
+            "date_of_birth": "1980-01-15",
             "full_name": "New Teacher",
         }
         base.update(over)
@@ -783,6 +784,7 @@ class TestEmploymentRecord:
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
             json={
                 "staff_number": "T-2001",
+                "date_of_birth": "1980-01-15",
                 "full_name": "Lydia Lucas",
                 "first_name": "Lydia",
                 "last_name": "Lucas",
@@ -838,7 +840,7 @@ class TestEmploymentRecord:
         resp = client.post(
             TEACHERS,
             headers=auth_headers(user_id=principal.id, role=Role.PRINCIPAL),
-            json={"staff_number": "T-2002", "full_name": "Ada Pol", "status": "inactive"},
+            json={"date_of_birth": "1980-01-15", "staff_number": "T-2002", "full_name": "Ada Pol", "status": "inactive"},
         )
         assert resp.status_code == 201, resp.text
         assert resp.json()["teacher"]["is_employed"] is False

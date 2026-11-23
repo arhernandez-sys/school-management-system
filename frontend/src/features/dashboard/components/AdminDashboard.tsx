@@ -26,9 +26,11 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { ChartWithTable } from '@shared/components';
 import { ROUTES } from '@shared/constants/routes';
+import { formatSchoolDate } from '@shared/utils/schoolDate';
 import type {
   AdminDashboard as AdminDashboardData,
   AuditorDashboard as AuditorDashboardData,
+  RetiringLecturer,
 } from '../types';
 import { AnnouncementsList } from './AnnouncementsList';
 import { PeopleListCard } from './PeopleListCard';
@@ -530,6 +532,8 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
   const worstCourses = data.course_failure_rates ?? [];
   const teachers = data.recent_teachers ?? [];
   const students = data.recent_students ?? [];
+  // Dean only — the server sends an empty list to the auditor, and this guards it too.
+  const retiring = data.role === 'principal' ? (data.retiring_lecturers ?? []) : [];
 
   // ── The hero's four queues, in urgency order (the defence is in the docstring).
   const attention: AttentionItem[] = [
@@ -700,6 +704,17 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
       <Grid item xs={12}>
         <AttentionPanel items={attention} />
       </Grid>
+
+      {/* ── Lecturers nearing retirement (Dean only) ─────────────────────────── */}
+      {retiring.length > 0 && (
+        <Grid item xs={12}>
+          <RetiringLecturersCard
+            lecturers={retiring}
+            retirementAge={data.retirement_age ?? 60}
+            warningYears={data.retirement_warning_years ?? 3}
+          />
+        </Grid>
+      )}
 
       {/* ── The college: one ledger, not six cards ───────────────────────────── */}
       <Grid item xs={12}>
@@ -973,6 +988,85 @@ export function AdminDashboard({ data }: AdminDashboardProps) {
         </Grid>
       ))}
     </Grid>
+  );
+}
+
+/** "3 yrs 2 mos" / "Due now" — how long until a lecturer reaches retirement age. */
+function timeLeft(days: number): string {
+  if (days <= 0) return 'Due now';
+  const months = Math.floor(days / 30.44);
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  if (years === 0 && rem === 0) return `${days} day${days === 1 ? '' : 's'}`;
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years} yr${years === 1 ? '' : 's'}`);
+  if (rem > 0) parts.push(`${rem} mo${rem === 1 ? '' : 's'}`);
+  return parts.join(' ');
+}
+
+function RetiringLecturersCard({
+  lecturers,
+  retirementAge,
+  warningYears,
+}: {
+  lecturers: RetiringLecturer[];
+  retirementAge: number;
+  warningYears: number;
+}) {
+  return (
+    <Card>
+      <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+        <Typography variant="h6" component="h2">
+          Lecturers nearing retirement
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Within {warningYears} year{warningYears === 1 ? '' : 's'} of the retirement age of{' '}
+          {retirementAge}. Change these in Settings › School profile.
+        </Typography>
+        <TableContainer>
+          <Table size="small" aria-label="Lecturers nearing retirement">
+            <TableHead>
+              <TableRow>
+                <TableCell>Lecturer</TableCell>
+                <TableCell>Staff no.</TableCell>
+                <TableCell>Date of birth</TableCell>
+                <TableCell align="right">Age</TableCell>
+                <TableCell>Retirement date</TableCell>
+                <TableCell>Time left</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {lecturers.map((l) => (
+                <TableRow key={l.id} hover>
+                  <TableCell>
+                    <Button
+                      component={RouterLink}
+                      to={`${ROUTES.teachers}/${l.id}`}
+                      size="small"
+                      sx={{ p: 0, minWidth: 0, textTransform: 'none', justifyContent: 'flex-start' }}
+                    >
+                      {l.name}
+                    </Button>
+                  </TableCell>
+                  <TableCell>{l.staff_number}</TableCell>
+                  <TableCell>{formatSchoolDate(l.date_of_birth)}</TableCell>
+                  <TableCell align="right">{l.age}</TableCell>
+                  <TableCell>{formatSchoolDate(l.retirement_date)}</TableCell>
+                  <TableCell
+                    sx={{
+                      color: l.days_remaining <= 0 ? 'error.main' : undefined,
+                      fontWeight: l.days_remaining <= 0 ? 600 : undefined,
+                    }}
+                  >
+                    {timeLeft(l.days_remaining)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </CardContent>
+    </Card>
   );
 }
 

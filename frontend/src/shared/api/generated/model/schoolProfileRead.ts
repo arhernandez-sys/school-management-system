@@ -44,4 +44,8 @@ export interface SchoolProfileRead {
    * resolved number back on every response so this screen and that one cannot disagree.
    */
   attendance_alert_threshold: number;
+  /** HAND-EDITED (22 Nov 2026) — Dean setting: the age a lecturer retires at. */
+  lecturer_retirement_age?: number;
+  /** HAND-EDITED (22 Nov 2026) — years before retirement age a lecturer shows on the Dean dashboard. */
+  retirement_warning_years?: number;
 }

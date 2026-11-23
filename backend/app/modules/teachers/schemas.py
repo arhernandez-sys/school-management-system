@@ -126,6 +126,9 @@ class TeacherDetail(BaseModel):
     hire_date: date | None = None
     end_date: date | None = None
     comments: str | None = None
+    date_of_birth: date | None = None
+    is_retired: bool | None = None
+    retired_date: date | None = None
 
     @field_validator("expertise", mode="before")
     @classmethod
@@ -196,6 +199,10 @@ class TeacherCreateRequest(BaseModel):
     gender: TeacherGender | None = None
     bio: str | None = None
     expertise: list[TeacherExpertise] | None = None
+    #: Retirement record. Date of birth is REQUIRED for a new lecturer.
+    date_of_birth: date
+    is_retired: bool = False
+    retired_date: date | None = None
 
 
 class TeacherUpdateRequest(BaseModel):
@@ -232,6 +239,11 @@ class TeacherUpdateRequest(BaseModel):
     hire_date: date | None = None
     end_date: date | None = None
     comments: str | None = Field(default=None, max_length=500)
+    #: Retirement record. Absent leaves alone. Setting `is_retired=false` clears
+    #: `retired_date` (the service enforces it).
+    date_of_birth: date | None = None
+    is_retired: bool | None = None
+    retired_date: date | None = None
 
 
 class TeacherStatusRequest(BaseModel):
