@@ -23,6 +23,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import GradingOutlinedIcon from '@mui/icons-material/GradingOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import PrintIcon from '@mui/icons-material/Print';
 import {
   ConfirmDialog,
   DataTable,
@@ -57,6 +58,7 @@ import { StudentFormDialog } from './components/StudentFormDialog';
 import { StudentProfileSummary } from './components/StudentProfileSummary';
 import { StudentEnrollmentPanel } from './components/StudentEnrollmentPanel';
 import { AcademicHistoryPanel } from './components/AcademicHistoryPanel';
+import { AssessmentReportPrintDialog } from '@features/grades/components/AssessmentReportPrintDialog';
 import {
   STUDENT_STATUS_LABEL as STATUS_LABEL,
   STUDENT_STATUS_OPTIONS as STATUS_OPTIONS,
@@ -141,7 +143,19 @@ export function StudentDetailPage() {
                       withheld={Boolean(detail.grades_withheld)}
                     />
                   )}
-                  <GradesTab studentId={studentId} yearId={yearId} />
+                  <GradesTab
+                    studentId={studentId}
+                    yearId={yearId}
+                    // Dean only: `GET /grades/assessment-report` is Dean + lecturers, and a
+                    // lecturer's print is narrowed to their own courses server-side, which
+                    // would make a "student report" here silently partial. The Registrar
+                    // never reaches this tab (D32).
+                    printFor={
+                      user?.role === 'principal'
+                        ? { name: detail.full_name, number: detail.student_number, yearName }
+                        : undefined
+                    }
+                  />
                 </>
               ),
             } as DetailTab,
@@ -260,9 +274,19 @@ function termGradeText(group: StudentAssessmentGroup): string {
  * card drills into that subject's assessments (paginated, 10 per page); a back link returns
  * to the grid. Selection is local to the tab.
  */
-function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }) {
+function GradesTab({
+  studentId,
+  yearId,
+  printFor,
+}: {
+  studentId: string;
+  yearId?: string;
+  /** Set → show "Print assessment report" (the Dean). */
+  printFor?: { name: string; number: string; yearName?: string };
+}) {
   const query = useStudentAssessments(studentId, yearId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [printOpen, setPrintOpen] = useState(false);
 
   if (query.isLoading) {
     return <LoadingState variant="table" rows={4} label="Loading assessments" />;
@@ -282,22 +306,42 @@ function GradesTab({ studentId, yearId }: { studentId: string; yearId?: string }
   }
 
   const selected = groups.find((g) => g.offering_id === selectedId) ?? null;
-  if (selected) {
-    return (
-      <Box>
-        <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />
-      </Box>
-    );
-  }
 
   return (
-    <Grid container spacing={2}>
-      {groups.map((group) => (
-        <Grid item xs={12} sm={6} key={group.offering_id}>
-          <SubjectCard group={group} onOpen={() => setSelectedId(group.offering_id)} />
+    <Box>
+      {printFor && (
+        <>
+          <Stack direction="row" sx={{ justifyContent: 'flex-end', mb: 1.5 }}>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => setPrintOpen(true)}>
+              Print assessment report
+            </Button>
+          </Stack>
+          {/* Same D47 report the Grades page prints, narrowed to this student and the
+              profile's selected year, laid out student-first (one page, every course). */}
+          <AssessmentReportPrintDialog
+            open={printOpen}
+            onClose={() => setPrintOpen(false)}
+            params={{ student_id: studentId, academic_year_id: yearId }}
+            filterSummary={[
+              `Student: ${printFor.name} (${printFor.number})`,
+              ...(printFor.yearName ? [`Academic year: ${printFor.yearName}`] : []),
+            ]}
+            groupBy="student"
+          />
+        </>
+      )}
+      {selected ? (
+        <SubjectAssessments group={selected} onBack={() => setSelectedId(null)} />
+      ) : (
+        <Grid container spacing={2}>
+          {groups.map((group) => (
+            <Grid item xs={12} sm={6} key={group.offering_id}>
+              <SubjectCard group={group} onOpen={() => setSelectedId(group.offering_id)} />
+            </Grid>
+          ))}
         </Grid>
-      ))}
-    </Grid>
+      )}
+    </Box>
   );
 }
 
