@@ -165,6 +165,23 @@ class CourseFailureRateItem(BaseModel):
     failure_rate: float = 0.0
 
 
+class RetiringLecturer(BaseModel):
+    """A lecturer within the Dean's warning window of the retirement age.
+
+    `retirement_date` is `date_of_birth` + the configured retirement age. A lecturer
+    already past it but not marked retired still appears, with `days_remaining` <= 0,
+    so the Dean sees who is overdue rather than having them silently drop off.
+    """
+
+    id: UUID
+    name: str
+    staff_number: str
+    date_of_birth: date
+    age: int
+    retirement_date: date
+    days_remaining: int
+
+
 class AdminDashboard(_Base):
     role: Literal["principal"] = "principal"
     stats: AdminStats
@@ -178,6 +195,11 @@ class AdminDashboard(_Base):
     recent_teachers: list[DashboardPerson] = Field(default_factory=list)
     recent_students: list[DashboardPerson] = Field(default_factory=list)
     recent_announcements: list[DashboardAnnouncement] = Field(default_factory=list)
+    #: Dean only — lecturers nearing (or past) the retirement age, soonest first.
+    #: Emptied for the auditor variant.
+    retiring_lecturers: list[RetiringLecturer] = Field(default_factory=list)
+    retirement_age: int = 60
+    retirement_warning_years: int = 3
 
 
 # ── Secretary ──────────────────────────────────────────────────────────────────

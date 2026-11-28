@@ -45,6 +45,10 @@ export function SchoolProfileScreen() {
   // D45 §23 — the attendance warning floor. Blueprint §57: institutional rules belong in
   // configuration, not in source. It was a constant in the backend until now.
   const [attendanceFloor, setAttendanceFloor] = useState('80');
+  // Dean settings — lecturer retirement age, and how many years ahead of it a lecturer
+  // appears on the Dean dashboard.
+  const [retirementAge, setRetirementAge] = useState('60');
+  const [retirementWarningYears, setRetirementWarningYears] = useState('3');
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saved, setSaved] = useState(false);
@@ -61,6 +65,8 @@ export function SchoolProfileScreen() {
           : String(query.data.post_graduation_access_days),
       );
       setAttendanceFloor(String(query.data.attendance_alert_threshold ?? 80));
+      setRetirementAge(String(query.data.lecturer_retirement_age ?? 60));
+      setRetirementWarningYears(String(query.data.retirement_warning_years ?? 3));
     }
   }, [query.data]);
 
@@ -88,6 +94,10 @@ export function SchoolProfileScreen() {
           // rather than to 0, which would flag every student who ever missed a class.
           attendance_alert_threshold:
             attendanceFloor.trim() === '' ? 80 : Number(attendanceFloor),
+          lecturer_retirement_age:
+            retirementAge.trim() === '' ? 60 : Number(retirementAge),
+          retirement_warning_years:
+            retirementWarningYears.trim() === '' ? 3 : Number(retirementWarningYears),
         },
       },
       {
@@ -219,6 +229,35 @@ export function SchoolProfileScreen() {
                 fieldErrors.attendance_alert_threshold?.join(' ') ??
                 'A student or class at or below this attendance percentage is flagged on ' +
                   'the alerts screen and the Dean dashboard. BAJC policy; 80 is the default.'
+              }
+            />
+            <TextField
+              label="Lecturer retirement age"
+              type="number"
+              value={retirementAge}
+              onChange={(e) => setRetirementAge(e.target.value)}
+              fullWidth
+              disabled={!canEdit}
+              slotProps={{ htmlInput: { min: 40, max: 100, step: 1 } }}
+              error={Boolean(fieldErrors.lecturer_retirement_age)}
+              helperText={
+                fieldErrors.lecturer_retirement_age?.join(' ') ??
+                'The age at which a lecturer retires. 60 is the default.'
+              }
+            />
+            <TextField
+              label="Show lecturers nearing retirement (years before)"
+              type="number"
+              value={retirementWarningYears}
+              onChange={(e) => setRetirementWarningYears(e.target.value)}
+              fullWidth
+              disabled={!canEdit}
+              slotProps={{ htmlInput: { min: 0, max: 20, step: 1 } }}
+              error={Boolean(fieldErrors.retirement_warning_years)}
+              helperText={
+                fieldErrors.retirement_warning_years?.join(' ') ??
+                'A lecturer within this many years of the retirement age is listed on the ' +
+                  'Dean dashboard. 3 is the default.'
               }
             />
             {canEdit && (

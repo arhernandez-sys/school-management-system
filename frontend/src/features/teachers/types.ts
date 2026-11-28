@@ -98,6 +98,10 @@ export interface TeacherDetail {
   hire_date?: string | null;
   end_date?: string | null;
   comments?: string;
+  /** Retirement record. `date_of_birth` is required on create (older records may lack it). */
+  date_of_birth?: string | null;
+  is_retired?: boolean | null;
+  retired_date?: string | null;
   /** Distinct students across this teacher's classes (directory convenience). */
   student_count?: number;
 }
@@ -135,6 +139,10 @@ export interface TeacherCreateBody {
   gender?: 'male' | 'female' | 'other';
   bio?: string;
   expertise?: TeacherExpertise[];
+  /** Retirement record. Date of birth is REQUIRED on create. */
+  date_of_birth: string;
+  is_retired?: boolean;
+  retired_date?: string | null;
 }
 
 /** POST /teachers response envelope (temp password surfaced ONCE on create-with-login). */
@@ -163,6 +171,10 @@ export interface TeacherUpdateBody {
   hire_date?: string | null;
   end_date?: string | null;
   comments?: string;
+  /** Retirement record. `is_retired: false` clears `retired_date` server-side. */
+  date_of_birth?: string;
+  is_retired?: boolean;
+  retired_date?: string | null;
 }
 
 /**

@@ -93,6 +93,9 @@ interface Draft {
   first_name: string;
   last_name: string;
   gender: '' | 'male' | 'female' | 'other';
+  date_of_birth: string;
+  is_retired: boolean;
+  retired_date: string;
   email: string;
   phone: string;
   address: string;
@@ -117,6 +120,9 @@ const EMPTY: Draft = {
   last_name: '',
   // No blank dropdowns (client, Nov 2026): the select starts on its first option.
   gender: 'male',
+  date_of_birth: '',
+  is_retired: false,
+  retired_date: '',
   email: '',
   phone: '',
   address: '',
@@ -143,6 +149,9 @@ function fromDetail(t: TeacherDetail): Draft {
     last_name: t.last_name ?? '',
     // A lecturer with nothing on file gets the first option rather than a blank select.
     gender: t.gender ?? 'male',
+    date_of_birth: t.date_of_birth ?? '',
+    is_retired: Boolean(t.is_retired),
+    retired_date: t.retired_date ?? '',
     email: t.email ?? '',
     phone: t.phone ?? '',
     address: t.address ?? '',
@@ -273,6 +282,8 @@ export function TeacherFormScreen() {
     if (!editing && draft.last_name.trim().length === 0) out.push('a last name');
     if (draft.full_name.trim().length === 0) out.push('a full name');
     if (editing && draft.gender.length === 0) out.push('a gender');
+    if (draft.date_of_birth.length === 0) out.push('a date of birth');
+    if (draft.is_retired && draft.retired_date.length === 0) out.push('a retired date');
     if (!editing && draft.create_login && draft.login_email.trim().length === 0) {
       out.push('a login email');
     }
@@ -284,6 +295,9 @@ export function TeacherFormScreen() {
     draft.last_name,
     draft.full_name,
     draft.gender,
+    draft.date_of_birth,
+    draft.is_retired,
+    draft.retired_date,
     draft.create_login,
     draft.login_email,
   ]);
@@ -323,6 +337,9 @@ export function TeacherFormScreen() {
           end_date: draft.end_date || undefined,
           comments: orUndef(draft.comments),
           expertise: expertisePayload,
+          date_of_birth: draft.date_of_birth || undefined,
+          is_retired: draft.is_retired,
+          retired_date: draft.is_retired ? draft.retired_date || null : null,
         },
         {
           onSuccess: () => navigate(`${ROUTES.teachers}/${teacherId}`),
@@ -357,6 +374,9 @@ export function TeacherFormScreen() {
         end_date: draft.end_date || undefined,
         comments: orUndef(draft.comments),
         expertise: expertisePayload,
+        date_of_birth: draft.date_of_birth,
+        is_retired: draft.is_retired,
+        retired_date: draft.is_retired ? draft.retired_date || null : null,
       },
       {
         onSuccess: (result) => {
@@ -504,6 +524,17 @@ export function TeacherFormScreen() {
               )}
             </TextField>
           </Row>
+          <Row>
+            <DateField
+              label="Date of birth"
+              value={draft.date_of_birth}
+              onChange={(v) => set('date_of_birth', v)}
+              required
+              fullWidth
+              error={Boolean(fieldErrors.date_of_birth)}
+              helperText={err('date_of_birth') ?? 'Used to warn the Dean ahead of retirement.'}
+            />
+          </Row>
 
           <SectionHeading>Contact</SectionHeading>
           <Row>
@@ -587,6 +618,38 @@ export function TeacherFormScreen() {
               fullWidth
               error={Boolean(fieldErrors.end_date)}
               helperText={err('end_date') ?? 'Leave blank while employed.'}
+            />
+          </Row>
+          <Row>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={draft.is_retired}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      is_retired: e.target.checked,
+                      // A retired date only means something on a retired lecturer.
+                      retired_date: e.target.checked ? prev.retired_date : '',
+                    }))
+                  }
+                />
+              }
+              label="Retired"
+              sx={{ minWidth: 160 }}
+            />
+            <DateField
+              label="Retired date"
+              value={draft.retired_date}
+              onChange={(v) => set('retired_date', v)}
+              required={draft.is_retired}
+              disabled={!draft.is_retired}
+              fullWidth
+              error={Boolean(fieldErrors.retired_date)}
+              helperText={
+                err('retired_date') ??
+                (draft.is_retired ? undefined : 'Turn on Retired to enter a date.')
+              }
             />
           </Row>
           <Row>

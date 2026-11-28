@@ -88,6 +88,17 @@ export function TeacherProfileSummary({ teacher }: TeacherProfileSummaryProps) {
 
   const personalRows: Array<{ label: string; value: ReactNode }> = [
     ...(teacher.gender ? [{ label: 'Gender', value: capitalize(teacher.gender) }] : []),
+    ...(teacher.date_of_birth
+      ? [{ label: 'Date of birth', value: formatSchoolDate(teacher.date_of_birth) }]
+      : []),
+    {
+      label: 'Retired',
+      value: teacher.is_retired
+        ? teacher.retired_date
+          ? `Yes — ${formatSchoolDate(teacher.retired_date)}`
+          : 'Yes'
+        : 'No',
+    },
     // D39 (Meeting #2 item 10) — relabelled from 'Education' along with the column.
     ...(teacher.academic_qualification
       ? [{ label: 'Academic qualification', value: teacher.academic_qualification }]

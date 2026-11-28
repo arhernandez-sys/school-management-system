@@ -306,6 +306,14 @@ class SchoolProfile(Base, TimestampMixin, AuditMixin):
     attendance_alert_threshold: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, server_default=text("80.00")
     )
+    #: Dean setting (22 Nov 2026): the age a lecturer retires at, and how many years
+    #: before it they appear on the Dean dashboard as nearing retirement.
+    lecturer_retirement_age: Mapped[int] = mapped_column(
+        SmallInteger(), nullable=False, server_default=text("60")
+    )
+    retirement_warning_years: Mapped[int] = mapped_column(
+        SmallInteger(), nullable=False, server_default=text("3")
+    )
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_school_profile_singleton"),

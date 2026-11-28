@@ -48,4 +48,17 @@ export interface SchoolUpdateRequest {
    * @maximum 100
    */
   attendance_alert_threshold?: number;
+  /**
+   * HAND-EDITED (22 Nov 2026) — lecturer retirement age. Defaulted server-side to 60.
+   * @minimum 40
+   * @maximum 100
+   */
+  lecturer_retirement_age?: number;
+  /**
+   * HAND-EDITED (22 Nov 2026) — years before retirement age that a lecturer shows on
+   * the Dean dashboard. Defaulted server-side to 3.
+   * @minimum 0
+   * @maximum 20
+   */
+  retirement_warning_years?: number;
 }

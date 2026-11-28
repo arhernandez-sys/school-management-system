@@ -158,6 +158,22 @@ export interface AdminDashboard extends DashboardBase {
   /** A short list of students for the Students card. Optional (guard with `?? []`). */
   recent_students?: DashboardPerson[];
   recent_announcements: DashboardAnnouncement[];
+  /** Dean only — lecturers within the warning window of the retirement age (or past it
+   *  and not yet marked retired), soonest first. Empty for the auditor. */
+  retiring_lecturers?: RetiringLecturer[];
+  retirement_age?: number;
+  retirement_warning_years?: number;
+}
+
+export interface RetiringLecturer {
+  id: string;
+  name: string;
+  staff_number: string;
+  date_of_birth: string;
+  age: number;
+  retirement_date: string;
+  /** Days until `retirement_date`; zero or negative means already past it. */
+  days_remaining: number;
 }
 
 // ── Registrar / secretary (records clerk — task-forward, FR-DASH-03) ─────────────

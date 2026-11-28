@@ -66,6 +66,12 @@ class TeacherProfile(Base, TimestampMixin, AuditMixin, SoftDeleteMixin):
     #: wrong, so nothing is derived from them that `full_name` can answer instead.
     first_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    #: Retirement record (22 Nov 2026, `add_lecturer_retirement.sql`). `date_of_birth`
+    #: is required on create; the column is mapped nullable because lecturers created
+    #: before it existed have none until the Registrar fills it in.
+    date_of_birth: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    is_retired: Mapped[bool | None] = mapped_column(Boolean(), nullable=True)
+    retired_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     #: Belize social security number. Same width as `student_profiles.ssno`.
     ssno: Mapped[str | None] = mapped_column(String(9), nullable=True)
     #: Teacher licence number. ALPHANUMERIC — the client's sample is `OWD-2019-00035`,

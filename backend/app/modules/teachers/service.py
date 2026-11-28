@@ -484,6 +484,10 @@ def create_teacher(
         designation=_clean(payload.designation),
         address=_clean(payload.address),
         comments=_clean(payload.comments),
+        date_of_birth=payload.date_of_birth,
+        is_retired=payload.is_retired,
+        # A retired date only means something on a retired lecturer.
+        retired_date=payload.retired_date if payload.is_retired else None,
         # D40 — the three the create body could not carry until now. `expertise` is
         # stored as plain dicts for the reason `update_teacher` records: the column is
         # JSON, and handing it a Pydantic model serialises through whatever the driver
@@ -573,6 +577,15 @@ def update_teacher(
         teacher.hire_date = payload.hire_date
     if payload.end_date is not None:
         teacher.end_date = payload.end_date
+    if payload.date_of_birth is not None:
+        teacher.date_of_birth = payload.date_of_birth
+    if payload.is_retired is not None:
+        teacher.is_retired = payload.is_retired
+    if payload.retired_date is not None:
+        teacher.retired_date = payload.retired_date
+    # A retired date only means something on a retired lecturer.
+    if not teacher.is_retired:
+        teacher.retired_date = None
     if payload.expertise is not None:
         # Stored as plain dicts: the column is JSON, and a Pydantic model handed to it
         # would serialise through whatever the driver happens to do with an object.

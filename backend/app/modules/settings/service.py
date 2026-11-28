@@ -208,6 +208,8 @@ def get_school(db: Session) -> SchoolProfileRead:
         contact_phone=profile.contact_phone,
         post_graduation_access_days=profile.post_graduation_access_days,
         attendance_alert_threshold=float(profile.attendance_alert_threshold),
+        lecturer_retirement_age=profile.lecturer_retirement_age,
+        retirement_warning_years=profile.retirement_warning_years,
     )
 
 
@@ -226,6 +228,8 @@ def update_school(
     profile.post_graduation_access_days = payload.post_graduation_access_days
     # D45 §23. Same full-replacement rule as the rest of this PUT.
     profile.attendance_alert_threshold = payload.attendance_alert_threshold
+    profile.lecturer_retirement_age = payload.lecturer_retirement_age
+    profile.retirement_warning_years = payload.retirement_warning_years
     profile.updated_by = actor.id
     _audit(db, actor=actor, action="school.update", entity_type="school_profile")
     db.commit()
@@ -237,6 +241,8 @@ def update_school(
         contact_phone=profile.contact_phone,
         post_graduation_access_days=profile.post_graduation_access_days,
         attendance_alert_threshold=float(profile.attendance_alert_threshold),
+        lecturer_retirement_age=profile.lecturer_retirement_age,
+        retirement_warning_years=profile.retirement_warning_years,
     )
 
 
